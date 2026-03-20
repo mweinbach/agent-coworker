@@ -5,6 +5,9 @@ import { ChevronDownIcon, InfoIcon, PlusIcon, XIcon } from "lucide-react";
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 
 import {
+  AWS_BEDROCK_PROXY_PROMPT_CACHING_TTLS,
+  getWorkspaceAwsBedrockProxyBaseUrl,
+  getWorkspaceAwsBedrockProxyPromptCaching,
   getGoogleReasoningEffortValuesForModel,
   getWorkspaceGoogleNativeWebSearchEnabled,
   getWorkspaceGoogleReasoningEffort,
@@ -23,6 +26,8 @@ import {
   WEB_SEARCH_BACKEND_VALUES,
   WEB_SEARCH_CONTEXT_SIZE_VALUES,
   WEB_SEARCH_MODE_VALUES,
+  type AwsBedrockProxyPromptCachingTtlValue,
+  type AwsBedrockProxyProviderOptions,
   type CodexCliProviderOptions,
   type GoogleReasoningEffortValue,
   type GoogleProviderOptions,
@@ -99,6 +104,15 @@ function updateCodexProviderOption(
 ) {
   return mergeWorkspaceProviderOptions(providerOptions, {
     "codex-cli": patch,
+  });
+}
+
+function updateAwsBedrockProxyProviderOption(
+  providerOptions: ReturnType<typeof mergeWorkspaceProviderOptions>,
+  patch: Partial<AwsBedrockProxyProviderOptions>,
+) {
+  return mergeWorkspaceProviderOptions(providerOptions, {
+    "aws-bedrock-proxy": patch,
   });
 }
 
@@ -366,6 +380,11 @@ export function OpenAiCompatibleModelSettingsCard({
   const codexWebSearchContextSize = getWorkspaceWebSearchContextSize(workspace.providerOptions);
   const codexWebSearchAllowedDomains = getWorkspaceWebSearchAllowedDomains(workspace.providerOptions);
   const codexWebSearchLocation = getWorkspaceWebSearchLocation(workspace.providerOptions);
+  const awsBedrockProxyVerbosity = getWorkspaceTextVerbosity(workspace.providerOptions, "aws-bedrock-proxy");
+  const awsBedrockProxyReasoningEffort = getWorkspaceReasoningEffort(workspace.providerOptions, "aws-bedrock-proxy");
+  const awsBedrockProxyReasoningSummary = getWorkspaceReasoningSummary(workspace.providerOptions, "aws-bedrock-proxy");
+  const awsBedrockProxyBaseUrl = getWorkspaceAwsBedrockProxyBaseUrl(workspace.providerOptions);
+  const awsBedrockProxyPromptCaching = getWorkspaceAwsBedrockProxyPromptCaching(workspace.providerOptions);
 
   const sections = ([
     {
@@ -382,7 +401,16 @@ export function OpenAiCompatibleModelSettingsCard({
       reasoningEffort: openAiReasoningEffort,
       reasoningSummary: openAiReasoningSummary,
     },
+    {
+      key: "aws-bedrock-proxy",
+      label: "AWS Bedrock Proxy",
+      verbosity: awsBedrockProxyVerbosity,
+      reasoningEffort: awsBedrockProxyReasoningEffort,
+      reasoningSummary: awsBedrockProxyReasoningSummary,
+      alwaysVisible: true,
+    },
   ] as const).filter((section) => {
+    if ("alwaysVisible" in section && section.alwaysVisible) return true;
     const status = providerStatusByName[section.key];
     return hasConfiguredProviderStatus(status);
   });
@@ -392,9 +420,9 @@ export function OpenAiCompatibleModelSettingsCard({
   return (
     <Card className="border-border/80 bg-card/85">
       <CardHeader>
-        <CardTitle>OpenAI &amp; ChatGPT Settings</CardTitle>
+        <CardTitle>OpenAI-Compatible Settings</CardTitle>
         <CardDescription>
-          Workspace defaults for ChatGPT Subscription and OpenAI API models.
+          Workspace defaults for ChatGPT Subscription, OpenAI API, and AWS Bedrock Proxy models.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -691,6 +719,87 @@ export function OpenAiCompatibleModelSettingsCard({
                     )}
                   </CollapsibleContent>
                 </Collapsible>
+              </div>
+            ) : null}
+
+            {section.key === "aws-bedrock-proxy" ? (
+              <div className="space-y-3 border-t border-border/50 pt-3">
+                <div className={MODEL_CARD_FIELD_CLASS}>
+                  <div className="text-[13px] font-medium text-foreground">Proxy URL</div>
+                  <Input
+                    aria-label="AWS Bedrock Proxy base URL"
+                    className={MODEL_SETTINGS_INPUT_CLASS}
+                    autoComplete="off"
+                    placeholder="https://your-proxy.example.com/v1"
+                    value={awsBedrockProxyBaseUrl}
+                    onChange={(event) => {
+                      void updateWorkspaceDefaults(workspace.id, {
+                        providerOptions: updateAwsBedrockProxyProviderOption(workspace.providerOptions, {
+                          baseUrl: event.target.value,
+                        }),
+                      });
+                    }}
+                  />
+                  <div className="text-xs text-muted-foreground">
+                    Required for model discovery and API key validation.
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className={MODEL_CARD_FIELD_CLASS}>
+                    <div className="text-[13px] font-medium text-foreground">Prompt caching</div>
+                    <div className="flex items-center justify-between rounded-sm border border-border/60 px-3 py-2">
+                      <span className="text-xs text-muted-foreground">
+                        Add `cache_control` to eligible Claude prompts.
+                      </span>
+                      <Checkbox
+                        checked={awsBedrockProxyPromptCaching.enabled}
+                        aria-label="Enable AWS Bedrock Proxy prompt caching"
+                        onCheckedChange={(checked) => {
+                          void updateWorkspaceDefaults(workspace.id, {
+                            providerOptions: updateAwsBedrockProxyProviderOption(workspace.providerOptions, {
+                              promptCaching: {
+                                enabled: toBoolean(checked),
+                                ttl: awsBedrockProxyPromptCaching.ttl,
+                              },
+                            }),
+                          });
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className={MODEL_CARD_FIELD_CLASS}>
+                    <div className="text-[13px] font-medium text-foreground">Cache TTL</div>
+                    <Select
+                      value={awsBedrockProxyPromptCaching.ttl}
+                      onValueChange={(value) => {
+                        void updateWorkspaceDefaults(workspace.id, {
+                          providerOptions: updateAwsBedrockProxyProviderOption(workspace.providerOptions, {
+                            promptCaching: {
+                              enabled: awsBedrockProxyPromptCaching.enabled,
+                              ttl: value as AwsBedrockProxyPromptCachingTtlValue,
+                            },
+                          }),
+                        });
+                      }}
+                    >
+                      <SelectTrigger aria-label="AWS Bedrock Proxy prompt caching TTL" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {AWS_BEDROCK_PROXY_PROMPT_CACHING_TTLS.map((entry) => (
+                          <SelectItem key={entry} value={entry}>
+                            {entry}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <div className="text-xs text-muted-foreground">
+                      1h is only applied for compatible Claude 4.5 models; others fall back to 5m.
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : null}
           </div>

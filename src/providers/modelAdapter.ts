@@ -12,6 +12,10 @@ import {
   refreshCodexAuthMaterialCoalesced,
 } from "./codex-auth";
 import { resolveAuthHomeDir } from "../utils/authHome";
+import {
+  awsBedrockProxyForcedHeaders,
+  resolveAwsBedrockProxyApiKey,
+} from "./awsBedrockProxyShared";
 
 type HeaderMap = Record<string, string>;
 type HeaderResolver = () => Promise<HeaderMap>;
@@ -118,6 +122,26 @@ export function createNvidiaModelAdapter(modelId: string, savedKey?: string): Pr
   return createModelAdapter(modelId, "nvidia.completions", async () => {
     const key = firstNonEmpty(savedKey, envKey("NVIDIA_API_KEY"));
     const headers: HeaderMap = {};
+    if (key) {
+      headers.authorization = `Bearer ${key}`;
+    }
+    return headers;
+  });
+}
+
+export function createAwsBedrockProxyModelAdapter(
+  _config: AgentConfig,
+  modelId: string,
+  savedKey?: string,
+): ProviderModelAdapter {
+  return createModelAdapter(modelId, "aws-bedrock-proxy.completions", async () => {
+    const key = resolveAwsBedrockProxyApiKey({
+      savedKey,
+      env: process.env,
+    });
+    const headers: HeaderMap = {
+      ...awsBedrockProxyForcedHeaders(),
+    };
     if (key) {
       headers.authorization = `Bearer ${key}`;
     }

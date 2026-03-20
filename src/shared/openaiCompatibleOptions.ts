@@ -6,11 +6,12 @@ import {
 
 export { GOOGLE_THINKING_LEVEL_VALUES } from "./googleThinking";
 
-export const OPENAI_COMPATIBLE_PROVIDER_NAMES = ["openai", "codex-cli"] as const;
+export const OPENAI_COMPATIBLE_PROVIDER_NAMES = ["openai", "codex-cli", "aws-bedrock-proxy"] as const;
 export type OpenAiCompatibleProviderName = (typeof OPENAI_COMPATIBLE_PROVIDER_NAMES)[number];
 export const EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES = [
   "openai",
   "codex-cli",
+  "aws-bedrock-proxy",
   "google",
   "lmstudio",
 ] as const;
@@ -37,6 +38,9 @@ export type CodexWebSearchBackend = (typeof CODEX_WEB_SEARCH_BACKEND_VALUES)[num
 export const CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES = ["low", "medium", "high"] as const;
 export type CodexWebSearchContextSize = (typeof CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES)[number];
 
+export const AWS_BEDROCK_PROXY_PROMPT_CACHING_TTL_VALUES = ["5m", "1h"] as const;
+export type AwsBedrockProxyPromptCachingTtl = (typeof AWS_BEDROCK_PROXY_PROMPT_CACHING_TTL_VALUES)[number];
+
 export type CodexWebSearchLocation = {
   country?: string;
   region?: string;
@@ -57,6 +61,16 @@ export type OpenAiCompatibleProviderOptions = {
 };
 
 export type OpenAiProviderOptions = OpenAiCompatibleProviderOptions;
+
+export type AwsBedrockProxyPromptCachingOptions = {
+  enabled?: boolean;
+  ttl?: AwsBedrockProxyPromptCachingTtl;
+};
+
+export type AwsBedrockProxyProviderOptions = OpenAiCompatibleProviderOptions & {
+  baseUrl?: string;
+  promptCaching?: AwsBedrockProxyPromptCachingOptions;
+};
 
 export type CodexCliProviderOptions = OpenAiCompatibleProviderOptions & {
   webSearchBackend?: CodexWebSearchBackend;
@@ -84,6 +98,7 @@ export type OpenAiCompatibleProviderOptionsByProvider = Partial<
   {
     openai: OpenAiProviderOptions;
     "codex-cli": CodexCliProviderOptions;
+    "aws-bedrock-proxy": AwsBedrockProxyProviderOptions;
     google: GoogleProviderOptions;
     lmstudio: LmStudioProviderOptions;
   }
@@ -228,6 +243,42 @@ function pickCodexCliProviderOptionsSection(value: unknown): CodexCliProviderOpt
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+function pickAwsBedrockProxyPromptCachingOptions(
+  value: unknown,
+): AwsBedrockProxyPromptCachingOptions | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const next: AwsBedrockProxyPromptCachingOptions = {};
+  const enabled = pickBoolean(value.enabled);
+  if (enabled !== undefined) {
+    next.enabled = enabled;
+  }
+  if (value.ttl === "5m" || value.ttl === "1h") {
+    next.ttl = value.ttl;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function pickAwsBedrockProxyProviderOptionsSection(
+  value: unknown,
+): AwsBedrockProxyProviderOptions | undefined {
+  if (!isPlainObject(value)) return undefined;
+
+  const next: AwsBedrockProxyProviderOptions = {
+    ...(pickOpenAiCompatibleProviderOptionsSection(value) ?? {}),
+  };
+
+  const baseUrl = pickTrimmedString(value.baseUrl);
+  if (baseUrl) {
+    next.baseUrl = baseUrl;
+  }
+  const promptCaching = pickAwsBedrockProxyPromptCachingOptions(value.promptCaching);
+  if (promptCaching) {
+    next.promptCaching = promptCaching;
+  }
+
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 function pickLmStudioProviderOptionsSection(value: unknown): LmStudioProviderOptions | undefined {
   if (!isPlainObject(value)) return undefined;
 
@@ -297,6 +348,10 @@ export function pickEditableOpenAiCompatibleProviderOptions(
   if (codex) {
     out["codex-cli"] = codex;
   }
+  const awsBedrockProxy = pickAwsBedrockProxyProviderOptionsSection(providerOptions["aws-bedrock-proxy"]);
+  if (awsBedrockProxy) {
+    out["aws-bedrock-proxy"] = awsBedrockProxy;
+  }
   const google = pickGoogleProviderOptionsSection(providerOptions.google);
   if (google) {
     out.google = google;
@@ -352,6 +407,8 @@ export function mergeEditableOpenAiCompatibleProviderOptions(
         ? pickCodexCliProviderOptionsSection(sectionPatch)
         : provider === "openai"
           ? pickOpenAiCompatibleProviderOptionsSection(sectionPatch)
+          : provider === "aws-bedrock-proxy"
+            ? pickAwsBedrockProxyProviderOptionsSection(sectionPatch)
           : provider === "google"
             ? pickGoogleProviderOptionsSection(sectionPatch)
             : pickLmStudioProviderOptionsSection(sectionPatch);

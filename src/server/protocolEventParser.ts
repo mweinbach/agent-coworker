@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  AWS_BEDROCK_PROXY_PROMPT_CACHING_TTL_VALUES,
   CODEX_WEB_SEARCH_BACKEND_VALUES,
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
@@ -53,6 +54,13 @@ const codexCliProviderOptionsSchema = openAiCompatibleProviderOptionsSchema.exte
   webSearchMode: z.enum(CODEX_WEB_SEARCH_MODE_VALUES).optional(),
   webSearch: codexWebSearchSchema.optional(),
 }).strict();
+const awsBedrockProxyProviderOptionsSchema = openAiCompatibleProviderOptionsSchema.extend({
+  baseUrl: z.string().trim().min(1).optional(),
+  promptCaching: z.object({
+    enabled: z.boolean().optional(),
+    ttl: z.enum(AWS_BEDROCK_PROXY_PROMPT_CACHING_TTL_VALUES).optional(),
+  }).strict().optional(),
+}).strict();
 const googleProviderOptionsSchema = z.object({
   nativeWebSearch: z.boolean().optional(),
   thinkingConfig: z.object({
@@ -62,6 +70,7 @@ const googleProviderOptionsSchema = z.object({
 const editableOpenAiProviderOptionsByProviderSchema = z.object({
   openai: openAiCompatibleProviderOptionsSchema.optional(),
   "codex-cli": codexCliProviderOptionsSchema.optional(),
+  "aws-bedrock-proxy": awsBedrockProxyProviderOptionsSchema.optional(),
   google: googleProviderOptionsSchema.optional(),
   lmstudio: z.object({
     baseUrl: z.string().trim().min(1).optional(),

@@ -1565,7 +1565,7 @@ describe("safeParseClientMessage", () => {
             config: { providerOptions: { anthropic: { reasoningEffort: "high" } } },
           }),
         ),
-      ).toBe("set_config config.providerOptions only supports openai, codex-cli, google, and lmstudio");
+      ).toBe("set_config config.providerOptions only supports openai, codex-cli, aws-bedrock-proxy, google, and lmstudio");
       expect(
         expectErr(
           JSON.stringify({

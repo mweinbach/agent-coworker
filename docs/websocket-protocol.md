@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.28`
+- Current protocol version: `7.29`
 
 ## Table of Contents
 
@@ -48,6 +48,16 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.29`:
+
+- Added `aws-bedrock-proxy` as a first-class provider.
+- `set_config.config.providerOptions.aws-bedrock-proxy` and `session_config.config.providerOptions.aws-bedrock-proxy` now support:
+  - `baseUrl`
+  - `promptCaching.enabled`
+  - `promptCaching.ttl` (`"5m" | "1h"`)
+- `provider_catalog` now hydrates `aws-bedrock-proxy` models from live proxy `/models` discovery when a proxy URL is configured, while preserving the active model if it is not currently returned.
+- `provider_auth_set_api_key` for `aws-bedrock-proxy` now validates submitted keys against proxy `/models` before saving.
 
 Changes in `7.28`:
 
@@ -304,7 +314,7 @@ Types referenced across multiple messages.
 ### ProviderName
 
 ```
-"google" | "openai" | "anthropic" | "baseten" | "together" | "nvidia" | "lmstudio" | "opencode-go" | "opencode-zen" | "codex-cli"
+"google" | "openai" | "aws-bedrock-proxy" | "anthropic" | "baseten" | "together" | "nvidia" | "lmstudio" | "opencode-go" | "opencode-zen" | "codex-cli"
 ```
 
 ### PublicConfig
@@ -1173,6 +1183,10 @@ Clear the saved auth state for a provider.
 | `provider` | `ProviderName` | Yes | Must be a valid provider |
 
 **Response:** `provider_auth_result`, then `provider_status` and `provider_catalog` on success.
+
+Notes:
+- For `aws-bedrock-proxy`, key saves are validated against the configured proxy `/models` endpoint before persistence.
+- `aws-bedrock-proxy` validation requires a configured proxy URL (for example `providerOptions["aws-bedrock-proxy"].baseUrl` or `AWS_BEDROCK_PROXY_BASE_URL`).
 
 ---
 
@@ -2332,13 +2346,19 @@ Update runtime configuration values.
 | `config.preferredChildModelRef` | `string` | No | Canonical preferred child target ref. Accepts either a plain same-provider model id or a canonical `provider:modelId` ref |
 | `config.allowedChildModelRefs` | `string[]` | No | Exact cross-provider child target refs allowed for this workspace |
 | `config.maxSteps` | `number` | No | Max steps per turn (1-1000) |
-| `config.providerOptions` | `object` | No | Editable provider option patch. Only `openai`, `codex-cli`, `google`, and `lmstudio` are allowed |
+| `config.providerOptions` | `object` | No | Editable provider option patch. Only `openai`, `codex-cli`, `aws-bedrock-proxy`, `google`, and `lmstudio` are allowed |
 | `config.providerOptions.openai.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | OpenAI reasoning effort |
 | `config.providerOptions.openai.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | No | OpenAI reasoning summary |
 | `config.providerOptions.openai.textVerbosity` | `"low" \| "medium" \| "high"` | No | OpenAI verbosity |
 | `config.providerOptions.codex-cli.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | Codex CLI reasoning effort |
 | `config.providerOptions.codex-cli.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | No | Codex CLI reasoning summary |
 | `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | No | Codex CLI verbosity |
+| `config.providerOptions.aws-bedrock-proxy.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | AWS Bedrock Proxy reasoning effort |
+| `config.providerOptions.aws-bedrock-proxy.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | No | AWS Bedrock Proxy reasoning summary |
+| `config.providerOptions.aws-bedrock-proxy.textVerbosity` | `"low" \| "medium" \| "high"` | No | AWS Bedrock Proxy verbosity |
+| `config.providerOptions.aws-bedrock-proxy.baseUrl` | `string` | No | Override the AWS Bedrock Proxy base URL |
+| `config.providerOptions.aws-bedrock-proxy.promptCaching.enabled` | `boolean` | No | Enable/disable automatic prompt-cache metadata injection for eligible proxy requests |
+| `config.providerOptions.aws-bedrock-proxy.promptCaching.ttl` | `"5m" \| "1h"` | No | Preferred prompt-cache TTL. `1h` only applies to compatible Claude 4.5 models and falls back to `5m` otherwise |
 | `config.providerOptions.codex-cli.webSearchBackend` | `"native" \| "exa"` | No | Selects Codex built-in web search vs the local Exa `webSearch` tool. Defaults to `"native"` when omitted |
 | `config.providerOptions.codex-cli.webSearchMode` | `"disabled" \| "cached" \| "live"` | No | Codex native web-search mode |
 | `config.providerOptions.codex-cli.webSearch.contextSize` | `"low" \| "medium" \| "high"` | No | Codex native web-search context size |
@@ -2365,6 +2385,7 @@ Notes:
 - `providerOptions` is a deep-merged patch against the workspace config. Unrelated provider settings outside this editable subset are preserved.
 - `google.nativeWebSearch` replaces the local `webSearch` and `webFetch` tools for Google/Gemini sessions with the Gemini Interactions built-in Search and URL Context tools.
 - `google.thinkingConfig.thinkingLevel` accepts only explicit Gemini thinking levels. Sending an empty `thinkingConfig` object clears the override and returns the workspace to Gemini's dynamic default.
+- `aws-bedrock-proxy.promptCaching` configures runtime request rewriting for proxy `/chat/completions` calls only; unsupported models automatically fall back to 5-minute cache TTL behavior.
 - `lmstudio` provider options affect harness-side discovery/load behavior; inference still runs through the normal runtime path.
 - `toolOutputOverflowChars: null` disables spill files explicitly. `clearToolOutputOverflowChars: true` removes the persisted override so future sessions inherit the default again.
 
@@ -4060,6 +4081,16 @@ Current runtime config. Sent on connection and after `set_config`.
           }
         }
       },
+      "aws-bedrock-proxy": {
+        "reasoningEffort": "high",
+        "reasoningSummary": "detailed",
+        "textVerbosity": "medium",
+        "baseUrl": "https://proxy.example.com/v1",
+        "promptCaching": {
+          "enabled": true,
+          "ttl": "5m"
+        }
+      },
       "google": {
         "nativeWebSearch": true,
         "thinkingConfig": {
@@ -4112,6 +4143,12 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.providerOptions.codex-cli.webSearch.location.region` | `string` | Current editable Codex native web-search region/state |
 | `config.providerOptions.codex-cli.webSearch.location.city` | `string` | Current editable Codex native web-search city |
 | `config.providerOptions.codex-cli.webSearch.location.timezone` | `string` | Current editable Codex native web-search timezone |
+| `config.providerOptions.aws-bedrock-proxy.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable AWS Bedrock Proxy reasoning effort |
+| `config.providerOptions.aws-bedrock-proxy.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | Current editable AWS Bedrock Proxy reasoning summary |
+| `config.providerOptions.aws-bedrock-proxy.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable AWS Bedrock Proxy verbosity |
+| `config.providerOptions.aws-bedrock-proxy.baseUrl` | `string` | Current AWS Bedrock Proxy base URL override |
+| `config.providerOptions.aws-bedrock-proxy.promptCaching.enabled` | `boolean` | Current AWS Bedrock Proxy prompt-caching toggle |
+| `config.providerOptions.aws-bedrock-proxy.promptCaching.ttl` | `"5m" \| "1h"` | Current AWS Bedrock Proxy prompt-caching TTL preference |
 | `config.providerOptions.google.nativeWebSearch` | `boolean` | Current Gemini built-in Search + URL Context toggle |
 | `config.providerOptions.google.thinkingConfig.thinkingLevel` | `"minimal" \| "low" \| "medium" \| "high"` | Current explicit Gemini `thinking_level` override when set. Omitted means the workspace is using Gemini's dynamic default |
 | `config.providerOptions.lmstudio.baseUrl` | `string` | Current LM Studio base URL override |

@@ -6,6 +6,7 @@ type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }
 const DISPLAY_NAMES: Partial<Record<ProviderName, string>> = {
   google: "Google",
   openai: "OpenAI",
+  "aws-bedrock-proxy": "AWS Bedrock Proxy",
   anthropic: "Anthropic",
   baseten: "Baseten",
   together: "Together AI",

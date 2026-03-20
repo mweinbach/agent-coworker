@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 
+import { getWorkspaceAwsBedrockProxyBaseUrl } from "../../../app/openaiCompatibleProviderOptions";
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -291,6 +292,11 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const selectedWorkspaceId = serverState?.selectedWorkspaceId ?? selectedWorkspaceIdFromStore;
   const hasWorkspace = workspaces.length > 0;
   const canConnectProvider = hasWorkspace || selectedWorkspaceId !== null;
+  const selectedWorkspace = useMemo(
+    () => workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? workspaces[0],
+    [workspaces, selectedWorkspaceId],
+  );
+  const workspaceAwsBedrockProxyBaseUrl = getWorkspaceAwsBedrockProxyBaseUrl(selectedWorkspace?.providerOptions);
 
   const setProviderApiKey = useAppStore((s) => s.setProviderApiKey);
   const copyProviderApiKey = useAppStore((s) => s.copyProviderApiKey);
@@ -781,6 +787,19 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
 
         {isExpanded ? (
           <CardContent id={`provider-panel-${provider}`} className="space-y-3.5 border-t border-border/70 px-4 py-3.5">
+            {provider === "aws-bedrock-proxy" ? (
+              <div className="rounded-sm border border-border/60 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+                {workspaceAwsBedrockProxyBaseUrl
+                  ? (
+                    <>
+                      Using workspace proxy URL <code className="rounded bg-muted/45 px-1.5 py-0.5">{workspaceAwsBedrockProxyBaseUrl}</code>.
+                      Update it in Workspaces settings if needed.
+                    </>
+                  )
+                  : "Set your AWS Bedrock Proxy URL in Workspaces settings before saving this API key."}
+              </div>
+            ) : null}
+
             {methods.map((method) =>
               renderAuthMethod({
                 provider,

@@ -15,6 +15,7 @@ import codexCliGpt51 from "../../config/models/codex-cli/gpt-5.1.json";
 import codexCliGpt52Codex from "../../config/models/codex-cli/gpt-5.2-codex.json";
 import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
 import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
+import awsBedrockProxyClaudeSonnet45 from "../../config/models/aws-bedrock-proxy/claude-sonnet-4-5.json";
 import googleGemini3FlashPreview from "../../config/models/google/gemini-3-flash-preview.json";
 import googleGemini31FlashLitePreview from "../../config/models/google/gemini-3.1-flash-lite-preview.json";
 import googleGemini31ProPreview from "../../config/models/google/gemini-3.1-pro-preview.json";
@@ -43,6 +44,7 @@ import type { ProviderName } from "../types";
 
 export const STATIC_MODEL_PROVIDER_NAMES = [
   "google",
+  "aws-bedrock-proxy",
   "openai",
   "anthropic",
   "baseten",
@@ -88,6 +90,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   codexCliGpt54,
   codexCliGpt54Mini,
   googleGemini3FlashPreview,
+  awsBedrockProxyClaudeSonnet45,
   googleGemini31FlashLitePreview,
   googleGemini31ProPreview,
   googleGemini31ProPreviewCustomtools,
@@ -118,6 +121,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
 function buildRegistry(entries: SupportedModel[]) {
   const byProvider: Record<StaticModelProviderName, SupportedModel[]> = {
     google: [],
+    "aws-bedrock-proxy": [],
     openai: [],
     anthropic: [],
     baseten: [],

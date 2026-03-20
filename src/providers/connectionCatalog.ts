@@ -11,6 +11,7 @@ import {
 import { isLmStudioError, listLmStudioModels, resolveLmStudioProviderOptions } from "./lmstudio/client";
 import { getOpenCodeDisplayName } from "./opencodeShared";
 import { resolveAuthHomeDir } from "../utils/authHome";
+import { discoverAwsBedrockProxyModels, resolveAwsBedrockProxyBaseUrl } from "./awsBedrockProxyShared";
 
 function storedProviderApiKey(store: Awaited<ReturnType<typeof readConnectionStore>>, provider: ProviderName): string | undefined {
   const entry = store.services[provider];
@@ -41,6 +42,7 @@ export type ProviderCatalogPayload = {
 const PROVIDER_LABELS: Record<ProviderName, string> = {
   google: "Google",
   openai: "OpenAI",
+  "aws-bedrock-proxy": "AWS Bedrock Proxy",
   anthropic: "Anthropic",
   baseten: "Baseten",
   together: "Together AI",
@@ -150,6 +152,10 @@ export async function getProviderCatalog(opts: {
   providerOptions?: unknown;
   env?: NodeJS.ProcessEnv;
   lmstudioFetchImpl?: typeof fetch;
+  activeProvider?: ProviderName;
+  activeModel?: string;
+  awsBedrockProxyBaseUrl?: string;
+  fetchImpl?: typeof fetch;
 } = {}): Promise<ProviderCatalogPayload> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const readStore = opts.readStore ?? readConnectionStore;
@@ -165,6 +171,44 @@ export async function getProviderCatalog(opts: {
     if (provider === "lmstudio") return lmstudio.entry;
     return staticCatalogEntry(provider);
   });
+
+  const awsBedrockProxyIndex = all.findIndex((entry) => entry.id === "aws-bedrock-proxy");
+  if (awsBedrockProxyIndex >= 0) {
+    const proxyEntry = all[awsBedrockProxyIndex];
+    const savedKey = store.services["aws-bedrock-proxy"]?.mode === "api_key"
+      ? store.services["aws-bedrock-proxy"].apiKey
+      : undefined;
+    const baseUrl = resolveAwsBedrockProxyBaseUrl({
+      baseUrl: opts.awsBedrockProxyBaseUrl,
+      providerOptions: opts.providerOptions,
+      env: opts.env,
+    });
+    const discoveredModels = await discoverAwsBedrockProxyModels({
+      baseUrl,
+      apiKey: savedKey,
+      fetchImpl: opts.fetchImpl,
+    });
+    const mergedModels = discoveredModels.length > 0 ? discoveredModels : proxyEntry.models;
+    const activeProxyModel = opts.activeProvider === "aws-bedrock-proxy" ? opts.activeModel?.trim() : undefined;
+    const hasActiveModel = Boolean(activeProxyModel && mergedModels.some((model) => model.id === activeProxyModel));
+    const models = activeProxyModel && !hasActiveModel
+      ? [
+          {
+            id: activeProxyModel,
+            displayName: activeProxyModel,
+            knowledgeCutoff: "Unknown",
+            supportsImageInput: false,
+          },
+          ...mergedModels,
+        ]
+      : mergedModels;
+    all[awsBedrockProxyIndex] = {
+      ...proxyEntry,
+      models,
+      defaultModel: models[0]?.id ?? proxyEntry.defaultModel,
+    };
+  }
+
   const defaults: Record<string, string> = {};
   for (const entry of all) defaults[entry.id] = entry.defaultModel;
   const hasCodexOauth = Boolean((await readCodexAuthMaterialImpl(paths))?.accessToken);

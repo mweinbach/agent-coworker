@@ -35,16 +35,35 @@ function mergeLiveTopLevelSessionSummary(
   };
 }
 
+function mapLiveTopLevelSessionSummary(liveSnapshot: SessionSnapshot | null): PersistedSessionSummary | null {
+  if (!liveSnapshot || liveSnapshot.sessionKind !== "root") {
+    return null;
+  }
+
+  return {
+    sessionId: liveSnapshot.sessionId,
+    title: liveSnapshot.title,
+    titleSource: liveSnapshot.titleSource,
+    titleModel: liveSnapshot.titleModel,
+    provider: liveSnapshot.provider,
+    model: liveSnapshot.model,
+    createdAt: liveSnapshot.createdAt,
+    updatedAt: liveSnapshot.updatedAt,
+    messageCount: liveSnapshot.messageCount,
+    lastEventSeq: liveSnapshot.lastEventSeq,
+    hasPendingAsk: liveSnapshot.hasPendingAsk,
+    hasPendingApproval: liveSnapshot.hasPendingApproval,
+  };
+}
+
 function shouldIncludeTopLevelSessionSummary(
   session: PersistedSessionSummary,
   liveSnapshot: SessionSnapshot | null,
-  activeSessionId: string,
 ): boolean {
   if (
     liveSnapshot?.sessionKind === "root"
     && (
-      liveSnapshot.sessionId === activeSessionId
-      || liveSnapshot.executionState === "running"
+      liveSnapshot.executionState === "running"
       || liveSnapshot.executionState === "pending_init"
     )
   ) {
@@ -100,21 +119,42 @@ export class SessionAdminManager {
       return;
     }
     try {
-      const sessions = (this.context.deps.sessionDb
+      const persistedSessions = this.context.deps.sessionDb
         ? this.context.deps.sessionDb.listSessions({
             ...(scope === "workspace" ? { workingDirectory: this.context.state.config.workingDirectory } : {}),
           })
         : await listPersistedSessionSnapshots(this.context.getCoworkPaths(), {
             ...(scope === "workspace" ? { workingDirectory: this.context.state.config.workingDirectory } : {}),
-          }))
+          });
+      const liveSessions = persistedSessions.map((session) => {
+        const liveSnapshot = this.context.deps.getLiveSessionSnapshotImpl?.(session.sessionId) ?? null;
+        return {
+          liveSnapshot,
+          summary: mergeLiveTopLevelSessionSummary(session, liveSnapshot),
+        };
+      });
+      let sessions = liveSessions
+        .map(({ summary, liveSnapshot }) =>
+          shouldIncludeTopLevelSessionSummary(summary, liveSnapshot)
+            ? summary
+            : null,
+        )
+        .filter((session): session is PersistedSessionSummary => session !== null);
+
+      if (sessions.length === 0) {
+        const activeLiveSession = mapLiveTopLevelSessionSummary(
+          this.context.deps.getLiveSessionSnapshotImpl?.(this.context.id) ?? null,
+        );
+        if (activeLiveSession) {
+          sessions = [activeLiveSession];
+        }
+      }
+
+      sessions = sessions
         .map((session) => {
           const liveSnapshot = this.context.deps.getLiveSessionSnapshotImpl?.(session.sessionId) ?? null;
-          const effectiveSummary = mergeLiveTopLevelSessionSummary(session, liveSnapshot);
-          return shouldIncludeTopLevelSessionSummary(effectiveSummary, liveSnapshot, this.context.id)
-            ? effectiveSummary
-            : null;
+          return mergeLiveTopLevelSessionSummary(session, liveSnapshot);
         })
-        .filter((session): session is PersistedSessionSummary => session !== null)
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
       this.context.emit({ type: "sessions", sessionId: this.context.id, sessions });
     } catch (err) {

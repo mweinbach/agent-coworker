@@ -174,7 +174,20 @@ async function readSkillFileAsDataUri(skillRoot: string, relativePath: string): 
     return null;
   }
 
-  return await readFileAsDataUri(resolvedPath);
+  try {
+    // Resolve through symlinks before reading so icon paths cannot escape the skill root.
+    const [canonicalSkillRoot, canonicalTarget] = await Promise.all([
+      fs.realpath(skillRoot),
+      fs.realpath(resolvedPath),
+    ]);
+    if (!isPathInside(canonicalSkillRoot, canonicalTarget)) {
+      return null;
+    }
+
+    return await readFileAsDataUri(canonicalTarget);
+  } catch {
+    return null;
+  }
 }
 
 function parseAgentInterfaceYaml(raw: string): SkillEntry["interface"] | null {

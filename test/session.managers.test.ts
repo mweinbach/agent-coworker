@@ -221,7 +221,7 @@ describe("session managers", () => {
     });
   });
 
-  test("SessionAdminManager listSessions keeps the active idle session visible before its first message", async () => {
+  test("SessionAdminManager listSessions hides the active idle session when other meaningful sessions exist", async () => {
     const context = makeBaseContext();
     const emitted: any[] = [];
     context.emit = (evt) => emitted.push(evt);
@@ -297,6 +297,85 @@ describe("session managers", () => {
     expect(emitted).toContainEqual({
       type: "sessions",
       sessionId: "session-1",
+      sessions: [{
+        sessionId: "existing-root",
+        title: "Existing session",
+        titleSource: "manual",
+        titleModel: null,
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        createdAt: "2025-12-31T23:59:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        messageCount: 1,
+        lastEventSeq: 2,
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+      }],
+    });
+  });
+
+  test("SessionAdminManager listSessions keeps the active idle session visible when it is the only session", async () => {
+    const context = makeBaseContext();
+    const emitted: any[] = [];
+    context.emit = (evt) => emitted.push(evt);
+    context.deps.sessionDb = {
+      listSessions: () => [
+        {
+          sessionId: "session-1",
+          title: "New Session",
+          titleSource: "default",
+          titleModel: null,
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          messageCount: 0,
+          lastEventSeq: 1,
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+        },
+      ],
+    } as any;
+    context.deps.getLiveSessionSnapshotImpl = (sessionId) => sessionId === "session-1"
+      ? {
+          sessionId: "session-1",
+          title: "New Session",
+          titleSource: "default",
+          titleModel: null,
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          mode: null,
+          depth: null,
+          nickname: null,
+          requestedModel: null,
+          effectiveModel: null,
+          requestedReasoningEffort: null,
+          effectiveReasoningEffort: null,
+          executionState: null,
+          lastMessagePreview: null,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:10.000Z",
+          messageCount: 0,
+          lastEventSeq: 1,
+          feed: [],
+          agents: [],
+          todos: [],
+          sessionUsage: null,
+          lastTurnUsage: null,
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+        }
+      : null;
+
+    const manager = new SessionAdminManager(context);
+    await manager.listSessions("workspace");
+
+    expect(emitted).toContainEqual({
+      type: "sessions",
+      sessionId: "session-1",
       sessions: [
         {
           sessionId: "session-1",
@@ -309,20 +388,6 @@ describe("session managers", () => {
           updatedAt: "2026-01-01T00:00:10.000Z",
           messageCount: 0,
           lastEventSeq: 1,
-          hasPendingAsk: false,
-          hasPendingApproval: false,
-        },
-        {
-          sessionId: "existing-root",
-          title: "Existing session",
-          titleSource: "manual",
-          titleModel: null,
-          provider: "google",
-          model: "gemini-3-flash-preview",
-          createdAt: "2025-12-31T23:59:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-          messageCount: 1,
-          lastEventSeq: 2,
           hasPendingAsk: false,
           hasPendingApproval: false,
         },

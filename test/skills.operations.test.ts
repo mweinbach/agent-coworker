@@ -161,6 +161,62 @@ describe("updateSkillInstallation", () => {
     await expect(fs.access(path.join(config.skillsDirs[0]!, "other-skill"))).rejects.toBeDefined();
   });
 
+  test("checkSkillInstallationUpdate rejects duplicate valid candidates for the recorded skill name", async () => {
+    const config = makeConfig(root);
+    await createSkill(config.skillsDirs[0]!, "dup-skill", "Existing skill");
+    const sourceRoot = path.join(root, "incoming");
+    await createSkill(path.join(sourceRoot, "a"), "dup-skill", "One");
+    await createSkill(path.join(sourceRoot, "b"), "dup-skill", "Two");
+
+    const catalog = await scanSkillCatalog(config.skillsDirs, {
+      includeDisabled: true,
+      adoptManagedWritableInstalls: true,
+    });
+    const installation = {
+      ...catalog.installations[0]!,
+      origin: {
+        kind: "local" as const,
+        sourcePath: sourceRoot,
+      },
+    };
+
+    const result = await checkSkillInstallationUpdate({ config, installation });
+
+    expect(result.canUpdate).toBe(false);
+    expect(result.reason).toBe(
+      'The update source contains more than one valid skill named "dup-skill". Split the source or remove duplicates so each skill name is unique.',
+    );
+    expect(result.preview?.candidates.map((candidate) => candidate.relativeRootPath)).toEqual([
+      path.join("a", "dup-skill"),
+      path.join("b", "dup-skill"),
+    ]);
+  });
+
+  test("rejects updates when the source contains duplicate valid candidates for the recorded skill name", async () => {
+    const config = makeConfig(root);
+    const existingSkillDir = await createSkill(config.skillsDirs[0]!, "dup-skill", "Existing skill");
+    const sourceRoot = path.join(root, "incoming");
+    await createSkill(path.join(sourceRoot, "a"), "dup-skill", "One");
+    await createSkill(path.join(sourceRoot, "b"), "dup-skill", "Two");
+
+    const catalog = await scanSkillCatalog(config.skillsDirs, {
+      includeDisabled: true,
+      adoptManagedWritableInstalls: true,
+    });
+    const installation = {
+      ...catalog.installations[0]!,
+      origin: {
+        kind: "local" as const,
+        sourcePath: sourceRoot,
+      },
+    };
+
+    await expect(updateSkillInstallation({ config, installation })).rejects.toThrow(
+      'The update source contains more than one valid skill named "dup-skill". Split the source or remove duplicates so each skill name is unique.',
+    );
+    expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain('description: "Existing skill"');
+  });
+
   test("can update a local installation in place without deleting its source first", async () => {
     const config = makeConfig(root);
     const existingSkillDir = await createSkill(config.skillsDirs[0]!, "my-skill", "Existing skill");

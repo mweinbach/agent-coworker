@@ -148,9 +148,16 @@ function resolveRecordedUpdateCandidate<T extends NamedUpdateCandidate>(
   installationName: string,
 ): { candidate: T | null; reason: string | null } {
   const matchingCandidates = candidates.filter((candidate) => candidate.name === installationName);
-  const validCandidate = matchingCandidates.find((candidate) => candidate.diagnostics.length === 0) ?? null;
-  if (validCandidate) {
-    return { candidate: validCandidate, reason: null };
+  const validCandidates = matchingCandidates.filter((candidate) => candidate.diagnostics.length === 0);
+  if (validCandidates.length === 1) {
+    return { candidate: validCandidates[0] ?? null, reason: null };
+  }
+
+  if (validCandidates.length > 1) {
+    return {
+      candidate: null,
+      reason: `The update source contains more than one valid skill named "${installationName}". Split the source or remove duplicates so each skill name is unique.`,
+    };
   }
 
   if (matchingCandidates.length === 0) {

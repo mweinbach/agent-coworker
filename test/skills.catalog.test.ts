@@ -102,4 +102,36 @@ describe("scanSkillCatalog", () => {
     expect(alpha?.interface?.iconSmall).toBe(`data:image/png;base64,${Buffer.from("icon-small").toString("base64")}`);
     expect(alpha?.interface?.iconLarge).toBeUndefined();
   });
+
+  test("ignores symlinked icon paths that resolve outside the skill root", async () => {
+    if (process.platform === "win32") return;
+
+    const project = path.join(root, ".agent", "skills");
+    const skillDir = path.join(project, "alpha");
+    const outsideDir = path.join(root, "outside");
+    await fs.mkdir(path.join(skillDir, "agents"), { recursive: true });
+    await fs.mkdir(path.join(skillDir, "assets"), { recursive: true });
+    await fs.mkdir(outsideDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), skillDoc("alpha", "Project alpha."), "utf-8");
+    await fs.writeFile(path.join(skillDir, "assets", "icon.png"), "icon-small", "utf-8");
+    await fs.writeFile(path.join(outsideDir, "escape.png"), "escaped", "utf-8");
+    await fs.symlink(path.join(outsideDir, "escape.png"), path.join(skillDir, "assets", "external.png"));
+    await fs.writeFile(
+      path.join(skillDir, "agents", "openai.yaml"),
+      [
+        "interface:",
+        '  display_name: "Alpha"',
+        '  icon_small: "./assets/icon.png"',
+        '  icon_large: "./assets/external.png"',
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const catalog = await scanSkillCatalog([project], { includeDisabled: true });
+    const alpha = catalog.installations.find((entry) => entry.name === "alpha");
+
+    expect(alpha?.interface?.displayName).toBe("Alpha");
+    expect(alpha?.interface?.iconSmall).toBe(`data:image/png;base64,${Buffer.from("icon-small").toString("base64")}`);
+    expect(alpha?.interface?.iconLarge).toBeUndefined();
+  });
 });

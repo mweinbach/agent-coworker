@@ -308,19 +308,31 @@ async function materializeGitHubSource(
     throw new Error("GitHub source is missing repo information");
   }
 
+  const preferredAttempt = descriptor.ref
+    ? [{
+        ref: descriptor.ref,
+        githubPath: descriptor.subdir ?? "",
+        descriptor: buildResolvedGitHubDescriptor(descriptor, descriptor.ref, descriptor.subdir ?? ""),
+      }]
+    : [];
   const attempts = buildGitHubMaterializationAttempts(descriptor);
   const fallbackRefs = descriptor.ref ? [descriptor.ref] : ["main", "master"];
-  const materializationAttempts =
-    attempts.length > 0
-      ? attempts
-      : fallbackRefs.map((ref) => {
-          const githubPath = descriptor.subdir ?? "";
-          return {
-            ref,
-            githubPath,
-            descriptor: buildResolvedGitHubDescriptor(descriptor, ref, githubPath),
-          };
-        });
+  const fallbackAttempts = fallbackRefs.map((ref) => {
+    const githubPath = descriptor.subdir ?? "";
+    return {
+      ref,
+      githubPath,
+      descriptor: buildResolvedGitHubDescriptor(descriptor, ref, githubPath),
+    };
+  });
+  const materializationAttempts = (attempts.length > 0
+    ? [...preferredAttempt, ...attempts]
+    : [...preferredAttempt, ...fallbackAttempts]
+  ).filter((attempt, index, allAttempts) =>
+    allAttempts.findIndex((candidate) =>
+      candidate.ref === attempt.ref && candidate.githubPath === attempt.githubPath
+    ) === index
+  );
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-skill-source-"));
   let resolvedDescriptor: SkillSourceDescriptor | null = null;
   let stageRoot: string | null = null;

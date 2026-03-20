@@ -12,6 +12,8 @@ import {
   supportsImageInput,
   providerOptionsDefaultsForModel,
 } from "../src/models/registry";
+import { normalizeModelIdForProvider } from "../src/models/metadata";
+import { parseChildModelRef } from "../src/models/childModelRouting";
 import { listMissingChildAgentModelInfo } from "../src/models/childAgentModelInfo";
 import { isUserFacingProviderEnabled } from "../src/providers/catalog";
 import type { ProviderName } from "../src/types";
@@ -77,5 +79,32 @@ describe("model registry helpers", () => {
       ["google", "openai", "anthropic", "baseten", "together", "nvidia", "opencode-go", "opencode-zen", "codex-cli"] as ProviderName[]
     ).filter((provider) => isUserFacingProviderEnabled(provider));
     expect(listMissingChildAgentModelInfo(userFacingProviders)).toEqual([]);
+  });
+});
+
+describe("legacy model aliases", () => {
+  test("getSupportedModel resolves legacy alias gemini-3-pro-preview", () => {
+    const model = getSupportedModel("google", "gemini-3-pro-preview");
+    expect(model).not.toBeNull();
+    expect(model!.id).toBe("gemini-3.1-pro-preview-customtools");
+    expect(model!.provider).toBe("google");
+  });
+
+  test("assertSupportedModel accepts legacy alias gemini-3-pro-preview", () => {
+    const model = assertSupportedModel("google", "gemini-3-pro-preview");
+    expect(model.id).toBe("gemini-3.1-pro-preview-customtools");
+    expect(model.provider).toBe("google");
+  });
+
+  test("normalizeModelIdForProvider resolves legacy alias gemini-3-pro-preview", () => {
+    const normalized = normalizeModelIdForProvider("google", "gemini-3-pro-preview");
+    expect(normalized).toBe("gemini-3.1-pro-preview-customtools");
+  });
+
+  test("parseChildModelRef normalizes legacy alias in child model ref", () => {
+    const parsed = parseChildModelRef("google:gemini-3-pro-preview", "google");
+    expect(parsed.modelId).toBe("gemini-3.1-pro-preview-customtools");
+    expect(parsed.provider).toBe("google");
+    expect(parsed.ref).toBe("google:gemini-3.1-pro-preview-customtools");
   });
 });

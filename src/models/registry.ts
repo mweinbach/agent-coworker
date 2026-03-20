@@ -163,6 +163,14 @@ const MODEL_REGISTRY_ENTRIES = RAW_MODEL_REGISTRY_ENTRIES
   .sort((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
 const MODEL_REGISTRY = buildRegistry(MODEL_REGISTRY_ENTRIES);
 
+/**
+ * Legacy model ID aliases for backward compatibility.
+ * Maps deprecated/legacy model IDs to their canonical replacements.
+ */
+const LEGACY_MODEL_ALIASES: Record<string, string> = {
+  "google:gemini-3-pro-preview": "google:gemini-3.1-pro-preview-customtools",
+};
+
 export { MODEL_REGISTRY_ENTRIES };
 
 export function isStaticRegistryProvider(provider: ProviderName): provider is StaticModelProviderName {
@@ -175,7 +183,12 @@ export function listSupportedModels(provider: ProviderName): readonly SupportedM
 
 export function getSupportedModel(provider: ProviderName, modelId: string): SupportedModel | null {
   if (!isStaticRegistryProvider(provider)) return null;
-  return MODEL_REGISTRY.byKey.get(`${provider}:${modelId.trim()}`) ?? null;
+  const trimmed = modelId.trim();
+  const key = `${provider}:${trimmed}`;
+  // Check legacy aliases first
+  const aliasedKey = LEGACY_MODEL_ALIASES[key];
+  const lookupKey = aliasedKey ?? key;
+  return MODEL_REGISTRY.byKey.get(lookupKey) ?? null;
 }
 
 export function defaultSupportedModel(provider: ProviderName): SupportedModel {

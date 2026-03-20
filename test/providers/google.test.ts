@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
 import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
+import { normalizeModelIdForProvider } from "../../src/models/metadata";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot } from "./helpers";
 
 // ---------------------------------------------------------------------------
@@ -86,5 +87,19 @@ describe("Google provider (gemini-3.1-pro-preview)", () => {
 
     expect(cfg.provider).toBe("google");
     expect(cfg.model).toBe("gemini-3.1-pro-preview");
+  });
+
+  test("legacy alias gemini-3-pro-preview normalizes to gemini-3.1-pro-preview-customtools", () => {
+    const normalized = normalizeModelIdForProvider("google", "gemini-3-pro-preview");
+    expect(normalized).toBe("gemini-3.1-pro-preview-customtools");
+  });
+
+  test("getModel accepts legacy alias gemini-3-pro-preview", () => {
+    const cfg = makeConfig({ provider: "google", model: "gemini-3-pro-preview" });
+    const model = getModel(cfg);
+
+    expect(model).toBeDefined();
+    expect(model.modelId).toBe("gemini-3.1-pro-preview-customtools");
+    expect(model.provider).toBe("google.generative-ai");
   });
 });

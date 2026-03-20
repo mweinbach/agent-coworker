@@ -26,16 +26,16 @@ import {
   revealPathInputSchema,
   trashPathInputSchema,
 } from "../../src/lib/desktopSchemas";
+import { resolveDesktopBuiltinSkillRootsForReveal } from "../services/desktopBuiltinPaths";
 import {
   resolveAllowedDirectoryPath,
-  resolveAllowedOpenPath,
   resolveAllowedPath,
   resolveAllowedRevealOrOpenPath,
 } from "../services/ipcSecurity";
 import type { DesktopIpcModuleContext } from "./types";
 
 export function registerFilesIpc(context: DesktopIpcModuleContext): void {
-  const { builtinSkillRoots, handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
+  const { handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.listDirectory, async (_event, args: ListDirectoryInput) => {
     await workspaceRoots.ensureApprovedWorkspaceRoots();
@@ -120,7 +120,12 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openPath, async (_event, args: OpenPathInput) => {
     const input = parseWithSchema(openPathInputSchema, args, "openPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedOpenPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path, builtinSkillRoots);
+    const builtinSkillRoots = resolveDesktopBuiltinSkillRootsForReveal();
+    const safePath = resolveAllowedRevealOrOpenPath(
+      workspaceRoots.getApprovedWorkspaceRoots(),
+      input.path,
+      builtinSkillRoots,
+    );
     const errString = await shell.openPath(safePath);
     if (errString) {
       throw new Error(errString);
@@ -130,6 +135,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.revealPath, async (_event, args: RevealPathInput) => {
     const input = parseWithSchema(revealPathInputSchema, args, "revealPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
+    const builtinSkillRoots = resolveDesktopBuiltinSkillRootsForReveal();
     const safePath = resolveAllowedRevealOrOpenPath(
       workspaceRoots.getApprovedWorkspaceRoots(),
       input.path,

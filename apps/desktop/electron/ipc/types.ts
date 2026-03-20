@@ -31,8 +31,6 @@ export interface WorkspaceRootsAccess {
 export type DesktopIpcModuleContext = {
   deps: DesktopIpcDeps;
   workspaceRoots: WorkspaceRootsAccess;
-  /** Built-in / bundled skill roots for open/reveal allowlisting (packaged dist + env). */
-  builtinSkillRoots: string[];
   handleDesktopInvoke: HandleDesktopInvoke;
   parseWithSchema: ParseWithSchema;
 };

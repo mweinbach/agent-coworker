@@ -6,7 +6,6 @@ import path from "node:path";
 import {
   isTrustedDesktopSenderUrl,
   resolveAllowedDirectoryPath,
-  resolveAllowedOpenPath,
   resolveAllowedPath,
   resolveAllowedRevealOrOpenPath,
 } from "../electron/services/ipcSecurity";
@@ -113,7 +112,7 @@ describe("desktop IPC security helpers", () => {
     }
   });
 
-  test("resolveAllowedOpenPath allows workspace and same reveal allowlist as revealPath", async () => {
+  test("resolveAllowedRevealOrOpenPath allows workspace and skill-home paths used by open/reveal IPC", async () => {
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-ws-"));
     const workspaceRoot = await fs.realpath(tempWorkspace);
     const home = os.homedir();
@@ -123,15 +122,15 @@ describe("desktop IPC security helpers", () => {
     try {
       await fs.writeFile(workspaceFile, "inside workspace\n");
 
-      expect(resolveAllowedOpenPath([workspaceRoot], workspaceFile)).toBe(workspaceFile);
-      expect(() => resolveAllowedOpenPath([workspaceRoot], coworkSkillDir)).not.toThrow();
-      expect(() => resolveAllowedOpenPath([workspaceRoot], agentSkillFile)).not.toThrow();
+      expect(resolveAllowedRevealOrOpenPath([workspaceRoot], workspaceFile)).toBe(workspaceFile);
+      expect(() => resolveAllowedRevealOrOpenPath([workspaceRoot], coworkSkillDir)).not.toThrow();
+      expect(() => resolveAllowedRevealOrOpenPath([workspaceRoot], agentSkillFile)).not.toThrow();
 
       const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-open-nope-"));
       try {
-        expect(() => resolveAllowedOpenPath([workspaceRoot], path.join(outside, "secret"))).toThrow(
-          "outside allowed workspace roots",
-        );
+        expect(() =>
+          resolveAllowedRevealOrOpenPath([workspaceRoot], path.join(outside, "secret")),
+        ).toThrow("outside allowed workspace roots");
       } finally {
         await fs.rm(outside, { recursive: true, force: true });
       }

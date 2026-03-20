@@ -47,7 +47,9 @@ export function resolveAllowedPath(workspaceRoots: string[], requestedPath: stri
  * Used for `revealPath` and `openPath` targets outside the active workspace
  * (e.g. ~/.cowork/skills, ~/.agent/skills).
  *
- * `builtinSkillRoots` should match server `builtInDir` / `COWORK_BUILTIN_DIR` (see `resolveDesktopBuiltinSkillRootsForReveal`).
+ * `builtinSkillRoots` should match server `builtInDir` / `COWORK_BUILTIN_DIR`
+ * (see `resolveDesktopBuiltinSkillRootsForReveal`); pass a freshly resolved list
+ * per invocation so env / packaged paths stay accurate.
  */
 export function getRevealOpenPathRoots(workspaceRoots: string[], builtinSkillRoots: string[] = []): string[] {
   const home = os.homedir();
@@ -61,18 +63,16 @@ export function getRevealOpenPathRoots(workspaceRoots: string[], builtinSkillRoo
   return [...workspaceRoots, ...extra];
 }
 
+/**
+ * Validates paths for both reveal-in-folder and open-with-default-app IPC.
+ * The allowlist is identical for both: workspace roots, `~/.cowork`, `~/.agent`,
+ * and optional built-in skill dirs. `shell.openPath` can execute binaries, so
+ * callers should only pass user-intended targets.
+ */
 export function resolveAllowedRevealOrOpenPath(
   workspaceRoots: string[],
   requestedPath: string,
   builtinSkillRoots: string[] = [],
 ): string {
   return assertPathWithinRoots(getRevealOpenPathRoots(workspaceRoots, builtinSkillRoots), requestedPath, "path");
-}
-
-export function resolveAllowedOpenPath(
-  workspaceRoots: string[],
-  requestedPath: string,
-  builtinSkillRoots: string[] = [],
-): string {
-  return resolveAllowedRevealOrOpenPath(workspaceRoots, requestedPath, builtinSkillRoots);
 }

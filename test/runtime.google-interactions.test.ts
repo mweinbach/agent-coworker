@@ -839,6 +839,32 @@ describe("google native interactions request building", () => {
     ]);
   });
 
+  test("convertMessagesToInteractionsInput preserves Gemini audio, video, and PDF inputs", () => {
+    const input = googleNativeInternal.convertMessagesToInteractionsInput([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Analyze these files" },
+          { type: "audio", data: "audio64", mimeType: "audio/wav" },
+          { type: "video", data: "video64", mimeType: "video/mp4" },
+          { type: "document", data: "pdf64", mimeType: "application/pdf" },
+        ],
+      },
+    ] as ModelMessage[]);
+
+    expect(input).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Analyze these files" },
+          { type: "audio", data: "audio64", mime_type: "audio/wav" },
+          { type: "video", data: "video64", mime_type: "video/mp4" },
+          { type: "document", data: "pdf64", mime_type: "application/pdf" },
+        ],
+      },
+    ]);
+  });
+
   test("convertMessagesToInteractionsInput handles assistant tool calls with repaired thought signatures", () => {
     const input = googleNativeInternal.convertMessagesToInteractionsInput([
       {

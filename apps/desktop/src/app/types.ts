@@ -1,5 +1,6 @@
 import type {
   ApprovalRiskCode,
+  ClientMessage,
   ChildModelRoutingMode,
   ConfigSubset,
   ProviderName,
@@ -79,6 +80,17 @@ export type WorkspaceDefaultsPatch = Partial<Omit<WorkspaceRecord, "userProfile"
 
 export type ThreadStatus = "active" | "disconnected";
 export type ThreadBusyPolicy = "reject" | "steer" | "queue";
+export type ThreadMessageDraftAttachment = NonNullable<Extract<ClientMessage, { type: "user_message" }>["attachments"]>[number];
+export type ThreadMessageAttachment = NonNullable<Extract<ServerEvent, { type: "user_message" }>["attachments"]>[number];
+export type PendingThreadMessage = {
+  text: string;
+  attachments?: ThreadMessageDraftAttachment[];
+};
+export type ComposerAttachment = ThreadMessageDraftAttachment & {
+  id: string;
+  kind: ThreadMessageAttachment["kind"];
+  sizeBytes: number;
+};
 
 export type ThreadTitleSource = "default" | "model" | "heuristic" | "manual";
 

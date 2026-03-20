@@ -1245,6 +1245,79 @@ describe("thread reconnect", () => {
     expect(state.threads.find((t) => t.id === activeThreadId)?.status).toBe("active");
   });
 
+  test("sendMessage supports attachment-only user messages and enriches them with the saved workspace path", async () => {
+    await useAppStore.getState().selectThread(threadId);
+
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+    const activeThreadId = canonicalThreadId("thread-session", threadId);
+
+    await useAppStore.getState().sendMessage("", "reject", [
+      {
+        filename: "photo.png",
+        mimeType: "image/png",
+        contentBase64: "aGVsbG8=",
+      },
+    ]);
+
+    const sentUserMessages = threadSocket.sent.filter((message) => message?.type === "user_message");
+    expect(sentUserMessages).toHaveLength(1);
+    expect(sentUserMessages[0]).toMatchObject({
+      text: "",
+      attachments: [
+        {
+          filename: "photo.png",
+          mimeType: "image/png",
+          contentBase64: "aGVsbG8=",
+        },
+      ],
+    });
+
+    const optimisticFeed = useAppStore.getState().threadRuntimeById[activeThreadId]?.feed ?? [];
+    expect(optimisticFeed[0]).toMatchObject({
+      kind: "message",
+      role: "user",
+      text: "",
+      attachments: [
+        {
+          filename: "photo.png",
+          mimeType: "image/png",
+          kind: "image",
+        },
+      ],
+    });
+
+    threadSocket.emit({
+      type: "user_message",
+      sessionId: "thread-session",
+      text: "",
+      clientMessageId: sentUserMessages[0].clientMessageId,
+      attachments: [
+        {
+          filename: "photo.png",
+          mimeType: "image/png",
+          kind: "image",
+          path: "/tmp/workspace/photo.png",
+        },
+      ],
+    });
+
+    const updatedFeed = useAppStore.getState().threadRuntimeById[activeThreadId]?.feed ?? [];
+    expect(updatedFeed[0]).toMatchObject({
+      kind: "message",
+      role: "user",
+      text: "",
+      attachments: [
+        {
+          filename: "photo.png",
+          mimeType: "image/png",
+          kind: "image",
+          path: "/tmp/workspace/photo.png",
+        },
+      ],
+    });
+  });
+
   test("busy resume keeps reconnect firstMessage queued exactly once", async () => {
     await useAppStore.getState().selectThread(threadId);
 

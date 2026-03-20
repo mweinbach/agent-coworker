@@ -834,6 +834,12 @@ const transcriptPayloadTypeSchema = z.object({
 const transcriptUserMessagePayloadSchema = z.object({
   type: z.literal("user_message"),
   text: z.unknown().optional(),
+  attachments: z.array(z.object({
+    filename: z.string().trim().min(1),
+    mimeType: z.string().trim().min(1),
+    kind: z.enum(["image", "audio", "video", "document"]),
+    path: z.string().optional(),
+  }).strict()).optional(),
   clientMessageId: z.string().optional(),
 }).passthrough();
 
@@ -1008,7 +1014,23 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     if (payload.type === "user_message") {
       clearThreadModelStreamRuntime(stream);
       const cmid = payload.clientMessageId ?? "";
-      if (cmid && seenUser.has(cmid)) continue;
+      if (cmid && seenUser.has(cmid)) {
+        if (payload.attachments && payload.attachments.length > 0) {
+          const existingIndex = out.findIndex(
+            (item) => item.kind === "message" && item.role === "user" && item.id === cmid,
+          );
+          if (existingIndex >= 0) {
+            const existing = out[existingIndex];
+            if (existing?.kind === "message" && existing.role === "user") {
+              out[existingIndex] = {
+                ...existing,
+                attachments: payload.attachments,
+              };
+            }
+          }
+        }
+        continue;
+      }
       if (cmid) seenUser.add(cmid);
       out.push({
         id: cmid || makeId(),
@@ -1016,6 +1038,7 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
         role: "user",
         ts: evt.ts,
         text: String(payload.text ?? ""),
+        ...(payload.attachments && payload.attachments.length > 0 ? { attachments: payload.attachments } : {}),
       });
       continue;
     }

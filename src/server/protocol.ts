@@ -37,6 +37,10 @@ import type {
   PersistentAgentSummary,
   SessionKind,
 } from "../shared/agents";
+import type {
+  UserMessageAttachment,
+  UserMessageAttachmentDraft,
+} from "../shared/messageAttachments";
 export { ASK_SKIP_TOKEN } from "../shared/ask";
 
 export type MCPServerEventSource = "workspace" | "user" | "system" | "workspace_legacy" | "user_legacy";
@@ -89,7 +93,13 @@ export type SessionConfigState = {
 
 export type ClientMessage =
   | { type: "client_hello"; client: "tui" | "cli" | string; version?: string }
-  | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
+  | {
+    type: "user_message";
+    sessionId: string;
+    text: string;
+    attachments?: UserMessageAttachmentDraft[];
+    clientMessageId?: string;
+  }
   | {
     type: "steer_message";
     sessionId: string;
@@ -362,7 +372,13 @@ export type ServerEvent =
     text: string;
     clientMessageId?: string;
   }
-  | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
+  | {
+    type: "user_message";
+    sessionId: string;
+    text: string;
+    attachments?: UserMessageAttachment[];
+    clientMessageId?: string;
+  }
   | {
     type: "model_stream_chunk";
     sessionId: string;
@@ -531,7 +547,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.28";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.29";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",

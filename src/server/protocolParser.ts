@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { parseMCPServerConfig, parseMCPServersDocument } from "../mcp/configRegistry";
 import { resolveProviderAuthMethod } from "../providers/authRegistry";
+import type { UserMessageAttachmentDraft } from "../shared/messageAttachments";
 import {
   CODEX_WEB_SEARCH_BACKEND_VALUES,
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
@@ -122,6 +123,11 @@ const googleProviderOptionsSchema = z.object({
   thinkingConfig: z.object({
     thinkingLevel: z.enum(GOOGLE_THINKING_LEVEL_VALUES).optional(),
   }).strict().optional(),
+}).strict();
+const userMessageAttachmentDraftSchema: z.ZodType<UserMessageAttachmentDraft> = z.object({
+  filename: requiredNonEmptyTrimmedString("user_message attachments[].filename must be non-empty"),
+  mimeType: requiredNonEmptyTrimmedString("user_message attachments[].mimeType must be non-empty"),
+  contentBase64: requiredNonEmptyTrimmedString("user_message attachments[].contentBase64 must be non-empty"),
 }).strict();
 
 const editableOpenAiProviderOptionsByProviderSchema = z.object({
@@ -413,6 +419,9 @@ const clientHelloSchema = schemaWithType("client_hello", {
 const userMessageSchema = schemaWithType("user_message", {
   sessionId: requiredSessionId("user_message"),
   text: requiredString("user_message missing text"),
+  attachments: z.array(userMessageAttachmentDraftSchema).min(1, {
+    error: "user_message attachments must contain at least one item",
+  }).optional(),
   clientMessageId: optionalString("user_message invalid clientMessageId"),
 });
 

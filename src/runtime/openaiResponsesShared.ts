@@ -37,7 +37,7 @@ type ToolResultLike = {
 };
 
 type PiMessageLike =
-  | { role: "user"; content: string }
+  | { role: "user"; content: string | Array<Record<string, unknown>> }
   | AssistantMessageLike
   | ToolResultLike;
 
@@ -61,6 +61,50 @@ function shortHash(str: string): string {
 
 export function sanitizeSurrogates(text: string): string {
   return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+}
+
+function userContentToResponsesInput(
+  content: string | Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  if (typeof content === "string") {
+    return [{ type: "input_text", text: sanitizeSurrogates(content) }];
+  }
+
+  const parts: Array<Record<string, unknown>> = [];
+  for (const rawPart of content) {
+    const part = typeof rawPart === "object" && rawPart !== null ? rawPart : null;
+    if (!part) continue;
+    const text =
+      typeof part.text === "string"
+        ? part.text
+        : typeof part.inputText === "string"
+          ? part.inputText
+          : null;
+    if ((part.type === "text" || part.type === "input_text") && text) {
+      parts.push({
+        type: "input_text",
+        text: sanitizeSurrogates(text),
+      });
+      continue;
+    }
+
+    if (part.type === "image" || part.type === "input_image") {
+      const mimeType =
+        typeof part.mimeType === "string"
+          ? part.mimeType
+          : typeof part.mime_type === "string"
+            ? part.mime_type
+            : null;
+      const data = typeof part.data === "string" ? part.data : null;
+      if (!mimeType || !data) continue;
+      parts.push({
+        type: "input_image",
+        detail: "auto",
+        image_url: `data:${mimeType};base64,${data}`,
+      });
+    }
+  }
+  return parts;
 }
 
 function transformMessages(
@@ -215,9 +259,11 @@ export function convertResponsesMessages(
   let msgIndex = 0;
   for (const msg of transformedMessages) {
     if (msg.role === "user") {
+      const content = userContentToResponsesInput(msg.content);
+      if (content.length === 0) continue;
       messages.push({
         role: "user",
-        content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }],
+        content,
       });
       msgIndex += 1;
       continue;

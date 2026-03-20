@@ -722,6 +722,57 @@ describe("openai responses runtime", () => {
     expect(request.include).toBeUndefined();
   });
 
+  test("request builder converts user image parts into Responses input_image blocks", () => {
+    const request = openAiNativeInternal.buildOpenAiNativeRequest({
+      provider: "openai",
+      model: {
+        id: "gpt-5.2",
+        name: "gpt-5.2",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 32768,
+      },
+      systemPrompt: "You are helpful.",
+      piMessages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "Describe this image." },
+          { type: "image", data: "abc123", mimeType: "image/png" },
+        ],
+      }],
+      tools: [],
+      streamOptions: {},
+    });
+
+    expect((request.input as Array<Record<string, unknown>>)[0]).toEqual(
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: "Describe this image." },
+          { type: "input_image", detail: "auto", image_url: "data:image/png;base64,abc123" },
+        ],
+      },
+    );
+    expect(request.input).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: "Describe this image." },
+          { type: "input_image", detail: "auto", image_url: "data:image/png;base64,abc123" },
+        ],
+      },
+      {
+        role: "developer",
+        content: [{ type: "input_text", text: "# Juice: 0 !important" }],
+      },
+    ]);
+  });
+
   test("request builder keeps legacy webSearch when codex is explicitly configured for exa", () => {
     const request = openAiNativeInternal.buildOpenAiNativeRequest({
       provider: "codex-cli",

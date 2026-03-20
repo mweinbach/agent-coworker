@@ -39,6 +39,7 @@ import {
 } from "../store.helpers";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
 import type {
+  PendingThreadMessage,
   SessionSnapshot,
   SessionSnapshotFingerprint,
   ThreadBusyPolicy,
@@ -48,6 +49,25 @@ import type {
 } from "../types";
 
 export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "removeThread" | "deleteThreadHistory" | "renameThread" | "newThread" | "selectThread" | "reconnectThread" | "sendMessage" | "cancelThread" | "clearThreadUsageHardCap" | "setThreadModel" | "setComposerText" | "setInjectContext" | "answerAsk" | "answerApproval" | "dismissPrompt" | "loadAllThreadUsage"> {
+  const normalizePendingThreadMessage = (
+    message?: string | PendingThreadMessage,
+  ): PendingThreadMessage | null => {
+    if (typeof message === "string") {
+      return message.trim() ? { text: message } : null;
+    }
+    if (!message) return null;
+    const text = message.text.trim();
+    const attachments = message.attachments?.length ? message.attachments : undefined;
+    if (!text && !attachments) return null;
+    return {
+      text,
+      ...(attachments ? { attachments } : {}),
+    };
+  };
+
+  const hasPendingThreadMessagePayload = (message?: string | PendingThreadMessage): boolean =>
+    normalizePendingThreadMessage(message) !== null;
+
   const waitForSelectionFrame = async () => {
     await new Promise<void>((resolve) => {
       if (typeof window === "undefined") {
@@ -375,7 +395,8 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         set({ selectedWorkspaceId: workspaceId });
       }
 
-      const createSessionImmediately = opts?.mode === "session" || Boolean(opts?.firstMessage?.trim());
+      const firstMessage = normalizePendingThreadMessage(opts?.firstMessage);
+      const createSessionImmediately = opts?.mode === "session" || Boolean(firstMessage);
       if (!createSessionImmediately) {
         const existingDraft = get().threads.find((thread) => thread.workspaceId === workspaceId && thread.draft === true);
         if (existingDraft) {
@@ -450,7 +471,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         return;
       }
 
-      ensureThreadSocket(get, set, threadId, url, opts?.firstMessage, false);
+      ensureThreadSocket(get, set, threadId, url, firstMessage ?? undefined, false);
     },
   
 
@@ -633,7 +654,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
     },
   
 
-    reconnectThread: async (threadId: string, firstMessage?: string, opts?: { selectionRequestId?: number }) => {
+    reconnectThread: async (threadId: string, firstMessage?: string | PendingThreadMessage, opts?: { selectionRequestId?: number }) => {
       const isReconnectCurrent = () =>
         opts?.selectionRequestId === undefined
         || (get().selectedThreadId === threadId && isCurrentThreadSelectionRequest(threadId, opts.selectionRequestId));
@@ -642,8 +663,9 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
   
       const thread = get().threads.find((t) => t.id === threadId);
       if (!thread) return;
+      const normalizedFirstMessage = normalizePendingThreadMessage(firstMessage);
 
-      if (thread.draft && !firstMessage?.trim()) {
+      if (thread.draft && !normalizedFirstMessage) {
         return;
       }
   
@@ -668,14 +690,18 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       }
       if (!isReconnectCurrent()) return;
   
-      if (firstMessage && firstMessage.trim()) {
-        queuePendingThreadMessage(threadId, firstMessage);
+      if (normalizedFirstMessage) {
+        queuePendingThreadMessage(threadId, firstMessage ?? normalizedFirstMessage);
       }
-      ensureThreadSocket(get, set, threadId, url, firstMessage, Boolean(firstMessage?.trim()));
+      ensureThreadSocket(get, set, threadId, url, normalizedFirstMessage ?? undefined, Boolean(normalizedFirstMessage));
     },
   
 
-    sendMessage: async (text: string, busyPolicy: ThreadBusyPolicy = "reject") => {
+    sendMessage: async (
+      text: string,
+      busyPolicy: ThreadBusyPolicy = "reject",
+      attachments?: PendingThreadMessage["attachments"],
+    ) => {
       const activeThreadId = get().selectedThreadId;
       if (!activeThreadId) return;
   
@@ -684,12 +710,24 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
   
       const rt = get().threadRuntimeById[activeThreadId];
       const trimmed = text.trim();
-      if (!trimmed) return;
+      const hasAttachments = Boolean(attachments?.length);
+      if (!trimmed && !hasAttachments) return;
+      const withAttachments = (messageText: string): string | PendingThreadMessage =>
+        hasAttachments
+          ? {
+              text: messageText,
+              attachments,
+            }
+          : messageText;
   
       if (rt?.transcriptOnly) {
         const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
         const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
-        await get().newThread({ workspaceId: thread.workspaceId, titleHint: thread.title, firstMessage });
+        await get().newThread({
+          workspaceId: thread.workspaceId,
+          titleHint: thread.title,
+          firstMessage: withAttachments(firstMessage),
+        });
         set({ composerText: "" });
         return;
       }
@@ -697,12 +735,12 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       if (thread.status !== "active" || !rt?.sessionId) {
         const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
         const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
-        await get().reconnectThread(activeThreadId, firstMessage);
+        await get().reconnectThread(activeThreadId, withAttachments(firstMessage));
         set({ composerText: "" });
         return;
       }
   
-      const ok = sendUserMessageToThread(get, set, activeThreadId, trimmed, busyPolicy);
+      const ok = sendUserMessageToThread(get, set, activeThreadId, withAttachments(trimmed), busyPolicy);
       if (!ok) return;
       if (busyPolicy === "steer" && rt?.busy) return;
 

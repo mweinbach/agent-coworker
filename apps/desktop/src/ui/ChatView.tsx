@@ -1,11 +1,33 @@
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type {
+  ChangeEvent as ReactChangeEvent,
+  DragEvent as ReactDragEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 
-import { AlertTriangleIcon, LoaderCircleIcon, MessageSquareIcon, RotateCcwIcon } from "lucide-react";
+import {
+  AlertTriangleIcon,
+  FileTextIcon,
+  FilmIcon,
+  ImageIcon,
+  LoaderCircleIcon,
+  MessageSquareIcon,
+  Music4Icon,
+  PaperclipIcon,
+  RotateCcwIcon,
+  XIcon,
+} from "lucide-react";
 import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
 
 import { useAppStore } from "../app/store";
-import type { FeedItem, ThreadAgentSummary, ThreadPendingSteer, ThreadStatus } from "../app/types";
+import type {
+  ComposerAttachment,
+  FeedItem,
+  ThreadAgentSummary,
+  ThreadMessageAttachment,
+  ThreadPendingSteer,
+  ThreadStatus,
+} from "../app/types";
 import {
   Conversation,
   ConversationContent,
@@ -48,6 +70,12 @@ import type { ProviderName } from "../lib/wsProtocol";
 import { cn } from "../lib/utils";
 import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
 import {
+  classifyUserMessageAttachmentKind,
+  inferUserMessageAttachmentMimeType,
+  supportsUserMessageAttachmentMimeType,
+  supportsUserMessageAttachments,
+} from "../../../../src/shared/messageAttachments";
+import {
   buildCitationOverflowFilePathsByMessageId,
   buildCitationSourcesByMessageId,
   buildCitationUrlsByMessageId,
@@ -74,6 +102,87 @@ function useChatViewContext(): ChatViewContextValue {
     throw new Error("ChatViewContext is not available");
   }
   return context;
+}
+
+function attachmentKindLabel(kind: ThreadMessageAttachment["kind"]): string {
+  switch (kind) {
+    case "image":
+      return "Image";
+    case "audio":
+      return "Audio";
+    case "video":
+      return "Video";
+    case "document":
+      return "PDF";
+  }
+}
+
+function AttachmentKindIcon(props: { kind: ThreadMessageAttachment["kind"]; className?: string }) {
+  switch (props.kind) {
+    case "image":
+      return <ImageIcon className={props.className} />;
+    case "audio":
+      return <Music4Icon className={props.className} />;
+    case "video":
+      return <FilmIcon className={props.className} />;
+    case "document":
+      return <FileTextIcon className={props.className} />;
+  }
+}
+
+function formatAttachmentSize(sizeBytes: number): string {
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)} KB`;
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function attachmentInputAcceptValue(opts: {
+  provider: string;
+  model: string;
+} | null): string | undefined {
+  if (!opts || !supportsUserMessageAttachments(opts.provider as ProviderName, opts.model)) {
+    return undefined;
+  }
+  if (opts.provider === "google") {
+    return "image/*,audio/*,video/*,application/pdf";
+  }
+  return "image/*";
+}
+
+function attachmentHintForTarget(opts: {
+  provider: string;
+  model: string;
+} | null): string {
+  if (!opts) return "Drop files to attach them.";
+  if (!supportsUserMessageAttachments(opts.provider as ProviderName, opts.model)) {
+    return "Current model does not support attachments.";
+  }
+  return opts.provider === "google"
+    ? "Drop images, audio, video, or PDFs."
+    : "Drop images to attach them.";
+}
+
+async function fileToBase64(file: File): Promise<string> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error(`Failed to read ${file.name}.`));
+        return;
+      }
+      resolve(reader.result);
+    };
+    reader.onerror = () => {
+      reject(new Error(`Failed to read ${file.name}.`));
+    };
+    reader.readAsDataURL(file);
+  });
+
+  const separator = dataUrl.indexOf(",");
+  if (separator < 0) {
+    throw new Error(`Failed to read ${file.name}.`);
+  }
+  return dataUrl.slice(separator + 1);
 }
 
 export function reasoningLabelForMode(mode: "reasoning" | "summary"): string {
@@ -176,12 +285,15 @@ export function getComposerSubmitState(opts: {
   busy: boolean;
   hasPromptModal: boolean;
   composerText: string;
+  attachmentCount: number;
   pendingSteer: ThreadPendingSteer | null;
   sessionId: string | null;
   threadStatus: ThreadStatus;
 }): { status: "ready" | "streaming"; disabled: boolean; mode: "send" | "steer-ready" | "steer-pending" } {
   const composerText = opts.composerText.trim();
   const hasComposerText = composerText.length > 0;
+  const hasAttachments = opts.attachmentCount > 0;
+  const hasComposerInput = hasComposerText || hasAttachments;
   const steerPending = opts.busy
     && hasComposerText
     && opts.pendingSteer?.status === "sending"
@@ -200,13 +312,20 @@ export function getComposerSubmitState(opts: {
     mode: opts.busy ? (steerPending ? "steer-pending" : "steer-ready") : "send",
     disabled:
       opts.hasPromptModal
-      || !hasComposerText
+      || !hasComposerInput
+      || (opts.busy && hasAttachments)
       || steerPending
       || (opts.busy && (!opts.sessionId || opts.threadStatus !== "active")),
   };
 }
 
-export function composerBusyHint(submitState: ReturnType<typeof getComposerSubmitState>): string {
+export function composerBusyHint(
+  submitState: ReturnType<typeof getComposerSubmitState>,
+  opts?: { hasAttachments?: boolean; busy?: boolean },
+): string {
+  if (opts?.busy && opts?.hasAttachments) {
+    return "Wait for the current run to finish before sending attachments.";
+  }
   if (submitState.status === "streaming") {
     return "Type to steer, or use stop to cancel.";
   }
@@ -323,6 +442,50 @@ export function ChatThreadHeader(props: {
   );
 }
 
+function MessageAttachmentList(props: {
+  attachments: ThreadMessageAttachment[];
+  showSize?: boolean;
+  removable?: boolean;
+  onRemove?: (attachmentId: string) => void;
+  attachmentIds?: string[];
+  sizeById?: Record<string, number>;
+}) {
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {props.attachments.map((attachment, index) => {
+        const attachmentId = props.attachmentIds?.[index];
+        const sizeBytes = attachmentId ? props.sizeById?.[attachmentId] : undefined;
+        return (
+          <div
+            key={`${attachment.filename}:${attachment.path ?? index}`}
+            className="inline-flex max-w-full items-center gap-2 rounded-full border border-border/60 bg-muted/30 px-2.5 py-1 text-xs text-foreground/90"
+            title={attachment.path ?? attachment.filename}
+          >
+            <AttachmentKindIcon kind={attachment.kind} className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate font-medium">{attachment.filename}</span>
+            <span className="shrink-0 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+              {attachmentKindLabel(attachment.kind)}
+            </span>
+            {props.showSize && typeof sizeBytes === "number" ? (
+              <span className="shrink-0 text-muted-foreground">{formatAttachmentSize(sizeBytes)}</span>
+            ) : null}
+            {props.removable && attachmentId && props.onRemove ? (
+              <button
+                type="button"
+                className="inline-flex size-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                onClick={() => props.onRemove?.(attachmentId)}
+                aria-label={`Remove ${attachment.filename}`}
+              >
+                <XIcon className="size-3" />
+              </button>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 const FeedRow = memo(function FeedRow(props: {
   item: FeedItem;
   citationUrlsByIndex?: ReadonlyMap<number, string>;
@@ -346,7 +509,12 @@ const FeedRow = memo(function FeedRow(props: {
               {item.text}
             </MessageResponse>
           ) : (
-            <div className="whitespace-pre-wrap">{item.text}</div>
+            <div>
+              {item.text ? <div className="whitespace-pre-wrap">{item.text}</div> : null}
+              {item.attachments && item.attachments.length > 0 ? (
+                <MessageAttachmentList attachments={item.attachments} />
+              ) : null}
+            </div>
           )}
         </MessageContent>
         {hasSources && (
@@ -499,6 +667,8 @@ function ThreadModelSelector({
 export function ChatView() {
   const bootstrapPending = useAppStore((s) => s.bootstrapPending);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
+  const workspaces = useAppStore((s) => s.workspaces);
+  const providerDefaultModelByProvider = useAppStore((s) => s.providerDefaultModelByProvider);
   const thread = useAppStore((s) => {
     if (!s.selectedThreadId) return null;
     return s.threads.find((t) => t.id === s.selectedThreadId) ?? null;
@@ -518,6 +688,9 @@ export function ChatView() {
     () => new Map(),
   );
   const [cancelScopeDialogOpen, setCancelScopeDialogOpen] = useState(false);
+  const [composerAttachments, setComposerAttachments] = useState<ComposerAttachment[]>([]);
+  const [composerAttachmentError, setComposerAttachmentError] = useState<string | null>(null);
+  const [composerDragActive, setComposerDragActive] = useState(false);
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
@@ -527,6 +700,7 @@ export function ChatView() {
   const newThread = useAppStore((s) => s.newThread);
 
   const feedRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const lastCountRef = useRef<number>(0);
   const autoScrolledThreadIdRef = useRef<string | null>(null);
@@ -563,12 +737,44 @@ export function ChatView() {
     () => countActiveChildAgents(rt?.agents ?? []),
     [rt?.agents],
   );
+  const currentWorkspace = useMemo(
+    () => (thread ? workspaces.find((workspace) => workspace.id === thread.workspaceId) ?? null : null),
+    [thread, workspaces],
+  );
+  const attachmentTarget = useMemo(() => {
+    if (rt?.config?.provider && rt?.config?.model) {
+      return { provider: rt.config.provider, model: rt.config.model };
+    }
+    const provider = currentWorkspace?.defaultProvider ?? "google";
+    const model = currentWorkspace?.defaultModel ?? providerDefaultModelByProvider[provider];
+    return model ? { provider, model } : null;
+  }, [currentWorkspace, providerDefaultModelByProvider, rt?.config?.model, rt?.config?.provider]);
+  const attachmentsAvailable = !attachmentTarget
+    || supportsUserMessageAttachments(attachmentTarget.provider, attachmentTarget.model);
+  const composerAttachmentSizeById = useMemo<Record<string, number>>(
+    () => Object.fromEntries(composerAttachments.map((attachment) => [attachment.id, attachment.sizeBytes])),
+    [composerAttachments],
+  );
+  const composerFeedAttachments = useMemo<ThreadMessageAttachment[]>(
+    () =>
+      composerAttachments.map((attachment) => ({
+        filename: attachment.filename,
+        mimeType: attachment.mimeType,
+        kind: attachment.kind,
+      })),
+    [composerAttachments],
+  );
+  const composerAttachmentDrafts = useMemo(
+    () => composerAttachments.map(({ id: _id, kind: _kind, sizeBytes: _sizeBytes, ...draft }) => draft),
+    [composerAttachments],
+  );
   const contextValue = useMemo<ChatViewContextValue>(
     () => ({
       developerMode,
     }),
     [developerMode],
   );
+  const busy = rt?.busy === true;
 
   const handleStop = useCallback(() => {
     if (!selectedThreadId) return;
@@ -584,6 +790,84 @@ export function ChatView() {
     cancelThread(selectedThreadId, { includeSubagents });
     setCancelScopeDialogOpen(false);
   }, [cancelThread, selectedThreadId]);
+
+  const removeComposerAttachment = useCallback((attachmentId: string) => {
+    setComposerAttachments((current) => current.filter((attachment) => attachment.id !== attachmentId));
+    setComposerAttachmentError(null);
+  }, []);
+
+  const addFilesToComposer = useCallback(async (files: File[] | FileList) => {
+    const nextFiles = Array.from(files);
+    if (nextFiles.length === 0) return;
+
+    if (attachmentTarget && !supportsUserMessageAttachments(attachmentTarget.provider, attachmentTarget.model)) {
+      setComposerAttachmentError("Current model does not support attachments.");
+      return;
+    }
+
+    const nextAttachments: ComposerAttachment[] = [];
+    let firstError: string | null = null;
+    for (const file of nextFiles) {
+      const mimeType = inferUserMessageAttachmentMimeType(file.name, file.type);
+      if (!mimeType) {
+        firstError ??= `Unsupported file type for ${file.name}.`;
+        continue;
+      }
+      const kind = classifyUserMessageAttachmentKind(mimeType);
+      if (!kind) {
+        firstError ??= `Unsupported file type for ${file.name}.`;
+        continue;
+      }
+      if (
+        attachmentTarget
+        && !supportsUserMessageAttachmentMimeType(attachmentTarget.provider, attachmentTarget.model, mimeType)
+      ) {
+        firstError ??= `${file.name} is not supported by the current model. ${attachmentHintForTarget(attachmentTarget)}`;
+        continue;
+      }
+
+      try {
+        nextAttachments.push({
+          id: crypto.randomUUID(),
+          filename: file.name,
+          mimeType,
+          kind,
+          sizeBytes: file.size,
+          contentBase64: await fileToBase64(file),
+        });
+      } catch (error) {
+        firstError ??= error instanceof Error ? error.message : `Failed to read ${file.name}.`;
+      }
+    }
+
+    if (nextAttachments.length > 0) {
+      setComposerAttachments((current) => {
+        const seen = new Set(current.map((attachment) => `${attachment.filename}:${attachment.sizeBytes}:${attachment.mimeType}`));
+        const deduped = nextAttachments.filter((attachment) => {
+          const signature = `${attachment.filename}:${attachment.sizeBytes}:${attachment.mimeType}`;
+          if (seen.has(signature)) return false;
+          seen.add(signature);
+          return true;
+        });
+        return [...current, ...deduped];
+      });
+    }
+
+    setComposerAttachmentError(firstError);
+  }, [attachmentTarget]);
+
+  const handleComposerFileInput = useCallback(async (event: ReactChangeEvent<HTMLInputElement>) => {
+    if (!event.currentTarget.files) return;
+    await addFilesToComposer(event.currentTarget.files);
+    event.currentTarget.value = "";
+  }, [addFilesToComposer]);
+
+  const handleComposerDrop = useCallback(async (event: ReactDragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setComposerDragActive(false);
+    if (!event.dataTransfer.files || event.dataTransfer.files.length === 0) return;
+    await addFilesToComposer(event.dataTransfer.files);
+  }, [addFilesToComposer]);
 
   useEffect(() => {
     const el = feedRef.current;
@@ -654,6 +938,12 @@ export function ChatView() {
   }, [selectedThreadId]);
 
   useEffect(() => {
+    setComposerAttachments([]);
+    setComposerAttachmentError(null);
+    setComposerDragActive(false);
+  }, [selectedThreadId]);
+
+  useEffect(() => {
     if (!rt?.busy || activeChildAgentCount === 0) {
       setCancelScopeDialogOpen(false);
     }
@@ -664,10 +954,24 @@ export function ChatView() {
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
-        void sendMessage(composerText, resolveComposerBusyPolicy(rt?.busy === true));
+        if (busy && composerAttachments.length > 0) {
+          setComposerAttachmentError("Wait for the current run to finish before sending attachments.");
+          return;
+        }
+        void (async () => {
+          await sendMessage(
+            composerText,
+            resolveComposerBusyPolicy(rt?.busy === true),
+            composerAttachmentDrafts,
+          );
+          if (!busy) {
+            setComposerAttachments([]);
+            setComposerAttachmentError(null);
+          }
+        })();
       }
     },
-    [composerText, rt?.busy, sendMessage],
+    [busy, composerAttachmentDrafts, composerAttachments.length, composerText, rt?.busy, sendMessage],
   );
 
   if (!selectedThreadId || !thread) {
@@ -688,7 +992,6 @@ export function ChatView() {
     );
   }
 
-  const busy = rt?.busy === true;
   const disabled = hasPromptModal;
   const transcriptOnly = rt?.transcriptOnly === true;
   const hydrating = rt?.hydrating === true || (bootstrapPending && Boolean(selectedThreadId) && Boolean(thread) && rt === null);
@@ -710,6 +1013,7 @@ export function ChatView() {
     busy,
     hasPromptModal,
     composerText,
+    attachmentCount: composerAttachments.length,
     pendingSteer: rt?.pendingSteer ?? null,
     sessionId: rt?.sessionId ?? null,
     threadStatus: thread.status,
@@ -796,15 +1100,74 @@ export function ChatView() {
 
       <div className="relative border-t border-border/60 px-4 py-1.5 flex flex-col shrink-0" style={{ height: messageBarHeight }}>
         <MessageBarResizer />
-        <PromptInputRoot>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept={attachmentInputAcceptValue(attachmentTarget)}
+          className="hidden"
+          onChange={(event) => {
+            void handleComposerFileInput(event);
+          }}
+        />
+        <PromptInputRoot
+          className={cn(
+            composerDragActive && "border border-primary/30 bg-primary/5 ring-2 ring-primary/25",
+          )}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+            if (!composerDragActive) {
+              setComposerDragActive(true);
+            }
+          }}
+          onDragLeave={() => {
+            setComposerDragActive(false);
+          }}
+          onDrop={(event) => {
+            void handleComposerDrop(event);
+          }}
+        >
             <PromptInputForm
               onSubmit={(event) => {
                 event.preventDefault();
-                if (!composerText.trim()) return;
-                void sendMessage(composerText, resolveComposerBusyPolicy(busy));
+                if (!composerText.trim() && composerAttachments.length === 0) return;
+                if (busy && composerAttachments.length > 0) {
+                  setComposerAttachmentError("Wait for the current run to finish before sending attachments.");
+                  return;
+                }
+                void (async () => {
+                  await sendMessage(
+                    composerText,
+                    resolveComposerBusyPolicy(busy),
+                    composerAttachmentDrafts,
+                  );
+                  if (!busy) {
+                    setComposerAttachments([]);
+                    setComposerAttachmentError(null);
+                  }
+                })();
               }}
             >
-              <PromptInputBody>
+              <PromptInputBody className="flex-col gap-2">
+                {composerAttachments.length > 0 ? (
+                  <MessageAttachmentList
+                    attachments={composerFeedAttachments}
+                    removable
+                    showSize
+                    attachmentIds={composerAttachments.map((attachment) => attachment.id)}
+                    sizeById={composerAttachmentSizeById}
+                    onRemove={removeComposerAttachment}
+                  />
+                ) : null}
+                {composerDragActive ? (
+                  <div className="rounded-xl border border-dashed border-primary/40 bg-primary/5 px-3 py-2 text-xs text-primary">
+                    {attachmentHintForTarget(attachmentTarget)}
+                  </div>
+                ) : null}
+                {composerAttachmentError ? (
+                  <div className="px-1.5 text-xs text-destructive">{composerAttachmentError}</div>
+                ) : null}
                 <PromptInputTextarea
                   ref={textareaRef}
                   value={composerText}
@@ -817,6 +1180,18 @@ export function ChatView() {
               </PromptInputBody>
               <PromptInputFooter>
                 <PromptInputTools>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 rounded-full px-2.5 text-xs text-muted-foreground hover:text-foreground"
+                    disabled={!attachmentsAvailable}
+                    onClick={() => fileInputRef.current?.click()}
+                    title={attachmentHintForTarget(attachmentTarget)}
+                    aria-label="Attach files"
+                  >
+                    <PaperclipIcon className="size-3.5" />
+                  </Button>
                   {modelSelectorConfig ? (
                     <ThreadModelSelector
                       threadId={selectedThreadId}
@@ -828,7 +1203,10 @@ export function ChatView() {
                 </PromptInputTools>
                 <div className={cn("flex shrink-0 items-center gap-2", busy ? "opacity-100" : "opacity-70")}>
                   <span className="hidden max-w-[18rem] text-right text-xs leading-tight text-muted-foreground sm:block">
-                    {composerBusyHint(composerSubmitState)}
+                    {composerBusyHint(composerSubmitState, {
+                      busy,
+                      hasAttachments: composerAttachments.length > 0,
+                    })}
                   </span>
                   <PromptInputSubmit
                     mode={composerSubmitState.mode}

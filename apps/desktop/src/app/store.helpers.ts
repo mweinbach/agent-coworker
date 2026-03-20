@@ -7,6 +7,7 @@ import type {
   PersistedProviderUiState,
   Notification,
   OnboardingStep,
+  PendingThreadMessage,
   PersistedOnboardingState,
   PromptModalState,
   SettingsPageId,
@@ -199,14 +200,14 @@ export type AppStoreState = {
   selectWorkspace: (workspaceId: string) => Promise<void>;
   reorderWorkspaces: (sourceWorkspaceId: string, targetWorkspaceId: string) => Promise<void>;
 
-  newThread: (opts?: { workspaceId?: string; titleHint?: string; firstMessage?: string; mode?: "draft" | "session" }) => Promise<void>;
+  newThread: (opts?: { workspaceId?: string; titleHint?: string; firstMessage?: string | PendingThreadMessage; mode?: "draft" | "session" }) => Promise<void>;
   removeThread: (threadId: string) => Promise<void>;
   deleteThreadHistory: (threadId: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
-  reconnectThread: (threadId: string, firstMessage?: string, opts?: { selectionRequestId?: number }) => Promise<void>;
+  reconnectThread: (threadId: string, firstMessage?: string | PendingThreadMessage, opts?: { selectionRequestId?: number }) => Promise<void>;
   renameThread: (threadId: string, newTitle: string) => void;
 
-  sendMessage: (text: string, busyPolicy?: ThreadBusyPolicy) => Promise<void>;
+  sendMessage: (text: string, busyPolicy?: ThreadBusyPolicy, attachments?: PendingThreadMessage["attachments"]) => Promise<void>;
   cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => void;
   clearThreadUsageHardCap: (threadId: string) => void;
   setThreadModel: (threadId: string, provider: ProviderName, model: string) => void;

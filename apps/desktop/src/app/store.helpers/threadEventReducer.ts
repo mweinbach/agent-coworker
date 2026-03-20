@@ -1,5 +1,6 @@
 import { AgentSocket } from "../../lib/agentSocket";
 import { VERSION } from "../../lib/version";
+import { classifyUserMessageAttachmentKind } from "../../../../../src/shared/messageAttachments";
 import type { ClientMessage, ServerEvent } from "../../lib/wsProtocol";
 import {
   mapModelStreamChunk,
@@ -23,8 +24,10 @@ import type {
   AskPrompt,
   FeedItem,
   Notification,
+  PendingThreadMessage,
   ThreadAgentSummary,
   ThreadBusyPolicy,
+  ThreadMessageAttachment,
   ThreadTitleSource,
 } from "../types";
 import {
@@ -42,6 +45,38 @@ import {
 } from "./runtimeState";
 
 const MAX_FEED_ITEMS = 2000;
+
+function normalizePendingThreadMessage(
+  message: string | PendingThreadMessage,
+): PendingThreadMessage {
+  if (typeof message === "string") {
+    return { text: message };
+  }
+  return {
+    text: message.text,
+    ...(message.attachments && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
+  };
+}
+
+function messageHasPayload(message: PendingThreadMessage): boolean {
+  return message.text.trim().length > 0 || Boolean(message.attachments?.length);
+}
+
+function draftAttachmentsToFeedAttachments(
+  attachments: PendingThreadMessage["attachments"],
+): ThreadMessageAttachment[] | undefined {
+  if (!attachments || attachments.length === 0) return undefined;
+  const mapped = attachments.flatMap<ThreadMessageAttachment>((attachment) => {
+    const kind = classifyUserMessageAttachmentKind(attachment.mimeType);
+    if (!kind) return [];
+    return [{
+      filename: attachment.filename,
+      mimeType: attachment.mimeType,
+      kind,
+    }];
+  });
+  return mapped.length > 0 ? mapped : undefined;
+}
 
 function sortAgentSummaries(agents: ThreadAgentSummary[]): ThreadAgentSummary[] {
   return [...agents].sort((left, right) => {
@@ -213,11 +248,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     get: StoreGet,
     set: StoreSet,
     threadId: string,
-    text: string,
+    message: string | PendingThreadMessage,
     busyPolicy: ThreadBusyPolicy = "reject",
   ): boolean {
-    const trimmed = text.trim();
-    if (!trimmed) return false;
+    const normalizedMessage = normalizePendingThreadMessage(message);
+    const trimmed = normalizedMessage.text.trim();
+    const draftAttachments = draftAttachmentsToFeedAttachments(normalizedMessage.attachments);
+    if (!trimmed && !draftAttachments) return false;
 
     const thread = get().threads.find((t) => t.id === threadId);
     if (!thread) return false;
@@ -226,10 +263,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     if (!rt?.sessionId) return false;
 
     if (rt.busy) {
+      if (draftAttachments) {
+        return false;
+      }
       if (busyPolicy === "queue") {
         RUNTIME.pendingThreadMessages.set(threadId, [
           ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
-          trimmed,
+          normalizedMessage,
         ]);
         return true;
       }
@@ -323,12 +363,14 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       role: "user",
       ts: deps.nowIso(),
       text: trimmed,
+      ...(draftAttachments ? { attachments: draftAttachments } : {}),
     });
 
     deps.appendThreadTranscript(threadId, "client", {
       type: "user_message",
       sessionId: rt.sessionId,
       text: trimmed,
+      ...(draftAttachments ? { attachments: draftAttachments } : {}),
       clientMessageId,
     });
 
@@ -336,6 +378,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       type: "user_message",
       sessionId,
       text: trimmed,
+      ...(normalizedMessage.attachments && normalizedMessage.attachments.length > 0
+        ? { attachments: normalizedMessage.attachments }
+        : {}),
       clientMessageId,
     }));
 
@@ -397,7 +442,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     set: StoreSet,
     threadId: string,
     evt: ServerEvent,
-    pendingFirstMessage?: string,
+    pendingFirstMessage?: string | PendingThreadMessage,
     pendingFirstMessageQueued = false,
   ) {
     if (evt.type !== "server_hello") {
@@ -476,18 +521,21 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       }
 
       let sentPendingFirstMessage = false;
-      if (pendingFirstMessage && pendingFirstMessage.trim()) {
+      const normalizedPendingFirstMessage = pendingFirstMessage
+        ? normalizePendingThreadMessage(pendingFirstMessage)
+        : null;
+      if (normalizedPendingFirstMessage && messageHasPayload(normalizedPendingFirstMessage)) {
         if (resumedBusy) {
           if (!pendingFirstMessageQueued) {
             RUNTIME.pendingThreadMessages.set(threadId, [
-              pendingFirstMessage.trim(),
+              normalizedPendingFirstMessage,
               ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
             ]);
           }
         } else {
           sentPendingFirstMessage = pendingFirstMessageQueued
             ? flushOneQueuedThreadMessage(get, set, threadId)
-            : sendUserMessageToThread(get, set, threadId, pendingFirstMessage);
+            : sendUserMessageToThread(get, set, threadId, normalizedPendingFirstMessage);
         }
       }
 
@@ -805,7 +853,22 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       }
       if (cmid) {
         const seen = RUNTIME.optimisticUserMessageIds.get(threadId);
-        if (seen && seen.has(cmid)) return;
+        if (seen && seen.has(cmid)) {
+          if (evt.attachments && evt.attachments.length > 0) {
+            updateFeedItem(set, threadId, cmid, (item) =>
+              item.kind === "message" && item.role === "user"
+                ? { ...item, attachments: evt.attachments }
+                : item
+            );
+          }
+          if (evt.attachments && evt.attachments.length > 0) {
+            const thread = get().threads.find((entry) => entry.id === threadId);
+            if (thread) {
+              void get().refreshWorkspaceFiles(thread.workspaceId);
+            }
+          }
+          return;
+        }
       }
 
       pushFeedItem(set, threadId, {
@@ -814,7 +877,15 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         role: "user",
         ts: deps.nowIso(),
         text: evt.text,
+        ...(evt.attachments && evt.attachments.length > 0 ? { attachments: evt.attachments } : {}),
       });
+
+      if (evt.attachments && evt.attachments.length > 0) {
+        const thread = get().threads.find((entry) => entry.id === threadId);
+        if (thread) {
+          void get().refreshWorkspaceFiles(thread.workspaceId);
+        }
+      }
 
       set((s) => ({
         threads: s.threads.map((t) =>
@@ -987,7 +1058,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     set: StoreSet,
     threadId: string,
     url: string,
-    pendingFirstMessage?: string,
+    pendingFirstMessage?: string | PendingThreadMessage,
     pendingFirstMessageQueued = false,
   ) {
     if (RUNTIME.threadSockets.has(threadId)) return;

@@ -80,6 +80,11 @@ function contentTextParts(content: unknown): string[] {
       continue;
     }
 
+    if (partType === "audio" || partType === "video" || partType === "document") {
+      parts.push("[non-text content]");
+      continue;
+    }
+
     if (
       record.image !== undefined ||
       record.imageUrl !== undefined ||
@@ -88,6 +93,50 @@ function contentTextParts(content: unknown): string[] {
     ) {
       parts.push("[non-text content]");
     }
+  }
+  return parts;
+}
+
+function userContentFromModelContent(
+  content: unknown,
+): string | Array<Record<string, unknown>> | null {
+  if (typeof content === "string") {
+    const text = content.trim();
+    return text ? text : null;
+  }
+  if (!Array.isArray(content)) return null;
+
+  const parts: Array<Record<string, unknown>> = [];
+  let hasNonTextPart = false;
+  for (const rawPart of content) {
+    if (typeof rawPart === "string") {
+      if (rawPart.trim()) {
+        parts.push({ type: "text", text: rawPart });
+      }
+      continue;
+    }
+
+    const record = asRecord(rawPart);
+    if (!record) continue;
+    const partType = asString(record.type);
+    const text = asString(record.text) ?? asString(record.inputText);
+    if ((partType === "text" || partType === "input_text") && text?.trim()) {
+      parts.push({ type: "text", text });
+      continue;
+    }
+
+    if (partType === "image" || partType === "input_image") {
+      const data = asNonEmptyString(record.data);
+      const mimeType = asNonEmptyString(record.mimeType) ?? asNonEmptyString(record.mime_type);
+      if (!data || !mimeType) continue;
+      hasNonTextPart = true;
+      parts.push({ type: "image", data, mimeType });
+    }
+  }
+
+  if (parts.length === 0) return null;
+  if (!hasNonTextPart && parts.length === 1 && parts[0]?.type === "text" && typeof parts[0]?.text === "string") {
+    return parts[0].text;
   }
   return parts;
 }
@@ -279,12 +328,11 @@ export function modelMessagesToPiMessages(messages: ModelMessage[], provider: st
     if (!role) continue;
 
     if (role === "user") {
-      const textParts = contentTextParts(message.content);
-      const text = textParts.join("\n").trim();
-      if (!text) continue;
+      const content = userContentFromModelContent(message.content);
+      if (!content) continue;
       out.push({
         role: "user",
-        content: text,
+        content,
         timestamp: now,
       } as PiMessage);
       continue;

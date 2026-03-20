@@ -6,6 +6,7 @@ import {
 } from "../modelStream";
 import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
 import { supportsProviderManagedContinuationProvider } from "../../shared/providerContinuation";
+import type { UserMessageAttachment } from "../../shared/messageAttachments";
 import type { AgentExecutionState } from "../../shared/agents";
 import type { TurnUsage } from "../../session/costTracker";
 import {
@@ -354,7 +355,16 @@ export class TurnExecutionManager {
     this.context.emitError("validation_failed", "session", message);
   }
 
-  async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
+  async sendUserMessage(
+    text: string,
+    clientMessageId?: string,
+    displayText?: string,
+    extras?: {
+      content?: ModelMessage["content"];
+      attachments?: UserMessageAttachment[];
+      titleText?: string;
+    },
+  ) {
     if (this.context.state.running) {
       this.context.emitError("busy", "session", "Agent is busy");
       return;
@@ -379,10 +389,13 @@ export class TurnExecutionManager {
     this.context.state.acceptingSteers = true;
     const turnStartedAt = Date.now();
     const turnId = makeId();
+    const visibleText = displayText ?? text;
+    const userMessageContent = extras?.content ?? text;
+    const titleText = extras?.titleText ?? text;
     this.context.state.currentTurnId = turnId;
     this.context.state.currentTurnOutcome = "completed";
     this.updateSessionExecutionState("running");
-    const cause: "user_message" | "command" = displayText?.startsWith("/") ? "command" : "user_message";
+    const cause: "user_message" | "command" = visibleText.startsWith("/") ? "command" : "user_message";
     let lastStreamError: unknown = null;
     let lastMessagePreview: string | undefined;
     let aggregatedUsage: TurnUsage | undefined;
@@ -582,15 +595,23 @@ export class TurnExecutionManager {
         },
       });
     try {
-      this.context.emit({ type: "user_message", sessionId: this.context.id, text: displayText ?? text, clientMessageId });
+      this.context.emit({
+        type: "user_message",
+        sessionId: this.context.id,
+        text: visibleText,
+        ...(extras?.attachments && extras.attachments.length > 0 ? { attachments: extras.attachments } : {}),
+        ...(clientMessageId ? { clientMessageId } : {}),
+      });
       this.context.emit({ type: "session_busy", sessionId: this.context.id, busy: true, turnId, cause });
       this.context.emitTelemetry("agent.turn.started", "ok", {
         sessionId: this.context.id,
         provider: this.context.state.config.provider,
         model: this.context.state.config.model,
       });
-      this.deps.historyManager.appendMessagesToHistory([{ role: "user", content: text }]);
-      this.deps.metadataManager.maybeGenerateTitleFromQuery(text);
+      this.deps.historyManager.appendMessagesToHistory([{ role: "user", content: userMessageContent }]);
+      if (titleText.trim().length > 0) {
+        this.deps.metadataManager.maybeGenerateTitleFromQuery(titleText);
+      }
       this.context.queuePersistSessionSnapshot("session.user_message");
       let continueSameTurn = true;
       while (continueSameTurn) {

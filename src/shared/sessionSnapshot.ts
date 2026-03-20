@@ -27,6 +27,7 @@ import {
   type ServerErrorSource,
   type TodoItem,
 } from "../types";
+import type { UserMessageAttachment } from "./messageAttachments";
 
 const isoTimestampSchema = z.string().datetime({ offset: true });
 const providerNameSchema = z.enum(PROVIDER_NAMES);
@@ -55,6 +56,7 @@ export type SessionFeedItem =
       ts: string;
       text: string;
       annotations?: Array<Record<string, unknown>>;
+      attachments?: UserMessageAttachment[];
     }
   | { id: string; kind: "reasoning"; mode: "reasoning" | "summary"; ts: string; text: string }
   | {
@@ -127,6 +129,12 @@ const feedItemSchema: z.ZodType<SessionFeedItem> = z.discriminatedUnion("kind", 
     ts: isoTimestampSchema,
     text: z.string(),
     annotations: z.array(z.record(z.string(), z.unknown())).optional(),
+    attachments: z.array(z.object({
+      filename: z.string().trim().min(1),
+      mimeType: z.string().trim().min(1),
+      kind: z.enum(["image", "audio", "video", "document"]),
+      path: z.string().optional(),
+    }).strict()).optional(),
   }).strict(),
   z.object({
     id: z.string().trim().min(1),

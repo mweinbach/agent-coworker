@@ -103,6 +103,32 @@ describe("safeParseClientMessage", () => {
       }
     });
 
+    test("user_message with multimodal attachments", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "user_message",
+          sessionId: "s1",
+          text: "describe this",
+          attachments: [
+            {
+              filename: "photo.png",
+              mimeType: "image/png",
+              contentBase64: "aGVsbG8=",
+            },
+          ],
+        }),
+      );
+      if (msg.type === "user_message") {
+        expect(msg.attachments).toEqual([
+          {
+            filename: "photo.png",
+            mimeType: "image/png",
+            contentBase64: "aGVsbG8=",
+          },
+        ]);
+      }
+    });
+
     test("user_message with empty text", () => {
       const msg = expectOk(
         JSON.stringify({ type: "user_message", sessionId: "s1", text: "" }),
@@ -131,6 +157,25 @@ describe("safeParseClientMessage", () => {
         }),
       );
       expect(err).toBe("user_message invalid clientMessageId");
+    });
+
+    test("user_message validates attachment fields", () => {
+      expect(expectErr(
+        JSON.stringify({
+          type: "user_message",
+          sessionId: "s1",
+          text: "hello",
+          attachments: [],
+        }),
+      )).toBe("user_message attachments must contain at least one item");
+      expect(expectErr(
+        JSON.stringify({
+          type: "user_message",
+          sessionId: "s1",
+          text: "hello",
+          attachments: [{ filename: "photo.png", mimeType: "", contentBase64: "aGVsbG8=" }],
+        }),
+      )).toBe("user_message attachments[].mimeType must be non-empty");
     });
   });
 
@@ -2370,6 +2415,34 @@ describe("safeParseClientMessage", () => {
       if (evt?.type === "steer_accepted") {
         expect(evt.turnId).toBe("turn-1");
         expect(evt.clientMessageId).toBe("cm-steer");
+      }
+    });
+
+    test("safeParseServerEvent accepts user_message attachments", () => {
+      const evt = safeParseServerEvent({
+        type: "user_message",
+        sessionId: "s1",
+        text: "",
+        clientMessageId: "cm-attach",
+        attachments: [
+          {
+            filename: "clip.mp4",
+            mimeType: "video/mp4",
+            kind: "video",
+            path: "/workspace/clip.mp4",
+          },
+        ],
+      });
+
+      expect(evt).not.toBeNull();
+      expect(evt?.type).toBe("user_message");
+      if (evt?.type === "user_message") {
+        expect(evt.attachments?.[0]).toEqual({
+          filename: "clip.mp4",
+          mimeType: "video/mp4",
+          kind: "video",
+          path: "/workspace/clip.mp4",
+        });
       }
     });
 

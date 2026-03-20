@@ -10,6 +10,7 @@ import {
   OPENAI_TEXT_VERBOSITY_VALUES,
 } from "../shared/openaiCompatibleOptions";
 import { CHILD_MODEL_ROUTING_MODES } from "../types";
+import type { UserMessageAttachment } from "../shared/messageAttachments";
 import {
   agentExecutionStateSchema,
   agentModeSchema,
@@ -32,6 +33,12 @@ const nonEmptyTrimmedStringSchema = z.preprocess((value) => {
 const stringArraySchema = z.array(z.string());
 const unknownArraySchema = z.array(z.unknown());
 const recordUnknownSchema = z.record(z.string(), z.unknown());
+const userMessageAttachmentSchema: z.ZodType<UserMessageAttachment> = z.object({
+  filename: z.string().trim().min(1),
+  mimeType: z.string().trim().min(1),
+  kind: z.enum(["image", "audio", "video", "document"]),
+  path: z.string().optional(),
+}).strict();
 const openAiCompatibleProviderOptionsSchema = z.object({
   reasoningEffort: z.enum(OPENAI_REASONING_EFFORT_VALUES).optional(),
   reasoningSummary: z.enum(OPENAI_REASONING_SUMMARY_VALUES).optional(),
@@ -300,6 +307,7 @@ const serverEventSchema = z.discriminatedUnion("type", [
     type: z.literal("user_message"),
     sessionId: nonEmptyTrimmedStringSchema,
     text: z.string(),
+    attachments: z.array(userMessageAttachmentSchema).optional(),
     clientMessageId: z.string().optional(),
   }).passthrough(),
   modelStreamChunkSchema,

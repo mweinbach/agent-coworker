@@ -5,7 +5,12 @@ import {
   type ThreadModelStreamRuntime,
 } from "../store.feedMapping";
 import type { AppStoreState } from "../store.helpers";
-import type { CachedSessionSnapshot, ThreadRuntime, WorkspaceRuntime } from "../types";
+import type {
+  CachedSessionSnapshot,
+  PendingThreadMessage,
+  ThreadRuntime,
+  WorkspaceRuntime,
+} from "../types";
 
 export type PendingThreadSteer = {
   clientMessageId: string;
@@ -28,7 +33,7 @@ export type RuntimeMaps = {
   skillInstallWaiters: Map<string, SkillInstallWaiter>;
   threadSockets: Map<string, AgentSocket>;
   optimisticUserMessageIds: Map<string, Set<string>>;
-  pendingThreadMessages: Map<string, string[]>;
+  pendingThreadMessages: Map<string, Array<string | PendingThreadMessage>>;
   pendingThreadSteers: Map<string, Map<string, PendingThreadSteer>>;
   threadSelectionRequests: Map<string, number>;
   nextThreadSelectionRequestId: number;
@@ -76,22 +81,29 @@ export function resetModelStreamRuntime(threadId: string) {
   RUNTIME.modelStreamByThread.set(threadId, createThreadModelStreamRuntime());
 }
 
-export function queuePendingThreadMessage(threadId: string, text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) return;
+export function queuePendingThreadMessage(threadId: string, message: string | PendingThreadMessage) {
+  const normalized = typeof message === "string"
+    ? message.trim()
+    : {
+        text: message.text.trim(),
+        ...(message.attachments && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
+      };
+  const text = typeof normalized === "string" ? normalized : normalized.text;
+  const hasAttachments = typeof normalized !== "string" && Boolean(normalized.attachments?.length);
+  if (!text && !hasAttachments) return;
   const existing = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
-  existing.push(trimmed);
+  existing.push(normalized);
   RUNTIME.pendingThreadMessages.set(threadId, existing);
 }
 
-export function drainPendingThreadMessages(threadId: string): string[] {
+export function drainPendingThreadMessages(threadId: string): Array<string | PendingThreadMessage> {
   const existing = RUNTIME.pendingThreadMessages.get(threadId);
   if (!existing || existing.length === 0) return [];
   RUNTIME.pendingThreadMessages.delete(threadId);
   return existing;
 }
 
-export function shiftPendingThreadMessage(threadId: string): string | undefined {
+export function shiftPendingThreadMessage(threadId: string): string | PendingThreadMessage | undefined {
   const existing = RUNTIME.pendingThreadMessages.get(threadId);
   if (!existing || existing.length === 0) return undefined;
   const next = existing.shift();

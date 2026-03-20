@@ -8,6 +8,63 @@ import {
 } from "../src/app/store.feedMapping";
 
 describe("desktop transcript feed mapping", () => {
+  test("merges optimistic user attachment previews with the later server echo path", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:00.000Z",
+        threadId: "thread-1",
+        direction: "client",
+        payload: {
+          type: "user_message",
+          text: "See attached.",
+          clientMessageId: "cm-attach",
+          attachments: [
+            {
+              filename: "photo.png",
+              mimeType: "image/png",
+              kind: "image",
+            },
+          ],
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "user_message",
+          sessionId: "thread-session",
+          text: "See attached.",
+          clientMessageId: "cm-attach",
+          attachments: [
+            {
+              filename: "photo.png",
+              mimeType: "image/png",
+              kind: "image",
+              path: "/workspace/photo.png",
+            },
+          ],
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    expect(feed).toHaveLength(1);
+    expect(feed[0]).toMatchObject({
+      kind: "message",
+      role: "user",
+      text: "See attached.",
+      attachments: [
+        {
+          filename: "photo.png",
+          mimeType: "image/png",
+          kind: "image",
+          path: "/workspace/photo.png",
+        },
+      ],
+    });
+  });
+
   test("dedupes streamed reasoning against legacy reasoning finals while preserving trace order", () => {
     const transcript: TranscriptEvent[] = [
       {

@@ -59,7 +59,9 @@ import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
 import { SkillManager } from "./SkillManager";
 import { TurnExecutionManager } from "./TurnExecutionManager";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
+import type { UserMessageAttachmentDraft } from "../../shared/messageAttachments";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
+import { importUserMessageAttachments } from "./userMessageAttachments";
 
 function makeId(): string {
   return crypto.randomUUID();
@@ -1340,9 +1342,29 @@ export class AgentSession {
     await this.backupController.reloadSessionBackupStateFromDisk();
   }
 
-  async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
+  async sendUserMessage(
+    text: string,
+    clientMessageId?: string,
+    displayText?: string,
+    attachmentDrafts?: UserMessageAttachmentDraft[],
+  ) {
     await this.pendingConfigMutation.catch(() => {});
-    await this.turnExecutionManager.sendUserMessage(text, clientMessageId, displayText);
+    if (!attachmentDrafts || attachmentDrafts.length === 0) {
+      await this.turnExecutionManager.sendUserMessage(text, clientMessageId, displayText);
+      return;
+    }
+
+    const imported = await importUserMessageAttachments({
+      config: this.state.config,
+      text,
+      attachments: attachmentDrafts,
+    });
+
+    await this.turnExecutionManager.sendUserMessage(text, clientMessageId, displayText, {
+      content: imported.content,
+      attachments: imported.attachments,
+      titleText: imported.titleText,
+    });
   }
 
   async sendSteerMessage(text: string, expectedTurnId: string, clientMessageId?: string) {

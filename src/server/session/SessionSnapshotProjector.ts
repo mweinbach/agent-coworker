@@ -744,6 +744,7 @@ export class SessionSnapshotProjector {
         role: "user",
         ts,
         text: evt.text,
+        ...(evt.attachments && evt.attachments.length > 0 ? { attachments: structuredClone(evt.attachments) } : {}),
       });
       return;
     }

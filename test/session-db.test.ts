@@ -66,7 +66,7 @@ describe("sessionDb", () => {
     const db = await SessionDb.create({ paths });
     try {
       const now = new Date().toISOString();
-      db.persistSessionMutation({
+      await db.persistSessionMutation({
         sessionId: "s-1",
         eventType: "session.created",
         snapshot: {
@@ -171,7 +171,7 @@ describe("sessionDb", () => {
         updatedAt: now,
       });
 
-      db.deleteSession("s-1");
+      await db.deleteSession("s-1");
       expect(db.getSessionRecord("s-1")).toBeNull();
     } finally {
       db.close();
@@ -183,7 +183,7 @@ describe("sessionDb", () => {
     const db = await SessionDb.create({ paths });
     try {
       const now = new Date().toISOString();
-      db.persistSessionMutation({
+      await db.persistSessionMutation({
         sessionId: "s-raw",
         eventType: "session.created",
         snapshot: {
@@ -211,7 +211,7 @@ describe("sessionDb", () => {
         },
       });
 
-      db.persistModelStreamChunk({
+      await db.persistModelStreamChunk({
         sessionId: "s-raw",
         turnId: "turn-1",
         chunkIndex: 0,
@@ -252,7 +252,7 @@ describe("sessionDb", () => {
     const db = await SessionDb.create({ paths });
     try {
       const now = new Date().toISOString();
-      db.persistSessionMutation({
+      await db.persistSessionMutation({
         sessionId: "workspace-a",
         eventType: "session.created",
         snapshot: {
@@ -279,7 +279,7 @@ describe("sessionDb", () => {
           costTracker: null,
         },
       });
-      db.persistSessionMutation({
+      await db.persistSessionMutation({
         sessionId: "workspace-b",
         eventType: "session.created",
         snapshot: {
@@ -312,7 +312,7 @@ describe("sessionDb", () => {
         title: "Workspace A",
         updatedAt: now,
       });
-      db.persistSessionSnapshot("workspace-a", persistedSnapshot);
+      await db.persistSessionSnapshot("workspace-a", persistedSnapshot);
 
       expect(db.listSessions({ workingDirectory: "/tmp/workspace-a" }).map((session) => session.sessionId)).toEqual([
         "workspace-a",
@@ -493,7 +493,7 @@ describe("sessionDb", () => {
     const db = await SessionDb.create({ paths });
     try {
       const now = new Date().toISOString();
-      db.persistSessionMutation({
+      await db.persistSessionMutation({
         sessionId: "root-1",
         eventType: "session.created",
         snapshot: {
@@ -520,7 +520,7 @@ describe("sessionDb", () => {
           costTracker: null,
         },
       });
-      db.persistSessionMutation({
+      await db.persistSessionMutation({
         sessionId: "child-1",
         eventType: "session.created",
         snapshot: {
@@ -560,7 +560,7 @@ describe("sessionDb", () => {
         lifecycleState: "active",
       });
 
-      db.deleteSession("root-1");
+      await db.deleteSession("root-1");
       expect(db.getSessionRecord("root-1")).toBeNull();
       expect(db.getSessionRecord("child-1")).toBeNull();
       expect(db.listAgentSessions("root-1")).toEqual([]);
@@ -678,7 +678,7 @@ describe("sessionDb", () => {
     const db = await SessionDb.create({ paths });
     try {
       const now = new Date().toISOString();
-      db.persistSessionMutation({
+      await db.persistSessionMutation({
         sessionId: "s-bad-messages",
         eventType: "session.created",
         snapshot: {

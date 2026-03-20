@@ -22,6 +22,7 @@ import { importLegacySnapshots } from "./sessionDb/legacyImport";
 import { bootstrapSessionDb } from "./sessionDb/migrations";
 import { isCorruptionError } from "./sessionDb/normalizers";
 import { SessionDbRepository } from "./sessionDb/repository";
+import { SessionDbWriteCoordinator } from "./sessionDb/writeCoordinator";
 
 export type { PersistedSessionSummary } from "./sessionStore";
 
@@ -129,6 +130,12 @@ type SessionDbOptions = {
   paths: Pick<AiCoworkerPaths, "rootDir" | "sessionsDir">;
   dbPath?: string;
   busyTimeoutMs?: number;
+  emitTelemetry?: (
+    name: string,
+    status: "ok" | "error",
+    attributes?: Record<string, string | number | boolean>,
+    durationMs?: number,
+  ) => void;
 };
 
 export class SessionDb {
@@ -138,13 +145,21 @@ export class SessionDb {
   private readonly sessionsDir: string;
   private readonly busyTimeoutMs: number;
   private readonly repository: SessionDbRepository;
+  private readonly writeCoordinator: SessionDbWriteCoordinator;
 
-  private constructor(opts: { db: Database; dbPath: string; sessionsDir: string; busyTimeoutMs: number }) {
+  private constructor(opts: {
+    db: Database;
+    dbPath: string;
+    sessionsDir: string;
+    busyTimeoutMs: number;
+    writeCoordinator: SessionDbWriteCoordinator;
+  }) {
     this.db = opts.db;
     this.dbPath = opts.dbPath;
     this.sessionsDir = opts.sessionsDir;
     this.busyTimeoutMs = opts.busyTimeoutMs;
     this.repository = new SessionDbRepository(this.db);
+    this.writeCoordinator = opts.writeCoordinator;
   }
 
   static async create(opts: SessionDbOptions): Promise<SessionDb> {
@@ -152,6 +167,10 @@ export class SessionDb {
 
     const dbPath = opts.dbPath ?? path.join(opts.paths.rootDir, "sessions.db");
     const busyTimeoutMs = opts.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS;
+    const writeCoordinator = new SessionDbWriteCoordinator({
+      rootDir: opts.paths.rootDir,
+      emitTelemetry: opts.emitTelemetry,
+    });
     let db: Database;
     try {
       db = new Database(dbPath, { create: true, strict: false });
@@ -164,6 +183,7 @@ export class SessionDb {
       dbPath,
       sessionsDir: opts.paths.sessionsDir,
       busyTimeoutMs,
+      writeCoordinator,
     });
 
     try {
@@ -185,6 +205,7 @@ export class SessionDb {
         dbPath,
         sessionsDir: opts.paths.sessionsDir,
         busyTimeoutMs,
+        writeCoordinator,
       });
       await recoveredRepo.bootstrap();
       await recoveredRepo.hardenDbFile();
@@ -204,8 +225,14 @@ export class SessionDb {
     return this.repository.listAgentSessions(parentSessionId);
   }
 
-  deleteSession(sessionId: string): void {
-    this.repository.deleteSession(sessionId);
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.writeCoordinator.runExclusive(
+      "delete_session",
+      async () => {
+        this.repository.deleteSession(sessionId);
+      },
+      { sessionId },
+    );
   }
 
   getMessages(sessionId: string, offset = 0, limit = 100): { messages: ModelMessage[]; total: number } {
@@ -220,35 +247,53 @@ export class SessionDb {
     return this.repository.getSessionSnapshot(sessionId);
   }
 
-  persistSessionMutation(opts: PersistedSessionMutation): number {
-    return this.repository.persistSessionMutation(opts);
+  async persistSessionMutation(opts: PersistedSessionMutation): Promise<number> {
+    return await this.writeCoordinator.runExclusive(
+      "persist_session_mutation",
+      async () => this.repository.persistSessionMutation(opts),
+      { sessionId: opts.sessionId, eventType: opts.eventType },
+    );
   }
 
-  persistModelStreamChunk(opts: PersistedModelStreamChunk): void {
-    this.repository.persistModelStreamChunk(opts);
+  async persistModelStreamChunk(opts: PersistedModelStreamChunk): Promise<void> {
+    await this.writeCoordinator.runExclusive(
+      "persist_model_stream_chunk",
+      async () => {
+        this.repository.persistModelStreamChunk(opts);
+      },
+      { sessionId: opts.sessionId, turnId: opts.turnId },
+    );
   }
 
   listModelStreamChunks(sessionId: string, turnId?: string): PersistedModelStreamChunk[] {
     return this.repository.listModelStreamChunks(sessionId, turnId);
   }
 
-  persistSessionSnapshot(sessionId: string, snapshot: SessionSnapshot): void {
-    this.repository.persistSessionSnapshot(sessionId, snapshot);
+  async persistSessionSnapshot(sessionId: string, snapshot: SessionSnapshot): Promise<void> {
+    await this.writeCoordinator.runExclusive(
+      "persist_session_snapshot",
+      async () => {
+        this.repository.persistSessionSnapshot(sessionId, snapshot);
+      },
+      { sessionId },
+    );
   }
 
   private async bootstrap(): Promise<void> {
-    await bootstrapSessionDb({
-      db: this.db,
-      busyTimeoutMs: this.busyTimeoutMs,
-      repository: this.repository,
-      importLegacySnapshots: async () => {
-        await importLegacySnapshots({
-          sessionsDir: this.sessionsDir,
-          importSnapshot: (snapshot) => {
-            this.repository.importLegacySnapshot(snapshot);
-          },
-        });
-      },
+    await this.writeCoordinator.runExclusive("bootstrap_session_db", async () => {
+      await bootstrapSessionDb({
+        db: this.db,
+        busyTimeoutMs: this.busyTimeoutMs,
+        repository: this.repository,
+        importLegacySnapshots: async () => {
+          await importLegacySnapshots({
+            sessionsDir: this.sessionsDir,
+            importSnapshot: (snapshot) => {
+              this.repository.importLegacySnapshot(snapshot);
+            },
+          });
+        },
+      });
     });
   }
 

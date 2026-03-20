@@ -228,7 +228,8 @@ export type SessionContext = {
   getMcpServerByName: (nameRaw: string) => Promise<MCPRegistryServer | null>;
   queuePersistSessionSnapshot: (reason: string) => void;
   updateSessionInfo: (
-    patch: Partial<SessionInfoState>
+    patch: Partial<SessionInfoState>,
+    opts?: { queuePersistSessionSnapshot?: boolean },
   ) => void;
   emitConfigUpdated: () => void;
   syncSessionBackupAvailability: () => Promise<void>;

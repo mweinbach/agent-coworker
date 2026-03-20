@@ -456,6 +456,75 @@ const setModelSchema = schemaWithType("set_model", {
   }
 });
 
+const applySessionDefaultsSchema = schemaWithType("apply_session_defaults", {
+  sessionId: requiredSessionId("apply_session_defaults"),
+  provider: z.unknown().optional(),
+  model: z.unknown().optional(),
+  enableMcp: z.boolean({ error: "apply_session_defaults missing/invalid enableMcp" }).optional(),
+  config: z.unknown().optional(),
+}).superRefine((value, ctx) => {
+  if ((value.provider === undefined) !== (value.model === undefined)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["provider"],
+      message: "apply_session_defaults provider and model must be supplied together",
+    });
+  }
+
+  if (value.provider !== undefined && !isProviderName(value.provider)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["provider"],
+      message: `apply_session_defaults invalid provider: ${String(value.provider)}`,
+    });
+  }
+
+  if (
+    value.model !== undefined
+    && !nonEmptyTrimmedStringSchema.safeParse(value.model).success
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["model"],
+      message: "apply_session_defaults missing/invalid model",
+    });
+  }
+
+  if (value.config === undefined) return;
+  if (!recordSchema.safeParse(value.config).success) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["config"],
+      message: "apply_session_defaults missing/invalid config",
+    });
+    return;
+  }
+
+  const parsedConfig = setConfigPayloadSchema.safeParse(value.config);
+  if (parsedConfig.success) {
+    if (
+      parsedConfig.data.toolOutputOverflowChars !== undefined
+      && parsedConfig.data.clearToolOutputOverflowChars === true
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["config"],
+        message: "apply_session_defaults config.toolOutputOverflowChars cannot be combined with clearToolOutputOverflowChars",
+      });
+    }
+    return;
+  }
+
+  const issue = parsedConfig.error.issues[0];
+  const message = issue ? setConfigIssueMessage(issue).replace(/^set_config /, "apply_session_defaults ") : "apply_session_defaults missing/invalid config";
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["config"],
+    message,
+  });
+});
+
 const providerAuthAuthorizeSchema = schemaWithType("provider_auth_authorize", {
   sessionId: requiredSessionId("provider_auth_authorize"),
   provider: z.unknown(),
@@ -847,6 +916,7 @@ const clientMessageSchema = z.discriminatedUnion("type", [
   approvalResponseSchema,
   executeCommandSchema,
   setModelSchema,
+  applySessionDefaultsSchema,
   providerAuthAuthorizeSchema,
   providerAuthLogoutSchema,
   providerAuthCallbackSchema,
@@ -903,6 +973,36 @@ function normalizeClientMessage(parsed: ParsedClientMessage): ClientMessage {
         sessionId,
         model,
         ...(provider !== undefined ? { provider } : {}),
+      };
+    }
+    case "apply_session_defaults": {
+      const sessionId = parsed.sessionId as string;
+      const provider = parsed.provider;
+      const model = parsed.model;
+      if ((provider === undefined) !== (model === undefined)) {
+        throw new Error("apply_session_defaults provider and model must be supplied together");
+      }
+      if (provider !== undefined && !isProviderName(provider)) {
+        throw new Error(`apply_session_defaults invalid provider: ${String(provider)}`);
+      }
+      if (model !== undefined && !nonEmptyTrimmedStringSchema.safeParse(model).success) {
+        throw new Error("apply_session_defaults missing/invalid model");
+      }
+      const normalizedProvider = provider !== undefined ? provider : undefined;
+      const normalizedModel = typeof model === "string" ? model : undefined;
+      const parsedConfig = parsed.config !== undefined
+        ? setConfigPayloadSchema.safeParse(parsed.config)
+        : null;
+      if (parsed.config !== undefined && !parsedConfig?.success) {
+        throw new Error("apply_session_defaults missing/invalid config");
+      }
+      return {
+        type: "apply_session_defaults",
+        sessionId,
+        ...(normalizedProvider !== undefined ? { provider: normalizedProvider } : {}),
+        ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
+        ...(parsed.enableMcp !== undefined ? { enableMcp: parsed.enableMcp as boolean } : {}),
+        ...(parsedConfig?.success ? { config: parsedConfig.data } : {}),
       };
     }
     case "provider_auth_authorize": {

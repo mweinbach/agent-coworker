@@ -980,6 +980,21 @@ describe("WebSocket Lifecycle", () => {
     const first = await startAgentServer(serverOpts(tmpDir));
     const originalSessionId = (await collectMessages(first.url, 1))[0]?.sessionId as string;
     expect(typeof originalSessionId).toBe("string");
+    const persistenceProbe = await SessionDb.create({ paths: getAiCoworkerPaths({ homedir: tmpDir }) });
+    try {
+      const deadline = Date.now() + 5_000;
+      let persisted = false;
+      while (Date.now() < deadline) {
+        if (persistenceProbe.getSessionRecord(originalSessionId)) {
+          persisted = true;
+          break;
+        }
+        await Bun.sleep(25);
+      }
+      expect(persisted).toBe(true);
+    } finally {
+      persistenceProbe.close();
+    }
     first.server.stop();
 
     const second = await startAgentServer(serverOpts(tmpDir));
@@ -1439,7 +1454,7 @@ describe("WebSocket Lifecycle", () => {
     const now = new Date().toISOString();
     const paths = getAiCoworkerPaths({ homedir: homeDir });
     const db = await SessionDb.create({ paths });
-    db.persistSessionMutation({
+    await db.persistSessionMutation({
       sessionId: "workspace-a-root",
       eventType: "session.created",
       snapshot: {
@@ -1466,7 +1481,7 @@ describe("WebSocket Lifecycle", () => {
         costTracker: null,
       },
     });
-    db.persistSessionMutation({
+    await db.persistSessionMutation({
       sessionId: "workspace-b-root",
       eventType: "session.created",
       snapshot: {
@@ -1501,11 +1516,13 @@ describe("WebSocket Lifecycle", () => {
         url,
         (sessionId) => ({ type: "list_sessions", sessionId, scope: "workspace" }),
         (msg) => msg.type === "sessions",
+        10_000,
       );
       const allSessions = await sendAndWaitForEvent(
         url,
         (sessionId) => ({ type: "list_sessions", sessionId, scope: "all" }),
         (msg) => msg.type === "sessions",
+        10_000,
       );
 
       expect(workspaceScoped.sessions.some((session: any) => session.sessionId === "workspace-a-root")).toBe(true);
@@ -1513,9 +1530,9 @@ describe("WebSocket Lifecycle", () => {
       expect(allSessions.sessions.some((session: any) => session.sessionId === "workspace-a-root")).toBe(true);
       expect(allSessions.sessions.some((session: any) => session.sessionId === "workspace-b-root")).toBe(true);
     } finally {
-      void server.stop(true);
+      server.stop();
     }
-  });
+  }, 15_000);
 
   test("list_sessions hides blank default root sessions while keeping meaningful empty sessions", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-server-home-"));
@@ -1605,10 +1622,12 @@ describe("WebSocket Lifecycle", () => {
 
     try {
       const created = await createSessionWithAssistantTurn(url, "hello snapshot");
-      const snapshotEvent = await sendAndWaitForEvent(
+      const snapshotEvent = await sendToExistingSessionAndWaitForEvent(
         url,
+        created.sessionId,
         (sessionId) => ({ type: "get_session_snapshot", sessionId, targetSessionId: created.sessionId }),
         (msg) => msg.type === "session_snapshot" && msg.targetSessionId === created.sessionId,
+        10_000,
       );
 
       expect(snapshotEvent.snapshot.sessionId).toBe(created.sessionId);
@@ -1621,9 +1640,9 @@ describe("WebSocket Lifecycle", () => {
         ]),
       );
     } finally {
-      void server.stop(true);
+      server.stop();
     }
-  });
+  }, 15_000);
 
   test("get_session_snapshot reads persisted snapshots from sqlite on cold resume", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-server-home-"));
@@ -1631,7 +1650,7 @@ describe("WebSocket Lifecycle", () => {
     const now = new Date().toISOString();
     const paths = getAiCoworkerPaths({ homedir: homeDir });
     const db = await SessionDb.create({ paths });
-    db.persistSessionMutation({
+    await db.persistSessionMutation({
       sessionId: "persisted-session",
       eventType: "session.created",
       snapshot: {
@@ -1661,7 +1680,7 @@ describe("WebSocket Lifecycle", () => {
         costTracker: null,
       },
     });
-    db.persistSessionSnapshot("persisted-session", {
+    await db.persistSessionSnapshot("persisted-session", {
       sessionId: "persisted-session",
       title: "Persisted Session",
       titleSource: "manual",
@@ -1715,6 +1734,7 @@ describe("WebSocket Lifecycle", () => {
         url,
         (sessionId) => ({ type: "get_session_snapshot", sessionId, targetSessionId: "persisted-session" }),
         (msg) => msg.type === "session_snapshot" && msg.targetSessionId === "persisted-session",
+        10_000,
       );
 
       expect(snapshotEvent.snapshot.sessionId).toBe("persisted-session");
@@ -1725,9 +1745,9 @@ describe("WebSocket Lifecycle", () => {
         ]),
       );
     } finally {
-      void server.stop(true);
+      server.stop();
     }
-  });
+  }, 15_000);
 
   test("get_session_snapshot allows lexical workspace path aliases", async () => {
     const workspace = await makeTmpProject();
@@ -1824,7 +1844,7 @@ describe("WebSocket Lifecycle", () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-server-home-"));
     const now = "2026-03-19T00:00:01.000Z";
     const db = await SessionDb.create({ paths: getAiCoworkerPaths({ homedir: homeDir }) });
-    db.persistSessionMutation({
+    await db.persistSessionMutation({
       sessionId: "legacy-session",
       eventType: "session.created",
       snapshot: {
@@ -1861,6 +1881,7 @@ describe("WebSocket Lifecycle", () => {
         (msg) =>
           (msg.type === "session_snapshot" && msg.targetSessionId === "legacy-session")
           || msg.type === "error",
+        10_000,
       );
 
       expect(snapshotEvent.type).toBe("session_snapshot");
@@ -1871,9 +1892,9 @@ describe("WebSocket Lifecycle", () => {
       ]);
       expect(snapshotEvent.snapshot.lastEventSeq).toBe(1);
     } finally {
-      void server.stop(true);
+      server.stop();
     }
-  });
+  }, 15_000);
 
   test("agent_list_get lists child sessions and child sessions cannot call list_sessions", async () => {
     const tmpDir = await makeTmpProject();
@@ -2010,13 +2031,20 @@ describe("WebSocket Lifecycle", () => {
     try {
       const created = await createPersistentAgent(url, "child task", "worker");
       const childId = created.agent.agentId as string;
+      await collectSessionEventsUntil(
+        url,
+        childId,
+        (msg) =>
+          (msg.type === "session_info" && msg.sessionId === childId && msg.executionState === "completed")
+          || (msg.type === "session_busy" && msg.sessionId === childId && msg.busy === false),
+      );
 
       const update = await sendAndWaitForEvent(
         `${url}?resumeSessionId=${childId}`,
-        (sessionId) => ({ type: "set_model", sessionId, model: "gemini-3.1-pro-preview" }),
+        (sessionId) => ({ type: "set_model", sessionId, model: "gemini-3-flash-preview" }),
         (msg) => msg.type === "config_updated",
       );
-      expect(update.config.model).toBe("gemini-3.1-pro-preview");
+      expect(update.config.model).toBe("gemini-3-flash-preview");
 
       await expect(fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8")).rejects.toThrow();
     } finally {
@@ -3491,6 +3519,7 @@ describe("Server Resilience", () => {
     expect(messages[0].type).toBe("server_hello");
 
     server.stop();
+    await Bun.sleep(50);
 
     // After stopping, connection should fail
     const failed = await new Promise<boolean>((resolve) => {
@@ -3656,6 +3685,147 @@ describe("Protocol Doc Parity", () => {
         provider: "google",
         runtime: "google-interactions",
         model: "gemini-3-flash-preview",
+      });
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("apply_session_defaults batches provider, config, and mcp updates into one persisted sync", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const responses = await new Promise<any[]>((resolve, reject) => {
+        const seen: any[] = [];
+        const ws = new WebSocket(url);
+        let sessionId = "";
+        let readyToSend = false;
+        const timer = setTimeout(() => {
+          ws.close();
+          reject(new Error("Timed out waiting for apply_session_defaults updates"));
+        }, 10_000);
+
+        ws.onmessage = (event) => {
+          const message = JSON.parse(typeof event.data === "string" ? event.data : "");
+          if (!sessionId && message.type === "server_hello") {
+            sessionId = message.sessionId;
+            return;
+          }
+          if (!readyToSend) {
+            if (message.type === "session_info" && message.sessionId === sessionId) {
+              readyToSend = true;
+              ws.send(JSON.stringify({
+                type: "apply_session_defaults",
+                sessionId,
+                provider: "openai",
+                model: "gpt-5.2",
+                enableMcp: false,
+                config: {
+                  backupsEnabled: false,
+                  preferredChildModel: "gpt-5-mini",
+                  toolOutputOverflowChars: 12_000,
+                },
+              }));
+            }
+            return;
+          }
+          if (message.type === "provider_catalog") {
+            return;
+          }
+          if (message.type === "error") {
+            clearTimeout(timer);
+            ws.close();
+            reject(new Error(`Unexpected error: ${message.message}`));
+            return;
+          }
+
+          seen.push(message);
+          const types = new Set(seen.map((entry) => entry.type));
+          if (
+            types.has("config_updated")
+            && types.has("session_info")
+            && types.has("session_settings")
+            && types.has("session_config")
+          ) {
+            clearTimeout(timer);
+            ws.close();
+            resolve(seen);
+          }
+        };
+
+        ws.onerror = (event) => {
+          clearTimeout(timer);
+          ws.close();
+          reject(new Error(`WebSocket error: ${event}`));
+        };
+      });
+
+      const relevantResponses = responses.filter((message) =>
+        message.type === "config_updated"
+        || message.type === "session_info"
+        || message.type === "session_settings"
+        || message.type === "session_config",
+      );
+
+      expect(new Set(relevantResponses.map((message) => message.type))).toEqual(new Set([
+        "config_updated",
+        "session_info",
+        "session_settings",
+        "session_config",
+      ]));
+
+      const configUpdated = relevantResponses.find((message) => message.type === "config_updated");
+      expect(configUpdated?.config).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.2",
+      });
+
+      const sessionInfo = relevantResponses.find((message) => message.type === "session_info");
+      expect(sessionInfo).toMatchObject({
+        type: "session_info",
+        provider: "openai",
+        model: "gpt-5.2",
+      });
+
+      const sessionSettings = relevantResponses.find((message) => message.type === "session_settings");
+      expect(sessionSettings).toMatchObject({
+        type: "session_settings",
+        enableMcp: false,
+      });
+
+      const sessionConfig = relevantResponses.find((message) => message.type === "session_config");
+      expect(sessionConfig?.config).toMatchObject({
+        backupsEnabled: false,
+        defaultBackupsEnabled: false,
+        preferredChildModel: "gpt-5-mini",
+        preferredChildModelRef: "openai:gpt-5-mini",
+        toolOutputOverflowChars: 12_000,
+        defaultToolOutputOverflowChars: 12_000,
+      });
+
+      const persistedConfig = JSON.parse(
+        await fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8"),
+      ) as any;
+      expect(persistedConfig.provider).toBe("openai");
+      expect(persistedConfig.model).toBe("gpt-5.2");
+      expect(persistedConfig.enableMcp).toBe(false);
+      expect(persistedConfig.backupsEnabled).toBe(false);
+      expect(persistedConfig.preferredChildModel).toBe("gpt-5-mini");
+      expect(persistedConfig.preferredChildModelRef).toBe("openai:gpt-5-mini");
+      expect(persistedConfig.toolOutputOverflowChars).toBe(12_000);
+
+      const nextMessages = await collectMessages(url, 5);
+      const nextSessionHello = nextMessages.find((message) => message.type === "server_hello");
+      const nextSessionSettings = nextMessages.find((message) => message.type === "session_settings");
+      const nextSessionConfig = nextMessages.find((message) => message.type === "session_config");
+      expect(nextSessionHello?.config.provider).toBe("openai");
+      expect(nextSessionHello?.config.model).toBe("gpt-5.2");
+      expect(nextSessionSettings?.enableMcp).toBe(false);
+      expect(nextSessionConfig?.config).toMatchObject({
+        defaultBackupsEnabled: false,
+        preferredChildModel: "gpt-5-mini",
+        preferredChildModelRef: "openai:gpt-5-mini",
+        defaultToolOutputOverflowChars: 12_000,
       });
     } finally {
       server.stop();

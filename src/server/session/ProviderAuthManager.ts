@@ -16,6 +16,28 @@ import type { ServerEvent } from "../protocol";
 import { resolveModelMetadata } from "../../models/metadata";
 import { normalizeChildRoutingConfig } from "../../models/childModelRouting";
 
+type PreparedModelSelection = {
+  nextConfig: AgentConfig;
+  nextProvider: AgentConfig["provider"];
+  nextModel: string;
+  normalizedChildRouting: ReturnType<typeof normalizeChildRoutingConfig>;
+  shouldClearProviderState: boolean;
+  persistSelection: {
+    provider: AgentConfig["provider"];
+    model: string;
+    preferredChildModel: string;
+    childModelRoutingMode?: AgentConfig["childModelRoutingMode"];
+    preferredChildModelRef?: string;
+    allowedChildModelRefs?: string[];
+  };
+  changed: boolean;
+};
+
+function stringArrayEqual(left: string[] | undefined, right: string[] | undefined): boolean {
+  if ((left?.length ?? 0) !== (right?.length ?? 0)) return false;
+  return (left ?? []).every((value, index) => value === (right ?? [])[index]);
+}
+
 export class ProviderAuthManager {
   constructor(
     private readonly opts: {
@@ -44,7 +66,10 @@ export class ProviderAuthManager {
         preferredChildModelRef?: string;
         allowedChildModelRefs?: string[];
       }) => Promise<void> | void;
-      updateSessionInfo: (patch: Partial<{ provider: AgentConfig["provider"]; model: string }>) => void;
+      updateSessionInfo: (
+        patch: Partial<{ provider: AgentConfig["provider"]; model: string }>,
+        opts?: { queuePersistSessionSnapshot?: boolean },
+      ) => void;
       queuePersistSessionSnapshot: (reason: string) => void;
       emitConfigUpdated: () => void;
       emitProviderCatalog: () => Promise<void>;
@@ -54,23 +79,23 @@ export class ProviderAuthManager {
     }
   ) {}
 
-  async setModel(modelIdRaw: string, providerRaw?: AgentConfig["provider"]) {
+  async prepareModelSelection(
+    modelIdRaw: string,
+    providerRaw?: AgentConfig["provider"],
+    baseConfig?: AgentConfig,
+  ): Promise<PreparedModelSelection | null> {
     const modelId = modelIdRaw.trim();
     if (!modelId) {
       this.opts.emitError("validation_failed", "session", "Model id is required");
-      return;
-    }
-    if (this.opts.isRunning()) {
-      this.opts.emitError("busy", "session", "Agent is busy");
-      return;
+      return null;
     }
 
     if (providerRaw !== undefined && !isProviderName(providerRaw)) {
       this.opts.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
-      return;
+      return null;
     }
 
-    const currentConfig = this.opts.getConfig();
+    const currentConfig = baseConfig ?? this.opts.getConfig();
     const nextProvider = providerRaw ?? currentConfig.provider;
     let resolvedModel;
     try {
@@ -80,7 +105,7 @@ export class ProviderAuthManager {
       });
     } catch (error) {
       this.opts.emitError("validation_failed", "provider", error instanceof Error ? error.message : String(error));
-      return;
+      return null;
     }
     const normalizedChildRouting = normalizeChildRoutingConfig({
       provider: nextProvider,
@@ -99,7 +124,7 @@ export class ProviderAuthManager {
     const shouldClearProviderState =
       currentConfig.provider !== nextProvider || currentConfig.model !== resolvedModel.id;
 
-    this.opts.setConfig({
+    const nextConfig: AgentConfig = {
       ...currentConfig,
       provider: nextProvider,
       ...(nextRuntime !== undefined ? { runtime: nextRuntime } : {}),
@@ -109,22 +134,50 @@ export class ProviderAuthManager {
       preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
       allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
       knowledgeCutoff: resolvedModel.knowledgeCutoff,
-    });
-    if (shouldClearProviderState) {
+    };
+
+    const changed =
+      currentConfig.provider !== nextConfig.provider
+      || currentConfig.model !== nextConfig.model
+      || currentConfig.runtime !== nextConfig.runtime
+      || currentConfig.preferredChildModel !== nextConfig.preferredChildModel
+      || (currentConfig.childModelRoutingMode ?? "same-provider") !== (nextConfig.childModelRoutingMode ?? "same-provider")
+      || (currentConfig.preferredChildModelRef ?? `${currentConfig.provider}:${currentConfig.preferredChildModel}`)
+        !== (nextConfig.preferredChildModelRef ?? `${nextConfig.provider}:${nextConfig.preferredChildModel}`)
+      || !stringArrayEqual(currentConfig.allowedChildModelRefs, nextConfig.allowedChildModelRefs)
+      || currentConfig.knowledgeCutoff !== nextConfig.knowledgeCutoff;
+
+    return {
+      nextConfig,
+      nextProvider,
+      nextModel: resolvedModel.id,
+      normalizedChildRouting,
+      shouldClearProviderState,
+      persistSelection: {
+        provider: nextProvider,
+        model: resolvedModel.id,
+        preferredChildModel: normalizedChildRouting.preferredChildModel,
+        childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
+        preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
+        allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
+      },
+      changed,
+    };
+  }
+
+  async applyPreparedModelSelection(
+    prepared: PreparedModelSelection,
+    opts?: { persistSelection?: boolean; queuePersistSessionSnapshot?: boolean; emitProviderCatalog?: boolean },
+  ): Promise<unknown | null> {
+    this.opts.setConfig(prepared.nextConfig);
+    if (prepared.shouldClearProviderState) {
       this.opts.clearProviderState();
     }
 
     let persistError: unknown = null;
-    if (this.opts.persistModelSelection) {
+    if (opts?.persistSelection !== false && this.opts.persistModelSelection) {
       try {
-        await this.opts.persistModelSelection({
-          provider: nextProvider,
-          model: resolvedModel.id,
-          preferredChildModel: normalizedChildRouting.preferredChildModel,
-          childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
-          preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
-          allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
-        });
+        await this.opts.persistModelSelection(prepared.persistSelection);
       } catch (err) {
         persistError = err;
       }
@@ -132,12 +185,39 @@ export class ProviderAuthManager {
 
     this.opts.emitConfigUpdated();
     this.opts.updateSessionInfo({
-      provider: nextProvider,
-      model: resolvedModel.id,
-    });
+      provider: prepared.nextProvider,
+      model: prepared.nextModel,
+    }, opts?.queuePersistSessionSnapshot === false ? { queuePersistSessionSnapshot: false } : undefined);
 
-    this.opts.queuePersistSessionSnapshot("session.model_updated");
-    await this.opts.emitProviderCatalog();
+    if (opts?.queuePersistSessionSnapshot !== false) {
+      this.opts.queuePersistSessionSnapshot("session.model_updated");
+    }
+    if (opts?.emitProviderCatalog !== false) {
+      await this.opts.emitProviderCatalog();
+    }
+
+    return persistError;
+  }
+
+  async setModel(modelIdRaw: string, providerRaw?: AgentConfig["provider"]) {
+    if (this.opts.isRunning()) {
+      this.opts.emitError("busy", "session", "Agent is busy");
+      return;
+    }
+
+    const prepared = await this.prepareModelSelection(modelIdRaw, providerRaw);
+    if (!prepared) {
+      return;
+    }
+    if (!prepared.changed) {
+      this.opts.emitTelemetry("session.defaults.noop", "ok", {
+        sessionId: this.opts.sessionId,
+        operation: "set_model",
+      });
+      return;
+    }
+
+    const persistError = await this.applyPreparedModelSelection(prepared);
 
     if (persistError) {
       this.opts.emitError(

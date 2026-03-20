@@ -24,6 +24,17 @@ export class McpManager {
     await this.registryFlow.setEnableMcp(enableMcp);
   }
 
+  prepareEnableMcpChange(enableMcp: boolean) {
+    return this.registryFlow.prepareEnableMcpChange(enableMcp);
+  }
+
+  async applyPreparedEnableMcpChange(
+    prepared: ReturnType<McpRegistryFlow["prepareEnableMcpChange"]>,
+    opts?: { persistDefaults?: boolean; queuePersistSessionSnapshot?: boolean },
+  ) {
+    return await this.registryFlow.applyPreparedEnableMcpChange(prepared, opts);
+  }
+
   async emitMcpServers() {
     await this.registryFlow.emitMcpServers();
   }

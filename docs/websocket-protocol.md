@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.27`
+- Current protocol version: `7.28`
 
 ## Table of Contents
 
@@ -27,7 +27,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 - [Client -> Server Messages](#client---server-messages)
   - Handshake: [client_hello](#client_hello)
   - Conversation: [user_message](#user_message) | [steer_message](#steer_message) | [ask_response](#ask_response) | [approval_response](#approval_response) | [cancel](#cancel) | [reset](#reset)
-  - Model & Provider: [set_model](#set_model) | [refresh_provider_status](#refresh_provider_status) | [provider_catalog_get](#provider_catalog_get) | [provider_auth_methods_get](#provider_auth_methods_get) | [provider_auth_authorize](#provider_auth_authorize) | [provider_auth_logout](#provider_auth_logout) | [provider_auth_callback](#provider_auth_callback) | [provider_auth_set_api_key](#provider_auth_set_api_key) | [provider_auth_copy_api_key](#provider_auth_copy_api_key)
+  - Model & Provider: [set_model](#set_model) | [apply_session_defaults](#apply_session_defaults) | [refresh_provider_status](#refresh_provider_status) | [provider_catalog_get](#provider_catalog_get) | [provider_auth_methods_get](#provider_auth_methods_get) | [provider_auth_authorize](#provider_auth_authorize) | [provider_auth_logout](#provider_auth_logout) | [provider_auth_callback](#provider_auth_callback) | [provider_auth_set_api_key](#provider_auth_set_api_key) | [provider_auth_copy_api_key](#provider_auth_copy_api_key)
   - Tools & Commands: [list_tools](#list_tools) | [list_commands](#list_commands) | [execute_command](#execute_command)
   - Skills: [list_skills](#list_skills) | [read_skill](#read_skill) | [disable_skill](#disable_skill) | [enable_skill](#enable_skill) | [delete_skill](#delete_skill) | [skills_catalog_get](#skills_catalog_get) | [skill_installation_get](#skill_installation_get) | [skill_install_preview](#skill_install_preview) | [skill_install](#skill_install) | [skill_installation_enable](#skill_installation_enable) | [skill_installation_disable](#skill_installation_disable) | [skill_installation_delete](#skill_installation_delete) | [skill_installation_copy](#skill_installation_copy) | [skill_installation_check_update](#skill_installation_check_update) | [skill_installation_update](#skill_installation_update)
   - MCP: [set_enable_mcp](#set_enable_mcp) | [mcp_servers_get](#mcp_servers_get) | [mcp_server_upsert](#mcp_server_upsert) | [mcp_server_delete](#mcp_server_delete) | [mcp_server_validate](#mcp_server_validate) | [mcp_server_auth_authorize](#mcp_server_auth_authorize) | [mcp_server_auth_callback](#mcp_server_auth_callback) | [mcp_server_auth_set_api_key](#mcp_server_auth_set_api_key) | [mcp_servers_migrate_legacy](#mcp_servers_migrate_legacy)
@@ -48,6 +48,12 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.28`:
+
+- New client message: `apply_session_defaults`.
+- Clients can now apply provider/model, editable session defaults, and MCP enablement in one composite write instead of replaying `set_model`, `set_config`, and `set_enable_mcp` separately.
+- The harness now serializes session-db bootstrap and write mutations across processes so desktop, TUI, and CLI instances can safely share the same per-user SQLite database.
 
 Changes in `7.27`:
 
@@ -1043,6 +1049,41 @@ Update session model and optionally provider. On success, server emits `config_u
 
 **Response:** `config_updated`, `session_info`, `provider_catalog`
 **Error:** `busy` if a turn is running. `validation_failed` if provider is invalid. `internal_error` may be emitted if persisting project defaults fails after the in-session update is already applied.
+
+---
+
+### apply_session_defaults
+
+Apply persisted workspace/session defaults in one composite update. This is intended for startup, resume, and settings-sync flows that need to reconcile provider/model, editable config defaults, and MCP enablement without sending multiple sequential writes.
+
+```json
+{
+  "type": "apply_session_defaults",
+  "sessionId": "...",
+  "provider": "openai",
+  "model": "gpt-5.2",
+  "enableMcp": true,
+  "config": {
+    "backupsEnabled": true,
+    "preferredChildModel": "gpt-5.2",
+    "toolOutputOverflowChars": 25000
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"apply_session_defaults"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `provider` | `ProviderName` | No | Must be supplied together with `model` |
+| `model` | `string` | No | Must be supplied together with `provider` |
+| `enableMcp` | `boolean` | No | Optional persisted/default MCP toggle |
+| `config` | `object` | No | Optional config patch using the same field semantics as [`set_config`](#set_config) |
+
+**Validation:** `provider` and `model` must either both be present or both be omitted.
+
+**Response:** Emits only the changed follow-up events among `config_updated`, `session_info`, `session_config`, `session_settings`, and `provider_catalog`.
+**Error:** `busy` if a turn is running. `validation_failed` if the request is malformed or any embedded config/model change is invalid. `internal_error` may be emitted if persisted defaults fail after the in-session update is already applied.
 
 ---
 

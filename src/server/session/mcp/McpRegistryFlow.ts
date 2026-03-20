@@ -7,21 +7,31 @@ import {
 import type { MCPServerConfig } from "../../../types";
 import type { SessionContext } from "../SessionContext";
 
+type PreparedEnableMcpChange = {
+  enableMcp: boolean;
+  changed: boolean;
+};
+
 export class McpRegistryFlow {
   constructor(private readonly context: SessionContext) {}
 
-  async setEnableMcp(enableMcp: boolean) {
-    if (this.context.state.running) {
-      this.context.emitError("busy", "session", "Agent is busy");
-      return;
-    }
+  prepareEnableMcpChange(enableMcp: boolean): PreparedEnableMcpChange {
+    return {
+      enableMcp,
+      changed: (this.context.state.config.enableMcp ?? false) !== enableMcp,
+    };
+  }
 
-    this.context.state.config = { ...this.context.state.config, enableMcp };
+  async applyPreparedEnableMcpChange(
+    prepared: PreparedEnableMcpChange,
+    opts?: { persistDefaults?: boolean; queuePersistSessionSnapshot?: boolean },
+  ): Promise<unknown | null> {
+    this.context.state.config = { ...this.context.state.config, enableMcp: prepared.enableMcp };
 
     let persistError: unknown = null;
-    if (this.context.deps.persistProjectConfigPatchImpl) {
+    if (opts?.persistDefaults !== false && this.context.deps.persistProjectConfigPatchImpl) {
       try {
-        await this.context.deps.persistProjectConfigPatchImpl({ enableMcp });
+        await this.context.deps.persistProjectConfigPatchImpl({ enableMcp: prepared.enableMcp });
       } catch (err) {
         persistError = err;
       }
@@ -30,11 +40,33 @@ export class McpRegistryFlow {
     this.context.emit({
       type: "session_settings",
       sessionId: this.context.id,
-      enableMcp,
+      enableMcp: prepared.enableMcp,
       enableMemory: this.context.state.config.enableMemory ?? true,
       memoryRequireApproval: this.context.state.config.memoryRequireApproval ?? false,
     });
-    this.context.queuePersistSessionSnapshot("session.enable_mcp");
+    if (opts?.queuePersistSessionSnapshot !== false) {
+      this.context.queuePersistSessionSnapshot("session.enable_mcp");
+    }
+
+    return persistError;
+  }
+
+  async setEnableMcp(enableMcp: boolean) {
+    if (this.context.state.running) {
+      this.context.emitError("busy", "session", "Agent is busy");
+      return;
+    }
+
+    const prepared = this.prepareEnableMcpChange(enableMcp);
+    if (!prepared.changed) {
+      this.context.emitTelemetry("session.defaults.noop", "ok", {
+        sessionId: this.context.id,
+        operation: "set_enable_mcp",
+      });
+      return;
+    }
+
+    const persistError = await this.applyPreparedEnableMcpChange(prepared);
 
     if (persistError) {
       this.context.emitError(

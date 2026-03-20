@@ -414,7 +414,7 @@ export class AgentSession {
       runProviderConnect: async (providerOpts) => await this.runProviderConnect(providerOpts),
       getMcpServerByName: async (nameRaw) => await this.getMcpServerByName(nameRaw),
       queuePersistSessionSnapshot: (reason) => this.queuePersistSessionSnapshot(reason),
-      updateSessionInfo: (patch) => this.metadataManager.updateSessionInfo(patch),
+      updateSessionInfo: (patch, infoOpts) => this.metadataManager.updateSessionInfo(patch, infoOpts),
       emitConfigUpdated: () => this.metadataManager.emitConfigUpdated(),
       syncSessionBackupAvailability: async () => {},
       refreshProviderStatus: async () => await this.providerCatalogManager.refreshProviderStatus(),
@@ -700,7 +700,7 @@ export class AgentSession {
     snapshot.createdAt = this.state.sessionInfo.createdAt;
     snapshot.updatedAt = this.state.sessionInfo.updatedAt;
     snapshot.messageCount = this.state.allMessages.length;
-    snapshot.lastEventSeq = this.persistedLastEventSeq;
+    snapshot.lastEventSeq = this.persistenceManager.getProjectedLastEventSeq(this.persistedLastEventSeq);
     snapshot.todos = structuredClone(this.state.todos);
     snapshot.sessionUsage = this.state.costTracker?.getSnapshot() ?? null;
     snapshot.lastTurnUsage = snapshot.sessionUsage?.turns?.length
@@ -1022,6 +1022,117 @@ export class AgentSession {
     await this.providerAuthManager.setModel(modelIdRaw, providerRaw);
   }
 
+  async applySessionDefaults(opts: {
+    provider?: AgentConfig["provider"];
+    model?: string;
+    enableMcp?: boolean;
+    config?: SessionConfigPatch;
+  }) {
+    await this.enqueueConfigMutation(async () => {
+      if ((opts.provider === undefined) !== (opts.model === undefined)) {
+        this.context.emitError(
+          "validation_failed",
+          "session",
+          "provider and model must be supplied together",
+        );
+        return;
+      }
+      if (this.state.running) {
+        this.context.emitError("busy", "session", "Agent is busy");
+        return;
+      }
+
+      const preparedModel = opts.provider !== undefined && opts.model !== undefined
+        ? await this.providerAuthManager.prepareModelSelection(opts.model, opts.provider)
+        : null;
+      if (opts.provider !== undefined && opts.model !== undefined && !preparedModel) {
+        return;
+      }
+
+      const preparedConfig = opts.config
+        ? await this.metadataManager.prepareConfigUpdate(opts.config, {
+            baseConfig: preparedModel?.nextConfig ?? this.state.config,
+            baseYolo: this.state.yolo,
+            baseMaxSteps: this.state.maxSteps,
+          })
+        : null;
+      if (opts.config && !preparedConfig) {
+        return;
+      }
+
+      const preparedEnableMcp = typeof opts.enableMcp === "boolean"
+        ? this.mcpManager.prepareEnableMcpChange(opts.enableMcp)
+        : null;
+
+      const changed =
+        (preparedModel?.changed ?? false)
+        || (preparedConfig?.changed ?? false)
+        || (preparedEnableMcp?.changed ?? false);
+      if (!changed) {
+        this.emitTelemetry("session.defaults.noop", "ok", {
+          sessionId: this.id,
+          operation: "apply_session_defaults",
+        });
+        return;
+      }
+
+      const combinedPersistPatch: PersistedProjectConfigPatch = {};
+      if (preparedModel?.changed) {
+        Object.assign(combinedPersistPatch, preparedModel.persistSelection);
+      }
+      if (preparedConfig?.changed) {
+        Object.assign(combinedPersistPatch, preparedConfig.persistPatch);
+      }
+      if (preparedEnableMcp?.changed) {
+        combinedPersistPatch.enableMcp = preparedEnableMcp.enableMcp;
+      }
+
+      let persistError: unknown = null;
+      if (Object.keys(combinedPersistPatch).length > 0 && this.deps.persistProjectConfigPatchImpl) {
+        try {
+          await this.deps.persistProjectConfigPatchImpl(combinedPersistPatch);
+        } catch (error) {
+          persistError = error;
+        }
+      }
+
+      if (preparedModel?.changed) {
+        await this.providerAuthManager.applyPreparedModelSelection(preparedModel, {
+          persistSelection: false,
+          queuePersistSessionSnapshot: false,
+        });
+      }
+      if (preparedConfig?.changed) {
+        await this.metadataManager.applyPreparedConfigUpdate(preparedConfig, {
+          persistDefaults: false,
+          queuePersistSessionSnapshot: false,
+        });
+      }
+      if (preparedEnableMcp?.changed) {
+        await this.mcpManager.applyPreparedEnableMcpChange(preparedEnableMcp, {
+          persistDefaults: false,
+          queuePersistSessionSnapshot: false,
+        });
+      }
+
+      this.queuePersistSessionSnapshot("session.defaults_applied");
+      this.emitTelemetry("session.defaults.apply", "ok", {
+        sessionId: this.id,
+        modelChanged: preparedModel?.changed ?? false,
+        configChanged: preparedConfig?.changed ?? false,
+        enableMcpChanged: preparedEnableMcp?.changed ?? false,
+      });
+
+      if (persistError) {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Session defaults updated for this session, but failed to persist defaults: ${String(persistError)}`,
+        );
+      }
+    });
+  }
+
   async emitProviderCatalog() {
     await this.providerCatalogManager.emitProviderCatalog();
   }
@@ -1075,6 +1186,10 @@ export class AgentSession {
   async closeForHistory(): Promise<void> {
     this.state.persistenceStatus = "closed";
     this.queuePersistSessionSnapshot("session.closed");
+    await this.persistenceManager.waitForIdle();
+  }
+
+  async waitForPersistenceIdle(): Promise<void> {
     await this.persistenceManager.waitForIdle();
   }
 

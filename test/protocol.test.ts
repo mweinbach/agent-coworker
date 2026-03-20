@@ -374,6 +374,51 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("apply_session_defaults", () => {
+    test("valid apply_session_defaults accepts composite defaults payloads", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "apply_session_defaults",
+          sessionId: "s1",
+          provider: "openai",
+          model: "gpt-5.2",
+          enableMcp: false,
+          config: {
+            backupsEnabled: true,
+            preferredChildModel: "gpt-5.2-mini",
+            childModelRoutingMode: "same-provider",
+          },
+        }),
+      );
+      expect(msg.type).toBe("apply_session_defaults");
+      if (msg.type === "apply_session_defaults") {
+        expect(msg.provider).toBe("openai");
+        expect(msg.model).toBe("gpt-5.2");
+        expect(msg.enableMcp).toBe(false);
+        expect(msg.config?.preferredChildModel).toBe("gpt-5.2-mini");
+      }
+    });
+
+    test("apply_session_defaults requires provider and model together", () => {
+      expect(
+        expectErr(JSON.stringify({ type: "apply_session_defaults", sessionId: "s1", provider: "openai" })),
+      ).toBe("apply_session_defaults provider and model must be supplied together");
+      expect(
+        expectErr(JSON.stringify({ type: "apply_session_defaults", sessionId: "s1", model: "gpt-5.2" })),
+      ).toBe("apply_session_defaults provider and model must be supplied together");
+    });
+
+    test("apply_session_defaults validates config payloads with set_config semantics", () => {
+      expect(
+        expectErr(JSON.stringify({
+          type: "apply_session_defaults",
+          sessionId: "s1",
+          config: { toolOutputOverflowChars: 25_000, clearToolOutputOverflowChars: true },
+        })),
+      ).toBe("apply_session_defaults config.toolOutputOverflowChars cannot be combined with clearToolOutputOverflowChars");
+    });
+  });
+
   describe("connect_provider hard break", () => {
     test("connect_provider is rejected as unknown type", () => {
       const err = expectErr(

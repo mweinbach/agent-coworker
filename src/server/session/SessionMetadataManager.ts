@@ -10,11 +10,44 @@ import type { SessionConfigPatch } from "../protocol";
 import { DEFAULT_SESSION_TITLE, heuristicTitleFromQuery, type SessionTitleSource } from "../sessionTitleService";
 import type { SessionContext } from "./SessionContext";
 
+type PrepareConfigUpdateOptions = {
+  baseConfig?: AgentConfig;
+  baseYolo?: boolean;
+  baseMaxSteps?: number;
+};
+
+type PreparedConfigUpdate = {
+  nextConfig: AgentConfig;
+  nextYolo: boolean;
+  nextMaxSteps: number;
+  persistPatch: import("./SessionContext").PersistedProjectConfigPatch;
+  refreshedSystemPrompt: Awaited<ReturnType<SessionContext["deps"]["loadSystemPromptWithSkillsImpl"]>> | null;
+  emitObservabilityStatus: boolean;
+  syncBackups: boolean;
+  changed: boolean;
+};
+
+function stringArrayEqual(left: string[] | undefined, right: string[] | undefined): boolean {
+  if ((left?.length ?? 0) !== (right?.length ?? 0)) return false;
+  return (left ?? []).every((value, index) => value === (right ?? [])[index]);
+}
+
+function userProfileEqual(
+  left: NonNullable<AgentConfig["userProfile"]> | undefined,
+  right: NonNullable<AgentConfig["userProfile"]> | undefined,
+): boolean {
+  return (
+    (left?.instructions ?? "") === (right?.instructions ?? "")
+    && (left?.work ?? "") === (right?.work ?? "")
+    && (left?.details ?? "") === (right?.details ?? "")
+  );
+}
+
 export class SessionMetadataManager {
   constructor(private readonly context: SessionContext) {}
 
-  private effectiveUserProfile() {
-    const profile = this.context.state.config.userProfile;
+  private effectiveUserProfile(config = this.context.state.config) {
+    const profile = config.userProfile;
     return {
       instructions: profile?.instructions ?? "",
       work: profile?.work ?? "",
@@ -22,13 +55,13 @@ export class SessionMetadataManager {
     };
   }
 
-  private promptRefreshConfig(patch: SessionConfigPatch): AgentConfig {
+  private promptRefreshConfig(baseConfig: AgentConfig, patch: SessionConfigPatch): AgentConfig {
     return {
-      ...this.context.state.config,
+      ...baseConfig,
       ...(patch.providerOptions !== undefined
         ? {
             providerOptions: mergeEditableOpenAiCompatibleProviderOptions(
-              this.context.state.config.providerOptions,
+              baseConfig.providerOptions,
               patch.providerOptions,
             ),
           }
@@ -36,14 +69,165 @@ export class SessionMetadataManager {
       ...(patch.userName !== undefined ? { userName: patch.userName } : {}),
       ...(patch.userProfile !== undefined
         ? {
-            userProfile: {
-              ...this.effectiveUserProfile(),
+          userProfile: {
+              ...this.effectiveUserProfile(baseConfig),
               ...patch.userProfile,
             },
           }
         : {}),
       ...(patch.enableMemory !== undefined ? { enableMemory: patch.enableMemory } : {}),
     };
+  }
+
+  private buildNextConfig(
+    patch: SessionConfigPatch,
+    normalizedChildRouting: ReturnType<typeof normalizeChildRoutingConfig> | undefined,
+    baseConfig: AgentConfig,
+  ): AgentConfig {
+    let nextConfig: AgentConfig = baseConfig;
+    if (patch.observabilityEnabled !== undefined) {
+      nextConfig = { ...nextConfig, observabilityEnabled: patch.observabilityEnabled };
+    }
+    if (patch.backupsEnabled !== undefined) {
+      nextConfig = { ...nextConfig, backupsEnabled: patch.backupsEnabled };
+    }
+    if (patch.enableMemory !== undefined) {
+      nextConfig = { ...nextConfig, enableMemory: patch.enableMemory };
+    }
+    if (patch.memoryRequireApproval !== undefined) {
+      nextConfig = { ...nextConfig, memoryRequireApproval: patch.memoryRequireApproval };
+    }
+    if (normalizedChildRouting !== undefined) {
+      nextConfig = {
+        ...nextConfig,
+        preferredChildModel: normalizedChildRouting.preferredChildModel,
+        childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
+        preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
+        allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
+      };
+    }
+    if (patch.toolOutputOverflowChars !== undefined) {
+      nextConfig = {
+        ...nextConfig,
+        toolOutputOverflowChars: patch.toolOutputOverflowChars,
+        projectConfigOverrides: {
+          ...nextConfig.projectConfigOverrides,
+          toolOutputOverflowChars: patch.toolOutputOverflowChars,
+        },
+      };
+    }
+    if (patch.clearToolOutputOverflowChars) {
+      const { toolOutputOverflowChars: _ignored, ...remainingOverrides } =
+        nextConfig.projectConfigOverrides ?? {};
+      nextConfig = {
+        ...nextConfig,
+        toolOutputOverflowChars: effectiveToolOutputOverflowChars(
+          nextConfig.inheritedToolOutputOverflowChars
+        ),
+        projectConfigOverrides: Object.keys(remainingOverrides).length > 0 ? remainingOverrides : undefined,
+      };
+    }
+    if (patch.providerOptions !== undefined) {
+      nextConfig = {
+        ...nextConfig,
+        providerOptions: mergeEditableOpenAiCompatibleProviderOptions(
+          nextConfig.providerOptions,
+          patch.providerOptions,
+        ),
+      };
+    }
+    if (patch.userName !== undefined) {
+      nextConfig = {
+        ...nextConfig,
+        userName: patch.userName,
+      };
+    }
+    if (patch.userProfile !== undefined) {
+      nextConfig = {
+        ...nextConfig,
+        userProfile: {
+          ...this.effectiveUserProfile(nextConfig),
+          ...patch.userProfile,
+        },
+      };
+    }
+    return nextConfig;
+  }
+
+  private buildPersistPatch(
+    patch: SessionConfigPatch,
+    normalizedChildRouting: ReturnType<typeof normalizeChildRoutingConfig> | undefined,
+  ): import("./SessionContext").PersistedProjectConfigPatch {
+    const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
+    if (normalizedChildRouting !== undefined) {
+      persistPatch.preferredChildModel = normalizedChildRouting.preferredChildModel;
+      persistPatch.childModelRoutingMode = normalizedChildRouting.childModelRoutingMode;
+      persistPatch.preferredChildModelRef = normalizedChildRouting.preferredChildModelRef;
+      persistPatch.allowedChildModelRefs = normalizedChildRouting.allowedChildModelRefs;
+    }
+    if (patch.observabilityEnabled !== undefined) {
+      persistPatch.observabilityEnabled = patch.observabilityEnabled;
+    }
+    if (patch.backupsEnabled !== undefined) {
+      persistPatch.backupsEnabled = patch.backupsEnabled;
+    }
+    if (patch.enableMemory !== undefined) {
+      persistPatch.enableMemory = patch.enableMemory;
+    }
+    if (patch.memoryRequireApproval !== undefined) {
+      persistPatch.memoryRequireApproval = patch.memoryRequireApproval;
+    }
+    if (patch.toolOutputOverflowChars !== undefined) {
+      persistPatch.toolOutputOverflowChars = patch.toolOutputOverflowChars;
+    }
+    if (patch.clearToolOutputOverflowChars) {
+      persistPatch.clearToolOutputOverflowChars = true;
+    }
+    if (patch.providerOptions !== undefined) {
+      persistPatch.providerOptions = patch.providerOptions;
+    }
+    if (patch.userName !== undefined) {
+      persistPatch.userName = patch.userName;
+    }
+    if (patch.userProfile !== undefined) {
+      persistPatch.userProfile = patch.userProfile;
+    }
+    return persistPatch;
+  }
+
+  private configUpdateChanged(
+    baseConfig: AgentConfig,
+    nextConfig: AgentConfig,
+    baseYolo: boolean,
+    nextYolo: boolean,
+    baseMaxSteps: number,
+    nextMaxSteps: number,
+  ): boolean {
+    return (
+      baseYolo !== nextYolo
+      || baseMaxSteps !== nextMaxSteps
+      || (baseConfig.observabilityEnabled ?? false) !== (nextConfig.observabilityEnabled ?? false)
+      || (baseConfig.backupsEnabled ?? true) !== (nextConfig.backupsEnabled ?? true)
+      || (baseConfig.enableMemory ?? true) !== (nextConfig.enableMemory ?? true)
+      || (baseConfig.memoryRequireApproval ?? false) !== (nextConfig.memoryRequireApproval ?? false)
+      || baseConfig.preferredChildModel !== nextConfig.preferredChildModel
+      || (baseConfig.childModelRoutingMode ?? "same-provider") !== (nextConfig.childModelRoutingMode ?? "same-provider")
+      || (baseConfig.preferredChildModelRef ?? `${baseConfig.provider}:${baseConfig.preferredChildModel}`)
+        !== (nextConfig.preferredChildModelRef ?? `${nextConfig.provider}:${nextConfig.preferredChildModel}`)
+      || !stringArrayEqual(baseConfig.allowedChildModelRefs, nextConfig.allowedChildModelRefs)
+      || !Object.is(baseConfig.toolOutputOverflowChars ?? null, nextConfig.toolOutputOverflowChars ?? null)
+      || !Object.is(
+        baseConfig.projectConfigOverrides?.toolOutputOverflowChars ?? null,
+        nextConfig.projectConfigOverrides?.toolOutputOverflowChars ?? null,
+      )
+      || JSON.stringify(
+        pickEditableOpenAiCompatibleProviderOptions(baseConfig.providerOptions),
+      ) !== JSON.stringify(
+        pickEditableOpenAiCompatibleProviderOptions(nextConfig.providerOptions),
+      )
+      || (baseConfig.userName ?? "") !== (nextConfig.userName ?? "")
+      || !userProfileEqual(baseConfig.userProfile, nextConfig.userProfile)
+    );
   }
 
   getPublicConfig() {
@@ -127,7 +311,10 @@ export class SessionMetadataManager {
     };
   }
 
-  updateSessionInfo(patch: Partial<import("./SessionContext").SessionInfoState>) {
+  updateSessionInfo(
+    patch: Partial<import("./SessionContext").SessionInfoState>,
+    opts?: { queuePersistSessionSnapshot?: boolean },
+  ) {
     const next = {
       ...this.context.state.sessionInfo,
       ...patch,
@@ -144,7 +331,9 @@ export class SessionMetadataManager {
 
     this.context.state.sessionInfo = next;
     this.context.emit(this.getSessionInfoEvent());
-    this.context.queuePersistSessionSnapshot("session_info.updated");
+    if (opts?.queuePersistSessionSnapshot !== false) {
+      this.context.queuePersistSessionSnapshot("session_info.updated");
+    }
   }
 
   maybeGenerateTitleFromQuery(query: string) {
@@ -200,14 +389,20 @@ export class SessionMetadataManager {
     });
   }
 
-  async setConfig(patch: SessionConfigPatch) {
+  async prepareConfigUpdate(
+    patch: SessionConfigPatch,
+    opts?: PrepareConfigUpdateOptions,
+  ): Promise<PreparedConfigUpdate | null> {
+    const baseConfig = opts?.baseConfig ?? this.context.state.config;
+    const baseYolo = opts?.baseYolo ?? this.context.state.yolo;
+    const baseMaxSteps = opts?.baseMaxSteps ?? this.context.state.maxSteps;
     if (patch.toolOutputOverflowChars !== undefined && patch.clearToolOutputOverflowChars) {
       this.context.emitError(
         "validation_failed",
         "session",
         "toolOutputOverflowChars cannot be combined with clearToolOutputOverflowChars"
       );
-      return;
+      return null;
     }
 
     let normalizedChildRouting:
@@ -221,23 +416,53 @@ export class SessionMetadataManager {
     ) {
       try {
         normalizedChildRouting = normalizeChildRoutingConfig({
-          provider: this.context.state.config.provider,
-          model: this.context.state.config.model,
-          childModelRoutingMode: patch.childModelRoutingMode ?? this.context.state.config.childModelRoutingMode,
-          preferredChildModel: patch.preferredChildModel ?? this.context.state.config.preferredChildModel,
+          provider: baseConfig.provider,
+          model: baseConfig.model,
+          childModelRoutingMode: patch.childModelRoutingMode ?? baseConfig.childModelRoutingMode,
+          preferredChildModel: patch.preferredChildModel ?? baseConfig.preferredChildModel,
           preferredChildModelRef:
             patch.preferredChildModelRef !== undefined
               ? patch.preferredChildModelRef
               : patch.preferredChildModel !== undefined
                 ? undefined
-                : this.context.state.config.preferredChildModelRef,
-          allowedChildModelRefs: patch.allowedChildModelRefs ?? this.context.state.config.allowedChildModelRefs,
+                : baseConfig.preferredChildModelRef,
+          allowedChildModelRefs: patch.allowedChildModelRefs ?? baseConfig.allowedChildModelRefs,
           source: "session config",
         });
       } catch (err) {
         this.context.emitError("validation_failed", "session", err instanceof Error ? err.message : String(err));
-        return;
+        return null;
       }
+    }
+
+    const defaultBackupsEnabled = baseConfig.backupsEnabled ?? true;
+    const nextConfig = this.buildNextConfig(patch, normalizedChildRouting, baseConfig);
+    const nextYolo = patch.yolo ?? baseYolo;
+    const nextMaxSteps = patch.maxSteps ?? baseMaxSteps;
+    const shouldSyncBackups =
+      patch.backupsEnabled !== undefined
+      && (
+        this.context.state.backupsEnabledOverride !== null
+        || defaultBackupsEnabled !== patch.backupsEnabled
+      );
+    const changed =
+      this.configUpdateChanged(baseConfig, nextConfig, baseYolo, nextYolo, baseMaxSteps, nextMaxSteps)
+      || shouldSyncBackups;
+    const persistPatch = this.buildPersistPatch(patch, normalizedChildRouting);
+    if (patch.backupsEnabled !== undefined && defaultBackupsEnabled === patch.backupsEnabled) {
+      delete persistPatch.backupsEnabled;
+    }
+    if (!changed) {
+      return {
+        nextConfig,
+        nextYolo,
+        nextMaxSteps,
+        persistPatch,
+        refreshedSystemPrompt: null,
+        emitObservabilityStatus: false,
+        syncBackups: false,
+        changed: false,
+      };
     }
 
     let refreshedSystemPrompt: Awaited<ReturnType<SessionContext["deps"]["loadSystemPromptWithSkillsImpl"]>> | null = null;
@@ -248,144 +473,93 @@ export class SessionMetadataManager {
       || patch.providerOptions !== undefined
     ) {
       try {
-        refreshedSystemPrompt = await this.context.deps.loadSystemPromptWithSkillsImpl(this.promptRefreshConfig(patch));
+        refreshedSystemPrompt = await this.context.deps.loadSystemPromptWithSkillsImpl(
+          this.promptRefreshConfig(baseConfig, patch),
+        );
       } catch (err) {
         this.context.emitError(
           "internal_error",
           "session",
           `Failed to refresh system prompt: ${String(err)}`
         );
-        return;
+        return null;
       }
     }
 
-    const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
-    if (normalizedChildRouting !== undefined) {
-      persistPatch.preferredChildModel = normalizedChildRouting.preferredChildModel;
-      persistPatch.childModelRoutingMode = normalizedChildRouting.childModelRoutingMode;
-      persistPatch.preferredChildModelRef = normalizedChildRouting.preferredChildModelRef;
-      persistPatch.allowedChildModelRefs = normalizedChildRouting.allowedChildModelRefs;
-    }
-    if (patch.observabilityEnabled !== undefined) {
-      persistPatch.observabilityEnabled = patch.observabilityEnabled;
-    }
-    if (patch.backupsEnabled !== undefined) {
-      persistPatch.backupsEnabled = patch.backupsEnabled;
-    }
-    if (patch.enableMemory !== undefined) {
-      persistPatch.enableMemory = patch.enableMemory;
-    }
-    if (patch.memoryRequireApproval !== undefined) {
-      persistPatch.memoryRequireApproval = patch.memoryRequireApproval;
-    }
-    if (patch.toolOutputOverflowChars !== undefined) {
-      persistPatch.toolOutputOverflowChars = patch.toolOutputOverflowChars;
-    }
-    if (patch.clearToolOutputOverflowChars) {
-      persistPatch.clearToolOutputOverflowChars = true;
-    }
-    if (patch.providerOptions !== undefined) {
-      persistPatch.providerOptions = patch.providerOptions;
-    }
-    if (patch.userName !== undefined) {
-      persistPatch.userName = patch.userName;
-    }
-    if (patch.userProfile !== undefined) {
-      persistPatch.userProfile = patch.userProfile;
-    }
-    if (Object.keys(persistPatch).length > 0 && this.context.deps.persistProjectConfigPatchImpl) {
+    return {
+      nextConfig,
+      nextYolo,
+      nextMaxSteps,
+      persistPatch,
+      refreshedSystemPrompt,
+      emitObservabilityStatus: patch.observabilityEnabled !== undefined,
+      syncBackups: shouldSyncBackups,
+      changed: true,
+    };
+  }
+
+  async applyPreparedConfigUpdate(
+    prepared: PreparedConfigUpdate,
+    opts?: { persistDefaults?: boolean; queuePersistSessionSnapshot?: boolean },
+  ): Promise<unknown | null> {
+    if (prepared.changed && opts?.persistDefaults !== false && Object.keys(prepared.persistPatch).length > 0 && this.context.deps.persistProjectConfigPatchImpl) {
       try {
-        await this.context.deps.persistProjectConfigPatchImpl(persistPatch);
+        await this.context.deps.persistProjectConfigPatchImpl(prepared.persistPatch);
       } catch (err) {
-        this.context.emitError(
-          "internal_error",
-          "session",
-          `Failed to persist config defaults: ${String(err)}`
-        );
-        return;
+        return err;
       }
     }
 
-    if (patch.yolo !== undefined) this.context.state.yolo = patch.yolo;
-    if (patch.observabilityEnabled !== undefined) {
-      this.context.state.config = { ...this.context.state.config, observabilityEnabled: patch.observabilityEnabled };
+    if (!prepared.changed) {
+      return null;
+    }
+
+    this.context.state.yolo = prepared.nextYolo;
+    this.context.state.config = prepared.nextConfig;
+    if (prepared.syncBackups) {
+      this.context.state.backupsEnabledOverride = null;
+    }
+    this.context.state.maxSteps = prepared.nextMaxSteps;
+    if (prepared.refreshedSystemPrompt) {
+      this.context.state.system = prepared.refreshedSystemPrompt.prompt;
+      this.context.state.discoveredSkills = prepared.refreshedSystemPrompt.discoveredSkills;
+    }
+
+    if (prepared.emitObservabilityStatus) {
       this.context.emit(this.getObservabilityStatusEvent());
     }
-    if (patch.backupsEnabled !== undefined) {
-      this.context.state.backupsEnabledOverride = null;
-      this.context.state.config = { ...this.context.state.config, backupsEnabled: patch.backupsEnabled };
-    }
-    if (patch.enableMemory !== undefined) {
-      this.context.state.config = { ...this.context.state.config, enableMemory: patch.enableMemory };
-    }
-    if (patch.memoryRequireApproval !== undefined) {
-      this.context.state.config = { ...this.context.state.config, memoryRequireApproval: patch.memoryRequireApproval };
-    }
-    if (normalizedChildRouting !== undefined) {
-      this.context.state.config = {
-        ...this.context.state.config,
-        preferredChildModel: normalizedChildRouting.preferredChildModel,
-        childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
-        preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
-        allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
-      };
-    }
-    if (patch.toolOutputOverflowChars !== undefined) {
-      this.context.state.config = {
-        ...this.context.state.config,
-        toolOutputOverflowChars: patch.toolOutputOverflowChars,
-        projectConfigOverrides: {
-          ...this.context.state.config.projectConfigOverrides,
-          toolOutputOverflowChars: patch.toolOutputOverflowChars,
-        },
-      };
-    }
-    if (patch.clearToolOutputOverflowChars) {
-      const { toolOutputOverflowChars: _ignored, ...remainingOverrides } =
-        this.context.state.config.projectConfigOverrides ?? {};
-      this.context.state.config = {
-        ...this.context.state.config,
-        toolOutputOverflowChars: effectiveToolOutputOverflowChars(
-          this.context.state.config.inheritedToolOutputOverflowChars
-        ),
-        projectConfigOverrides: Object.keys(remainingOverrides).length > 0 ? remainingOverrides : undefined,
-      };
-    }
-    if (patch.providerOptions !== undefined) {
-      this.context.state.config = {
-        ...this.context.state.config,
-        providerOptions: mergeEditableOpenAiCompatibleProviderOptions(
-          this.context.state.config.providerOptions,
-          patch.providerOptions,
-        ),
-      };
-    }
-    if (patch.userName !== undefined) {
-      this.context.state.config = {
-        ...this.context.state.config,
-        userName: patch.userName,
-      };
-    }
-    if (patch.userProfile !== undefined) {
-      this.context.state.config = {
-        ...this.context.state.config,
-        userProfile: {
-          ...this.effectiveUserProfile(),
-          ...patch.userProfile,
-        },
-      };
-    }
-    if (patch.maxSteps !== undefined) this.context.state.maxSteps = patch.maxSteps;
-    if (refreshedSystemPrompt) {
-      this.context.state.system = refreshedSystemPrompt.prompt;
-      this.context.state.discoveredSkills = refreshedSystemPrompt.discoveredSkills;
-    }
-
     this.context.emit(this.getSessionConfigEvent());
-    if (patch.backupsEnabled !== undefined) {
+    if (prepared.syncBackups) {
       await this.context.syncSessionBackupAvailability();
     }
-    this.context.queuePersistSessionSnapshot("session.config_updated");
+    if (opts?.queuePersistSessionSnapshot !== false) {
+      this.context.queuePersistSessionSnapshot("session.config_updated");
+    }
+
+    return null;
+  }
+
+  async setConfig(patch: SessionConfigPatch) {
+    const prepared = await this.prepareConfigUpdate(patch);
+    if (!prepared) {
+      return;
+    }
+    if (!prepared.changed) {
+      this.context.emitTelemetry("session.defaults.noop", "ok", {
+        sessionId: this.context.id,
+        operation: "set_config",
+      });
+      return;
+    }
+
+    const persistError = await this.applyPreparedConfigUpdate(prepared);
+    if (persistError) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to persist config defaults: ${String(persistError)}`
+      );
+    }
   }
 
   async setBackupsEnabledOverride(backupsEnabledOverride: boolean | null) {

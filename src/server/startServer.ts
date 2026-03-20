@@ -7,6 +7,7 @@ import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from
 import type { runTurn as runTurnFn } from "../agent";
 import { defaultRuntimeNameForProvider, type AgentConfig } from "../types";
 import { loadConfig } from "../config";
+import { emitObservabilityEvent } from "../observability/otel";
 import { loadAgentPrompt, loadSystemPromptWithSkills } from "../prompt";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
 import type { SessionKind } from "../shared/agents";
@@ -269,6 +270,17 @@ export async function startAgentServer(
   const getAiCoworkerPathsImpl = opts.getAiCoworkerPathsImpl ?? getAiCoworkerPathsDefault;
   const sessionDb = await SessionDb.create({
     paths: getAiCoworkerPathsImpl({ homedir: opts.homedir }),
+    emitTelemetry: (name, status, attributes, durationMs) => {
+      void emitObservabilityEvent(config, {
+        name,
+        at: new Date().toISOString(),
+        status,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        attributes,
+      }).catch(() => {
+        // Session DB observability is best-effort only.
+      });
+    },
   });
   const sessionBindings = new Map<string, SessionBinding>();
   const workspaceBackupService = new WorkspaceBackupService({
@@ -394,7 +406,7 @@ export async function startAgentServer(
           sessionBindings.delete(sessionId);
         }
 
-        sessionDb.deleteSession(opts.targetSessionId);
+        await sessionDb.deleteSession(opts.targetSessionId);
       },
       listWorkspaceBackupsImpl: async (opts: { requesterSessionId: string; workingDirectory: string }) =>
         await workspaceBackupService.listWorkspaceBackups(opts.workingDirectory),
@@ -788,6 +800,7 @@ export async function startAgentServer(
     if (serverStopped) return;
     serverStopped = true;
     // Dispose all active sessions to abort running turns and close MCP child processes.
+    const persistenceFlushes: Promise<void>[] = [];
     for (const [id, binding] of sessionBindings) {
       if (!binding.session) {
         sessionBindings.delete(id);
@@ -799,11 +812,18 @@ export async function startAgentServer(
         // ignore
       }
       try {
+        persistenceFlushes.push(binding.session.waitForPersistenceIdle());
+      } catch {
+        // ignore
+      }
+      try {
         binding.socket?.close();
       } catch {
         // ignore
       }
     }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.allSettled(persistenceFlushes);
     sessionBindings.clear();
     try {
       sessionDb.close();

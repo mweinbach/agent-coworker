@@ -344,7 +344,7 @@ export class SessionAdminManager {
           targetSessionId,
         });
       } else if (this.context.deps.sessionDb) {
-        this.context.deps.sessionDb.deleteSession(targetSessionId);
+        await this.context.deps.sessionDb.deleteSession(targetSessionId);
       } else {
         const paths = this.context.getCoworkPaths();
         await deletePersistedSessionSnapshot(paths, targetSessionId);

@@ -48,6 +48,12 @@ export function dispatchClientMessage({
       return session.handleApprovalResponse(message.requestId, message.approved);
     case "set_model":
       return void session.setModel(message.model, message.provider);
+    case "apply_session_defaults":
+      return void session.applySessionDefaults({
+        ...(message.provider !== undefined ? { provider: message.provider, model: message.model! } : {}),
+        ...(message.enableMcp !== undefined ? { enableMcp: message.enableMcp } : {}),
+        ...(message.config !== undefined ? { config: message.config } : {}),
+      });
     case "refresh_provider_status":
       return void session.refreshProviderStatus();
     case "provider_catalog_get":

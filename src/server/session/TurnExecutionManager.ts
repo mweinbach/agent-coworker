@@ -539,7 +539,7 @@ export class TurnExecutionManager {
             event: rawEvent.event,
           };
           this.context.emit(eventPayload);
-          this.context.deps.sessionDb?.persistModelStreamChunk({
+          await this.context.deps.sessionDb?.persistModelStreamChunk({
             sessionId: this.context.id,
             turnId,
             chunkIndex: index,

@@ -7,7 +7,7 @@ import { createRuntime } from "../src/runtime";
 import { SessionCostTracker } from "../src/session/costTracker";
 import type { AgentConfig, TodoItem } from "../src/types";
 import { ASK_SKIP_TOKEN, type ServerEvent } from "../src/server/protocol";
-import { defaultSupportedModel } from "../src/models/registry";
+import { defaultSupportedModel, getSupportedModel } from "../src/models/registry";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import type {
   SessionBackupHandle,
@@ -481,6 +481,19 @@ describe("AgentSession", () => {
 
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({ enableMcp: false });
+    });
+
+    test("setEnableMcp suppresses no-op writes when the value is unchanged", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session, events } = makeSession({
+        config: { ...makeConfig("/tmp/test-session"), enableMcp: true },
+        persistProjectConfigPatchImpl,
+      });
+
+      await session.setEnableMcp(true);
+
+      expect(persistProjectConfigPatchImpl).not.toHaveBeenCalled();
+      expect(events.some((evt) => evt.type === "session_settings")).toBe(false);
     });
 
     test("setEnableMcp persistence failures still apply runtime state and emit a non-fatal error", async () => {
@@ -1117,6 +1130,40 @@ describe("AgentSession", () => {
       }
     });
 
+    test("setConfig suppresses no-op writes when the effective config is unchanged", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session, events } = makeSession({ persistProjectConfigPatchImpl });
+
+      await session.setConfig({
+        preferredChildModel: "gemini-3-flash-preview",
+        childModelRoutingMode: "same-provider",
+      });
+
+      expect(persistProjectConfigPatchImpl).not.toHaveBeenCalled();
+      expect(events.some((evt) => evt.type === "session_config")).toBe(false);
+    });
+
+    test("setConfig clears a live backup override even when the persisted default is unchanged", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session, events } = makeSession({ persistProjectConfigPatchImpl });
+
+      await session.setBackupsEnabledOverride(false);
+      events.length = 0;
+
+      await session.setConfig({
+        backupsEnabled: true,
+      });
+
+      expect(persistProjectConfigPatchImpl).not.toHaveBeenCalled();
+      expect(session.getSessionConfigEvent().config.backupsEnabled).toBe(true);
+      expect(session.getSessionConfigEvent().config.defaultBackupsEnabled).toBe(true);
+
+      const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
+      expect(cfgEvt).toBeDefined();
+      expect(cfgEvt.config.backupsEnabled).toBe(true);
+      expect(cfgEvt.config.defaultBackupsEnabled).toBe(true);
+    });
+
     test("setConfig merges editable providerOptions and preserves unrelated keys", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const loadSystemPromptWithSkillsImpl = mock(async () => ({
@@ -1517,6 +1564,26 @@ describe("AgentSession", () => {
       });
     });
 
+    test("suppresses no-op model updates when provider and model are unchanged", async () => {
+      const persistModelSelectionImpl = mock(async () => {});
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          provider: "openai",
+          model: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
+          knowledgeCutoff: getSupportedModel("openai", "gpt-5.2")?.knowledgeCutoff ?? "unknown",
+        },
+        persistModelSelectionImpl,
+      });
+
+      await session.setModel("gpt-5.2", "openai");
+
+      expect(persistModelSelectionImpl).not.toHaveBeenCalled();
+      expect(events.some((evt) => evt.type === "config_updated")).toBe(false);
+      expect(events.some((evt) => evt.type === "session_info")).toBe(false);
+    });
+
     test("persistence-hook failures keep model updates and emit a non-fatal error", async () => {
       const persistModelSelectionImpl = mock(async () => {
         throw new Error("disk write failed");
@@ -1564,6 +1631,47 @@ describe("AgentSession", () => {
       if (err && err.type === "error") {
         expect(err.message).toContain("Unsupported provider");
       }
+    });
+
+    test("applySessionDefaults persists combined defaults once and emits one snapshot write", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session, events } = makeSession({
+        persistProjectConfigPatchImpl,
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          preferredChildModel: "gemini-3-flash-preview",
+          enableMcp: true,
+        },
+      });
+
+      await session.applySessionDefaults({
+        provider: "openai",
+        model: "gpt-5.2",
+        enableMcp: false,
+        config: {
+          backupsEnabled: false,
+          preferredChildModel: "gpt-5-mini",
+        },
+      });
+      await flushAsyncWork();
+
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        provider: "openai",
+        model: "gpt-5.2",
+        preferredChildModel: "gpt-5-mini",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "openai:gpt-5-mini",
+        allowedChildModelRefs: [],
+        backupsEnabled: false,
+        enableMcp: false,
+      });
+
+      expect(events.some((evt) => evt.type === "config_updated")).toBe(true);
+      expect(events.some((evt) => evt.type === "session_config")).toBe(true);
+      expect(events.some((evt) => evt.type === "session_settings")).toBe(true);
     });
   });
 

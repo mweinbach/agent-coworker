@@ -100,6 +100,14 @@ export type ClientMessage =
   | { type: "ask_response"; sessionId: string; requestId: string; answer: string }
   | { type: "approval_response"; sessionId: string; requestId: string; approved: boolean }
   | { type: "set_model"; sessionId: string; model: string; provider?: AgentConfig["provider"] }
+  | {
+    type: "apply_session_defaults";
+    sessionId: string;
+    provider?: AgentConfig["provider"];
+    model?: string;
+    enableMcp?: boolean;
+    config?: SessionConfigPatch;
+  }
   | { type: "refresh_provider_status"; sessionId: string }
   | { type: "provider_catalog_get"; sessionId: string }
   | { type: "provider_auth_methods_get"; sessionId: string }
@@ -523,7 +531,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.27";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.28";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -532,6 +540,7 @@ export const CLIENT_MESSAGE_TYPES = [
   "ask_response",
   "approval_response",
   "set_model",
+  "apply_session_defaults",
   "refresh_provider_status",
   "provider_catalog_get",
   "provider_auth_methods_get",

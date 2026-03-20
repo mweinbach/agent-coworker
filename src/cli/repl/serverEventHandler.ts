@@ -40,13 +40,24 @@ export type ReplServerEventContext = {
   activateNextPrompt: (rl: readline.Interface) => void;
   resetModelStreamState: () => void;
   send: (msg: ClientMessage) => boolean;
-  storeSessionForCurrentCwd: (sessionId: string) => void;
+  storeSessionForCurrentCwd: (sessionId: string) => void | Promise<void>;
 };
 
 function renderTodos(todos: TodoItem[]) {
   for (const line of renderTodosToLines(todos)) {
     console.log(line);
   }
+}
+
+function persistSessionForCurrentCwdBestEffort(
+  storeSessionForCurrentCwd: ReplServerEventContext["storeSessionForCurrentCwd"],
+  sessionId: string
+) {
+  void Promise.resolve()
+    .then(() => storeSessionForCurrentCwd(sessionId))
+    .catch(() => {
+      // Session resume state is optional; ignore filesystem failures.
+    });
 }
 
 export function createServerEventHandler(ctx: ReplServerEventContext) {
@@ -62,7 +73,7 @@ export function createServerEventHandler(ctx: ReplServerEventContext) {
       console.log(`connected: ${evt.sessionId}`);
       console.log(`provider=${evt.config.provider} model=${evt.config.model}`);
       console.log(`cwd=${evt.config.workingDirectory}`);
-      ctx.storeSessionForCurrentCwd(evt.sessionId);
+      persistSessionForCurrentCwdBestEffort(ctx.storeSessionForCurrentCwd, evt.sessionId);
       ctx.send({ type: "provider_catalog_get", sessionId: evt.sessionId });
       ctx.send({ type: "provider_auth_methods_get", sessionId: evt.sessionId });
       ctx.send({ type: "refresh_provider_status", sessionId: evt.sessionId });

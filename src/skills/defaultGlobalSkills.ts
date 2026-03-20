@@ -3,22 +3,14 @@ import os from "node:os";
 import path from "node:path";
 
 import { ensureAiCoworkerHome, getAiCoworkerPaths } from "../store/connections";
+import { downloadGitHubDirectory, type FetchLike } from "./github";
+import { writeSkillInstallManifest } from "./manifest";
 
 const DEFAULT_SKILLS_REPO = "openai/skills";
 const DEFAULT_SKILLS_REF = "main";
 const DEFAULT_SKILLS_STATE_FILE = "default-global-skills.json";
 const INSTALL_STATE_VERSION = 1;
 const bootstrapPromises = new Map<string, Promise<EnsureDefaultGlobalSkillsInstalledResult | null>>();
-
-type FetchLike = typeof fetch;
-
-type GitHubContentEntry = {
-  type: "file" | "dir";
-  name: string;
-  path: string;
-  url: string;
-  download_url: string | null;
-};
 
 type DefaultGlobalSkillsState = {
   version: number;
@@ -47,29 +39,6 @@ export type EnsureDefaultGlobalSkillsInstalledResult = {
   installed: string[];
   skippedExisting: string[];
 };
-
-function encodeGitHubPath(githubPath: string): string {
-  return githubPath
-    .split("/")
-    .filter(Boolean)
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-}
-
-function buildGitHubApiUrl(repo: string, ref: string, githubPath: string): string {
-  return `https://api.github.com/repos/${repo}/contents/${encodeGitHubPath(githubPath)}?ref=${encodeURIComponent(ref)}`;
-}
-
-function githubHeaders(): HeadersInit {
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-    "User-Agent": "agent-coworker-default-skills",
-  };
-
-  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return headers;
-}
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -102,82 +71,6 @@ async function readState(stateFile: string): Promise<DefaultGlobalSkillsState | 
     };
   } catch {
     return null;
-  }
-}
-
-async function responseError(response: Response): Promise<string> {
-  try {
-    const text = await response.text();
-    return text.trim() || `${response.status} ${response.statusText}`;
-  } catch {
-    return `${response.status} ${response.statusText}`;
-  }
-}
-
-async function fetchGitHubDirectoryEntries(
-  fetchImpl: FetchLike,
-  repo: string,
-  ref: string,
-  githubPath: string
-): Promise<GitHubContentEntry[]> {
-  const response = await fetchImpl(buildGitHubApiUrl(repo, ref, githubPath), {
-    headers: githubHeaders(),
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch ${repo}/${githubPath}@${ref}: ${await responseError(response)}`);
-  }
-
-  const parsed = await response.json();
-  if (!Array.isArray(parsed)) {
-    throw new Error(`GitHub API returned a non-directory payload for ${repo}/${githubPath}@${ref}`);
-  }
-
-  return parsed as GitHubContentEntry[];
-}
-
-async function fetchGitHubFile(fetchImpl: FetchLike, downloadUrl: string): Promise<Buffer> {
-  const response = await fetchImpl(downloadUrl, {
-    headers: githubHeaders(),
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to download ${downloadUrl}: ${await responseError(response)}`);
-  }
-
-  const bytes = await response.arrayBuffer();
-  return Buffer.from(bytes);
-}
-
-async function downloadGitHubDirectory(opts: {
-  fetchImpl: FetchLike;
-  repo: string;
-  ref: string;
-  githubPath: string;
-  destDir: string;
-}): Promise<void> {
-  const { fetchImpl, repo, ref, githubPath, destDir } = opts;
-  await fs.mkdir(destDir, { recursive: true });
-
-  const entries = await fetchGitHubDirectoryEntries(fetchImpl, repo, ref, githubPath);
-  for (const entry of entries) {
-    if (entry.type === "dir") {
-      await downloadGitHubDirectory({
-        fetchImpl,
-        repo,
-        ref,
-        githubPath: entry.path,
-        destDir: path.join(destDir, entry.name),
-      });
-      continue;
-    }
-
-    if (entry.type !== "file" || !entry.download_url) {
-      continue;
-    }
-
-    const filePath = path.join(destDir, entry.name);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    const bytes = await fetchGitHubFile(fetchImpl, entry.download_url);
-    await fs.writeFile(filePath, bytes);
   }
 }
 
@@ -289,6 +182,17 @@ export async function ensureDefaultGlobalSkillsInstalled(opts: {
         destDir: tmpDir,
       });
       await fs.rename(tmpDir, finalDir);
+      await writeSkillInstallManifest({
+        skillRoot: finalDir,
+        installationId: `bootstrap-${skill.name}`,
+        origin: {
+          kind: "bootstrap",
+          url: `https://github.com/${repo}/tree/${ref}/${skill.githubPath}`,
+          repo,
+          ref,
+          subdir: skill.githubPath,
+        },
+      });
       installed.push(skill.name);
     }
 

@@ -462,7 +462,7 @@ async function fetchWithInitialResponseTimeout(
   }
 
   try {
-    return await fetch(input, {
+    return await globalThis.fetch(input, {
       ...init,
       signal: timeoutController.signal,
     });

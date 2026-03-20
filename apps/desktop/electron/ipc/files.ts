@@ -26,7 +26,12 @@ import {
   revealPathInputSchema,
   trashPathInputSchema,
 } from "../../src/lib/desktopSchemas";
-import { resolveAllowedDirectoryPath, resolveAllowedPath } from "../services/ipcSecurity";
+import { resolveDesktopBuiltinSkillRootsForReveal } from "../services/desktopBuiltinPaths";
+import {
+  resolveAllowedDirectoryPath,
+  resolveAllowedPath,
+  resolveAllowedRevealPath,
+} from "../services/ipcSecurity";
 import type { DesktopIpcModuleContext } from "./types";
 
 export function registerFilesIpc(context: DesktopIpcModuleContext): void {
@@ -125,7 +130,12 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.revealPath, async (_event, args: RevealPathInput) => {
     const input = parseWithSchema(revealPathInputSchema, args, "revealPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    const builtinSkillRoots = resolveDesktopBuiltinSkillRootsForReveal();
+    const safePath = resolveAllowedRevealPath(
+      workspaceRoots.getApprovedWorkspaceRoots(),
+      input.path,
+      builtinSkillRoots,
+    );
     shell.showItemInFolder(safePath);
   });
 

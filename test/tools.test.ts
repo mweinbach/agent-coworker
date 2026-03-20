@@ -1,4 +1,4 @@
-import { describe, expect, test, mock, beforeEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +22,7 @@ import { createSkillTool } from "../src/tools/skill";
 import { createMemoryTool } from "../src/tools/memory";
 import { createTools } from "../src/tools/index";
 import { getAiCoworkerPaths, writeConnectionStore } from "../src/connect";
+import { __internal as webSafetyInternal } from "../src/utils/webSafety";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1509,6 +1510,11 @@ describe("webFetch tool", () => {
   beforeEach(() => {
     webFetchInternal.setMaxDownloadBytes(50 * 1024 * 1024);
     webFetchInternal.setResponseTimeoutMs(5_000);
+    webSafetyInternal.setDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
+  });
+
+  afterEach(() => {
+    webSafetyInternal.resetDnsLookup();
   });
 
   const createStreamingResponse = (bytes: Uint8Array, init: ResponseInit, chunkSize = 4) => {

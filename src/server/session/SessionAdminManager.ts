@@ -1,10 +1,67 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 import { sameWorkspacePath } from "../../utils/workspacePath";
-import { deletePersistedSessionSnapshot, listPersistedSessionSnapshots } from "../sessionStore";
+import {
+  deletePersistedSessionSnapshot,
+  listPersistedSessionSnapshots,
+  type PersistedSessionSummary,
+} from "../sessionStore";
 import type { SessionContext } from "./SessionContext";
+
+function snapshotToTopLevelSessionSummary(liveSnapshot: SessionSnapshot | null): PersistedSessionSummary | null {
+  if (!liveSnapshot || liveSnapshot.sessionKind !== "root") {
+    return null;
+  }
+
+  return {
+    sessionId: liveSnapshot.sessionId,
+    title: liveSnapshot.title,
+    titleSource: liveSnapshot.titleSource,
+    titleModel: liveSnapshot.titleModel,
+    provider: liveSnapshot.provider,
+    model: liveSnapshot.model,
+    createdAt: liveSnapshot.createdAt,
+    updatedAt: liveSnapshot.updatedAt,
+    messageCount: liveSnapshot.messageCount,
+    lastEventSeq: liveSnapshot.lastEventSeq,
+    hasPendingAsk: liveSnapshot.hasPendingAsk,
+    hasPendingApproval: liveSnapshot.hasPendingApproval,
+  };
+}
+
+function mergeLiveTopLevelSessionSummary(
+  session: PersistedSessionSummary,
+  liveSnapshot: SessionSnapshot | null,
+): PersistedSessionSummary {
+  return snapshotToTopLevelSessionSummary(liveSnapshot) ?? session;
+}
+
+function mapLiveTopLevelSessionSummary(liveSnapshot: SessionSnapshot | null): PersistedSessionSummary | null {
+  return snapshotToTopLevelSessionSummary(liveSnapshot);
+}
+
+function shouldIncludeTopLevelSessionSummary(
+  session: PersistedSessionSummary,
+  liveSnapshot: SessionSnapshot | null,
+): boolean {
+  if (
+    liveSnapshot?.sessionKind === "root"
+    && (
+      liveSnapshot.executionState === "running"
+      || liveSnapshot.executionState === "pending_init"
+    )
+  ) {
+    return true;
+  }
+
+  return session.messageCount > 0
+    || session.titleSource !== "default"
+    || session.hasPendingAsk
+    || session.hasPendingApproval;
+}
 
 export class SessionAdminManager {
   constructor(private readonly context: SessionContext) {}
@@ -49,13 +106,42 @@ export class SessionAdminManager {
       return;
     }
     try {
-      const sessions = this.context.deps.sessionDb
+      const persistedSessions = this.context.deps.sessionDb
         ? this.context.deps.sessionDb.listSessions({
             ...(scope === "workspace" ? { workingDirectory: this.context.state.config.workingDirectory } : {}),
           })
         : await listPersistedSessionSnapshots(this.context.getCoworkPaths(), {
             ...(scope === "workspace" ? { workingDirectory: this.context.state.config.workingDirectory } : {}),
           });
+      const liveSessions = persistedSessions.map((session) => {
+        const liveSnapshot = this.context.deps.getLiveSessionSnapshotImpl?.(session.sessionId) ?? null;
+        return {
+          liveSnapshot,
+          summary: mergeLiveTopLevelSessionSummary(session, liveSnapshot),
+        };
+      });
+      let sessions = liveSessions
+        .map(({ summary, liveSnapshot }) =>
+          shouldIncludeTopLevelSessionSummary(summary, liveSnapshot)
+            ? summary
+            : null,
+        )
+        .filter((session): session is PersistedSessionSummary => session !== null);
+      const activeLiveSnapshot = this.context.deps.getLiveSessionSnapshotImpl?.(this.context.id) ?? null;
+      const activeLiveSession = mapLiveTopLevelSessionSummary(activeLiveSnapshot);
+      const shouldIncludeActiveLiveSession = activeLiveSession
+        ? shouldIncludeTopLevelSessionSummary(activeLiveSession, activeLiveSnapshot)
+        : false;
+
+      if (
+        activeLiveSession
+        && shouldIncludeActiveLiveSession
+        && !sessions.some((session) => session.sessionId === activeLiveSession.sessionId)
+      ) {
+        sessions = [activeLiveSession, ...sessions];
+      }
+
+      sessions = sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
       this.context.emit({ type: "sessions", sessionId: this.context.id, sessions });
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to list sessions: ${String(err)}`);

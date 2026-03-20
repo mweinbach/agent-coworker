@@ -154,6 +154,7 @@ const setConfigPayloadSchema = z.object({
 }).passthrough();
 
 const MAX_MCP_API_KEY_SIZE = 100_000;
+const skillMutationTargetScopeSchema = z.enum(["project", "global"]);
 
 type ParseOk = { ok: true; msg: ClientMessage };
 type ParseErr = { ok: false; error: string };
@@ -360,6 +361,7 @@ const sessionOnlyTypes = [
   "list_tools",
   "list_commands",
   "list_skills",
+  "skills_catalog_get",
   "agent_list_get",
   "refresh_provider_status",
   "provider_catalog_get",
@@ -379,6 +381,15 @@ const sessionAndSkillNameTypes = [
   "delete_skill",
 ] as const;
 
+const sessionAndInstallationIdTypes = [
+  "skill_installation_get",
+  "skill_installation_enable",
+  "skill_installation_disable",
+  "skill_installation_delete",
+  "skill_installation_check_update",
+  "skill_installation_update",
+] as const;
+
 const sessionAndNameTypes = [
   "mcp_server_delete",
   "mcp_server_validate",
@@ -388,6 +399,9 @@ const sessionAndNameTypes = [
 const sessionOnlySchemaList = sessionOnlyTypes.map((type) => sessionOnlySchema(type));
 
 const sessionAndSkillNameSchemaList = sessionAndSkillNameTypes.map((type) => sessionAndFieldSchema(type, "skillName"));
+const sessionAndInstallationIdSchemaList = sessionAndInstallationIdTypes.map((type) =>
+  sessionAndFieldSchema(type, "installationId")
+);
 
 const sessionAndNameSchemaList = sessionAndNameTypes.map((type) => sessionAndFieldSchema(type, "name"));
 
@@ -531,6 +545,24 @@ const providerAuthCopyApiKeySchema = schemaWithType("provider_auth_copy_api_key"
 const setEnableMcpSchema = schemaWithType("set_enable_mcp", {
   sessionId: requiredSessionId("set_enable_mcp"),
   enableMcp: requiredBoolean("set_enable_mcp missing/invalid enableMcp"),
+});
+
+const skillInstallPreviewSchema = schemaWithType("skill_install_preview", {
+  sessionId: requiredSessionId("skill_install_preview"),
+  sourceInput: requiredNonEmptyTrimmedString("skill_install_preview missing/invalid sourceInput"),
+  targetScope: skillMutationTargetScopeSchema,
+});
+
+const skillInstallSchema = schemaWithType("skill_install", {
+  sessionId: requiredSessionId("skill_install"),
+  sourceInput: requiredNonEmptyTrimmedString("skill_install missing/invalid sourceInput"),
+  targetScope: skillMutationTargetScopeSchema,
+});
+
+const skillInstallationCopySchema = schemaWithType("skill_installation_copy", {
+  sessionId: requiredSessionId("skill_installation_copy"),
+  installationId: requiredNonEmptyTrimmedString("skill_installation_copy missing/invalid installationId"),
+  targetScope: skillMutationTargetScopeSchema,
 });
 
 const memoryListSchema = schemaWithType("memory_list", {
@@ -806,6 +838,7 @@ const cancelSchema = schemaWithType("cancel", {
 const clientMessageSchema = z.discriminatedUnion("type", [
   ...sessionOnlySchemaList,
   ...sessionAndSkillNameSchemaList,
+  ...sessionAndInstallationIdSchemaList,
   ...sessionAndNameSchemaList,
   clientHelloSchema,
   userMessageSchema,
@@ -820,6 +853,9 @@ const clientMessageSchema = z.discriminatedUnion("type", [
   providerAuthSetApiKeySchema,
   providerAuthCopyApiKeySchema,
   setEnableMcpSchema,
+  skillInstallPreviewSchema,
+  skillInstallSchema,
+  skillInstallationCopySchema,
   memoryListSchema,
   memoryUpsertSchema,
   memoryDeleteSchema,

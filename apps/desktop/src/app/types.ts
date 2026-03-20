@@ -5,8 +5,12 @@ import type {
   ProviderName,
   ServerErrorCode,
   ServerErrorSource,
+  SkillCatalogSnapshot,
   ServerEvent,
   SkillEntry,
+  SkillInstallPreview,
+  SkillInstallationEntry,
+  SkillUpdateCheckResult,
   TodoItem,
 } from "../lib/wsProtocol";
 import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
@@ -231,8 +235,19 @@ export type WorkspaceRuntime = {
   mcpLastAuthChallenge: MCPServerAuthChallengeEvent | null;
   mcpLastAuthResult: MCPServerAuthResultEvent | null;
   skills: SkillEntry[];
+  skillsCatalog: SkillCatalogSnapshot | null;
   selectedSkillName: string | null;
   selectedSkillContent: string | null;
+  selectedSkillInstallationId: string | null;
+  selectedSkillInstallation: SkillInstallationEntry | null;
+  selectedSkillPreview: SkillInstallPreview | null;
+  skillUpdateChecksByInstallationId: Record<string, SkillUpdateCheckResult>;
+  skillCatalogLoading: boolean;
+  skillCatalogError: string | null;
+  skillsMutationBlocked: boolean;
+  skillsMutationBlockedReason: string | null;
+  skillMutationPendingKeys: Record<string, true>;
+  skillMutationError: string | null;
   memories: MemoryListEntry[];
   memoriesLoading: boolean;
   workspaceBackupsPath: string | null;

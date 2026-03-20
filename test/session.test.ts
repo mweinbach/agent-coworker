@@ -1310,6 +1310,28 @@ describe("AgentSession", () => {
       await fs.access(path.join(root, "disabled-skills", "alpha", "SKILL.md"));
     });
 
+    test("disableSkill while running emits Agent is busy and leaves the skill unchanged", async () => {
+      const root = await makeTmpDir();
+      const project = path.join(root, "project-skills");
+      const global = path.join(root, "skills");
+      await fs.mkdir(project, { recursive: true });
+      await fs.mkdir(global, { recursive: true });
+      await createSkill(global, "alpha", "# Alpha Skill\nTRIGGERS: a\n");
+
+      const cfg: AgentConfig = { ...makeConfig(root), skillsDirs: [project, global] };
+      const { session, events } = makeSession({ config: cfg });
+      (session as any).state.running = true;
+
+      await session.disableSkill("alpha");
+
+      const evt = events.find((e) => e.type === "error") as any;
+      expect(evt).toBeDefined();
+      expect(evt.code).toBe("busy");
+      expect(evt.message).toBe("Agent is busy");
+      await fs.access(path.join(root, "skills", "alpha", "SKILL.md"));
+      await expect(fs.access(path.join(root, "disabled-skills", "alpha", "SKILL.md"))).rejects.toBeDefined();
+    });
+
     test("enableSkill moves global skill back to skills and marks it enabled", async () => {
       const root = await makeTmpDir();
       const project = path.join(root, "project-skills");
@@ -1352,6 +1374,51 @@ describe("AgentSession", () => {
       expect(evt).toBeDefined();
       expect(evt.skills.some((s: any) => s.name === "alpha")).toBe(false);
       await expect(fs.access(path.join(root, "skills", "alpha"))).rejects.toBeDefined();
+    });
+
+    test("getSkillsCatalog emits non-deduped installation catalog", async () => {
+      const root = await makeTmpDir();
+      const project = path.join(root, ".agent", "skills");
+      const global = path.join(root, ".cowork", "skills");
+      await fs.mkdir(project, { recursive: true });
+      await fs.mkdir(global, { recursive: true });
+      await createSkill(project, "alpha", "# Project Alpha");
+      await createSkill(global, "alpha", "# Global Alpha");
+
+      const cfg: AgentConfig = { ...makeConfig(root), skillsDirs: [project, global] };
+      const { session, events } = makeSession({ config: cfg });
+
+      await session.getSkillsCatalog();
+
+      const evt = events.find((event) => event.type === "skills_catalog") as any;
+      expect(evt).toBeDefined();
+      expect(evt.catalog.installations).toHaveLength(2);
+      expect(evt.catalog.effectiveSkills).toHaveLength(1);
+      expect(evt.catalog.effectiveSkills[0]?.scope).toBe("project");
+      expect(evt.clearedMutationPendingKeys).toBeUndefined();
+    });
+
+    test("installSkills installs a local skill into workspace scope and emits catalog/detail", async () => {
+      const root = await makeTmpDir();
+      const project = path.join(root, ".agent", "skills");
+      const sourceRoot = path.join(root, "incoming");
+      await fs.mkdir(project, { recursive: true });
+      await createSkill(sourceRoot, "alpha", "# Alpha Skill");
+
+      const cfg: AgentConfig = { ...makeConfig(root), skillsDirs: [project] };
+      const { session, events } = makeSession({ config: cfg });
+
+      await session.installSkills(sourceRoot, "project");
+
+      const catalogEvt = events.filter((event) => event.type === "skills_catalog").at(-1) as any;
+      expect(catalogEvt).toBeDefined();
+      expect(catalogEvt.catalog.effectiveSkills.some((skill: any) => skill.name === "alpha")).toBe(true);
+      expect(catalogEvt.clearedMutationPendingKeys).toEqual(["install:project"]);
+
+      const detailEvt = events.filter((event) => event.type === "skill_installation").at(-1) as any;
+      expect(detailEvt).toBeDefined();
+      expect(detailEvt.installation?.name).toBe("alpha");
+      await fs.access(path.join(project, "alpha", "SKILL.md"));
     });
   });
 

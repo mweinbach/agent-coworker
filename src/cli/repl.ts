@@ -401,9 +401,7 @@ export async function runCliRepl(
     activateNextPrompt: activatePrompt,
     resetModelStreamState,
     send,
-    storeSessionForCurrentCwd: (nextSessionId) => {
-      void setStoredSessionForCwd(process.cwd(), nextSessionId);
-    },
+    storeSessionForCurrentCwd: (nextSessionId) => setStoredSessionForCwd(process.cwd(), nextSessionId),
   });
 
   const connectToServer = async (url: string, rl: readline.Interface, resumeSessionId?: string) => {

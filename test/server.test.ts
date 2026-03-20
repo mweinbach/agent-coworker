@@ -1517,6 +1517,83 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("list_sessions hides blank default root sessions while keeping meaningful empty sessions", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-server-home-"));
+    const workspace = await makeTmpProject();
+    const now = new Date().toISOString();
+    const paths = getAiCoworkerPaths({ homedir: homeDir });
+    const db = await SessionDb.create({ paths });
+
+    const baseSnapshot = {
+      sessionKind: "root" as const,
+      parentSessionId: null,
+      role: null,
+      titleModel: null,
+      provider: "google" as const,
+      model: "gemini-3-flash-preview",
+      workingDirectory: workspace,
+      enableMcp: true,
+      createdAt: now,
+      updatedAt: now,
+      status: "active" as const,
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+      systemPrompt: "system",
+      providerState: null,
+      todos: [],
+      harnessContext: null,
+      costTracker: null,
+    };
+
+    db.persistSessionMutation({
+      sessionId: "blank-root",
+      eventType: "session.created",
+      snapshot: {
+        ...baseSnapshot,
+        title: "New session",
+        titleSource: "default",
+        messages: [],
+      },
+    });
+    db.persistSessionMutation({
+      sessionId: "manual-empty-root",
+      eventType: "session.created",
+      snapshot: {
+        ...baseSnapshot,
+        title: "Pinned empty",
+        titleSource: "manual",
+        messages: [],
+      },
+    });
+    db.persistSessionMutation({
+      sessionId: "message-root",
+      eventType: "session.created",
+      snapshot: {
+        ...baseSnapshot,
+        title: "New session",
+        titleSource: "default",
+        messages: [{ role: "user", content: "hello" }],
+      },
+    });
+    db.close();
+
+    const { server, url } = await startAgentServer(serverOpts(workspace, { homedir: homeDir }));
+    try {
+      const listed = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({ type: "list_sessions", sessionId, scope: "workspace" }),
+        (msg) => msg.type === "sessions",
+      );
+
+      expect(listed.sessions.map((session: any) => session.sessionId)).toEqual([
+        "manual-empty-root",
+        "message-root",
+      ]);
+    } finally {
+      void server.stop(true);
+    }
+  });
+
   test("get_session_snapshot returns live in-memory materialized snapshots", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir, {

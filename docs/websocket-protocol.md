@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.25`
+- Current protocol version: `7.27`
 
 ## Table of Contents
 
@@ -20,7 +20,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 - [Validation Rules](#validation-rules)
 - [Shared Types](#shared-types)
   - [ProviderName](#providername) | [PublicConfig](#publicconfig) | [ProviderCatalogEntry](#providercatalogentry) | [ProviderAuthMethod](#providerauthmethod) | [ProviderAuthChallenge](#providerauthchallenge) | [ProviderStatus](#providerstatus)
-  - [TodoItem](#todoitem) | [CommandInfo](#commandinfo) | [SkillEntry](#skillentry) | [HarnessContextPayload](#harnesscontextpayload)
+  - [TodoItem](#todoitem) | [CommandInfo](#commandinfo) | [SkillEntry](#skillentry) | [SkillInstallationEntry](#skillinstallationentry) | [SkillCatalogSnapshot](#skillcatalogsnapshot) | [SkillInstallPreview](#skillinstallpreview) | [SkillUpdateCheckResult](#skillupdatecheckresult) | [HarnessContextPayload](#harnesscontextpayload)
   - [SessionBackupPublicState](#sessionbackuppublicstate) | [WorkspaceBackupPublicEntry](#workspacebackuppublicentry) | [WorkspaceBackupDeltaPreview](#workspacebackupdeltapreview) | [WorkspaceBackupDeltaFile](#workspacebackupdeltafile) | [ObservabilityHealth](#observabilityhealth)
   - [ModelStreamPartType](#modelstreamparttype) | [ApprovalRiskCode](#approvalriskcode) | [ServerErrorCode](#servererrorcode) | [ServerErrorSource](#servererrorsource)
   - [SessionUsageSnapshot](#sessionusagesnapshot) | [BudgetStatus](#budgetstatus)
@@ -29,7 +29,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Conversation: [user_message](#user_message) | [steer_message](#steer_message) | [ask_response](#ask_response) | [approval_response](#approval_response) | [cancel](#cancel) | [reset](#reset)
   - Model & Provider: [set_model](#set_model) | [refresh_provider_status](#refresh_provider_status) | [provider_catalog_get](#provider_catalog_get) | [provider_auth_methods_get](#provider_auth_methods_get) | [provider_auth_authorize](#provider_auth_authorize) | [provider_auth_logout](#provider_auth_logout) | [provider_auth_callback](#provider_auth_callback) | [provider_auth_set_api_key](#provider_auth_set_api_key) | [provider_auth_copy_api_key](#provider_auth_copy_api_key)
   - Tools & Commands: [list_tools](#list_tools) | [list_commands](#list_commands) | [execute_command](#execute_command)
-  - Skills: [list_skills](#list_skills) | [read_skill](#read_skill) | [disable_skill](#disable_skill) | [enable_skill](#enable_skill) | [delete_skill](#delete_skill)
+  - Skills: [list_skills](#list_skills) | [read_skill](#read_skill) | [disable_skill](#disable_skill) | [enable_skill](#enable_skill) | [delete_skill](#delete_skill) | [skills_catalog_get](#skills_catalog_get) | [skill_installation_get](#skill_installation_get) | [skill_install_preview](#skill_install_preview) | [skill_install](#skill_install) | [skill_installation_enable](#skill_installation_enable) | [skill_installation_disable](#skill_installation_disable) | [skill_installation_delete](#skill_installation_delete) | [skill_installation_copy](#skill_installation_copy) | [skill_installation_check_update](#skill_installation_check_update) | [skill_installation_update](#skill_installation_update)
   - MCP: [set_enable_mcp](#set_enable_mcp) | [mcp_servers_get](#mcp_servers_get) | [mcp_server_upsert](#mcp_server_upsert) | [mcp_server_delete](#mcp_server_delete) | [mcp_server_validate](#mcp_server_validate) | [mcp_server_auth_authorize](#mcp_server_auth_authorize) | [mcp_server_auth_callback](#mcp_server_auth_callback) | [mcp_server_auth_set_api_key](#mcp_server_auth_set_api_key) | [mcp_servers_migrate_legacy](#mcp_servers_migrate_legacy)
   - Session Management: [session_close](#session_close) | [get_messages](#get_messages) | [set_session_title](#set_session_title) | [list_sessions](#list_sessions) | [get_session_snapshot](#get_session_snapshot) | [delete_session](#delete_session) | [agent_spawn](#agent_spawn) | [agent_list_get](#agent_list_get) | [set_config](#set_config) | [upload_file](#upload_file) | [get_session_usage](#get_session_usage) | [set_session_usage_budget](#set_session_usage_budget)
   - Backup: [session_backup_get](#session_backup_get) | [session_backup_checkpoint](#session_backup_checkpoint) | [session_backup_restore](#session_backup_restore) | [session_backup_delete_checkpoint](#session_backup_delete_checkpoint) | [workspace_backups_get](#workspace_backups_get) | [workspace_backup_checkpoint](#workspace_backup_checkpoint) | [workspace_backup_restore](#workspace_backup_restore) | [workspace_backup_delete_checkpoint](#workspace_backup_delete_checkpoint) | [workspace_backup_delete_entry](#workspace_backup_delete_entry) | [workspace_backup_delta_get](#workspace_backup_delta_get)
@@ -40,7 +40,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Conversation: [steer_accepted](#steer_accepted) | [user_message](#user_message-1) | [model_stream_chunk](#model_stream_chunk) | [model_stream_raw](#model_stream_raw) | [assistant_message](#assistant_message) | [reasoning](#reasoning) | [log](#log) | [todos](#todos) | [reset_done](#reset_done)
   - Prompts: [ask](#ask) | [approval](#approval)
   - Provider: [provider_catalog](#provider_catalog) | [provider_auth_methods](#provider_auth_methods) | [provider_auth_challenge](#provider_auth_challenge) | [provider_auth_result](#provider_auth_result) | [provider_status](#provider_status) | [config_updated](#config_updated)
-  - Tools & Skills: [tools](#tools) | [commands](#commands) | [skills_list](#skills_list) | [skill_content](#skill_content)
+  - Tools & Skills: [tools](#tools) | [commands](#commands) | [skills_list](#skills_list) | [skill_content](#skill_content) | [skills_catalog](#skills_catalog) | [skill_installation](#skill_installation) | [skill_install_preview](#skill_install_preview-1) | [skill_installation_update_check](#skill_installation_update_check)
   - MCP: [mcp_servers](#mcp_servers) | [mcp_server_validation](#mcp_server_validation) | [mcp_server_auth_challenge](#mcp_server_auth_challenge) | [mcp_server_auth_result](#mcp_server_auth_result)
   - Session Data: [messages](#messages) | [sessions](#sessions) | [session_snapshot](#session_snapshot) | [agent_spawned](#agent_spawned) | [agent_list](#agent_list) | [agent_wait_result](#agent_wait_result) | [session_deleted](#session_deleted) | [file_uploaded](#file_uploaded) | [turn_usage](#turn_usage) | [session_usage](#session_usage) | [budget_warning](#budget_warning) | [budget_exceeded](#budget_exceeded)
   - Backup & Observability: [session_backup_state](#session_backup_state) | [workspace_backups](#workspace_backups) | [workspace_backup_delta](#workspace_backup_delta) | [observability_status](#observability_status)
@@ -48,6 +48,18 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.27`:
+
+- `skills_catalog` may now include `clearedMutationPendingKeys` so clients can clear only the mutation spinners completed by that catalog refresh.
+
+Changes in `7.26`:
+
+- Added installation-based skills catalog messages/events for desktop skill management:
+  - client: `skills_catalog_get`, `skill_installation_get`, `skill_install_preview`, `skill_install`, `skill_installation_enable`, `skill_installation_disable`, `skill_installation_delete`, `skill_installation_copy`, `skill_installation_check_update`, `skill_installation_update`
+  - server: `skills_catalog`, `skill_installation`, `skill_install_preview`, `skill_installation_update_check`
+- Legacy `list_skills`, `read_skill`, `disable_skill`, `enable_skill`, and `delete_skill` remain supported for backward compatibility.
+- Skill mutations are now installation-based and are blocked while any live session in the same workspace is running.
 
 Changes in `7.25`:
 
@@ -468,6 +480,82 @@ Returned in `server_hello` and `config_updated`:
 | `triggers` | `string[]` | Trigger patterns |
 | `description` | `string` | Skill description |
 | `interface` | `object?` | Optional UI metadata: `displayName?`, `shortDescription?`, `iconSmall?`, `iconLarge?`, `defaultPrompt?`, `agents?` |
+
+### SkillInstallationEntry
+
+```json
+{
+  "installationId": "0ed1f33e-...",
+  "name": "commit",
+  "description": "Create a git commit",
+  "scope": "global",
+  "enabled": true,
+  "writable": true,
+  "managed": true,
+  "effective": true,
+  "state": "effective",
+  "rootDir": "/home/user/.cowork/skills/commit",
+  "skillPath": "/home/user/.cowork/skills/commit/SKILL.md",
+  "path": "/home/user/.cowork/skills/commit/SKILL.md",
+  "triggers": ["/commit"],
+  "descriptionSource": "frontmatter",
+  "diagnostics": [],
+  "origin": { "kind": "github", "repo": "openai/skills", "ref": "main", "subdir": "skills/commit" }
+}
+```
+
+Represents one concrete installed copy on disk. Unlike `SkillEntry`, this does **not** dedupe shadowed or disabled copies away.
+
+### SkillCatalogSnapshot
+
+```json
+{
+  "scopes": [
+    { "scope": "project", "skillsDir": "/workspace/.agent/skills", "disabledSkillsDir": "/workspace/.agent/disabled-skills", "writable": true, "readable": true }
+  ],
+  "effectiveSkills": ["...SkillInstallationEntry"],
+  "installations": ["...SkillInstallationEntry"]
+}
+```
+
+Contains both:
+
+- `effectiveSkills`: the actual enabled, precedence-resolved skill set the runtime will use
+- `installations`: every discovered installation copy, including shadowed and disabled ones
+
+### SkillInstallPreview
+
+```json
+{
+  "source": { "kind": "github_repo", "raw": "openai/skills", "displaySource": "https://github.com/openai/skills", "repo": "openai/skills" },
+  "targetScope": "project",
+  "candidates": [
+    {
+      "name": "commit",
+      "description": "Create a git commit",
+      "relativeRootPath": "skills/commit",
+      "wouldBeEffective": true,
+      "shadowedInstallationIds": [],
+      "diagnostics": []
+    }
+  ],
+  "warnings": []
+}
+```
+
+Install preview built from a pasted source input before any mutation occurs.
+
+### SkillUpdateCheckResult
+
+```json
+{
+  "installationId": "0ed1f33e-...",
+  "canUpdate": true,
+  "preview": { "...": "SkillInstallPreview" }
+}
+```
+
+Represents whether a managed installation can be refreshed from its recorded origin and, when possible, includes the update preview.
 
 ### HarnessContextPayload
 
@@ -1250,6 +1338,194 @@ Delete a global skill permanently.
 
 **Response:** `skills_list` (refreshed list). Only global skills can be deleted.
 **Error:** `busy` if a turn is running. `validation_failed` if the skill is not found or not a global skill.
+
+---
+
+### skills_catalog_get
+
+Request the full skills catalog snapshot used by the desktop skills manager.
+
+```json
+{ "type": "skills_catalog_get", "sessionId": "..." }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"skills_catalog_get"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+
+**Response:** `skills_catalog`
+
+---
+
+### skill_installation_get
+
+Request detailed metadata and content for one installation copy by `installationId`.
+
+```json
+{ "type": "skill_installation_get", "sessionId": "...", "installationId": "inst-123" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"skill_installation_get"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `installationId` | `string` | Yes | Non-empty installation ID |
+
+**Response:** `skill_installation`
+
+---
+
+### skill_install_preview
+
+Preview a source before installing it to a writable scope.
+
+```json
+{ "type": "skill_install_preview", "sessionId": "...", "sourceInput": "openai/skills", "targetScope": "project" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"skill_install_preview"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `sourceInput` | `string` | Yes | Raw source string pasted by the user |
+| `targetScope` | `"project" \| "global"` | Yes | Writable destination scope |
+
+**Response:** `skill_install_preview`
+
+---
+
+### skill_install
+
+Install one or more skills from a source into the target writable scope.
+
+```json
+{ "type": "skill_install", "sessionId": "...", "sourceInput": "openai/skills", "targetScope": "project" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"skill_install"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `sourceInput` | `string` | Yes | Raw source string pasted by the user |
+| `targetScope` | `"project" \| "global"` | Yes | Writable destination scope |
+
+**Response:** refreshed `skills_catalog` and `skill_installation` events after success.
+**Error:** `busy` when any live workspace session is currently running.
+
+---
+
+### skill_installation_enable
+
+Enable a disabled writable installation by `installationId`.
+
+```json
+{ "type": "skill_installation_enable", "sessionId": "...", "installationId": "inst-123" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"skill_installation_enable"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `installationId` | `string` | Yes | Non-empty installation ID |
+
+**Response:** refreshed `skills_catalog` and `skill_installation`.
+**Error:** `busy` when any live workspace session is currently running.
+
+---
+
+### skill_installation_disable
+
+Disable a writable installation by `installationId`.
+
+```json
+{ "type": "skill_installation_disable", "sessionId": "...", "installationId": "inst-123" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"skill_installation_disable"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `installationId` | `string` | Yes | Non-empty installation ID |
+
+**Response:** refreshed `skills_catalog` and `skill_installation`.
+**Error:** `busy` when any live workspace session is currently running.
+
+---
+
+### skill_installation_delete
+
+Delete a writable installation by `installationId`.
+
+```json
+{ "type": "skill_installation_delete", "sessionId": "...", "installationId": "inst-123" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"skill_installation_delete"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `installationId` | `string` | Yes | Non-empty installation ID |
+
+**Response:** refreshed `skills_catalog`.
+**Error:** `busy` when any live workspace session is currently running.
+
+---
+
+### skill_installation_copy
+
+Copy an installation to a writable destination scope.
+
+```json
+{ "type": "skill_installation_copy", "sessionId": "...", "installationId": "inst-123", "targetScope": "global" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"skill_installation_copy"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `installationId` | `string` | Yes | Non-empty installation ID |
+| `targetScope` | `"project" \| "global"` | Yes | Writable destination scope |
+
+**Response:** refreshed `skills_catalog` and `skill_installation`.
+**Error:** `busy` when any live workspace session is currently running.
+
+---
+
+### skill_installation_check_update
+
+Check whether a writable installation can be updated from its recorded origin.
+
+```json
+{ "type": "skill_installation_check_update", "sessionId": "...", "installationId": "inst-123" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"skill_installation_check_update"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `installationId` | `string` | Yes | Non-empty installation ID |
+
+**Response:** `skill_installation_update_check`
+
+---
+
+### skill_installation_update
+
+Update a writable installation from its recorded origin.
+
+```json
+{ "type": "skill_installation_update", "sessionId": "...", "installationId": "inst-123" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"skill_installation_update"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `installationId` | `string` | Yes | Non-empty installation ID |
+
+**Response:** refreshed `skills_catalog`, `skill_installation`, and `skill_install_preview`.
+**Error:** `busy` when any live workspace session is currently running.
 
 ---
 
@@ -2923,6 +3199,109 @@ Skill content payload response to `read_skill`.
 | `sessionId` | `string` | Session identifier |
 | `skill` | `SkillEntry` | Skill metadata (see [SkillEntry](#skillentry)) |
 | `content` | `string` | Skill file content (front matter stripped) |
+
+---
+
+### skills_catalog
+
+Full skills catalog snapshot for the desktop skills manager.
+
+```json
+{
+  "type": "skills_catalog",
+  "sessionId": "...",
+  "catalog": {
+    "scopes": [],
+    "effectiveSkills": [],
+    "installations": []
+  },
+  "mutationBlocked": false,
+  "clearedMutationPendingKeys": ["install:project"]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"skills_catalog"` | — |
+| `sessionId` | `string` | Session identifier |
+| `catalog` | `SkillCatalogSnapshot` | Full catalog snapshot |
+| `mutationBlocked` | `boolean` | Whether install/update/delete/enable/disable/copy are currently blocked |
+| `clearedMutationPendingKeys` | `string[]?` | Optional pending mutation keys completed by this refresh; omit on plain catalog reads |
+| `mutationBlockedReason` | `string?` | Optional explanation when blocked |
+
+---
+
+### skill_installation
+
+Detailed metadata and content payload for one installation copy.
+
+```json
+{
+  "type": "skill_installation",
+  "sessionId": "...",
+  "installation": { "installationId": "inst-123", "name": "commit" },
+  "content": "# Commit Skill"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"skill_installation"` | — |
+| `sessionId` | `string` | Session identifier |
+| `installation` | `SkillInstallationEntry \| null` | Detailed installation metadata or `null` when not found |
+| `content` | `string \| null` | Skill file content with front matter stripped when readable |
+
+---
+
+### skill_install_preview
+
+Preview payload emitted in response to `skill_install_preview` and after successful install/update operations.
+
+`fromUserPreviewRequest` distinguishes user-initiated previews from install/update side effects so clients can keep “preview loading” state until the matching preview response arrives.
+
+```json
+{
+  "type": "skill_install_preview",
+  "sessionId": "...",
+  "fromUserPreviewRequest": true,
+  "preview": {
+    "source": { "kind": "github_repo", "raw": "openai/skills", "displaySource": "https://github.com/openai/skills" },
+    "targetScope": "project",
+    "candidates": [],
+    "warnings": []
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"skill_install_preview"` | — |
+| `sessionId` | `string` | Session identifier |
+| `fromUserPreviewRequest` | `boolean?` | `true` for the direct reply to client `skill_install_preview`; `false` after successful `skill_install` / `skill_installation_update`. Omitted on older servers — treat as `true`. |
+| `preview` | `SkillInstallPreview` | Install preview payload |
+
+---
+
+### skill_installation_update_check
+
+Update-check result for a managed installation.
+
+```json
+{
+  "type": "skill_installation_update_check",
+  "sessionId": "...",
+  "result": {
+    "installationId": "inst-123",
+    "canUpdate": true
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"skill_installation_update_check"` | — |
+| `sessionId` | `string` | Session identifier |
+| `result` | `SkillUpdateCheckResult` | Update-check result |
 
 ---
 

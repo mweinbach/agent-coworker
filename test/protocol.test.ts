@@ -698,6 +698,80 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("installation-based skill manager messages", () => {
+    test("skills_catalog_get parses", () => {
+      const msg = expectOk(JSON.stringify({ type: "skills_catalog_get", sessionId: "s1" }));
+      expect(msg.type).toBe("skills_catalog_get");
+      if (msg.type === "skills_catalog_get") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("skill_installation_get parses", () => {
+      const msg = expectOk(JSON.stringify({ type: "skill_installation_get", sessionId: "s1", installationId: "inst-1" }));
+      expect(msg.type).toBe("skill_installation_get");
+      if (msg.type === "skill_installation_get") {
+        expect(msg.installationId).toBe("inst-1");
+      }
+    });
+
+    test("skill_install_preview and skill_install validate source and target scope", () => {
+      const preview = expectOk(JSON.stringify({
+        type: "skill_install_preview",
+        sessionId: "s1",
+        sourceInput: "openai/skills",
+        targetScope: "project",
+      }));
+      expect(preview.type).toBe("skill_install_preview");
+
+      const install = expectOk(JSON.stringify({
+        type: "skill_install",
+        sessionId: "s1",
+        sourceInput: "/tmp/skill",
+        targetScope: "global",
+      }));
+      expect(install.type).toBe("skill_install");
+
+      expect(expectErr(JSON.stringify({
+        type: "skill_install_preview",
+        sessionId: "s1",
+        sourceInput: "",
+        targetScope: "project",
+      }))).toBe("skill_install_preview missing/invalid sourceInput");
+      expect(expectErr(JSON.stringify({
+        type: "skill_install",
+        sessionId: "s1",
+        sourceInput: "openai/skills",
+        targetScope: "user",
+      }))).toContain("expected one of");
+    });
+
+    test("installation mutation messages parse", () => {
+      const enable = expectOk(JSON.stringify({ type: "skill_installation_enable", sessionId: "s1", installationId: "inst-1" }));
+      expect(enable.type).toBe("skill_installation_enable");
+
+      const disable = expectOk(JSON.stringify({ type: "skill_installation_disable", sessionId: "s1", installationId: "inst-1" }));
+      expect(disable.type).toBe("skill_installation_disable");
+
+      const del = expectOk(JSON.stringify({ type: "skill_installation_delete", sessionId: "s1", installationId: "inst-1" }));
+      expect(del.type).toBe("skill_installation_delete");
+
+      const copy = expectOk(JSON.stringify({
+        type: "skill_installation_copy",
+        sessionId: "s1",
+        installationId: "inst-1",
+        targetScope: "global",
+      }));
+      expect(copy.type).toBe("skill_installation_copy");
+
+      const check = expectOk(JSON.stringify({ type: "skill_installation_check_update", sessionId: "s1", installationId: "inst-1" }));
+      expect(check.type).toBe("skill_installation_check_update");
+
+      const update = expectOk(JSON.stringify({ type: "skill_installation_update", sessionId: "s1", installationId: "inst-1" }));
+      expect(update.type).toBe("skill_installation_update");
+    });
+  });
+
   describe("set_enable_mcp", () => {
     test("valid set_enable_mcp message", () => {
       const msg = expectOk(JSON.stringify({ type: "set_enable_mcp", sessionId: "s1", enableMcp: true }));
@@ -2331,6 +2405,58 @@ describe("safeParseClientMessage", () => {
 
       expect(evt).not.toBeNull();
       expect(evt?.type).toBe("session_snapshot");
+    });
+
+    test("safeParseServerEvent accepts installation-based skill manager events", () => {
+      const catalogEvt = safeParseServerEvent({
+        type: "skills_catalog",
+        sessionId: "control-1",
+        catalog: {
+          scopes: [],
+          effectiveSkills: [],
+          installations: [],
+        },
+        mutationBlocked: false,
+        clearedMutationPendingKeys: ["install:project"],
+      });
+      expect(catalogEvt).not.toBeNull();
+      expect(catalogEvt?.type).toBe("skills_catalog");
+      if (catalogEvt?.type === "skills_catalog") {
+        expect(catalogEvt.clearedMutationPendingKeys).toEqual(["install:project"]);
+      }
+
+      const installationEvt = safeParseServerEvent({
+        type: "skill_installation",
+        sessionId: "control-1",
+        installation: null,
+        content: null,
+      });
+      expect(installationEvt).not.toBeNull();
+      expect(installationEvt?.type).toBe("skill_installation");
+
+      const previewEvt = safeParseServerEvent({
+        type: "skill_install_preview",
+        sessionId: "control-1",
+        preview: {
+          source: { kind: "github_repo", raw: "openai/skills", displaySource: "https://github.com/openai/skills" },
+          targetScope: "project",
+          candidates: [],
+          warnings: [],
+        },
+      });
+      expect(previewEvt).not.toBeNull();
+      expect(previewEvt?.type).toBe("skill_install_preview");
+
+      const updateCheckEvt = safeParseServerEvent({
+        type: "skill_installation_update_check",
+        sessionId: "control-1",
+        result: {
+          installationId: "inst-1",
+          canUpdate: true,
+        },
+      });
+      expect(updateCheckEvt).not.toBeNull();
+      expect(updateCheckEvt?.type).toBe("skill_installation_update_check");
     });
 
     test("error requires code/source", () => {

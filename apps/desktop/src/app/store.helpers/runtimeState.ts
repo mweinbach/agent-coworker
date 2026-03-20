@@ -16,8 +16,16 @@ export type PendingThreadSteer = {
 
 export type WorkspaceDefaultApplyMode = "auto" | "auto-resume" | "explicit";
 
+export type SkillInstallWaiter = {
+  pendingKey: string;
+  resolve: () => void;
+  reject: (err: Error) => void;
+};
+
 export type RuntimeMaps = {
   controlSockets: Map<string, AgentSocket>;
+  /** Latest in-flight skill install per workspace; resolved when `skills_catalog` completes the matching pending key. */
+  skillInstallWaiters: Map<string, SkillInstallWaiter>;
   threadSockets: Map<string, AgentSocket>;
   optimisticUserMessageIds: Map<string, Set<string>>;
   pendingThreadMessages: Map<string, string[]>;
@@ -35,6 +43,7 @@ export type RuntimeMaps = {
 
 export const RUNTIME: RuntimeMaps = {
   controlSockets: new Map(),
+  skillInstallWaiters: new Map(),
   threadSockets: new Map(),
   optimisticUserMessageIds: new Map(),
   pendingThreadMessages: new Map(),
@@ -190,8 +199,19 @@ export function defaultWorkspaceRuntime(): WorkspaceRuntime {
     mcpLastAuthChallenge: null,
     mcpLastAuthResult: null,
     skills: [],
+    skillsCatalog: null,
     selectedSkillName: null,
     selectedSkillContent: null,
+    selectedSkillInstallationId: null,
+    selectedSkillInstallation: null,
+    selectedSkillPreview: null,
+    skillUpdateChecksByInstallationId: {},
+    skillCatalogLoading: false,
+    skillCatalogError: null,
+    skillsMutationBlocked: false,
+    skillsMutationBlockedReason: null,
+    skillMutationPendingKeys: {},
+    skillMutationError: null,
     memories: [],
     memoriesLoading: false,
     workspaceBackupsPath: null,

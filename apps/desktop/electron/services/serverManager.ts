@@ -8,6 +8,7 @@ import { z } from "zod";
 
 import { app } from "electron";
 
+import { resolvePackagedBuiltinDistDir } from "./desktopBuiltinPaths";
 import { assertSafeId, assertWorkspaceDirectory } from "./validation";
 import { findPackagedSidecarBinary } from "./sidecar";
 
@@ -351,9 +352,9 @@ export class ServerManager {
     const { repoRoot, sourceEntry } = resolveSourceStartup(useSource);
 
     const sidecar = !useSource ? findSidecarBinary() : null;
-    const builtInDir = !useSource ? path.join(process.resourcesPath, "dist") : null;
-    if (!useSource && builtInDir && !fs.existsSync(builtInDir)) {
-      throw new Error(`Bundled dist directory not found: ${builtInDir}`);
+    const builtInDir = !useSource ? resolvePackagedBuiltinDistDir() : null;
+    if (!useSource && !builtInDir) {
+      throw new Error(`Bundled dist directory not found: ${path.join(process.resourcesPath, "dist")}`);
     }
 
     logServerManagerEvent(

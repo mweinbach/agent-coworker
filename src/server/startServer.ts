@@ -434,6 +434,29 @@ export async function startAgentServer(
       getLiveSessionSnapshotImpl: (sessionId: string) => sessionBindings.get(sessionId)?.session?.buildSessionSnapshot() ?? null,
       buildLegacySessionSnapshotImpl: (record: import("./sessionDb").PersistedSessionRecord) =>
         createLegacySessionSnapshot(record),
+      getSkillMutationBlockReasonImpl: (workingDirectory: string) => {
+        const busySession = [...sessionBindings.values()]
+          .map((candidate) => candidate.session)
+          .find((candidate): candidate is AgentSession =>
+            !!candidate && candidate.getWorkingDirectory() === workingDirectory && candidate.isBusy
+          );
+        if (!busySession) {
+          return null;
+        }
+        return "Skill mutations are blocked while another session in this workspace is running.";
+      },
+      refreshSkillsAcrossWorkspaceSessionsImpl: async (workingDirectory: string) => {
+        const sessions = [...sessionBindings.values()]
+          .map((candidate) => candidate.session)
+          .filter((candidate): candidate is AgentSession =>
+            !!candidate && candidate.getWorkingDirectory() === workingDirectory
+          );
+        await Promise.all(
+          sessions.map(async (session) => {
+            await session.refreshSystemPromptWithSkills("skills.workspace_refresh");
+          }),
+        );
+      },
     };
   };
 

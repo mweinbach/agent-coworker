@@ -1,3 +1,6 @@
+import os from "node:os";
+import path from "node:path";
+
 import { resolveDesktopRendererUrl } from "./rendererUrl";
 import { assertPathWithinRoots } from "./validation";
 
@@ -37,4 +40,38 @@ export function resolveAllowedDirectoryPath(workspaceRoots: string[], requestedP
 
 export function resolveAllowedPath(workspaceRoots: string[], requestedPath: string): string {
   return assertPathWithinRoots(workspaceRoots, requestedPath, "path");
+}
+
+/**
+ * Workspace roots plus Cowork agent homes where skills and config commonly live.
+ * Used for `revealPath` targets outside the active workspace
+ * (e.g. ~/.cowork/skills, ~/.agent/skills).
+ *
+ * `builtinSkillRoots` should match server `builtInDir` / `COWORK_BUILTIN_DIR`
+ * (see `resolveDesktopBuiltinSkillRootsForReveal`); pass a freshly resolved list
+ * per invocation so env / packaged paths stay accurate.
+ */
+export function getRevealPathRoots(workspaceRoots: string[], builtinSkillRoots: string[] = []): string[] {
+  const home = os.homedir();
+  const extra: string[] = [path.join(home, ".cowork"), path.join(home, ".agent")];
+  for (const root of builtinSkillRoots) {
+    const trimmed = root.trim();
+    if (trimmed.length > 0) {
+      extra.push(path.resolve(trimmed));
+    }
+  }
+  return [...workspaceRoots, ...extra];
+}
+
+/**
+ * Validates paths for reveal-in-folder IPC.
+ * Unlike `shell.openPath`, `shell.showItemInFolder` only opens the file manager,
+ * so reveal can safely allow skill/config homes outside the active workspace.
+ */
+export function resolveAllowedRevealPath(
+  workspaceRoots: string[],
+  requestedPath: string,
+  builtinSkillRoots: string[] = [],
+): string {
+  return assertPathWithinRoots(getRevealPathRoots(workspaceRoots, builtinSkillRoots), requestedPath, "path");
 }

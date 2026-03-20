@@ -6,9 +6,14 @@ import type {
   HarnessContextPayload,
   MCPServerConfig,
   ObservabilityHealth,
+  SkillCatalogSnapshot,
   ServerErrorCode,
   ServerErrorSource,
   SkillEntry,
+  SkillInstallPreview,
+  SkillInstallationEntry,
+  SkillMutationTargetScope,
+  SkillUpdateCheckResult,
   TodoItem,
 } from "../types";
 import type { SessionUsageSnapshot, TurnUsage } from "../session/costTracker";
@@ -134,6 +139,16 @@ export type ClientMessage =
   | { type: "disable_skill"; sessionId: string; skillName: string }
   | { type: "enable_skill"; sessionId: string; skillName: string }
   | { type: "delete_skill"; sessionId: string; skillName: string }
+  | { type: "skills_catalog_get"; sessionId: string }
+  | { type: "skill_installation_get"; sessionId: string; installationId: string }
+  | { type: "skill_install_preview"; sessionId: string; sourceInput: string; targetScope: SkillMutationTargetScope }
+  | { type: "skill_install"; sessionId: string; sourceInput: string; targetScope: SkillMutationTargetScope }
+  | { type: "skill_installation_enable"; sessionId: string; installationId: string }
+  | { type: "skill_installation_disable"; sessionId: string; installationId: string }
+  | { type: "skill_installation_delete"; sessionId: string; installationId: string }
+  | { type: "skill_installation_copy"; sessionId: string; installationId: string; targetScope: SkillMutationTargetScope }
+  | { type: "skill_installation_check_update"; sessionId: string; installationId: string }
+  | { type: "skill_installation_update"; sessionId: string; installationId: string }
   | { type: "set_enable_mcp"; sessionId: string; enableMcp: boolean }
   | { type: "mcp_servers_get"; sessionId: string }
   | { type: "mcp_server_upsert"; sessionId: string; server: MCPServerConfig; previousName?: string }
@@ -388,6 +403,32 @@ export type ServerEvent =
   | { type: "skills_list"; sessionId: string; skills: SkillEntry[] }
   | { type: "skill_content"; sessionId: string; skill: SkillEntry; content: string }
   | {
+    type: "skills_catalog";
+    sessionId: string;
+    catalog: SkillCatalogSnapshot;
+    mutationBlocked: boolean;
+    clearedMutationPendingKeys?: string[];
+    mutationBlockedReason?: string;
+  }
+  | {
+    type: "skill_installation";
+    sessionId: string;
+    installation: SkillInstallationEntry | null;
+    content?: string | null;
+  }
+  | {
+    type: "skill_install_preview";
+    sessionId: string;
+    preview: SkillInstallPreview;
+    /** When false, emitted after install/update; do not clear an in-flight user preview. Omitted = legacy (treat as true). */
+    fromUserPreviewRequest?: boolean;
+  }
+  | {
+    type: "skill_installation_update_check";
+    sessionId: string;
+    result: SkillUpdateCheckResult;
+  }
+  | {
     type: "session_backup_state";
     sessionId: string;
     reason: "requested" | "auto_checkpoint" | "manual_checkpoint" | "restore" | "delete";
@@ -482,7 +523,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.25";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.27";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -507,6 +548,16 @@ export const CLIENT_MESSAGE_TYPES = [
   "disable_skill",
   "enable_skill",
   "delete_skill",
+  "skills_catalog_get",
+  "skill_installation_get",
+  "skill_install_preview",
+  "skill_install",
+  "skill_installation_enable",
+  "skill_installation_disable",
+  "skill_installation_delete",
+  "skill_installation_copy",
+  "skill_installation_check_update",
+  "skill_installation_update",
   "set_enable_mcp",
   "mcp_servers_get",
   "mcp_server_upsert",
@@ -582,6 +633,10 @@ export const SERVER_EVENT_TYPES = [
   "commands",
   "skills_list",
   "skill_content",
+  "skills_catalog",
+  "skill_installation",
+  "skill_install_preview",
+  "skill_installation_update_check",
   "session_backup_state",
   "workspace_backups",
   "workspace_backup_delta",

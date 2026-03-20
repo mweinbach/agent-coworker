@@ -95,6 +95,26 @@ export function dispatchClientMessage({
       return void session.enableSkill(message.skillName);
     case "delete_skill":
       return void session.deleteSkill(message.skillName);
+    case "skills_catalog_get":
+      return void session.getSkillsCatalog();
+    case "skill_installation_get":
+      return void session.getSkillInstallation(message.installationId);
+    case "skill_install_preview":
+      return void session.previewSkillInstall(message.sourceInput, message.targetScope);
+    case "skill_install":
+      return void session.installSkills(message.sourceInput, message.targetScope);
+    case "skill_installation_enable":
+      return void session.enableSkillInstallation(message.installationId);
+    case "skill_installation_disable":
+      return void session.disableSkillInstallation(message.installationId);
+    case "skill_installation_delete":
+      return void session.deleteSkillInstallation(message.installationId);
+    case "skill_installation_copy":
+      return void session.copySkillInstallation(message.installationId, message.targetScope);
+    case "skill_installation_check_update":
+      return void session.checkSkillInstallationUpdate(message.installationId);
+    case "skill_installation_update":
+      return void session.updateSkillInstallation(message.installationId);
     case "set_enable_mcp":
       return void session.setEnableMcp(message.enableMcp);
     case "mcp_servers_get":

@@ -295,6 +295,14 @@ export function createSkillActions(
           },
         },
       }));
+      const existing = RUNTIME.skillInstallWaiters.get(workspaceId);
+      const installPromise = Promise.withResolvers<void>();
+      RUNTIME.skillInstallWaiters.set(workspaceId, {
+        pendingKey: key,
+        resolve: installPromise.resolve,
+        reject: installPromise.reject,
+      });
+
       const ok = sendControl(get, workspaceId, (sessionId) => ({
         type: "skill_install",
         sessionId,
@@ -302,40 +310,18 @@ export function createSkillActions(
         targetScope,
       }));
       if (!ok) {
-        set((s) => ({
-          workspaceRuntimeById: {
-            ...s.workspaceRuntimeById,
-            [workspaceId]: {
-              ...s.workspaceRuntimeById[workspaceId],
-              skillMutationPendingKeys: (() => {
-                const pendingKeys = { ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys };
-                delete pendingKeys[key];
-                return pendingKeys;
-              })(),
-            },
-          },
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to install skills.",
-          }),
-        }));
-        throw new Error("Unable to install skills.");
+        if (existing) {
+          RUNTIME.skillInstallWaiters.set(workspaceId, existing);
+        } else {
+          RUNTIME.skillInstallWaiters.delete(workspaceId);
+        }
+        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to install skills.");
+        installPromise.reject(new Error("Unable to install skills."));
+      } else if (existing) {
+        existing.reject(new Error("Another skill install was started"));
       }
 
-      return await new Promise<void>((resolve, reject) => {
-        const existing = RUNTIME.skillInstallWaiters.get(workspaceId);
-        if (existing) {
-          existing.reject(new Error("Another skill install was started"));
-        }
-        RUNTIME.skillInstallWaiters.set(workspaceId, {
-          pendingKey: key,
-          resolve: () => resolve(),
-          reject: (err: Error) => reject(err),
-        });
-      });
+      return await installPromise.promise;
     },
   
 

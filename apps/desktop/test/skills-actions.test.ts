@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
 const { createSkillActions } = await import("../src/app/store.actions/skills");
+const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
 
 const workspaceId = "ws-skills";
 
@@ -53,7 +54,8 @@ const failedSkillMutationActions = [
 
 describe("skill store actions", () => {
   beforeEach(() => {
-    // Leave control sockets/session ids unset so the real sendControl helper fails.
+    RUNTIME.controlSockets.clear();
+    RUNTIME.skillInstallWaiters.clear();
   });
 
   test("refreshSkillsCatalog clears loading when sendControl fails", async () => {
@@ -91,6 +93,27 @@ describe("skill store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ other: true });
     expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
     expect(state.notifications).toHaveLength(1);
+  });
+
+  test("installSkills registers its waiter before sending the control message", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
+    const { get, set } = createStoreHarness(state);
+
+    let waiterPendingKey: string | null = null;
+    RUNTIME.controlSockets.set(workspaceId, {
+      send: () => {
+        waiterPendingKey = RUNTIME.skillInstallWaiters.get(workspaceId)?.pendingKey ?? null;
+        return false;
+      },
+    } as any);
+
+    await expect(createSkillActions(set as any, get as any).installSkills("owner/repo", "global")).rejects.toThrow(
+      "Unable to install skills.",
+    );
+
+    expect(waiterPendingKey).toBe("install:global");
+    expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
   });
 
   for (const { name, invoke } of failedSkillMutationActions) {

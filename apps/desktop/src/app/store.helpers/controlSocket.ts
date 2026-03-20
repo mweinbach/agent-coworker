@@ -181,6 +181,41 @@ export function createControlSocketHelpers(
     ];
   }
 
+  function collectWorkspaceSessionCandidateIds(
+    allThreads: ThreadRecord[],
+    threadRuntimeById: ReturnType<StoreGet>["threadRuntimeById"],
+    workspaceId: string,
+  ): Set<string> {
+    const sessionIds = new Set<string>();
+    for (const thread of allThreads) {
+      if (thread.workspaceId !== workspaceId) continue;
+      const runtimeSessionId = threadRuntimeById[thread.id]?.sessionId;
+      for (const candidateSessionId of [thread.sessionId, runtimeSessionId, thread.id]) {
+        if (typeof candidateSessionId !== "string" || candidateSessionId.trim().length === 0) {
+          continue;
+        }
+        sessionIds.add(candidateSessionId);
+      }
+    }
+    return sessionIds;
+  }
+
+  function pruneRemovedWorkspaceSessionSnapshots(
+    allThreads: ThreadRecord[],
+    threadRuntimeById: ReturnType<StoreGet>["threadRuntimeById"],
+    workspaceId: string,
+    sessions: Extract<ServerEvent, { type: "sessions" }>["sessions"],
+  ): string[] {
+    const liveSessionIds = new Set(sessions.map((session) => session.sessionId));
+    const removedSessionIds: string[] = [];
+    for (const sessionId of collectWorkspaceSessionCandidateIds(allThreads, threadRuntimeById, workspaceId)) {
+      if (!liveSessionIds.has(sessionId) && RUNTIME.sessionSnapshots.has(sessionId)) {
+        removedSessionIds.push(sessionId);
+      }
+    }
+    return removedSessionIds;
+  }
+
   function withTimeout<T>(
     register: (resolve: (value: T | null) => void) => (() => void) | void,
   ): Promise<T | null> {
@@ -515,7 +550,14 @@ export function createControlSocketHelpers(
         }
 
         if (evt.type === "sessions") {
+          let removedSessionSnapshotIds: string[] = [];
           set((s) => {
+            removedSessionSnapshotIds = pruneRemovedWorkspaceSessionSnapshots(
+              s.threads,
+              s.threadRuntimeById,
+              workspaceId,
+              evt.sessions,
+            );
             const nextThreads = upsertWorkspaceThreads(
               s.threads,
               s.threadRuntimeById,
@@ -533,6 +575,12 @@ export function createControlSocketHelpers(
               selectedThreadId,
             };
           });
+          if (removedSessionSnapshotIds.length > 0) {
+            for (const sessionId of removedSessionSnapshotIds) {
+              RUNTIME.sessionSnapshots.delete(sessionId);
+            }
+          }
+          void deps.persist(get);
           resolveWorkspaceSessionWaiters(workspaceId, evt.sessions);
           return;
         }

@@ -130,6 +130,41 @@ const legacyCachedState = {
   },
 };
 
+function makeCachedSessionSnapshot(sessionId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    sessionId,
+    title: "Cached Harness Snapshot",
+    titleSource: "model",
+    titleModel: "gpt-5.2",
+    provider: "openai",
+    model: "gpt-5.2",
+    sessionKind: "root",
+    parentSessionId: null,
+    role: null,
+    mode: null,
+    depth: 0,
+    nickname: null,
+    requestedModel: "gpt-5.2",
+    effectiveModel: "gpt-5.2",
+    requestedReasoningEffort: null,
+    effectiveReasoningEffort: null,
+    executionState: null,
+    lastMessagePreview: "Cached Harness Snapshot",
+    createdAt: "2026-03-19T00:00:00.000Z",
+    updatedAt: "2026-03-19T00:00:00.000Z",
+    messageCount: 1,
+    lastEventSeq: 2,
+    feed: [],
+    agents: [],
+    todos: [],
+    sessionUsage: null,
+    lastTurnUsage: null,
+    hasPendingAsk: false,
+    hasPendingApproval: false,
+    ...overrides,
+  };
+}
+
 let loadedState: any = {
   workspaces: [
     {
@@ -420,6 +455,46 @@ describe("desktop bootstrap cache", () => {
     const seed = buildCachedDesktopStateSeed(snapshotCachedState);
     expect(seed?.ready).toBe(true);
     expect(RUNTIME.sessionSnapshots.get("thread-session")?.snapshot.title).toBe("Cached Harness Snapshot");
+  });
+
+  test("buildCachedDesktopStateSeed rebuilds valid snapshot fingerprints and ignores malformed entries", () => {
+    RUNTIME.sessionSnapshots.set("stale-session", {
+      fingerprint: { updatedAt: "2026-03-18T00:00:00.000Z", messageCount: 0, lastEventSeq: 0 },
+      snapshot: makeCachedSessionSnapshot("stale-session"),
+    });
+    const validSnapshot = makeCachedSessionSnapshot("thread-session", { title: "Recovered Cached Snapshot" });
+    const snapshotCachedState = {
+      ...cachedState,
+      sessionSnapshots: {
+        "thread-session": {
+          snapshot: validSnapshot,
+        },
+        "broken-session": {
+          snapshot: {
+            sessionId: "broken-session",
+          },
+        },
+        "mismatched-session": {
+          snapshot: makeCachedSessionSnapshot("different-session"),
+        },
+      },
+    };
+
+    const seed = buildCachedDesktopStateSeed(snapshotCachedState);
+
+    expect(seed?.ready).toBe(true);
+    expect(RUNTIME.sessionSnapshots.size).toBe(1);
+    expect(RUNTIME.sessionSnapshots.get("thread-session")).toEqual({
+      fingerprint: {
+        updatedAt: validSnapshot.updatedAt,
+        messageCount: validSnapshot.messageCount,
+        lastEventSeq: validSnapshot.lastEventSeq,
+      },
+      snapshot: validSnapshot,
+    });
+    expect(RUNTIME.sessionSnapshots.has("broken-session")).toBe(false);
+    expect(RUNTIME.sessionSnapshots.has("mismatched-session")).toBe(false);
+    expect(RUNTIME.sessionSnapshots.has("stale-session")).toBe(false);
   });
 
   test("init keeps cached state visible until authoritative load completes", async () => {

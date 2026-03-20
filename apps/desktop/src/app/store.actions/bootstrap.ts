@@ -18,8 +18,8 @@ import {
   renamePath,
   trashPath,
 } from "../../lib/desktopCommands";
-import type { ProviderName } from "../../lib/wsProtocol";
 import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
+import { safeParseServerEvent, type ProviderName } from "../../lib/wsProtocol";
 
 import {
   type AppStoreDataState,
@@ -360,6 +360,35 @@ function extractCachedDesktopState(value: unknown): {
   };
 }
 
+function normalizeCachedSessionSnapshot(sessionId: string, value: unknown): CachedSessionSnapshot | null {
+  if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
+    return null;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const snapshot = (value as { snapshot?: unknown }).snapshot;
+  const parsed = safeParseServerEvent({
+    type: "session_snapshot",
+    sessionId: "__desktop_cache__",
+    targetSessionId: sessionId,
+    snapshot,
+  });
+  if (!parsed || parsed.type !== "session_snapshot" || parsed.snapshot.sessionId !== sessionId) {
+    return null;
+  }
+
+  return {
+    fingerprint: {
+      updatedAt: parsed.snapshot.updatedAt,
+      messageCount: parsed.snapshot.messageCount,
+      lastEventSeq: parsed.snapshot.lastEventSeq,
+    },
+    snapshot: parsed.snapshot,
+  };
+}
+
 function runAfterInitialPaint(task: () => void): void {
   if (typeof window === "undefined") {
     setTimeout(task, 0);
@@ -385,9 +414,10 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
     const state = hydratePersistedDesktopState(cached.persistedState);
     RUNTIME.sessionSnapshots.clear();
     if (cached.sessionSnapshots && typeof cached.sessionSnapshots === "object" && !Array.isArray(cached.sessionSnapshots)) {
-      for (const [sessionId, entry] of Object.entries(cached.sessionSnapshots as Record<string, CachedSessionSnapshot>)) {
-        if (!entry || typeof entry !== "object") continue;
-        RUNTIME.sessionSnapshots.set(sessionId, entry);
+      for (const [sessionId, entry] of Object.entries(cached.sessionSnapshots as Record<string, unknown>)) {
+        const normalized = normalizeCachedSessionSnapshot(sessionId, entry);
+        if (!normalized) continue;
+        RUNTIME.sessionSnapshots.set(sessionId, normalized);
       }
     }
     const ui = buildResolvedDesktopUiState(state.workspaces, state.threads, cached.ui as CachedDesktopUiState | undefined);

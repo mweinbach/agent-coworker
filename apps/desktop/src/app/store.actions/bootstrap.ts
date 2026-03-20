@@ -211,22 +211,25 @@ const persistedThreadSchema = z.object({
   lastEventSeq: normalizedLastEventSeqSchema,
   legacyTranscriptId: normalizedSessionIdSchema.optional(),
   draft: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
-}).passthrough().transform((thread): ThreadRecord => ({
-  id: thread.sessionId ?? thread.id,
-  workspaceId: thread.workspaceId,
-  title: thread.title,
-  titleSource: normalizeThreadTitleSource(thread.titleSource, thread.title),
-  createdAt: thread.createdAt,
-  lastMessageAt: thread.lastMessageAt,
-  status: thread.status,
-  sessionId: thread.sessionId,
-  messageCount: thread.messageCount,
-  lastEventSeq: thread.lastEventSeq,
-  legacyTranscriptId:
-    thread.legacyTranscriptId
-    ?? (thread.sessionId && thread.sessionId !== thread.id ? thread.id : null),
-  draft: thread.draft ?? false,
-}));
+}).passthrough().transform((thread): ThreadRecord => {
+  const id = thread.sessionId ?? thread.id;
+  return {
+    id,
+    workspaceId: thread.workspaceId,
+    title: thread.title,
+    titleSource: normalizeThreadTitleSource(thread.titleSource, thread.title),
+    createdAt: thread.createdAt,
+    lastMessageAt: thread.lastMessageAt,
+    status: thread.status,
+    sessionId: thread.sessionId,
+    messageCount: thread.messageCount,
+    lastEventSeq: thread.lastEventSeq,
+    legacyTranscriptId:
+      thread.legacyTranscriptId
+      ?? (thread.id !== id ? thread.id : null),
+    draft: thread.draft ?? false,
+  };
+});
 
 const persistedUiSchema = z.object({
   selectedWorkspaceId: normalizedNullableSelectionSchema.optional(),

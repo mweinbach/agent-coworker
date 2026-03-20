@@ -189,16 +189,27 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
 
   const readTranscriptEvents = async (
     thread: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
-  ): Promise<TranscriptEvent[]> => {
-    const transcripts = await Promise.all(
-      transcriptIdsForThread(thread).map(async (transcriptId) => {
-        try {
-          return await desktopCommands.readTranscript({ threadId: transcriptId });
-        } catch {
-          return [];
-        }
-      }),
-    );
+  ): Promise<TranscriptEvent[] | null> => {
+    const transcriptIds = transcriptIdsForThread(thread);
+    if (transcriptIds.length === 0) return null;
+
+    const transcripts: TranscriptEvent[][] = [];
+    let successfulReads = 0;
+    let firstError: unknown = null;
+
+    for (const transcriptId of transcriptIds) {
+      try {
+        const events = await desktopCommands.readTranscript({ threadId: transcriptId });
+        transcripts.push(events);
+        successfulReads += 1;
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+
+    if (successfulReads === 0 && firstError) {
+      throw firstError;
+    }
 
     return transcripts
       .flat()
@@ -509,7 +520,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         return;
       }
 
-      if (matchingCachedSnapshot && sessionId) {
+      if (matchingCachedSnapshot && sessionId && skipHarnessSnapshotFetch) {
         applySessionSnapshot(threadId, sessionId, matchingCachedSnapshot);
       }
 
@@ -529,8 +540,10 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
               applySessionSnapshot(threadId, sessionId, snapshot);
               cacheSessionSnapshot(snapshot);
               loadedFromHarness = true;
+            } else if (matchingCachedSnapshot) {
+              applySessionSnapshot(threadId, sessionId, matchingCachedSnapshot);
             } else {
-              stayTranscriptOnly = !matchingCachedSnapshot;
+              stayTranscriptOnly = true;
             }
           }
 
@@ -781,6 +794,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
 
           try {
             const transcript = await readTranscriptEvents(thread);
+            if (!transcript) return; // No transcript available
             const usageState = extractUsageStateFromTranscript(transcript);
             if (!usageState.sessionUsage) return; // No usage in this thread
 

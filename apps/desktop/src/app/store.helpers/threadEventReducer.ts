@@ -85,7 +85,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       const replacementRuntime = s.threadRuntimeById[toThreadId];
 
       const nextThreads = replacementThread
-        ? s.threads.filter((thread) => thread.id !== fromThreadId)
+        ? s.threads
+            .filter((thread) => thread.id !== fromThreadId)
+            .map((thread) =>
+              thread.id === toThreadId && existingThread?.legacyTranscriptId && !thread.legacyTranscriptId
+                ? { ...thread, legacyTranscriptId: existingThread.legacyTranscriptId }
+                : thread,
+            )
         : s.threads.map((thread) =>
             thread.id === fromThreadId
               ? {

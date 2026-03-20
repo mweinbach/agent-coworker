@@ -146,7 +146,6 @@ export function rekeyThreadRuntimeMaps(fromThreadId: string, toThreadId: string)
   moveMapEntry(RUNTIME.optimisticUserMessageIds, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingThreadMessages, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingThreadSteers, fromThreadId, toThreadId);
-  moveMapEntry(RUNTIME.threadSelectionRequests, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingWorkspaceDefaultApplyModeByThread, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.modelStreamByThread, fromThreadId, toThreadId);
 

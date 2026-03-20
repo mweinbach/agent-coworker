@@ -1,4 +1,3 @@
-import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
 import { CheckIcon } from "lucide-react";

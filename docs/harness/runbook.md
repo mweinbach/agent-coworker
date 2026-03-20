@@ -1,6 +1,9 @@
 # Harness Runbook
 
-This runbook covers the raw harness runner in [`scripts/run_raw_agent_loops.ts`](../../scripts/run_raw_agent_loops.ts) and the default `bun run harness:run` entrypoint.
+This runbook covers both harness layers:
+
+- the **raw-loop harness** in [`scripts/run_raw_agent_loops.ts`](../../scripts/run_raw_agent_loops.ts)
+- the **real-boundary WebSocket/session harness** exercised by deterministic server tests
 
 ## Prerequisites
 
@@ -138,3 +141,28 @@ For harness or protocol behavior changes, run:
 bun test
 bun run docs:check
 ```
+
+## Harness Layers: When To Use Which
+
+### Raw-loop harness
+
+Use the raw-loop harness when you want the fastest repeatable inner loop for:
+
+- scenario contract validation
+- artifact generation and deterministic file checks
+- tool-budget measurement
+- strict/non-strict repair behavior
+
+It bypasses the live WebSocket protocol on purpose so the inner loop stays fast.
+
+### WebSocket/session harness
+
+Use the WebSocket/session harness when you need to validate the real product boundary:
+
+- session creation and handshake
+- `harness_context_set` / `harness_context_get`
+- ask / approval flows
+- persistence + resume
+- child-agent protocol controls (`agent_spawn`, `agent_list_get`, `agent_wait`, and related follow-up flows)
+
+This layer should use deterministic `startAgentServer({ runTurnImpl })` tests instead of live provider APIs whenever possible.

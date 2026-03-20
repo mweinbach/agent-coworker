@@ -1,95 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-
 import { createRunTurn } from "../src/agent";
-import { startAgentServer, type StartAgentServerOptions } from "../src/server/startServer";
-
-async function makeTmpProject(): Promise<string> {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-harness-ws-"));
-  await fs.mkdir(path.join(tmp, ".agent"), { recursive: true });
-  return tmp;
-}
-
-function serverOpts(tmpDir: string, overrides?: Partial<StartAgentServerOptions>): StartAgentServerOptions {
-  return {
-    cwd: tmpDir,
-    hostname: "127.0.0.1",
-    port: 0,
-    homedir: tmpDir,
-    env: {
-      AGENT_WORKING_DIR: tmpDir,
-      AGENT_PROVIDER: "google",
-      COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
-    },
-    ...overrides,
-  };
-}
-
-function withSession<T>(
-  url: string,
-  handler: (args: {
-    ws: WebSocket;
-    sessionId: string;
-    message: any;
-    resolve: (value: T) => void;
-    reject: (error: Error) => void;
-  }) => void,
-  options?: {
-    resumeSessionId?: string;
-    timeoutMs?: number;
-  },
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const settled = { value: false };
-    let activeSessionId = options?.resumeSessionId ?? "";
-    const endpoint = options?.resumeSessionId ? `${url}?resumeSessionId=${options.resumeSessionId}` : url;
-    const ws = new WebSocket(endpoint);
-    const timeout = setTimeout(() => {
-      if (settled.value) return;
-      settled.value = true;
-      ws.close();
-      reject(new Error("Timed out waiting for websocket flow"));
-    }, options?.timeoutMs ?? 10_000);
-
-    const finishResolve = (value: T) => {
-      if (settled.value) return;
-      settled.value = true;
-      clearTimeout(timeout);
-      ws.close();
-      resolve(value);
-    };
-    const finishReject = (error: Error) => {
-      if (settled.value) return;
-      settled.value = true;
-      clearTimeout(timeout);
-      ws.close();
-      reject(error);
-    };
-
-    ws.onmessage = (event) => {
-      const message = JSON.parse(typeof event.data === "string" ? event.data : "");
-
-      if (message.type === "server_hello") {
-        activeSessionId = message.sessionId;
-      }
-      if (!activeSessionId) return;
-
-      handler({
-        ws,
-        sessionId: activeSessionId,
-        message,
-        resolve: finishResolve,
-        reject: finishReject,
-      });
-    };
-
-    ws.onerror = (event) => {
-      finishReject(new Error(`WebSocket error: ${event}`));
-    };
-  });
-}
+import { startAgentServer } from "../src/server/startServer";
+import { makeTmpProject, serverOpts, withSession } from "./helpers/wsHarness";
 
 describe("WebSocket harness context runtime visibility", () => {
   test("root-session turns inject harness context into the runtime system prompt", async () => {
@@ -278,6 +190,166 @@ describe("WebSocket harness context runtime visibility", () => {
       });
     } finally {
       second.server.stop();
+    }
+  }, 30_000);
+});
+
+describe("WebSocket harness golden flows", () => {
+  test("ask flow works over the real session boundary", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async (params: any) => {
+        const answer = await params.askUser("Pick one", ["a", "b"]);
+        return {
+          text: `answer:${answer}`,
+          responseMessages: [],
+        };
+      }) as any,
+    }));
+
+    try {
+      const assistantText = await withSession<string>(
+        url,
+        ({ ws, sessionId, message, resolve }) => {
+          if (message.type === "server_hello") {
+            ws.send(JSON.stringify({ type: "user_message", sessionId, text: "start ask flow" }));
+            return;
+          }
+
+          if (message.type === "ask") {
+            ws.send(JSON.stringify({
+              type: "ask_response",
+              sessionId,
+              requestId: message.requestId,
+              answer: "b",
+            }));
+            return;
+          }
+
+          if (message.type === "assistant_message") {
+            resolve(message.text);
+          }
+        },
+      );
+
+      expect(assistantText).toBe("answer:b");
+    } finally {
+      server.stop();
+    }
+  }, 30_000);
+
+  test("approval flow handles both approve and deny responses", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async (params: any) => {
+        const approved = await params.approveCommand("rm -rf /tmp/example");
+        return {
+          text: approved ? "approved" : "denied",
+          responseMessages: [],
+        };
+      }) as any,
+    }));
+
+    const runApprovalFlow = async (approved: boolean) => {
+      return await withSession<string>(
+        url,
+        ({ ws, sessionId, message, resolve }) => {
+          if (message.type === "server_hello") {
+            ws.send(JSON.stringify({ type: "user_message", sessionId, text: "start approval flow" }));
+            return;
+          }
+
+          if (message.type === "approval") {
+            ws.send(JSON.stringify({
+              type: "approval_response",
+              sessionId,
+              requestId: message.requestId,
+              approved,
+            }));
+            return;
+          }
+
+          if (message.type === "assistant_message") {
+            resolve(message.text);
+          }
+        },
+      );
+    };
+
+    try {
+      expect(await runApprovalFlow(true)).toBe("approved");
+      expect(await runApprovalFlow(false)).toBe("denied");
+    } finally {
+      server.stop();
+    }
+  }, 30_000);
+
+  test("child-agent spawn/list/wait works over the real protocol boundary", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => ({
+        text: "child finished",
+        responseMessages: [],
+      })) as any,
+    }));
+
+    try {
+      const result = await withSession<{ childId: string; listed: boolean; waited: boolean }>(
+        url,
+        ({ ws, sessionId, message, resolve }) => {
+          const state = ((ws as any).__childFlowState ??= {
+            childId: "",
+            listed: false,
+            waited: false,
+          });
+
+          if (message.type === "server_hello") {
+            ws.send(JSON.stringify({
+              type: "agent_spawn",
+              sessionId,
+              role: "worker",
+              message: "handle the child task",
+            }));
+            return;
+          }
+
+          if (message.type === "agent_spawned") {
+            state.childId = message.agent.agentId;
+            ws.send(JSON.stringify({ type: "agent_list_get", sessionId }));
+            ws.send(JSON.stringify({
+              type: "agent_wait",
+              sessionId,
+              agentIds: [message.agent.agentId],
+              timeoutMs: 1_000,
+            }));
+            return;
+          }
+
+          if (message.type === "agent_list") {
+            state.listed = message.agents.some((agent: any) => agent.agentId === state.childId);
+          }
+
+          if (message.type === "agent_wait_result") {
+            state.waited =
+              !message.timedOut
+              && message.agents.some((agent: any) => agent.agentId === message.agentIds[0]);
+          }
+
+          if (state.childId && state.listed && state.waited) {
+            resolve({
+              childId: state.childId,
+              listed: state.listed,
+              waited: state.waited,
+            });
+          }
+        },
+      );
+
+      expect(result.listed).toBe(true);
+      expect(result.waited).toBe(true);
+      expect(result.childId).toEqual(expect.any(String));
+    } finally {
+      server.stop();
     }
   }, 30_000);
 });

@@ -220,4 +220,79 @@ describe("session managers", () => {
       }],
     });
   });
+
+  test("SessionAdminManager listSessions keeps the active idle session visible before its first message", async () => {
+    const context = makeBaseContext();
+    const emitted: any[] = [];
+    context.emit = (evt) => emitted.push(evt);
+    context.deps.sessionDb = {
+      listSessions: () => [{
+        sessionId: "session-1",
+        title: "New Session",
+        titleSource: "default",
+        titleModel: null,
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        messageCount: 0,
+        lastEventSeq: 1,
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+      }],
+    } as any;
+    context.deps.getLiveSessionSnapshotImpl = () => ({
+      sessionId: "session-1",
+      title: "New Session",
+      titleSource: "default",
+      titleModel: null,
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      sessionKind: "root",
+      parentSessionId: null,
+      role: null,
+      mode: null,
+      depth: null,
+      nickname: null,
+      requestedModel: null,
+      effectiveModel: null,
+      requestedReasoningEffort: null,
+      effectiveReasoningEffort: null,
+      executionState: null,
+      lastMessagePreview: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      messageCount: 0,
+      lastEventSeq: 1,
+      feed: [],
+      agents: [],
+      todos: [],
+      sessionUsage: null,
+      lastTurnUsage: null,
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+
+    const manager = new SessionAdminManager(context);
+    await manager.listSessions("workspace");
+
+    expect(emitted).toContainEqual({
+      type: "sessions",
+      sessionId: "session-1",
+      sessions: [{
+        sessionId: "session-1",
+        title: "New Session",
+        titleSource: "default",
+        titleModel: null,
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        messageCount: 0,
+        lastEventSeq: 1,
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+      }],
+    });
+  });
 });

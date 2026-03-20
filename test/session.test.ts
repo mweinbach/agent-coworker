@@ -1310,6 +1310,28 @@ describe("AgentSession", () => {
       await fs.access(path.join(root, "disabled-skills", "alpha", "SKILL.md"));
     });
 
+    test("disableSkill while running emits Agent is busy and leaves the skill unchanged", async () => {
+      const root = await makeTmpDir();
+      const project = path.join(root, "project-skills");
+      const global = path.join(root, "skills");
+      await fs.mkdir(project, { recursive: true });
+      await fs.mkdir(global, { recursive: true });
+      await createSkill(global, "alpha", "# Alpha Skill\nTRIGGERS: a\n");
+
+      const cfg: AgentConfig = { ...makeConfig(root), skillsDirs: [project, global] };
+      const { session, events } = makeSession({ config: cfg });
+      (session as any).state.running = true;
+
+      await session.disableSkill("alpha");
+
+      const evt = events.find((e) => e.type === "error") as any;
+      expect(evt).toBeDefined();
+      expect(evt.code).toBe("busy");
+      expect(evt.message).toBe("Agent is busy");
+      await fs.access(path.join(root, "skills", "alpha", "SKILL.md"));
+      await expect(fs.access(path.join(root, "disabled-skills", "alpha", "SKILL.md"))).rejects.toBeDefined();
+    });
+
     test("enableSkill moves global skill back to skills and marks it enabled", async () => {
       const root = await makeTmpDir();
       const project = path.join(root, "project-skills");

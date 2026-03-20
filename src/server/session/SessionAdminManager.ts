@@ -35,8 +35,19 @@ function mergeLiveTopLevelSessionSummary(
   };
 }
 
-function shouldIncludeTopLevelSessionSummary(session: PersistedSessionSummary, liveSnapshot: SessionSnapshot | null): boolean {
-  if (liveSnapshot?.sessionKind === "root" && (liveSnapshot.executionState === "running" || liveSnapshot.executionState === "pending_init")) {
+function shouldIncludeTopLevelSessionSummary(
+  session: PersistedSessionSummary,
+  liveSnapshot: SessionSnapshot | null,
+  activeSessionId: string,
+): boolean {
+  if (
+    liveSnapshot?.sessionKind === "root"
+    && (
+      liveSnapshot.sessionId === activeSessionId
+      || liveSnapshot.executionState === "running"
+      || liveSnapshot.executionState === "pending_init"
+    )
+  ) {
     return true;
   }
 
@@ -99,7 +110,7 @@ export class SessionAdminManager {
         .map((session) => {
           const liveSnapshot = this.context.deps.getLiveSessionSnapshotImpl?.(session.sessionId) ?? null;
           const effectiveSummary = mergeLiveTopLevelSessionSummary(session, liveSnapshot);
-          return shouldIncludeTopLevelSessionSummary(effectiveSummary, liveSnapshot)
+          return shouldIncludeTopLevelSessionSummary(effectiveSummary, liveSnapshot, this.context.id)
             ? effectiveSummary
             : null;
         })

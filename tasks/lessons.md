@@ -158,6 +158,8 @@
 - For collapsible settings sections backed by live workspace state, seed the open state from the current workspace or routing mode and do not let the selected-item count drive `open` on every rerender; otherwise a checkbox click can immediately collapse the section the user is editing.
 - For desktop thread reconnect in this repo, never replay workspace `set_model` defaults onto a resumed session; reconnect-time default sync may still apply safe config like backups or MCP, but provider/model must stay pinned to the session that already started.
 - For desktop thread creation in this repo, treat an untouched "new thread" as a renderer-local draft only: do not open a socket, start a workspace session, reconnect, or persist the thread until the user has actually sent a non-empty message.
+- For desktop React/JSDOM tests in this repo, never mutate `globalThis` test DOM globals with `Object.assign(...)` or plain assignment; Bun/CI can expose properties like `navigator` as getter-only, so use a shared descriptor-safe helper that installs/restores globals with `Object.defineProperty`.
+- For shared workspace/session path comparisons, never rely on raw resolved-string equality across platforms; Windows workspace identity must case-fold after lexical normalization, and the helper should expose deterministic test coverage for `win32` semantics from non-Windows CI.
 
 ## 2026-03-18 Tool Output Overflow Audit
 

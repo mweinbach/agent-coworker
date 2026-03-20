@@ -119,6 +119,52 @@ function emitServerHello(socket: MockAgentSocket, sessionId: string) {
   });
 }
 
+function makeSessionSnapshot(
+  sessionId: string,
+  overrides: Partial<Record<string, unknown>> = {},
+) {
+  return {
+    sessionId,
+    title: "Harness Snapshot Thread",
+    titleSource: "model",
+    titleModel: "gpt-5.2",
+    provider: "openai",
+    model: "gpt-5.2",
+    sessionKind: "root",
+    parentSessionId: null,
+    role: null,
+    mode: null,
+    depth: 0,
+    nickname: null,
+    requestedModel: "gpt-5.2",
+    effectiveModel: "gpt-5.2",
+    requestedReasoningEffort: null,
+    effectiveReasoningEffort: null,
+    executionState: null,
+    lastMessagePreview: "Hello from harness snapshot",
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:02.000Z",
+    messageCount: 2,
+    lastEventSeq: 4,
+    feed: [
+      {
+        id: "assistant-1",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:02.000Z",
+        text: "Hello from harness snapshot",
+      },
+    ],
+    agents: [],
+    todos: [],
+    sessionUsage: null,
+    lastTurnUsage: null,
+    hasPendingAsk: false,
+    hasPendingApproval: false,
+    ...overrides,
+  };
+}
+
 async function flushAsyncWork() {
   await Promise.resolve();
   await Promise.resolve();
@@ -430,11 +476,26 @@ describe("workspace settings sync", () => {
 
     const state = useAppStore.getState();
     expect(state.selectedWorkspaceId).toBe("ws-load");
-    expect(state.selectedThreadId).toBe("thread-load");
+    expect(state.selectedThreadId).toBe("thread-session-persisted");
 
     const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
     expect(controlSocket.opts.autoReconnect).toBe(true);
+    emitServerHello(controlSocket, "control-session");
+    await flushAsyncWork();
+    expect(controlSocket.sent).toContainEqual({
+      type: "get_session_snapshot",
+      sessionId: "control-session",
+      targetSessionId: "thread-session-persisted",
+    });
+    controlSocket.emit({
+      type: "session_snapshot",
+      sessionId: "control-session",
+      targetSessionId: "thread-session-persisted",
+      snapshot: makeSessionSnapshot("thread-session-persisted"),
+    });
+    await flushAsyncWork();
+
+    const threadSocket = socketByClient("desktop");
     expect(threadSocket.opts.autoReconnect).toBe(true);
     expect(threadSocket.opts.resumeSessionId).toBe("thread-session-persisted");
   });
@@ -496,7 +557,23 @@ describe("workspace settings sync", () => {
 
     const state = useAppStore.getState();
     expect(state.selectedWorkspaceId).toBe("ws-new");
-    expect(state.selectedThreadId).toBe("thread-new");
+    expect(state.selectedThreadId).toBe("thread-session-new");
+
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    await flushAsyncWork();
+    expect(controlSocket.sent).toContainEqual({
+      type: "get_session_snapshot",
+      sessionId: "control-session",
+      targetSessionId: "thread-session-new",
+    });
+    controlSocket.emit({
+      type: "session_snapshot",
+      sessionId: "control-session",
+      targetSessionId: "thread-session-new",
+      snapshot: makeSessionSnapshot("thread-session-new"),
+    });
+    await flushAsyncWork();
 
     const threadSocket = socketByClient("desktop");
     expect(threadSocket.opts.resumeSessionId).toBe("thread-session-new");

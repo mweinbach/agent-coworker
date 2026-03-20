@@ -11,19 +11,29 @@ describe("sessionDb mappers", () => {
     const mapped = mapPersistedSessionSummaryRow({
       session_id: "sess-1",
       title: "My Title",
+      title_source: "manual",
+      title_model: null,
       provider: "google",
       model: "gpt-5.2",
       created_at: "2026-02-19T00:00:00.000Z",
       updated_at: "2026-02-19T00:00:01.000Z",
       message_count: 4,
+      last_event_seq: 7,
+      has_pending_ask: 0,
+      has_pending_approval: 1,
     });
 
     expect(mapped).toMatchObject({
       sessionId: "sess-1",
       title: "My Title",
+      titleSource: "manual",
+      titleModel: null,
       provider: "google",
       model: "gpt-5.2",
       messageCount: 4,
+      lastEventSeq: 7,
+      hasPendingAsk: false,
+      hasPendingApproval: true,
     });
     expect(Number.isNaN(Date.parse(mapped.createdAt))).toBeFalse();
     expect(Number.isNaN(Date.parse(mapped.updatedAt))).toBeFalse();

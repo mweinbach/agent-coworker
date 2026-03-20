@@ -93,9 +93,9 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
     }
 
     if (message.includes("snapshot") || message.includes("target session")) {
-      for (const key of [...sessionSnapshotWaiters.keys()]) {
-        if (!key.startsWith(`${workspaceId}:`)) continue;
-        resolveSessionSnapshotWaiters(workspaceId, key.slice(workspaceId.length + 1), null);
+      const targetSessionId = /^unknown target session:\s*(.+)$/i.exec(evt.message.trim())?.[1]?.trim();
+      if (targetSessionId) {
+        resolveSessionSnapshotWaiters(workspaceId, targetSessionId, null);
       }
     }
   }

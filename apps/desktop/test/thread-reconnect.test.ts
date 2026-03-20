@@ -470,6 +470,166 @@ describe("thread reconnect", () => {
     ]);
   });
 
+  test("selectThread keeps reconnecting when a cached snapshot is valid but the live snapshot lookup returns null", async () => {
+    const persistedSessionId = "persisted-thread-session";
+    const snapshot = makeSessionSnapshot(persistedSessionId);
+    RUNTIME.sessionSnapshots.set(persistedSessionId, {
+      fingerprint: {
+        updatedAt: snapshot.updatedAt,
+        messageCount: snapshot.messageCount,
+        lastEventSeq: snapshot.lastEventSeq,
+      },
+      snapshot,
+    });
+
+    useAppStore.setState((state) => ({
+      ...state,
+      threads: state.threads.map((thread) =>
+        thread.id === threadId
+          ? {
+              ...thread,
+              sessionId: persistedSessionId,
+              lastMessageAt: snapshot.updatedAt,
+              messageCount: snapshot.messageCount,
+              lastEventSeq: snapshot.lastEventSeq,
+            }
+          : thread,
+      ),
+    }));
+    readTranscriptImpl = async () => {
+      throw new Error("readTranscript should not run when a matching cached snapshot was already applied");
+    };
+
+    const selectPromise = useAppStore.getState().selectThread(threadId);
+    await flushAsyncWork();
+
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    await flushAsyncWork();
+    expect(controlSocket.sent).toContainEqual({
+      type: "get_session_snapshot",
+      sessionId: "control-session",
+      targetSessionId: persistedSessionId,
+    });
+
+    controlSocket.emit({
+      type: "error",
+      sessionId: "control-session",
+      source: "session",
+      code: "validation_failed",
+      message: `Unknown target session: ${persistedSessionId}`,
+    });
+    await flushAsyncWork();
+
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, persistedSessionId);
+    await selectPromise;
+
+    const activeThreadId = canonicalThreadId(persistedSessionId, threadId);
+    expect(readTranscriptCalls).toEqual([]);
+    expect(useAppStore.getState().threadRuntimeById[activeThreadId]?.feed).toEqual(snapshot.feed);
+    expect(useAppStore.getState().threadRuntimeById[activeThreadId]?.transcriptOnly).toBe(false);
+  });
+
+  test("snapshot errors only resolve the waiter for the failing target session", async () => {
+    const secondThreadId = `t-${crypto.randomUUID()}`;
+    const firstSessionId = "persisted-thread-session-a";
+    const secondSessionId = "persisted-thread-session-b";
+    useAppStore.setState((state) => ({
+      ...state,
+      threads: state.threads.flatMap((thread) =>
+        thread.id === threadId
+          ? [
+              {
+                ...thread,
+                sessionId: firstSessionId,
+                messageCount: 2,
+                lastEventSeq: 4,
+              },
+              {
+                ...thread,
+                id: secondThreadId,
+                title: "Thread 2",
+                sessionId: secondSessionId,
+                messageCount: 2,
+                lastEventSeq: 4,
+              },
+            ]
+          : [thread],
+      ),
+    }));
+    readTranscriptImpl = async () => {
+      throw new Error("readTranscript should not run when an unrelated snapshot request fails");
+    };
+
+    const firstSelect = useAppStore.getState().selectThread(threadId);
+    await flushAsyncWork();
+
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    await flushAsyncWork();
+    expect(controlSocket.sent).toContainEqual({
+      type: "get_session_snapshot",
+      sessionId: "control-session",
+      targetSessionId: firstSessionId,
+    });
+
+    const secondSelect = useAppStore.getState().selectThread(secondThreadId);
+    await flushAsyncWork();
+    expect(controlSocket.sent).toContainEqual({
+      type: "get_session_snapshot",
+      sessionId: "control-session",
+      targetSessionId: secondSessionId,
+    });
+
+    controlSocket.emit({
+      type: "error",
+      sessionId: "control-session",
+      source: "session",
+      code: "validation_failed",
+      message: `Unknown target session: ${firstSessionId}`,
+    });
+    await flushAsyncWork();
+
+    controlSocket.emit({
+      type: "session_snapshot",
+      sessionId: "control-session",
+      targetSessionId: secondSessionId,
+      snapshot: makeSessionSnapshot(secondSessionId, {
+        title: "Second thread snapshot",
+        feed: [
+          {
+            id: "assistant-second",
+            kind: "message",
+            role: "assistant",
+            ts: "2024-01-01T00:00:03.000Z",
+            text: "Second thread snapshot",
+          },
+        ],
+      }),
+    });
+    await flushAsyncWork();
+
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, secondSessionId);
+    await secondSelect;
+    await firstSelect;
+
+    const activeThreadId = canonicalThreadId(secondSessionId, secondThreadId);
+    expect(readTranscriptCalls).toEqual([]);
+    expect(useAppStore.getState().selectedThreadId).toBe(activeThreadId);
+    expect(useAppStore.getState().threadRuntimeById[activeThreadId]?.feed).toEqual([
+      {
+        id: "assistant-second",
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:03.000Z",
+        text: "Second thread snapshot",
+      },
+    ]);
+    expect(useAppStore.getState().threadRuntimeById[activeThreadId]?.transcriptOnly).toBe(false);
+  });
+
   test("selectThread skips get_session_snapshot when feed is loaded and snapshot cache matches", async () => {
     const persistedSessionId = "persisted-thread-session";
     const snapshot = makeSessionSnapshot(persistedSessionId);

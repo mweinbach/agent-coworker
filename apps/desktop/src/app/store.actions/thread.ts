@@ -511,7 +511,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
               cacheSessionSnapshot(snapshot);
               loadedFromHarness = true;
             } else {
-              stayTranscriptOnly = true;
+              stayTranscriptOnly = !matchingCachedSnapshot;
             }
           }
 

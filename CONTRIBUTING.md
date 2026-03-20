@@ -42,7 +42,7 @@ Key modules:
 
 | Module | Purpose |
 |---|---|
-| `src/agent.ts` | Core agent loop. `createRunTurn()` factory returns `runTurn()` which calls the Vercel AI SDK `generateText()`. |
+| `src/agent.ts` | Core agent loop. `createRunTurn()` builds the effective turn prompt/tool set and delegates execution to the configured runtime. |
 | `src/server/` | WebSocket server, session management, protocol types, model streaming. |
 | `src/tools/` | Tool factories. Each tool is a file exporting a `create*Tool(ctx)` function. |
 | `src/providers/` | Provider registry (`google`, `openai`, `anthropic`, `codex-cli`). Each exports `defaultModel`, `keyCandidates`, `createModel()`. |
@@ -50,7 +50,7 @@ Key modules:
 | `src/mcp/` | MCP server config registry, OAuth provider, auth store. |
 | `src/skills/` | Skill discovery and trigger extraction. |
 | `apps/TUI/` | Default TUI built with OpenTUI + Solid.js (not React). |
-| `apps/desktop/` | Tauri desktop app wrapper. |
+| `apps/desktop/` | Electron desktop app wrapper. |
 | `src/cli/` | CLI REPL client. |
 
 ## Directory Structure
@@ -75,7 +75,7 @@ src/
   utils/                # Shared utilities
 apps/
   TUI/                  # OpenTUI + Solid.js terminal UI
-  desktop/              # Tauri desktop app
+  desktop/              # Electron desktop app
 config/
   defaults.json         # Built-in default configuration
   mcp-servers.json      # System-level MCP server definitions
@@ -159,7 +159,7 @@ Follow these four steps whenever you add a new client message or server event:
 
 1. **Add the type** to `ClientMessage` or `ServerEvent` in `src/server/protocol.ts`.
 2. **Add validation** in `safeParseClientMessage()` (same file) if it is a client message.
-3. **Add the handler** in `src/server/startServer.ts` (message routing) and/or `src/server/session.ts` (session logic).
+3. **Add the handler** in `src/server/startServer/dispatchClientMessage.ts` (message routing) and/or the appropriate manager under `src/server/session/` (session logic).
 4. **Update `docs/websocket-protocol.md`** with the new message format, fields, example JSON, and where it fits in the flow.
 
 The protocol doc is the source of truth for anyone building an alternative UI.
@@ -234,6 +234,7 @@ Key testing patterns:
 ## Useful References
 
 - [`docs/websocket-protocol.md`](docs/websocket-protocol.md) -- WebSocket message format and flow
+- [`docs/harness/index.md`](docs/harness/index.md) -- Harness docs map
 - [`docs/session-storage-architecture.md`](docs/session-storage-architecture.md) -- Session persistence design
 - [`CLAUDE.md`](CLAUDE.md) -- Repository assistant notes and architecture context
 - [`apps/TUI/docs/opentui.md`](apps/TUI/docs/opentui.md) -- OpenTUI framework documentation

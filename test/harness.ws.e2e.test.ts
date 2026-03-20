@@ -352,4 +352,183 @@ describe("WebSocket harness golden flows", () => {
       server.stop();
     }
   }, 30_000);
+
+  test("child-agent role policy is enforced on the real runtime path", async () => {
+    const tmpDir = await makeTmpProject();
+    const capturedToolSets: string[][] = [];
+    const runTurnImpl = createRunTurn({
+      createRuntime: () => ({
+        name: "pi",
+        runTurn: async (params) => {
+          capturedToolSets.push(Object.keys(params.tools).sort());
+          return {
+            text: "done",
+            responseMessages: [],
+          };
+        },
+      }),
+    });
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, { runTurnImpl }));
+
+    const spawnRole = async (role: "explorer" | "worker") => {
+      await withSession<void>(
+        url,
+        ({ ws, sessionId, message, resolve }) => {
+          if (message.type === "server_hello") {
+            ws.send(JSON.stringify({
+              type: "agent_spawn",
+              sessionId,
+              role,
+              message: `run as ${role}`,
+            }));
+            return;
+          }
+
+          if (message.type === "agent_spawned") {
+            setTimeout(() => resolve(undefined), 50);
+          }
+        },
+      );
+    };
+
+    try {
+      await spawnRole("explorer");
+      await spawnRole("worker");
+
+      const explorerTools = capturedToolSets[0] ?? [];
+      const workerTools = capturedToolSets[1] ?? [];
+
+      expect(explorerTools).toEqual(expect.arrayContaining(["bash", "glob", "grep", "read"]));
+      expect(explorerTools).not.toContain("write");
+      expect(explorerTools).not.toContain("edit");
+      expect(explorerTools).not.toContain("notebookEdit");
+
+      expect(workerTools).toEqual(expect.arrayContaining(["bash", "glob", "grep", "read", "write", "edit"]));
+    } finally {
+      server.stop();
+    }
+  }, 30_000);
+
+  test("child-agent follow-up input preserves history and supports close/resume over protocol", async () => {
+    const tmpDir = await makeTmpProject();
+    const childMessageSnapshots: Array<Array<{ role: string; content: unknown }>> = [];
+    let childTurnCount = 0;
+    const runTurnImpl = createRunTurn({
+      createRuntime: () => ({
+        name: "pi",
+        runTurn: async (params) => {
+          childMessageSnapshots.push(
+            params.messages.map((message) => ({
+              role: message.role,
+              content: message.content,
+            })),
+          );
+          childTurnCount += 1;
+          const text = childTurnCount === 1 ? "first child answer" : "second child answer";
+          return {
+            text,
+            responseMessages: [{ role: "assistant", content: text }],
+          };
+        },
+      }),
+    });
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, { runTurnImpl }));
+
+    try {
+      const flow = await withSession<{
+        childId: string;
+        closed: boolean;
+        resumed: boolean;
+      }>(
+        url,
+        ({ ws, sessionId, message, resolve }) => {
+          const state = ((ws as any).__followUpState ??= {
+            childId: "",
+            waitCount: 0,
+            sawClosed: false,
+            sawResumed: false,
+          });
+
+          if (message.type === "server_hello") {
+            ws.send(JSON.stringify({
+              type: "agent_spawn",
+              sessionId,
+              role: "worker",
+              message: "first task",
+            }));
+            return;
+          }
+
+          if (message.type === "agent_spawned") {
+            state.childId = message.agent.agentId;
+            ws.send(JSON.stringify({
+              type: "agent_wait",
+              sessionId,
+              agentIds: [state.childId],
+              timeoutMs: 1_000,
+            }));
+            return;
+          }
+
+          if (message.type === "agent_wait_result") {
+            state.waitCount += 1;
+            if (state.waitCount === 1) {
+              ws.send(JSON.stringify({
+                type: "agent_input_send",
+                sessionId,
+                agentId: state.childId,
+                message: "second task",
+              }));
+              ws.send(JSON.stringify({
+                type: "agent_wait",
+                sessionId,
+                agentIds: [state.childId],
+                timeoutMs: 1_000,
+              }));
+              return;
+            }
+
+            if (state.waitCount === 2) {
+              ws.send(JSON.stringify({
+                type: "agent_close",
+                sessionId,
+                agentId: state.childId,
+              }));
+            }
+            return;
+          }
+
+          if (message.type === "agent_status" && message.agent?.agentId === state.childId) {
+            if (message.agent.executionState === "closed") {
+              state.sawClosed = true;
+              ws.send(JSON.stringify({
+                type: "agent_resume",
+                sessionId,
+                agentId: state.childId,
+              }));
+              return;
+            }
+
+            if (state.sawClosed && message.agent.executionState === "completed") {
+              state.sawResumed = true;
+              resolve({
+                childId: state.childId,
+                closed: state.sawClosed,
+                resumed: state.sawResumed,
+              });
+            }
+          }
+        },
+      );
+
+      expect(flow.childId).toEqual(expect.any(String));
+      expect(flow.closed).toBe(true);
+      expect(flow.resumed).toBe(true);
+      expect(childMessageSnapshots).toHaveLength(2);
+      expect(childMessageSnapshots[0]?.map((message) => message.role)).toEqual(["user"]);
+      expect(childMessageSnapshots[1]?.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+    } finally {
+      server.stop();
+    }
+  }, 30_000);
 });

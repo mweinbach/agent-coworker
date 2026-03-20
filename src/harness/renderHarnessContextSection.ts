@@ -17,7 +17,7 @@ function normalizeMetadata(
   if (!metadata) return [];
 
   return Object.entries(metadata)
-    .map(([key, value]) => [key.trim(), value.trim()] as const)
+    .map(([key, value]) => [key.trim(), value.trim()] as [string, string])
     .filter(([key, value]) => key.length > 0 && value.length > 0)
     .sort(([left], [right]) => left.localeCompare(right));
 }

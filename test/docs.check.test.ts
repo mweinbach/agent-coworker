@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { protocolVersionNeedle } from "../scripts/check_docs";
+import {
+  collectRepoPathReferences,
+  extractInlineRepoPaths,
+  extractMarkdownLinks,
+  protocolVersionNeedle,
+} from "../scripts/check_docs";
 import { WEBSOCKET_PROTOCOL_VERSION } from "../src/server/protocol";
 
 function repoRoot(): string {
@@ -28,5 +33,28 @@ describe("docs checker parity", () => {
     expect(wsProtocol).toContain("### TurnUsage");
     expect(wsProtocol).toContain("### ModelPricing");
     expect(wsProtocol).toContain("| `usage` | `SessionUsageSnapshot \\| null` |");
+  });
+
+  test("extractMarkdownLinks returns local doc links", () => {
+    expect(extractMarkdownLinks("[Protocol](docs/websocket-protocol.md)")).toEqual([
+      "docs/websocket-protocol.md",
+    ]);
+  });
+
+  test("extractInlineRepoPaths returns inline repo paths", () => {
+    expect(extractInlineRepoPaths("See `src/server/session/AgentSession.ts` and `docs/harness/index.md`.")).toEqual([
+      "src/server/session/AgentSession.ts",
+      "docs/harness/index.md",
+    ]);
+  });
+
+  test("collectRepoPathReferences merges markdown links and inline repo paths", () => {
+    expect(collectRepoPathReferences(
+      "See [Protocol](docs/websocket-protocol.md), `src/server/startServer/dispatchClientMessage.ts`, and [README](README.md).",
+    )).toEqual([
+      "docs/websocket-protocol.md",
+      "README.md",
+      "src/server/startServer/dispatchClientMessage.ts",
+    ]);
   });
 });

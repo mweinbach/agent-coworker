@@ -8,6 +8,7 @@ import { z } from "zod";
 
 import { loadConfig } from "../src/config";
 import { runTurnWithDeps } from "../src/agent";
+import { normalizeHarnessContextPayload } from "../src/harness/contextStore";
 import {
   buildPathArtifactAssertions,
   type FinalContract,
@@ -27,7 +28,6 @@ import { ensureDefaultGlobalSkillsReady } from "../src/skills/defaultGlobalSkill
 import type {
   AgentConfig,
   HarnessContextPayload,
-  HarnessContextState,
   ModelMessage,
   ProviderName,
   TodoItem,
@@ -285,25 +285,6 @@ function safeJsonStringify(v: unknown): string {
   );
 }
 
-function toHarnessContextState(
-  payload: HarnessContextPayload,
-  updatedAt = isoSafeNow(),
-): HarnessContextState {
-  const metadataEntries = Object.entries(payload.metadata ?? {})
-    .map(([key, value]) => [key.trim(), value.trim()] as const)
-    .filter(([key, value]) => key.length > 0 && value.length > 0);
-
-  return {
-    runId: payload.runId.trim(),
-    taskId: payload.taskId?.trim() || undefined,
-    objective: payload.objective.trim(),
-    acceptanceCriteria: payload.acceptanceCriteria.map((item) => item.trim()).filter(Boolean),
-    constraints: payload.constraints.map((item) => item.trim()).filter(Boolean),
-    ...(metadataEntries.length > 0 ? { metadata: Object.fromEntries(metadataEntries) } : {}),
-    updatedAt,
-  };
-}
-
 function defaultHarnessContextForRun(
   run: Pick<RunSpec, "id" | "provider" | "model">,
   scenario: RawLoopArgs["scenario"],
@@ -337,7 +318,7 @@ export function buildRawLoopHarnessContext(
   promptContext: PromptContext,
   updatedAt = isoSafeNow(),
 ): HarnessContextState {
-  return toHarnessContextState(
+  return normalizeHarnessContextPayload(
     run.harnessContext?.(promptContext) ?? defaultHarnessContextForRun(run, scenario),
     updatedAt,
   );

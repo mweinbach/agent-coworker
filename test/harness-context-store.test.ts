@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { HarnessContextStore } from "../src/harness/contextStore";
+import { HarnessContextStore, normalizeHarnessContextPayload } from "../src/harness/contextStore";
 import type { HarnessContextPayload } from "../src/types";
 
 function makePayload(overrides?: Partial<HarnessContextPayload>): HarnessContextPayload {
@@ -15,6 +15,25 @@ function makePayload(overrides?: Partial<HarnessContextPayload>): HarnessContext
 }
 
 describe("HarnessContextStore", () => {
+  test("normalizeHarnessContextPayload trims and filters consistently", () => {
+    expect(normalizeHarnessContextPayload({
+      runId: " run-1 ",
+      taskId: " task-1 ",
+      objective: " objective ",
+      acceptanceCriteria: [" keep ", " ", ""],
+      constraints: ["", " constrain "],
+      metadata: { " env ": " prod ", blank: "   " },
+    }, "2026-03-20T12:00:00.000Z")).toEqual({
+      runId: "run-1",
+      taskId: "task-1",
+      objective: "objective",
+      acceptanceCriteria: ["keep"],
+      constraints: ["constrain"],
+      metadata: { env: "prod" },
+      updatedAt: "2026-03-20T12:00:00.000Z",
+    });
+  });
+
   test("get returns null for unknown session", () => {
     const store = new HarnessContextStore();
     expect(store.get("nonexistent")).toBeNull();

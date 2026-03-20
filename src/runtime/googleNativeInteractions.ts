@@ -311,10 +311,10 @@ function turnFromAssistantMessage(message: ModelMessage): InteractionTurn | null
   return parts.length > 0 ? { role: "model", content: parts } : null;
 }
 
-function turnFromToolMessage(message: ModelMessage): InteractionTurn | null {
-  if (!Array.isArray(message.content)) return null;
+function turnsFromToolMessage(message: ModelMessage): InteractionTurn[] {
+  if (!Array.isArray(message.content)) return [];
 
-  const parts: Array<Record<string, unknown>> = [];
+  const turns: InteractionTurn[] = [];
   for (const rawPart of message.content) {
     const record = asRecord(rawPart);
     if (!record) continue;
@@ -344,30 +344,34 @@ function turnFromToolMessage(message: ModelMessage): InteractionTurn | null {
       return multimodalPart ? [multimodalPart] : [];
     });
 
-    // Keep text + image/audio/video/document inside `function_result.result`, matching the
-    // Interactions schema for rich tool results. Do not emit binary parts as siblings of
-    // `function_result` (e.g. text-only `result` + top-level `document`) — the API rejects that.
-    const combinedResultParts = [...resultParts, ...extraMultimodalParts];
-    const firstPart = combinedResultParts[0];
     const result =
-      combinedResultParts.length === 0
+      resultParts.length === 0
         ? safeJsonStringify(record.output ?? record.content)
-        : combinedResultParts.length === 1 && firstPart?.type === "text"
-          ? firstPart.text
-          : combinedResultParts;
+        : resultParts.length === 1 && resultParts[0]?.type === "text"
+          ? resultParts[0].text
+          : resultParts;
     const signature = getGoogleThoughtSignature(record);
 
-    parts.push({
-      type: "function_result",
-      call_id: convertToolCallId(toolCallId),
-      result,
-      is_error: record.isError === true,
-      ...(toolName ? { name: toolName } : {}),
-      ...(signature ? { signature } : {}),
+    turns.push({
+      role: "user",
+      content: [{
+        type: "function_result",
+        call_id: convertToolCallId(toolCallId),
+        result,
+        is_error: record.isError === true,
+        ...(toolName ? { name: toolName } : {}),
+        ...(signature ? { signature } : {}),
+      }],
     });
+    if (extraMultimodalParts.length > 0) {
+      turns.push({
+        role: "user",
+        content: extraMultimodalParts,
+      });
+    }
   }
 
-  return parts.length > 0 ? { role: "user", content: parts } : null;
+  return turns;
 }
 
 function convertMessagesToInteractionsInput(
@@ -377,14 +381,16 @@ function convertMessagesToInteractionsInput(
 
   for (const msg of messages) {
     const role = msg.role;
+    if (role === "tool") {
+      input.push(...turnsFromToolMessage(msg));
+      continue;
+    }
     const turn =
       role === "user"
         ? turnFromUserMessage(msg)
         : role === "assistant"
           ? turnFromAssistantMessage(msg)
-          : role === "tool"
-            ? turnFromToolMessage(msg)
-            : null;
+          : null;
     if (turn) input.push(turn);
   }
 

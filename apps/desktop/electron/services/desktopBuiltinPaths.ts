@@ -16,7 +16,7 @@ export function resolvePackagedBuiltinDistDir(): string | null {
 }
 
 /**
- * Directories that contain built-in / bundled skills for IPC `openPath` / `revealPath` allowlisting.
+ * Directories that contain built-in / bundled skills for IPC `revealPath` allowlisting.
  * Includes `process.env.COWORK_BUILTIN_DIR` when set, and the packaged dist dir when running from an `.app` / installer.
  *
  * Resolve per IPC invocation (not once at startup) so a late-set `COWORK_BUILTIN_DIR` and

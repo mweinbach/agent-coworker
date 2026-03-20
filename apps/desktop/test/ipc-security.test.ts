@@ -7,7 +7,7 @@ import {
   isTrustedDesktopSenderUrl,
   resolveAllowedDirectoryPath,
   resolveAllowedPath,
-  resolveAllowedRevealOrOpenPath,
+  resolveAllowedRevealPath,
 } from "../electron/services/ipcSecurity";
 
 describe("desktop IPC security helpers", () => {
@@ -89,19 +89,32 @@ describe("desktop IPC security helpers", () => {
     }
   });
 
-  test("resolveAllowedRevealOrOpenPath allows ~/.cowork and ~/.agent paths for skill folders", async () => {
+  test("resolveAllowedPath keeps openPath inside workspace roots", async () => {
+    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-ws-"));
+    const workspaceRoot = await fs.realpath(tempWorkspace);
+    const home = os.homedir();
+    try {
+      const coworkSkill = path.join(home, ".cowork", "skills", "some-skill", "SKILL.md");
+      expect(() => resolveAllowedPath([workspaceRoot], coworkSkill)).toThrow("outside allowed workspace roots");
+      expect(() => resolveAllowedRevealPath([workspaceRoot], coworkSkill)).not.toThrow();
+    } finally {
+      await fs.rm(tempWorkspace, { recursive: true, force: true });
+    }
+  });
+
+  test("resolveAllowedRevealPath allows ~/.cowork and ~/.agent paths for skill folders", async () => {
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-ws-"));
     const workspaceRoot = await fs.realpath(tempWorkspace);
     const home = os.homedir();
     try {
       const coworkSkill = path.join(home, ".cowork", "skills", "some-skill", "SKILL.md");
       const agentSkill = path.join(home, ".agent", "skills", "other", "SKILL.md");
-      expect(() => resolveAllowedRevealOrOpenPath([workspaceRoot], coworkSkill)).not.toThrow();
-      expect(() => resolveAllowedRevealOrOpenPath([workspaceRoot], agentSkill)).not.toThrow();
+      expect(() => resolveAllowedRevealPath([workspaceRoot], coworkSkill)).not.toThrow();
+      expect(() => resolveAllowedRevealPath([workspaceRoot], agentSkill)).not.toThrow();
 
       const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-nope-"));
       try {
-        expect(() => resolveAllowedRevealOrOpenPath([workspaceRoot], path.join(outside, "secret"))).toThrow(
+        expect(() => resolveAllowedRevealPath([workspaceRoot], path.join(outside, "secret"))).toThrow(
           "outside allowed workspace roots",
         );
       } finally {
@@ -112,7 +125,7 @@ describe("desktop IPC security helpers", () => {
     }
   });
 
-  test("resolveAllowedRevealOrOpenPath allows workspace and skill-home paths used by open/reveal IPC", async () => {
+  test("resolveAllowedRevealPath allows workspace and skill-home paths used by reveal IPC", async () => {
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-ws-"));
     const workspaceRoot = await fs.realpath(tempWorkspace);
     const home = os.homedir();
@@ -122,14 +135,14 @@ describe("desktop IPC security helpers", () => {
     try {
       await fs.writeFile(workspaceFile, "inside workspace\n");
 
-      expect(resolveAllowedRevealOrOpenPath([workspaceRoot], workspaceFile)).toBe(workspaceFile);
-      expect(() => resolveAllowedRevealOrOpenPath([workspaceRoot], coworkSkillDir)).not.toThrow();
-      expect(() => resolveAllowedRevealOrOpenPath([workspaceRoot], agentSkillFile)).not.toThrow();
+      expect(resolveAllowedRevealPath([workspaceRoot], workspaceFile)).toBe(workspaceFile);
+      expect(() => resolveAllowedRevealPath([workspaceRoot], coworkSkillDir)).not.toThrow();
+      expect(() => resolveAllowedRevealPath([workspaceRoot], agentSkillFile)).not.toThrow();
 
       const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-open-nope-"));
       try {
         expect(() =>
-          resolveAllowedRevealOrOpenPath([workspaceRoot], path.join(outside, "secret")),
+          resolveAllowedRevealPath([workspaceRoot], path.join(outside, "secret")),
         ).toThrow("outside allowed workspace roots");
       } finally {
         await fs.rm(outside, { recursive: true, force: true });
@@ -139,7 +152,7 @@ describe("desktop IPC security helpers", () => {
     }
   });
 
-  test("resolveAllowedRevealOrOpenPath allows paths under configurable built-in skill roots", async () => {
+  test("resolveAllowedRevealPath allows paths under configurable built-in skill roots", async () => {
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-ws-"));
     const workspaceRoot = await fs.realpath(tempWorkspace);
     const builtinRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-builtin-"));
@@ -149,7 +162,7 @@ describe("desktop IPC security helpers", () => {
       await fs.writeFile(skillFile, "---\nname: x\n---\n", "utf-8");
 
       expect(() =>
-        resolveAllowedRevealOrOpenPath([workspaceRoot], skillFile, [builtinRoot]),
+        resolveAllowedRevealPath([workspaceRoot], skillFile, [builtinRoot]),
       ).not.toThrow();
     } finally {
       await fs.rm(builtinRoot, { recursive: true, force: true });

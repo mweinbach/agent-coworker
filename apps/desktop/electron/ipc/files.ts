@@ -30,7 +30,7 @@ import { resolveDesktopBuiltinSkillRootsForReveal } from "../services/desktopBui
 import {
   resolveAllowedDirectoryPath,
   resolveAllowedPath,
-  resolveAllowedRevealOrOpenPath,
+  resolveAllowedRevealPath,
 } from "../services/ipcSecurity";
 import type { DesktopIpcModuleContext } from "./types";
 
@@ -120,12 +120,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openPath, async (_event, args: OpenPathInput) => {
     const input = parseWithSchema(openPathInputSchema, args, "openPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const builtinSkillRoots = resolveDesktopBuiltinSkillRootsForReveal();
-    const safePath = resolveAllowedRevealOrOpenPath(
-      workspaceRoots.getApprovedWorkspaceRoots(),
-      input.path,
-      builtinSkillRoots,
-    );
+    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
     const errString = await shell.openPath(safePath);
     if (errString) {
       throw new Error(errString);
@@ -136,7 +131,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     const input = parseWithSchema(revealPathInputSchema, args, "revealPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const builtinSkillRoots = resolveDesktopBuiltinSkillRootsForReveal();
-    const safePath = resolveAllowedRevealOrOpenPath(
+    const safePath = resolveAllowedRevealPath(
       workspaceRoots.getApprovedWorkspaceRoots(),
       input.path,
       builtinSkillRoots,

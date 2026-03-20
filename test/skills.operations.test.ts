@@ -4,11 +4,18 @@ import os from "node:os";
 import path from "node:path";
 
 import { scanSkillCatalog } from "../src/skills/catalog";
-import { updateSkillInstallation } from "../src/skills/operations";
+import { checkSkillInstallationUpdate, updateSkillInstallation } from "../src/skills/operations";
 import type { AgentConfig } from "../src/types";
 
 function skillDoc(name: string, description: string): string {
   return ["---", `name: "${name}"`, `description: "${description}"`, "---", "", "# Body"].join("\n");
+}
+
+async function createSkill(parentDir: string, name: string, description: string): Promise<string> {
+  const skillDir = path.join(parentDir, name);
+  await fs.mkdir(skillDir, { recursive: true });
+  await fs.writeFile(path.join(skillDir, "SKILL.md"), skillDoc(name, description), "utf-8");
+  return skillDir;
 }
 
 function makeConfig(root: string): AgentConfig {
@@ -68,9 +75,7 @@ describe("updateSkillInstallation", () => {
 
   test("reuses the materialized source during updates", async () => {
     const config = makeConfig(root);
-    const existingSkillDir = path.join(config.skillsDirs[0]!, "my-skill");
-    await fs.mkdir(existingSkillDir, { recursive: true });
-    await fs.writeFile(path.join(existingSkillDir, "SKILL.md"), skillDoc("my-skill", "Existing skill"), "utf-8");
+    const existingSkillDir = await createSkill(config.skillsDirs[0]!, "my-skill", "Existing skill");
 
     const catalog = await scanSkillCatalog(config.skillsDirs, {
       includeDisabled: true,
@@ -91,5 +96,55 @@ describe("updateSkillInstallation", () => {
     expect(fetchCalls).toBe(2);
     expect(result.preview.source.repo).toBe("owner/repo");
     expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain('description: "Updated skill"');
+  });
+
+  test("checkSkillInstallationUpdate rejects missing original skill names", async () => {
+    const config = makeConfig(root);
+    await createSkill(config.skillsDirs[0]!, "my-skill", "Existing skill");
+    const sourceRoot = path.join(root, "incoming");
+    await createSkill(sourceRoot, "other-skill", "Other skill");
+
+    const catalog = await scanSkillCatalog(config.skillsDirs, {
+      includeDisabled: true,
+      adoptManagedWritableInstalls: true,
+    });
+    const installation = {
+      ...catalog.installations[0]!,
+      origin: {
+        kind: "local" as const,
+        sourcePath: sourceRoot,
+      },
+    };
+
+    const result = await checkSkillInstallationUpdate({ config, installation });
+
+    expect(result.canUpdate).toBe(false);
+    expect(result.reason).toBe('Recorded skill "my-skill" was not found in the update source.');
+    expect(result.preview?.candidates.map((candidate) => candidate.name)).toEqual(["other-skill"]);
+  });
+
+  test("rejects updates when the original skill name is missing from the source", async () => {
+    const config = makeConfig(root);
+    const existingSkillDir = await createSkill(config.skillsDirs[0]!, "my-skill", "Existing skill");
+    const sourceRoot = path.join(root, "incoming");
+    await createSkill(sourceRoot, "other-skill", "Other skill");
+
+    const catalog = await scanSkillCatalog(config.skillsDirs, {
+      includeDisabled: true,
+      adoptManagedWritableInstalls: true,
+    });
+    const installation = {
+      ...catalog.installations[0]!,
+      origin: {
+        kind: "local" as const,
+        sourcePath: sourceRoot,
+      },
+    };
+
+    await expect(updateSkillInstallation({ config, installation })).rejects.toThrow(
+      'Recorded skill "my-skill" was not found in the update source.'
+    );
+    expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain('description: "Existing skill"');
+    await expect(fs.access(path.join(config.skillsDirs[0]!, "other-skill"))).rejects.toBeDefined();
   });
 });

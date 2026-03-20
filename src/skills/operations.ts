@@ -108,6 +108,44 @@ async function refreshCatalog(config: AgentConfig): Promise<SkillCatalogSnapshot
   return await scanSkillCatalog(config.skillsDirs, { includeDisabled: true });
 }
 
+type NamedUpdateCandidate = {
+  name: string;
+  diagnostics: Array<{ message: string }>;
+};
+
+function resolveRecordedUpdateCandidate<T extends NamedUpdateCandidate>(
+  candidates: T[],
+  installationName: string,
+): { candidate: T | null; reason: string | null } {
+  const matchingCandidates = candidates.filter((candidate) => candidate.name === installationName);
+  const validCandidate = matchingCandidates.find((candidate) => candidate.diagnostics.length === 0) ?? null;
+  if (validCandidate) {
+    return { candidate: validCandidate, reason: null };
+  }
+
+  if (matchingCandidates.length === 0) {
+    return {
+      candidate: null,
+      reason: `Recorded skill "${installationName}" was not found in the update source.`,
+    };
+  }
+
+  const diagnosticMessages = [...new Set(
+    matchingCandidates.flatMap((candidate) =>
+      candidate.diagnostics
+        .map((diagnostic) => diagnostic.message.trim())
+        .filter((message) => message.length > 0)
+    )
+  )];
+
+  return {
+    candidate: null,
+    reason: diagnosticMessages.length > 0
+      ? `Recorded skill "${installationName}" exists in the update source but is not a valid skill installation. ${diagnosticMessages.join(" ")}`
+      : `Recorded skill "${installationName}" exists in the update source but is not a valid skill installation.`,
+  };
+}
+
 export async function installSkillsFromSource(opts: {
   config: AgentConfig;
   input: string;
@@ -285,6 +323,16 @@ export async function checkSkillInstallationUpdate(opts: {
     catalog: await refreshCatalog(opts.config),
     cwd: opts.config.workingDirectory,
   });
+  const resolvedCandidate = resolveRecordedUpdateCandidate(preview.candidates, opts.installation.name);
+  if (!resolvedCandidate.candidate) {
+    return {
+      installationId: opts.installation.installationId,
+      canUpdate: false,
+      reason: resolvedCandidate.reason ?? `No valid update candidate was found for "${opts.installation.name}".`,
+      preview,
+    };
+  }
+
   return {
     installationId: opts.installation.installationId,
     canUpdate: true,
@@ -319,11 +367,10 @@ export async function updateSkillInstallation(opts: {
       cwd: opts.config.workingDirectory,
       materialized,
     });
-    const selectedCandidate =
-      materialized.candidates.find((candidate) => candidate.name === opts.installation.name && candidate.diagnostics.length === 0)
-      ?? materialized.candidates.find((candidate) => candidate.diagnostics.length === 0);
+    const resolvedCandidate = resolveRecordedUpdateCandidate(materialized.candidates, opts.installation.name);
+    const selectedCandidate = resolvedCandidate.candidate;
     if (!selectedCandidate) {
-      throw new Error(`No valid update candidate was found for "${opts.installation.name}"`);
+      throw new Error(resolvedCandidate.reason ?? `No valid update candidate was found for "${opts.installation.name}"`);
     }
 
     const destinationBase = opts.installation.enabled ? writableScope.skillsDir : writableScope.disabledSkillsDir;

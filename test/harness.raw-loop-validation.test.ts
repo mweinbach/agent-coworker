@@ -148,7 +148,7 @@ describe("raw-loop validation repair policy", () => {
       },
       repairFinalOutput: async () => {
         repairCalls += 1;
-        return "report: /tmp/report.md\n<<END_RUN>>";
+        return { finalText: "report: /tmp/report.md\n<<END_RUN>>" };
       },
     });
 
@@ -173,7 +173,7 @@ describe("raw-loop validation repair policy", () => {
       },
       repairFinalOutput: async () => {
         repairCalls += 1;
-        return "report: /tmp/report.md\n<<END_RUN>>";
+        return { finalText: "report: /tmp/report.md\n<<END_RUN>>" };
       },
     });
 

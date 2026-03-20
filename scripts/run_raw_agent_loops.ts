@@ -688,8 +688,6 @@ export function createToolsWithTracing(
   skillGuard?: SkillGuardConfig,
   prerequisiteToolGuard?: PrerequisiteToolGuardConfig
 ): Record<string, any> {
-  void steps;
-
   const baseTools = {
     bash: createBashTool(ctx),
     read: createReadTool(ctx),
@@ -2220,13 +2218,15 @@ async function main() {
               }
             );
 
-            const finalizedText = String(finalized.text ?? "");
-            if (finalizedText.trim()) finalText = finalizedText;
-            if (typeof finalized.reasoningText === "string") finalReasoningText = finalized.reasoningText;
-            const moreMsgs = (finalized.responseMessages || []) as ModelMessage[];
-            if (moreMsgs.length > 0) finalResponseMessages = [...finalResponseMessages, ...moreMsgs];
-
-            return finalText;
+            return {
+              finalText: String(finalized.text ?? "").trim() || finalText,
+              data: {
+                reasoningText: typeof finalized.reasoningText === "string"
+                  ? finalized.reasoningText
+                  : finalReasoningText,
+                responseMessages: (finalized.responseMessages || []) as ModelMessage[],
+              },
+            };
           },
         });
         const validationResult = validationOutcome.validationResult;
@@ -2234,6 +2234,15 @@ async function main() {
         attemptRepairSucceeded = validationOutcome.repairSucceeded;
         attemptDegraded = validationOutcome.degraded;
         finalText = validationOutcome.finalText;
+        if (validationOutcome.repairData) {
+          finalReasoningText = validationOutcome.repairData.reasoningText;
+          if (validationOutcome.repairData.responseMessages.length > 0) {
+            finalResponseMessages = [
+              ...finalResponseMessages,
+              ...validationOutcome.repairData.responseMessages,
+            ];
+          }
+        }
         budgetSummary = buildRawLoopBudgetSummary(
           toolLogLines,
           steps,

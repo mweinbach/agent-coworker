@@ -283,15 +283,16 @@ export async function validateFinalContract(opts: {
   };
 }
 
-export async function validateWithOptionalRepair(opts: {
+export async function validateWithOptionalRepair<T = undefined>(opts: {
   finalText: string;
   runDir: string;
   trace: unknown;
   contract?: FinalContract;
   strictMode: boolean;
-  repairFinalOutput?: () => Promise<string>;
+  repairFinalOutput?: () => Promise<{ finalText: string; data?: T }>;
 }): Promise<{
   finalText: string;
+  repairData?: T;
   validationResult: FinalContractValidationResult;
   repairAttempted: boolean;
   repairSucceeded: boolean;
@@ -319,6 +320,7 @@ export async function validateWithOptionalRepair(opts: {
   if (initialValidation.ok || opts.strictMode || !opts.repairFinalOutput) {
     return {
       finalText: opts.finalText,
+      repairData: undefined,
       validationResult: initialValidation,
       repairAttempted: false,
       repairSucceeded: false,
@@ -327,11 +329,15 @@ export async function validateWithOptionalRepair(opts: {
   }
 
   let repairedText: string;
+  let repairData: T | undefined;
   try {
-    repairedText = await opts.repairFinalOutput();
+    const repaired = await opts.repairFinalOutput();
+    repairedText = repaired.finalText;
+    repairData = repaired.data;
   } catch (error) {
     return {
       finalText: opts.finalText,
+      repairData: undefined,
       validationResult: {
         ...initialValidation,
         ok: false,
@@ -369,6 +375,7 @@ export async function validateWithOptionalRepair(opts: {
 
   return {
     finalText: repairedText,
+    repairData,
     validationResult: repairedValidation,
     repairAttempted: true,
     repairSucceeded: repairedValidation.ok,

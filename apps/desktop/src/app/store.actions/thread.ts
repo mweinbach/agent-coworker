@@ -179,6 +179,14 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
     return [...new Set(ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0))];
   };
 
+  const sessionSnapshotIdsForThread = (
+    thread: Pick<ThreadRecord, "sessionId">,
+    runtimeSessionId?: string | null,
+  ): string[] => {
+    const ids = [runtimeSessionId ?? null, thread.sessionId ?? null];
+    return [...new Set(ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0))];
+  };
+
   const readTranscriptEvents = async (
     thread: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
   ): Promise<TranscriptEvent[]> => {
@@ -228,6 +236,13 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
   return {
     removeThread: async (threadId: string) => {
       const thread = get().threads.find((t) => t.id === threadId);
+      const runtimeSessionId = get().threadRuntimeById[threadId]?.sessionId ?? null;
+      const sessionSnapshotIds =
+        thread
+          ? sessionSnapshotIdsForThread(thread, runtimeSessionId)
+          : runtimeSessionId
+            ? [runtimeSessionId]
+            : [];
       const sock = RUNTIME.threadSockets.get(threadId);
       closeThreadSession(threadId);
       RUNTIME.threadSockets.delete(threadId);
@@ -242,6 +257,10 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         sock?.close();
       } catch {
         // ignore
+      }
+
+      for (const sessionId of sessionSnapshotIds) {
+        RUNTIME.sessionSnapshots.delete(sessionId);
       }
   
       set((s) => {
@@ -278,9 +297,6 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       const thread = get().threads.find((t) => t.id === threadId);
       if (!thread) return;
       const targetSessionId = get().threadRuntimeById[threadId]?.sessionId ?? thread.sessionId;
-      if (targetSessionId) {
-        RUNTIME.sessionSnapshots.delete(targetSessionId);
-      }
 
       await get().removeThread(threadId);
 

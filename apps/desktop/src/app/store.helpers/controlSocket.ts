@@ -145,7 +145,7 @@ export function createControlSocketHelpers(
         }
       }
     }
-    const legacyTranscriptThreads = workspaceThreads.filter((thread) => !thread.sessionId);
+    const localOnlyThreads = workspaceThreads.filter((thread) => !thread.sessionId);
     const nextServerThreads = sessions.map((session) => {
       const existing = serverBackedBySessionId.get(session.sessionId);
       const threadId = session.sessionId;
@@ -175,8 +175,8 @@ export function createControlSocketHelpers(
     return [
       ...allThreads.filter((thread) => thread.workspaceId !== workspaceId),
       ...nextServerThreads.sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt)),
-      ...legacyTranscriptThreads
-        .filter((thread) => !claimedLegacyThreadIds.has(thread.id))
+      ...localOnlyThreads
+        .filter((thread) => thread.draft === true || !claimedLegacyThreadIds.has(thread.id))
         .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt)),
     ];
   }

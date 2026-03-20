@@ -36,12 +36,6 @@ Example: `bun run start -- --dir /path/to/project`
 
 Always run tests while doing work, make sure you run these tests.
 
-Before finishing your work, make sure you have run the tests and build the project. This means building the raw harness, the desktop app, the server, and the TUI. 
-
-- 'bun run build:server-binary'
-- 'bun run desktop:build'
-- 'bun run build:desktop-resources'
-
 ## Coding Style & Naming Conventions
 
 - TypeScript is `strict` (see `tsconfig.json`); prefer `async/await` and explicit types at module boundaries.

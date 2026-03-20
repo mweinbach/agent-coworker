@@ -340,6 +340,69 @@ describe("desktop protocol v2 mapping", () => {
     expect(useAppStore.getState().selectedThreadId).toBe("thread-session");
   });
 
+  test("sessions events preserve drafts when a server thread claims the same legacy transcript id", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      threads: [
+        {
+          id: "thread-session",
+          workspaceId,
+          title: "Server Thread",
+          titleSource: "model",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          lastMessageAt: "2024-01-01T00:00:10.000Z",
+          status: "disconnected",
+          sessionId: "thread-session",
+          messageCount: 5,
+          lastEventSeq: 9,
+          legacyTranscriptId: "draft-thread-id",
+          draft: false,
+        },
+        {
+          id: "draft-thread-id",
+          workspaceId,
+          title: "Draft Thread",
+          titleSource: "default",
+          createdAt: "2024-01-01T00:00:05.000Z",
+          lastMessageAt: "2024-01-01T00:00:05.000Z",
+          status: "disconnected",
+          sessionId: null,
+          messageCount: 0,
+          lastEventSeq: 0,
+          draft: true,
+        },
+      ],
+      selectedThreadId: "draft-thread-id",
+    }));
+
+    await useAppStore.getState().selectWorkspace(workspaceId);
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.emit({
+      type: "sessions",
+      sessionId: "control-session",
+      sessions: [
+        {
+          sessionId: "thread-session",
+          title: "Server Thread",
+          titleSource: "model",
+          titleModel: "gpt-5.2",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          updatedAt: "2024-01-01T00:00:10.000Z",
+          messageCount: 5,
+          lastEventSeq: 9,
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+        },
+      ],
+    });
+
+    const threads = useAppStore.getState().threads;
+    expect(threads.find((thread) => thread.id === "draft-thread-id")?.draft).toBe(true);
+    expect(threads.find((thread) => thread.id === "thread-session")?.legacyTranscriptId).toBe("draft-thread-id");
+    expect(useAppStore.getState().selectedThreadId).toBe("draft-thread-id");
+  });
+
   test("draft threads stay local until the first message promotes them into a real session", async () => {
     await useAppStore.getState().newThread();
     const draftThreadId = useAppStore.getState().selectedThreadId!;
@@ -1828,6 +1891,67 @@ describe("desktop protocol v2 mapping", () => {
     expect(
       threadSocket.sent.some((msg) => msg?.type === "session_close" && msg?.sessionId === "thread-session")
     ).toBe(true);
+  });
+
+  test("removeThread purges cached session snapshots from desktop state cache", async () => {
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
+    const initialThreadId = useAppStore.getState().selectedThreadId;
+    if (!initialThreadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+    const threadId = canonicalThreadId("thread-session", initialThreadId);
+    RUNTIME.sessionSnapshots.set("thread-session", {
+      fingerprint: {
+        updatedAt: "2024-01-01T00:00:02.000Z",
+        messageCount: 2,
+        lastEventSeq: 4,
+      },
+      snapshot: {
+        sessionId: "thread-session",
+        title: "Cached Thread",
+        titleSource: "model",
+        titleModel: "gpt-5.2",
+        provider: "openai",
+        model: "gpt-5.2",
+        sessionKind: "root",
+        parentSessionId: null,
+        role: null,
+        mode: null,
+        depth: 0,
+        nickname: null,
+        requestedModel: "gpt-5.2",
+        effectiveModel: "gpt-5.2",
+        requestedReasoningEffort: null,
+        effectiveReasoningEffort: null,
+        executionState: null,
+        lastMessagePreview: "Hello from cache",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:02.000Z",
+        messageCount: 2,
+        lastEventSeq: 4,
+        feed: [],
+        agents: [],
+        todos: [],
+        sessionUsage: null,
+        lastTurnUsage: null,
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+      },
+    });
+    threadSocket.sent = [];
+
+    await useAppStore.getState().removeThread(threadId);
+
+    expect(
+      threadSocket.sent.some((msg) => msg?.type === "session_close" && msg?.sessionId === "thread-session")
+    ).toBe(true);
+    expect(RUNTIME.sessionSnapshots.has("thread-session")).toBe(false);
+    const cachedState = localStorageMock.getItem(DESKTOP_STATE_CACHE_KEY);
+    expect(cachedState).not.toBeNull();
+    expect(JSON.parse(cachedState!).sessionSnapshots?.["thread-session"]).toBeUndefined();
   });
 
   test("deleteThreadHistory sends delete_session via control socket after closing thread session", async () => {

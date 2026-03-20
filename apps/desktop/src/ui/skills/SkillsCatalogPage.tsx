@@ -12,6 +12,8 @@ export function SkillsCatalogPage({ workspaceId }: { workspaceId: string }) {
 
   const rt = wsRtById[workspaceId];
   const catalog = rt?.skillsCatalog ?? null;
+  const skillCatalogLoading = rt?.skillCatalogLoading ?? false;
+  const showLoadingState = skillCatalogLoading && catalog === null;
   
   const installations = useMemo(() => {
     let items = [...(catalog?.installations ?? [])];
@@ -70,7 +72,14 @@ export function SkillsCatalogPage({ workspaceId }: { workspaceId: string }) {
             </section>
           )}
           
-          {installations.length === 0 && (
+          {showLoadingState && (
+            <div className="flex flex-col items-center justify-center py-12 text-center border border-dashed border-border/50 rounded-xl bg-muted/10">
+              <div className="text-lg font-medium mb-1">Loading...</div>
+              <div className="text-sm text-muted-foreground">Fetching skills catalog.</div>
+            </div>
+          )}
+
+          {!showLoadingState && installations.length === 0 && (
             <div className="flex flex-col items-center justify-center py-12 text-center border border-dashed border-border/50 rounded-xl bg-muted/10">
               <div className="text-lg font-medium mb-1">No skills found</div>
               <div className="text-sm text-muted-foreground">

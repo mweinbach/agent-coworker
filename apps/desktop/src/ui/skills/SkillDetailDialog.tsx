@@ -3,7 +3,7 @@ import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../components/ui/dialog";
-import { openPath } from "../../lib/desktopCommands";
+import { revealPath } from "../../lib/desktopCommands";
 import { actionPending, normalizeDisplayContent, scopeLabel, skillSourceLabel, stateTone, SkillIcon } from "./utils";
 import { ExternalLinkIcon } from "lucide-react";
 
@@ -90,7 +90,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                         onClick={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
-                          void openPath({ path: selectedInstallation.rootDir });
+                          void revealPath({ path: selectedInstallation.rootDir });
                         }}
                       >
                         <span className="flex items-center gap-1">

@@ -96,6 +96,10 @@ export class SkillManager {
   }
 
   private async withSkillMutationLock<T>(task: () => Promise<T>): Promise<T | void> {
+    if (this.context.state.running) {
+      this.context.emitError("busy", "session", "Agent is busy");
+      return;
+    }
     const reason = this.mutationBlockReason;
     if (reason) {
       this.context.emitError("busy", "session", reason);

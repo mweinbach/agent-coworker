@@ -426,6 +426,57 @@ describe("control socket skill error recovery", () => {
   });
 });
 
+describe("control socket skill catalog loading", () => {
+  const workspaceId = "ws-skill-loading";
+
+  beforeEach(() => {
+    MOCK_SOCKETS.length = 0;
+    RUNTIME.controlSockets.clear();
+    RUNTIME.skillInstallWaiters.clear();
+    RUNTIME.sessionSnapshots.clear();
+    persistCalls = 0;
+  });
+
+  test("server_hello restores the loading state for an open skills view", () => {
+    const state = {
+      selectedWorkspaceId: workspaceId,
+      threads: [],
+      selectedThreadId: null,
+      threadRuntimeById: {},
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          skillCatalogError: "stale error",
+        },
+      },
+      workspaces: [],
+      notifications: [],
+      providerStatusRefreshing: false,
+      providerLastAuthChallenge: null,
+      view: "skills",
+    } as any;
+    const get = () => state;
+    const set = (updater: any) => {
+      const patch = typeof updater === "function" ? updater(state) : updater;
+      Object.assign(state, patch);
+    };
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+
+    expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(true);
+    expect(state.workspaceRuntimeById[workspaceId].skillCatalogError).toBeNull();
+    expect(controlSocket.sent).toContainEqual({
+      type: "skills_catalog_get",
+      sessionId: "control-session",
+    });
+  });
+});
+
 describe("control socket skill detail events", () => {
   const workspaceId = "ws-skill-events";
 

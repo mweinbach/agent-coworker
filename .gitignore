@@ -36,3 +36,4 @@ uploads/
 *~
 __pycache__/
 /native
+tasks/todo.md

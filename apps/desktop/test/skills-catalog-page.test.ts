@@ -80,10 +80,6 @@ mock.module("../src/ui/skills/InstallationCardGrid", () => ({
     createElement("div", null, `grid:${installations.length}`),
 }));
 
-mock.module("../src/ui/skills/SkillDetailDialog", () => ({
-  SkillDetailDialog: () => null,
-}));
-
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
 const { SkillsCatalogPage } = await import("../src/ui/skills/SkillsCatalogPage");

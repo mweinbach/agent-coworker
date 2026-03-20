@@ -18,6 +18,7 @@ export type ParsedGitHubSource = {
   repo: string;
   ref?: string;
   subdir?: string;
+  refPath?: string;
   url: string;
 };
 
@@ -187,7 +188,8 @@ export function parseGitHubUrl(raw: string): ParsedGitHubSource | null {
     if (segments.length < 4) {
       return null;
     }
-    const [owner, repo, ref, ...filePathSegments] = segments;
+    const [owner, repo, ...refPathSegments] = segments;
+    const [ref, ...filePathSegments] = refPathSegments;
     const filePath = filePathSegments.join("/");
     const subdir = path.posix.dirname(filePath);
     return {
@@ -195,6 +197,7 @@ export function parseGitHubUrl(raw: string): ParsedGitHubSource | null {
       repo: normalizeRepo(`${owner}/${repo}`),
       ref,
       subdir: subdir === "." ? undefined : subdir,
+      refPath: refPathSegments.join("/") || undefined,
       url: parsedUrl.toString(),
     };
   }
@@ -208,7 +211,7 @@ export function parseGitHubUrl(raw: string): ParsedGitHubSource | null {
     return null;
   }
 
-  const [owner, repo, kind, ref, ...rest] = segments;
+  const [owner, repo, kind, ...tail] = segments;
   const normalizedRepo = normalizeRepo(`${owner}/${repo}`);
 
   if (!kind) {
@@ -220,16 +223,19 @@ export function parseGitHubUrl(raw: string): ParsedGitHubSource | null {
   }
 
   if (kind === "tree") {
+    const [ref, ...rest] = tail;
     return {
       kind: "tree",
       repo: normalizedRepo,
       ref,
       subdir: rest.join("/") || undefined,
+      refPath: tail.join("/") || undefined,
       url: parsedUrl.toString(),
     };
   }
 
   if (kind === "blob") {
+    const [ref, ...rest] = tail;
     const filePath = rest.join("/");
     const subdir = filePath ? path.posix.dirname(filePath) : undefined;
     return {
@@ -237,6 +243,7 @@ export function parseGitHubUrl(raw: string): ParsedGitHubSource | null {
       repo: normalizedRepo,
       ref,
       subdir: subdir && subdir !== "." ? subdir : undefined,
+      refPath: tail.join("/") || undefined,
       url: parsedUrl.toString(),
     };
   }

@@ -324,6 +324,7 @@ export interface SkillSourceDescriptor {
   repo?: string;
   ref?: string;
   subdir?: string;
+  refPath?: string;
   localPath?: string;
   requestedSkillName?: string;
 }

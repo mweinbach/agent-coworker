@@ -329,12 +329,24 @@ export function createControlSocketHelpers(
             }),
             workspaceRuntimeById: {
               ...s.workspaceRuntimeById,
-              [workspaceId]: {
-                ...s.workspaceRuntimeById[workspaceId],
-                controlSessionId: evt.sessionId,
-                controlConfig: evt.config,
-                controlSessionConfig: null,
-              },
+              [workspaceId]: (() => {
+                const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
+                const shouldShowSkillCatalogLoading =
+                  s.view === "skills"
+                  && workspaceRuntime?.skillsCatalog === null;
+                return {
+                  ...workspaceRuntime,
+                  controlSessionId: evt.sessionId,
+                  controlConfig: evt.config,
+                  controlSessionConfig: null,
+                  ...(shouldShowSkillCatalogLoading
+                    ? {
+                        skillCatalogLoading: true,
+                        skillCatalogError: null,
+                      }
+                    : {}),
+                };
+              })(),
             },
             providerStatusRefreshing: true,
             providerLastAuthChallenge: null,

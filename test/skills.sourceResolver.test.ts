@@ -20,6 +20,43 @@ const emptyCatalog: SkillCatalogSnapshot = {
   installations: [],
 };
 
+function createGitHubSkillFetch(expectedApiUrl: string) {
+  const downloadUrl = "https://downloads.example/commit/SKILL.md";
+  const requests: string[] = [];
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    requests.push(url);
+
+    if (url === expectedApiUrl) {
+      return new Response(JSON.stringify([
+        {
+          type: "file",
+          name: "SKILL.md",
+          path: "skills/commit/SKILL.md",
+          url: `${expectedApiUrl}/SKILL.md`,
+          download_url: downloadUrl,
+        },
+      ]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    if (url === downloadUrl) {
+      return new Response(skillDoc("commit", "Commit skill."), { status: 200 });
+    }
+
+    return new Response(`Unexpected URL: ${url}`, { status: 404 });
+  }) as typeof fetch;
+
+  return { fetchImpl, requests };
+}
+
 describe("resolveSkillSource", () => {
   test("parses skills.sh URLs", () => {
     const resolved = resolveSkillSource("https://skills.sh/openai/skills/imagegen");
@@ -88,5 +125,43 @@ describe("local source materialization and preview", () => {
     expect(preview.candidates).toHaveLength(1);
     expect(preview.candidates[0]?.name).toBe("alpha");
     expect(preview.candidates[0]?.wouldBeEffective).toBe(true);
+  });
+});
+
+describe("GitHub source materialization", () => {
+  test("materializes tree URLs with slash-containing refs", async () => {
+    const expectedApiUrl = "https://api.github.com/repos/openai/skills/contents/skills/commit?ref=feature%2Fbranch";
+    const { fetchImpl, requests } = createGitHubSkillFetch(expectedApiUrl);
+
+    const preview = await buildSkillInstallPreview({
+      input: "https://github.com/openai/skills/tree/feature/branch/skills/commit",
+      targetScope: "project",
+      catalog: emptyCatalog,
+      fetchImpl,
+    });
+
+    expect(preview.source.kind).toBe("github_tree");
+    expect(preview.source.ref).toBe("feature/branch");
+    expect(preview.source.subdir).toBe("skills/commit");
+    expect(preview.candidates.map((candidate) => candidate.name)).toEqual(["commit"]);
+    expect(requests).toContain(expectedApiUrl);
+  });
+
+  test("materializes blob URLs with slash-containing refs", async () => {
+    const expectedApiUrl = "https://api.github.com/repos/openai/skills/contents/skills/commit?ref=feature%2Fbranch";
+    const { fetchImpl, requests } = createGitHubSkillFetch(expectedApiUrl);
+
+    const preview = await buildSkillInstallPreview({
+      input: "https://github.com/openai/skills/blob/feature/branch/skills/commit/SKILL.md",
+      targetScope: "project",
+      catalog: emptyCatalog,
+      fetchImpl,
+    });
+
+    expect(preview.source.kind).toBe("github_blob");
+    expect(preview.source.ref).toBe("feature/branch");
+    expect(preview.source.subdir).toBe("skills/commit");
+    expect(preview.candidates.map((candidate) => candidate.name)).toEqual(["commit"]);
+    expect(requests).toContain(expectedApiUrl);
   });
 });

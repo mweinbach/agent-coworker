@@ -59,7 +59,12 @@ function mapLiveTopLevelSessionSummary(liveSnapshot: SessionSnapshot | null): Pe
 function shouldIncludeTopLevelSessionSummary(
   session: PersistedSessionSummary,
   liveSnapshot: SessionSnapshot | null,
+  requesterSessionId: string,
 ): boolean {
+  if (session.sessionId === requesterSessionId) {
+    return true;
+  }
+
   if (
     liveSnapshot?.sessionKind === "root"
     && (
@@ -135,16 +140,20 @@ export class SessionAdminManager {
       });
       let sessions = liveSessions
         .map(({ summary, liveSnapshot }) =>
-          shouldIncludeTopLevelSessionSummary(summary, liveSnapshot)
+          shouldIncludeTopLevelSessionSummary(summary, liveSnapshot, this.context.id)
             ? summary
             : null,
         )
         .filter((session): session is PersistedSessionSummary => session !== null);
+      const activeLiveSession = mapLiveTopLevelSessionSummary(
+        this.context.deps.getLiveSessionSnapshotImpl?.(this.context.id) ?? null,
+      );
+
+      if (activeLiveSession && !sessions.some((session) => session.sessionId === activeLiveSession.sessionId)) {
+        sessions = [activeLiveSession, ...sessions];
+      }
 
       if (sessions.length === 0) {
-        const activeLiveSession = mapLiveTopLevelSessionSummary(
-          this.context.deps.getLiveSessionSnapshotImpl?.(this.context.id) ?? null,
-        );
         if (activeLiveSession) {
           sessions = [activeLiveSession];
         }

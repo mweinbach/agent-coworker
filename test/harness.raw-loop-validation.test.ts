@@ -183,6 +183,31 @@ describe("raw-loop validation repair policy", () => {
     expect(result.degraded).toBe(true);
     expect(repairCalls).toBe(1);
   });
+
+  test("non-strict mode records repair attempt when the repair pass itself fails", async () => {
+    const result = await validateWithOptionalRepair({
+      finalText: "report: /tmp/report.md",
+      runDir: "/tmp/run",
+      trace: {},
+      strictMode: false,
+      contract: {
+        format: "line_pairs",
+        schema: z.object({
+          report: z.string(),
+          end: z.literal("<<END_RUN>>"),
+        }).strict(),
+      },
+      repairFinalOutput: async () => {
+        throw new Error("provider unavailable");
+      },
+    });
+
+    expect(result.validationResult.ok).toBe(false);
+    expect(result.repairAttempted).toBe(true);
+    expect(result.repairSucceeded).toBe(false);
+    expect(result.degraded).toBe(true);
+    expect(result.validationResult.issues.some((entry) => entry.code === "repair_failed")).toBe(true);
+  });
 });
 
 describe("raw-loop budget summaries", () => {

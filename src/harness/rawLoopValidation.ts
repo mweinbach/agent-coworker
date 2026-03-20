@@ -326,7 +326,28 @@ export async function validateWithOptionalRepair(opts: {
     };
   }
 
-  const repairedText = await opts.repairFinalOutput();
+  let repairedText: string;
+  try {
+    repairedText = await opts.repairFinalOutput();
+  } catch (error) {
+    return {
+      finalText: opts.finalText,
+      validationResult: {
+        ...initialValidation,
+        ok: false,
+        issues: [
+          ...initialValidation.issues,
+          {
+            code: "repair_failed",
+            message: `Repair pass failed: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+      },
+      repairAttempted: true,
+      repairSucceeded: false,
+      degraded: true,
+    };
+  }
   const repairedValidation = opts.contract
     ? await validateFinalContract({
         finalText: repairedText,

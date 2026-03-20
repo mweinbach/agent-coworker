@@ -1,4 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -6,6 +8,7 @@ import {
   buildRawLoopBudgetSummary,
   buildGoogleCustomtoolsToolCoverageRuns,
   buildMixedRuns,
+  createToolsWithTracing,
   createRawLoopAgentControl,
 } from "../scripts/run_raw_agent_loops";
 import type { ModelMessage } from "../src/types";
@@ -428,5 +431,44 @@ describe("raw loop harness context", () => {
       totalSteps: 4,
       repairPassCount: 1,
     });
+  });
+
+  test("createToolsWithTracing preserves skill tracing when the skill guard is active", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "raw-loop-skill-trace-"));
+    const skillDir = path.join(tmp, "skills", "spreadsheet");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      ['---', 'name: "spreadsheet"', 'description: "Spreadsheet skill"', '---', '', '# Spreadsheet'].join("\n"),
+      "utf-8",
+    );
+
+    const steps: Array<{ scope: string; step: unknown }> = [];
+    const tools = createToolsWithTracing(
+      {
+        config: makeConfig({
+          skillsDirs: [path.join(tmp, "skills")],
+          projectAgentDir: path.join(tmp, ".agent"),
+          userAgentDir: path.join(tmp, ".agent-user"),
+        }),
+        log: () => {},
+        askUser: async () => "",
+        approveCommand: async () => true,
+        availableSkills: [{ name: "spreadsheet", description: "Spreadsheet skill" }],
+      } as any,
+      steps as any,
+      {
+        requiredSkillName: "spreadsheet",
+        guardedToolNames: ["write"],
+      },
+    );
+
+    const skillTool: any = tools.skill;
+    const result = await skillTool.execute({ skillName: "spreadsheet" });
+
+    expect(String(result)).toContain("# Spreadsheet");
+    expect(steps).toHaveLength(2);
+    expect((steps[0] as any).step).toMatchObject({ type: "tool-call", toolName: "skill" });
+    expect((steps[1] as any).step).toMatchObject({ type: "tool-result", toolName: "skill" });
   });
 });

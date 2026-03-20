@@ -682,7 +682,7 @@ export function createRawLoopAgentControl(
   };
 }
 
-function createToolsWithTracing(
+export function createToolsWithTracing(
   ctx: ToolContext,
   steps: TracedStep[],
   skillGuard?: SkillGuardConfig,
@@ -735,7 +735,7 @@ function createToolsWithTracing(
     const guarded = new Set(skillGuard.guardedToolNames);
 
     wrapped.skill = withExecuteGuard(
-      baseTools.skill,
+      wrapped.skill,
       () => false,
       "",
       (input) => {

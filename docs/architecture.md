@@ -339,5 +339,5 @@ Write operations are restricted to:
 
 - [WebSocket Protocol Reference](websocket-protocol.md) — Full message contract
 - [Session Storage Architecture](session-storage-architecture.md) — Persistence details
-- [Configuration Guide](configuration.md) — All config options
-- [Tools Reference](tools-reference.md) — Tool documentation
+- [Harness Config Guide](harness/config.md) — Config precedence and harness/runtime flags
+- [Custom Tools Guide](custom-tools.md) — Tool extension and customization reference

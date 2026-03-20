@@ -48,6 +48,10 @@ describe("docs checker parity", () => {
     ]);
   });
 
+  test("extractInlineRepoPaths ignores non-path inline code", () => {
+    expect(extractInlineRepoPaths("Use `bun test`, `camelCase`, and `ServerEvent` in prose.")).toEqual([]);
+  });
+
   test("collectRepoPathReferences merges markdown links and inline repo paths", () => {
     expect(collectRepoPathReferences(
       "See [Protocol](docs/websocket-protocol.md), `src/server/startServer/dispatchClientMessage.ts`, and [README](README.md).",
@@ -55,6 +59,14 @@ describe("docs checker parity", () => {
       "docs/websocket-protocol.md",
       "README.md",
       "src/server/startServer/dispatchClientMessage.ts",
+    ]);
+  });
+
+  test("collectRepoPathReferences keeps plain relative markdown doc links", () => {
+    expect(collectRepoPathReferences(
+      "See [Protocol](websocket-protocol.md) from this doc.",
+    )).toEqual([
+      "websocket-protocol.md",
     ]);
   });
 });

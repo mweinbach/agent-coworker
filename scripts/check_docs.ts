@@ -69,7 +69,21 @@ function normalizeDocReference(reference: string): string {
   return reference.replace(/[#?].*$/, "").trim();
 }
 
-function looksLikeRepoPath(reference: string): boolean {
+function isPlainRelativeDocLink(reference: string): boolean {
+  const normalized = normalizeDocReference(reference);
+  if (!normalized || normalized.includes(" ")) return false;
+  if (normalized.startsWith("http://") || normalized.startsWith("https://") || normalized.startsWith("mailto:")) {
+    return false;
+  }
+  if (normalized.startsWith("./") || normalized.startsWith("../")) return false;
+  if (normalized.startsWith("~")) return false;
+  if (normalized.startsWith(".")) return false;
+  if (TOP_LEVEL_DOCS.includes(normalized)) return false;
+  if (REPO_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return false;
+  return /\.md$/i.test(normalized);
+}
+
+function looksLikeInlineRepoPath(reference: string): boolean {
   const normalized = normalizeDocReference(reference);
   if (!normalized || normalized.startsWith("http://") || normalized.startsWith("https://") || normalized.startsWith("mailto:")) {
     return false;
@@ -91,21 +105,25 @@ function looksLikeRepoPath(reference: string): boolean {
   return REPO_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
+function looksLikeMarkdownRepoPath(reference: string): boolean {
+  return looksLikeInlineRepoPath(reference) || isPlainRelativeDocLink(reference);
+}
+
 export function extractMarkdownLinks(text: string): string[] {
   return Array.from(text.matchAll(/\[[^\]]+\]\(([^)]+)\)/g))
     .map((match) => match[1]?.trim() ?? "")
-    .filter(Boolean);
+    .filter((value) => value.length > 0 && looksLikeMarkdownRepoPath(value));
 }
 
 export function extractInlineRepoPaths(text: string): string[] {
   return Array.from(text.matchAll(/`([^`\n]+)`/g))
     .map((match) => match[1]?.trim() ?? "")
-    .filter((value) => looksLikeRepoPath(value));
+    .filter((value) => looksLikeInlineRepoPath(value));
 }
 
 export function collectRepoPathReferences(text: string): string[] {
   return [...new Set([
-    ...extractMarkdownLinks(text).filter((reference) => looksLikeRepoPath(reference)),
+    ...extractMarkdownLinks(text),
     ...extractInlineRepoPaths(text),
   ])];
 }
@@ -121,7 +139,9 @@ async function validateReferencedPaths(
 
   for (const reference of references) {
     const normalized = normalizeDocReference(reference);
-    const resolved = normalized.startsWith("./") || normalized.startsWith("../")
+    const resolved = isPlainRelativeDocLink(normalized)
+      ? path.resolve(docDir, normalized)
+      : normalized.startsWith("./") || normalized.startsWith("../")
       ? path.resolve(docDir, normalized)
       : path.resolve(cwd, normalized);
     if (!(await pathExists(resolved))) {

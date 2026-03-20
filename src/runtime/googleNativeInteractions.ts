@@ -344,12 +344,17 @@ function turnFromToolMessage(message: ModelMessage): InteractionTurn | null {
       return multimodalPart ? [multimodalPart] : [];
     });
 
+    // Keep text + image/audio/video/document inside `function_result.result`, matching the
+    // Interactions schema for rich tool results. Do not emit binary parts as siblings of
+    // `function_result` (e.g. text-only `result` + top-level `document`) — the API rejects that.
+    const combinedResultParts = [...resultParts, ...extraMultimodalParts];
+    const firstPart = combinedResultParts[0];
     const result =
-      resultParts.length === 1 && resultParts[0]?.type === "text"
-        ? resultParts[0].text
-        : resultParts.length > 0
-          ? resultParts
-          : safeJsonStringify(record.output ?? record.content);
+      combinedResultParts.length === 0
+        ? safeJsonStringify(record.output ?? record.content)
+        : combinedResultParts.length === 1 && firstPart?.type === "text"
+          ? firstPart.text
+          : combinedResultParts;
     const signature = getGoogleThoughtSignature(record);
 
     parts.push({
@@ -360,9 +365,6 @@ function turnFromToolMessage(message: ModelMessage): InteractionTurn | null {
       ...(toolName ? { name: toolName } : {}),
       ...(signature ? { signature } : {}),
     });
-    if (extraMultimodalParts.length > 0) {
-      parts.push(...extraMultimodalParts);
-    }
   }
 
   return parts.length > 0 ? { role: "user", content: parts } : null;

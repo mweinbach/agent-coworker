@@ -1033,13 +1033,11 @@ describe("google native interactions request building", () => {
             type: "function_result",
             call_id: "call_pdf",
             name: "read",
-            result: "PDF file: sample.pdf",
+            result: [
+              { type: "text", text: "PDF file: sample.pdf" },
+              { type: "document", data: "pdf64", mime_type: "application/pdf" },
+            ],
             is_error: false,
-          },
-          {
-            type: "document",
-            data: "pdf64",
-            mime_type: "application/pdf",
           },
         ],
       },

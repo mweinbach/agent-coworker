@@ -25,8 +25,22 @@ function toResolvedStaticModel(provider: ProviderName, modelId: string, source =
   };
 }
 
-export function isDynamicModelProvider(provider: ProviderName): provider is "lmstudio" {
-  return provider === "lmstudio";
+function toResolvedDynamicModel(provider: ProviderName, modelId: string): ResolvedModelMetadata {
+  const fallback = defaultSupportedModel(provider);
+  return {
+    id: modelId,
+    provider,
+    displayName: modelId,
+    knowledgeCutoff: fallback.knowledgeCutoff,
+    supportsImageInput: fallback.supportsImageInput,
+    promptTemplate: fallback.promptTemplate,
+    providerOptionsDefaults: { ...fallback.providerOptionsDefaults },
+    source: "dynamic",
+  };
+}
+
+export function isDynamicModelProvider(provider: ProviderName): provider is "lmstudio" | "aws-bedrock-proxy" {
+  return provider === "lmstudio" || provider === "aws-bedrock-proxy";
 }
 
 export function normalizeModelIdForProvider(
@@ -38,7 +52,7 @@ export function normalizeModelIdForProvider(
   if (!trimmed) {
     throw new Error(`${source} is required.`);
   }
-  if (provider === "lmstudio") {
+  if (isDynamicModelProvider(provider)) {
     return trimmed;
   }
   return assertSupportedModel(provider, trimmed, source).id;
@@ -51,6 +65,9 @@ export function getResolvedModelMetadataSync(
 ): ResolvedModelMetadata {
   if (provider === "lmstudio") {
     return buildLmStudioPlaceholderMetadata(normalizeModelIdForProvider(provider, modelId, source));
+  }
+  if (provider === "aws-bedrock-proxy") {
+    return toResolvedDynamicModel(provider, normalizeModelIdForProvider(provider, modelId, source));
   }
   return toResolvedStaticModel(provider, modelId, source);
 }
@@ -67,6 +84,9 @@ export async function resolveModelMetadata(
     log?: (line: string) => void;
   } = {},
 ): Promise<ResolvedModelMetadata> {
+  if (provider === "aws-bedrock-proxy") {
+    return toResolvedDynamicModel(provider, normalizeModelIdForProvider(provider, modelId, opts.source));
+  }
   if (provider !== "lmstudio") {
     return toResolvedStaticModel(provider, modelId, opts.source);
   }
@@ -120,6 +140,9 @@ export function getKnownResolvedModelMetadata(
 ): ResolvedModelMetadata | null {
   if (provider === "lmstudio") {
     return buildLmStudioPlaceholderMetadata(modelId);
+  }
+  if (provider === "aws-bedrock-proxy") {
+    return toResolvedDynamicModel(provider, modelId);
   }
   const model = getSupportedModel(provider, modelId);
   if (!model) return null;

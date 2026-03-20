@@ -21,6 +21,7 @@ import { defaultSupportedModel, getSupportedModel } from "./models/registry";
 import { normalizeChildRoutingConfig } from "./models/childModelRouting";
 import {
   getResolvedModelMetadataSync,
+  isDynamicModelProvider,
   normalizeModelIdForProvider,
   resolveDefaultModelMetadata,
   resolveModelMetadata,
@@ -117,9 +118,9 @@ async function resolveConfiguredModelMetadata(
   providerOptions: Record<string, unknown> | undefined,
   env: Record<string, string | undefined>,
 ) {
-  if (provider === "lmstudio") {
+  if (isDynamicModelProvider(provider)) {
     return await resolveModelMetadata(provider, modelId, {
-      allowPlaceholder: true,
+      allowPlaceholder: provider === "lmstudio",
       providerOptions,
       env,
       source,
@@ -340,6 +341,13 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const providerOptions = isPlainObject((merged as Record<string, unknown>).providerOptions)
     ? (deepMerge({}, (merged as Record<string, unknown>).providerOptions as Record<string, unknown>) as Record<string, unknown>)
     : undefined;
+  if (providerOptions) {
+    const legacyAwsOptions = providerOptions["openai-proxy"];
+    if (legacyAwsOptions !== undefined && providerOptions["aws-bedrock-proxy"] === undefined) {
+      providerOptions["aws-bedrock-proxy"] = legacyAwsOptions;
+    }
+    delete providerOptions["openai-proxy"];
+  }
 
   const configuredModel =
     asNonEmptyString(env.AGENT_MODEL) ||

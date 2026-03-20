@@ -12,6 +12,7 @@ describe("PROVIDER_NAMES", () => {
   test("contains expected provider names", () => {
     expect(PROVIDER_NAMES).toContain("google");
     expect(PROVIDER_NAMES).toContain("openai");
+    expect(PROVIDER_NAMES).toContain("aws-bedrock-proxy");
     expect(PROVIDER_NAMES).toContain("anthropic");
     expect(PROVIDER_NAMES).toContain("baseten");
     expect(PROVIDER_NAMES).toContain("together");
@@ -28,6 +29,7 @@ describe("resolveProviderName", () => {
   test("returns exact provider names", () => {
     expect(resolveProviderName("google")).toBe("google");
     expect(resolveProviderName("openai")).toBe("openai");
+    expect(resolveProviderName("aws-bedrock-proxy")).toBe("aws-bedrock-proxy");
     expect(resolveProviderName("anthropic")).toBe("anthropic");
     expect(resolveProviderName("baseten")).toBe("baseten");
     expect(resolveProviderName("together")).toBe("together");
@@ -57,6 +59,10 @@ describe("isProviderName", () => {
 
     test("openai", () => {
       expect(isProviderName("openai")).toBe(true);
+    });
+
+    test("aws-bedrock-proxy", () => {
+      expect(isProviderName("aws-bedrock-proxy")).toBe(true);
     });
 
     test("anthropic", () => {

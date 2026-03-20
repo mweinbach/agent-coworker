@@ -7,7 +7,7 @@ import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import { getProviderCatalog } from "../../providers/connectionCatalog";
 import { getProviderStatuses } from "../../providerStatus";
 import { defaultSupportedModel, getSupportedModel } from "../../models/registry";
-import { getKnownResolvedModelMetadata, isDynamicModelProvider } from "../../models/metadata";
+import { isDynamicModelProvider } from "../../models/metadata";
 import { MemoryStore, type MemoryScope } from "../../memoryStore";
 import type {
   AgentConfig,
@@ -581,14 +581,16 @@ export class AgentSession {
     initialSessionSnapshot?: SessionSnapshot | null;
   }): AgentSession {
     const { persisted } = opts;
-    const resolvedPersistedModel = getKnownResolvedModelMetadata(persisted.provider, persisted.model);
-    const resumedModel = resolvedPersistedModel ?? defaultSupportedModel(persisted.provider);
-    const migratedLegacyModel = resolvedPersistedModel === null && !isDynamicModelProvider(persisted.provider);
+    const dynamicProvider = isDynamicModelProvider(persisted.provider);
+    const supportedPersistedModel = dynamicProvider ? null : getSupportedModel(persisted.provider, persisted.model);
+    const resumedModel = supportedPersistedModel ?? defaultSupportedModel(persisted.provider);
+    const resumedModelId = dynamicProvider ? persisted.model : resumedModel.id;
+    const migratedLegacyModel = !dynamicProvider && supportedPersistedModel === null;
     const clearedContinuationState = migratedLegacyModel && persisted.providerState !== null;
     const config: AgentConfig = {
       ...opts.baseConfig,
       provider: persisted.provider,
-      model: resumedModel.id,
+      model: resumedModelId,
       workingDirectory: persisted.workingDirectory,
       enableMcp: persisted.enableMcp,
       outputDirectory: persisted.outputDirectory,
@@ -603,7 +605,7 @@ export class AgentSession {
       createdAt: persisted.createdAt,
       updatedAt: persisted.updatedAt,
       provider: persisted.provider,
-      model: resumedModel.id,
+      model: resumedModelId,
       sessionKind: persisted.sessionKind,
       ...(persisted.parentSessionId ? { parentSessionId: persisted.parentSessionId } : {}),
       ...(persisted.role ? { role: persisted.role } : {}),

@@ -46,7 +46,7 @@ function joinToolResultText(parts: PiToolResultContentPart[]): string {
 
 function serializeToolOutputForSpill(output: unknown): string | null {
   const content = toolResultContentFromOutput(output);
-  if (content.some((part) => part.type === "image")) return null;
+  if (content.some((part) => part.type !== "text")) return null;
 
   if (typeof output === "string") return output;
   if (typeof output === "number" || typeof output === "boolean" || typeof output === "bigint") {
@@ -132,7 +132,7 @@ export async function maybeSpillToolOutputToWorkspace(opts: {
   if (isToolOutputOverflowExempt(opts.toolName)) return null;
 
   const content = toolResultContentFromOutput(opts.output);
-  if (content.some((part) => part.type === "image")) return null;
+  if (content.some((part) => part.type !== "text")) return null;
 
   const inlineText = joinToolResultText(content);
   if (inlineText.length <= threshold) return null;

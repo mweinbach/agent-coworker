@@ -1003,6 +1003,49 @@ describe("google native interactions request building", () => {
     ]);
   });
 
+  test("convertMessagesToInteractionsInput forwards read-tool PDFs as Gemini document content", () => {
+    const input = googleNativeInternal.convertMessagesToInteractionsInput([
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call_pdf",
+            toolName: "read",
+            output: {
+              type: "content",
+              content: [
+                { type: "text", text: "PDF file: sample.pdf" },
+                { type: "document", data: "pdf64", mimeType: "application/pdf" },
+              ],
+            },
+            isError: false,
+          },
+        ],
+      },
+    ] as ModelMessage[]);
+
+    expect(input).toEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "function_result",
+            call_id: "call_pdf",
+            name: "read",
+            result: "PDF file: sample.pdf",
+            is_error: false,
+          },
+          {
+            type: "document",
+            data: "pdf64",
+            mime_type: "application/pdf",
+          },
+        ],
+      },
+    ]);
+  });
+
   test("convertToolsToInteractionsTools maps to function type", () => {
     const tools = googleNativeInternal.convertToolsToInteractionsTools([
       { name: "readFile", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } } } },

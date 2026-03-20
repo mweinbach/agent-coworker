@@ -220,6 +220,60 @@ describe("read tool", () => {
       ],
     });
   });
+
+  test("returns multimodal content for supported PDF files", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "sample.pdf");
+    const pdfBase64 = Buffer.from("%PDF-test").toString("base64");
+    await fs.writeFile(p, Buffer.from(pdfBase64, "base64"));
+
+    const t: any = createReadTool(makeCtx(dir));
+    const out = await t.execute({ filePath: p, limit: 2000 });
+
+    expect(out).toEqual({
+      type: "content",
+      content: [
+        { type: "text", text: "PDF file: sample.pdf" },
+        { type: "document", data: pdfBase64, mimeType: "application/pdf" },
+      ],
+    });
+  });
+
+  test("returns multimodal content for supported audio files", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "sample.wav");
+    const audioBase64 = Buffer.from("audio-bytes").toString("base64");
+    await fs.writeFile(p, Buffer.from(audioBase64, "base64"));
+
+    const t: any = createReadTool(makeCtx(dir));
+    const out = await t.execute({ filePath: p, limit: 2000 });
+
+    expect(out).toEqual({
+      type: "content",
+      content: [
+        { type: "text", text: "Audio file: sample.wav" },
+        { type: "audio", data: audioBase64, mimeType: "audio/wav" },
+      ],
+    });
+  });
+
+  test("returns multimodal content for supported video files", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "sample.mp4");
+    const videoBase64 = Buffer.from("video-bytes").toString("base64");
+    await fs.writeFile(p, Buffer.from(videoBase64, "base64"));
+
+    const t: any = createReadTool(makeCtx(dir));
+    const out = await t.execute({ filePath: p, limit: 2000 });
+
+    expect(out).toEqual({
+      type: "content",
+      content: [
+        { type: "text", text: "Video file: sample.mp4" },
+        { type: "video", data: videoBase64, mimeType: "video/mp4" },
+      ],
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

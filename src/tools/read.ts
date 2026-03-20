@@ -7,29 +7,41 @@ import { z } from "zod";
 
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
+import {
+  classifyUserMessageAttachmentKind,
+  inferUserMessageAttachmentMimeType,
+  type UserMessageAttachmentKind,
+} from "../shared/messageAttachments";
 import { resolveMaybeRelative, truncateLine } from "../utils/paths";
 import { assertReadPathAllowed } from "../utils/permissions";
 
-function supportedImageMimeType(filePath: string): string | null {
-  switch (path.extname(filePath).toLowerCase()) {
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".webp":
-      return "image/webp";
-    case ".gif":
-      return "image/gif";
-    default:
-      return null;
-  }
+type SupportedReadMultimodalFile = {
+  kind: UserMessageAttachmentKind;
+  mimeType: string;
+  label: string;
+};
+
+function supportedReadMultimodalFile(filePath: string): SupportedReadMultimodalFile | null {
+  const mimeType = inferUserMessageAttachmentMimeType(path.basename(filePath), undefined);
+  if (!mimeType) return null;
+  const kind = classifyUserMessageAttachmentKind(mimeType);
+  if (!kind) return null;
+
+  const label =
+    kind === "image"
+      ? "Image"
+      : kind === "audio"
+        ? "Audio"
+        : kind === "video"
+          ? "Video"
+          : "PDF";
+  return { kind, mimeType, label };
 }
 
 export function createReadTool(ctx: ToolContext) {
   return defineTool({
     description:
-      "Read a file from the filesystem. Returns line-numbered text for text files and visual content for supported images. Use offset/limit for large text files.",
+      "Read a file from the filesystem. Returns line-numbered text for text files and multimodal content for supported images, audio, video, and PDFs. Use offset/limit for large text files.",
     inputSchema: z.object({
       filePath: z.string().describe("Path to the file (prefer absolute)"),
       offset: z.number().int().min(1).optional().describe("Start line (1-indexed)"),
@@ -52,18 +64,18 @@ export function createReadTool(ctx: ToolContext) {
         "read"
       );
 
-      const imageMimeType = supportedImageMimeType(abs);
-      if (imageMimeType) {
+      const multimodalFile = supportedReadMultimodalFile(abs);
+      if (multimodalFile) {
         const buffer = await fs.readFile(abs);
         const result = {
           type: "content",
           content: [
-            { type: "text", text: `Image file: ${path.basename(abs)}` },
-            { type: "image", data: buffer.toString("base64"), mimeType: imageMimeType },
+            { type: "text", text: `${multimodalFile.label} file: ${path.basename(abs)}` },
+            { type: multimodalFile.kind, data: buffer.toString("base64"), mimeType: multimodalFile.mimeType },
           ],
         };
         ctx.log(
-          `tool< read ${JSON.stringify({ image: true, mimeType: imageMimeType, bytes: buffer.length })}`
+          `tool< read ${JSON.stringify({ multimodal: true, kind: multimodalFile.kind, mimeType: multimodalFile.mimeType, bytes: buffer.length })}`
         );
         return result;
       }

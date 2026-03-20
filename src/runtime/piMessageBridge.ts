@@ -49,7 +49,15 @@ function safeJsonStringify(value: unknown): string {
 
 type PiToolResultTextContent = { type: "text"; text: string };
 type PiToolResultImageContent = { type: "image"; data: string; mimeType: string };
-export type PiToolResultContentPart = PiToolResultTextContent | PiToolResultImageContent;
+type PiToolResultAudioContent = { type: "audio"; data: string; mimeType: string };
+type PiToolResultVideoContent = { type: "video"; data: string; mimeType: string };
+type PiToolResultDocumentContent = { type: "document"; data: string; mimeType: string };
+export type PiToolResultContentPart =
+  | PiToolResultTextContent
+  | PiToolResultImageContent
+  | PiToolResultAudioContent
+  | PiToolResultVideoContent
+  | PiToolResultDocumentContent;
 
 function contentTextParts(content: unknown): string[] {
   if (typeof content === "string") return content.trim() ? [content] : [];
@@ -207,6 +215,13 @@ function normalizeToolResultContentPart(part: unknown): PiToolResultContentPart 
     return { type: "image", data, mimeType };
   }
 
+  if (record.type === "audio" || record.type === "video" || record.type === "document") {
+    const data = asNonEmptyString(record.data);
+    const mimeType = asNonEmptyString(record.mimeType);
+    if (!data || !mimeType) return null;
+    return { type: record.type, data, mimeType };
+  }
+
   return null;
 }
 
@@ -256,7 +271,16 @@ function toolResultContentToText(content: unknown): string {
   const richContent = richToolResultContentFromOutput(content);
   if (richContent) {
     return richContent
-      .map((part) => (part.type === "text" ? part.text : "[image]"))
+      .map((part) =>
+        part.type === "text"
+          ? part.text
+          : part.type === "image"
+            ? "[image]"
+            : part.type === "audio"
+              ? "[audio]"
+              : part.type === "video"
+                ? "[video]"
+                : "[document]")
       .join("\n");
   }
   return safeJsonStringify(content);
@@ -264,7 +288,7 @@ function toolResultContentToText(content: unknown): string {
 
 export function toolOutputFromPiToolResultContent(content: unknown): unknown {
   const richContent = richToolResultContentFromOutput(content);
-  if (richContent?.some((part) => part.type === "image")) {
+  if (richContent?.some((part) => part.type !== "text")) {
     return { type: "content", content: richContent };
   }
 

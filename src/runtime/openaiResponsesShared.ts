@@ -31,7 +31,13 @@ type ToolResultLike = {
   role: "toolResult";
   toolCallId: string;
   toolName: string;
-  content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
+  content: Array<
+    { type: "text"; text: string }
+    | { type: "image"; data: string; mimeType: string }
+    | { type: "audio"; data: string; mimeType: string }
+    | { type: "video"; data: string; mimeType: string }
+    | { type: "document"; data: string; mimeType: string }
+  >;
   isError?: boolean;
   timestamp?: number;
 };
@@ -331,11 +337,22 @@ export function convertResponsesMessages(
       .map((content) => content.text)
       .join("\n");
     const hasImages = msg.content.some((content) => content.type === "image");
+    const hasOtherFiles = msg.content.some(
+      (content) => content.type === "audio" || content.type === "video" || content.type === "document",
+    );
     const [callId] = msg.toolCallId.split("|");
     messages.push({
       type: "function_call_output",
       call_id: callId,
-      output: sanitizeSurrogates(textResult.length > 0 ? textResult : "(see attached image)"),
+      output: sanitizeSurrogates(
+        textResult.length > 0
+          ? textResult
+          : hasImages
+            ? "(see attached image)"
+            : hasOtherFiles
+              ? "(see attached file)"
+              : "",
+      ),
     });
 
     if (hasImages && model.input.includes("image")) {

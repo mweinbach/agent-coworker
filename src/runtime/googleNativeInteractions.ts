@@ -330,8 +330,18 @@ function turnFromToolMessage(message: ModelMessage): InteractionTurn | null {
         const textPart = buildTextContent(part.text);
         return textPart ? [textPart] : [];
       }
-      const imagePart = buildImageContent(part);
-      return imagePart ? [imagePart] : [];
+      if (part.type === "image") {
+        const imagePart = buildImageContent(part);
+        return imagePart ? [imagePart] : [];
+      }
+      return [];
+    });
+    const extraMultimodalParts = richResult.flatMap<Record<string, unknown>>((part) => {
+      if (part.type !== "audio" && part.type !== "video" && part.type !== "document") {
+        return [];
+      }
+      const multimodalPart = buildBinaryContent(part, part.type);
+      return multimodalPart ? [multimodalPart] : [];
     });
 
     const result =
@@ -350,6 +360,9 @@ function turnFromToolMessage(message: ModelMessage): InteractionTurn | null {
       ...(toolName ? { name: toolName } : {}),
       ...(signature ? { signature } : {}),
     });
+    if (extraMultimodalParts.length > 0) {
+      parts.push(...extraMultimodalParts);
+    }
   }
 
   return parts.length > 0 ? { role: "user", content: parts } : null;

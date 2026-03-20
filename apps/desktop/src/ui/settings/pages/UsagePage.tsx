@@ -14,7 +14,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "../../../components/ui/dialog";
 import { cn } from "../../../lib/utils";
 import { formatCost, formatTokenCount } from "../../../../../../src/session/pricing";
@@ -214,13 +213,17 @@ export function UsagePage(props: UsagePageProps = {}) {
           </p>
         </div>
 
+        <Button
+          type="button"
+          variant="outline"
+          className="gap-2"
+          onClick={() => handleEstimateNoticeOpenChange?.(true)}
+        >
+          <AlertTriangleIcon className="h-4 w-4" />
+          How estimates work
+        </Button>
+
         <Dialog open={estimateNoticeOpen} onOpenChange={handleEstimateNoticeOpenChange}>
-          <DialogTrigger asChild>
-            <Button type="button" variant="outline" className="gap-2">
-              <AlertTriangleIcon className="h-4 w-4" />
-              How estimates work
-            </Button>
-          </DialogTrigger>
           <DialogContent showClose className="max-w-lg">
             <DialogHeader>
               <DialogTitle>Usage estimates</DialogTitle>

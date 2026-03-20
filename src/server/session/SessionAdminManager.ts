@@ -141,12 +141,6 @@ export class SessionAdminManager {
         sessions = [activeLiveSession, ...sessions];
       }
 
-      if (sessions.length === 0) {
-        if (activeLiveSession) {
-          sessions = [activeLiveSession];
-        }
-      }
-
       sessions = sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
       this.context.emit({ type: "sessions", sessionId: this.context.id, sessions });
     } catch (err) {

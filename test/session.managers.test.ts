@@ -314,7 +314,7 @@ describe("session managers", () => {
     });
   });
 
-  test("SessionAdminManager listSessions keeps the active idle session visible when it is the only session", async () => {
+  test("SessionAdminManager listSessions hides the active idle session when it is the only placeholder session", async () => {
     const context = makeBaseContext();
     const emitted: any[] = [];
     context.emit = (evt) => emitted.push(evt);
@@ -376,22 +376,7 @@ describe("session managers", () => {
     expect(emitted).toContainEqual({
       type: "sessions",
       sessionId: "session-1",
-      sessions: [
-        {
-          sessionId: "session-1",
-          title: "New Session",
-          titleSource: "default",
-          titleModel: null,
-          provider: "google",
-          model: "gemini-3-flash-preview",
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:10.000Z",
-          messageCount: 0,
-          lastEventSeq: 1,
-          hasPendingAsk: false,
-          hasPendingApproval: false,
-        },
-      ],
+      sessions: [],
     });
   });
 });

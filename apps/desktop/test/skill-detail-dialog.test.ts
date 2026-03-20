@@ -64,47 +64,12 @@ mock.module("../src/lib/desktopCommands", () => ({
   onUpdateStateChanged: () => () => {},
 }));
 
-mock.module("../src/lib/agentSocket", () => ({
-  AgentSocket: class {
-    connect() {}
-    send() {
-      return true;
-    }
-    close() {}
-  },
-}));
-
-mock.module("streamdown", () => ({
-  Streamdown: ({ children }: { children: unknown }) => createElement("div", null, children),
-}));
-
-mock.module("lucide-react", () => ({
-  ExternalLinkIcon: () => createElement("span", null, "icon"),
-}));
-
-mock.module("../src/components/ui/badge", () => ({
-  Badge: ({ children }: { children: unknown }) => createElement("span", null, children),
-}));
-
-mock.module("../src/components/ui/button", () => ({
-  Button: ({ children, ...props }: Record<string, unknown>) => createElement("button", props, children),
-}));
-
 mock.module("../src/components/ui/dialog", () => ({
   Dialog: ({ children }: { children: unknown }) => createElement("div", null, children),
-  DialogContent: ({ children }: { children: unknown }) => createElement("div", null, children),
-  DialogHeader: ({ children }: { children: unknown }) => createElement("div", null, children),
-  DialogTitle: ({ children }: { children: unknown }) => createElement("h2", null, children),
-  DialogDescription: ({ children }: { children: unknown }) => createElement("p", null, children),
-}));
-
-mock.module("../src/ui/skills/utils", () => ({
-  actionPending: () => false,
-  normalizeDisplayContent: (value: string | null) => value,
-  scopeLabel: (scope: string) => scope,
-  skillSourceLabel: (source: string) => source,
-  stateTone: () => "secondary",
-  SkillIcon: ({ icon }: { icon: string }) => createElement("span", null, icon),
+  DialogContent: ({ children, ...props }: Record<string, unknown>) => createElement("div", props, children),
+  DialogHeader: ({ children, ...props }: Record<string, unknown>) => createElement("div", props, children),
+  DialogTitle: ({ children, ...props }: Record<string, unknown>) => createElement("h2", props, children),
+  DialogDescription: ({ children, ...props }: Record<string, unknown>) => createElement("p", props, children),
 }));
 
 const { useAppStore } = await import("../src/app/store");
@@ -159,7 +124,7 @@ describe("skill detail dialog", () => {
         root.render(createElement(SkillDetailDialog, { workspaceId: "ws-1" }));
       });
 
-      const openFolderButton = Array.from(container.querySelectorAll("button")).find(
+      const openFolderButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
         (button) => button.textContent?.includes("Open folder"),
       );
 

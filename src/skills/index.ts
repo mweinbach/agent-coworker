@@ -1,6 +1,8 @@
 import type { SkillEntry } from "../types";
 import { scanSkillCatalog, toLegacySkillEntry } from "./catalog";
 
+export { extractTriggers } from "./catalog";
+
 export async function discoverSkills(
   skillsDirs: string[],
   opts: { includeDisabled?: boolean } = {}

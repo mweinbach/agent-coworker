@@ -1,46 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
-
-let sendControlResult = false;
-
-mock.module("../src/lib/desktopCommands", () => ({
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  stopWorkspaceServer: async () => {},
-  openPath: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-}));
-
-mock.module("../src/app/store.helpers", () => ({
-  RUNTIME: { controlSockets: new Map(), skillInstallWaiters: new Map() },
-  appendThreadTranscript: async () => {},
-  basename: (value: string) => value.split("/").at(-1) ?? value,
-  buildContextPreamble: () => "",
-  ensureControlSocket: () => null,
-  ensureServerRunning: async () => {},
-  ensureThreadRuntime: () => {},
-  ensureWorkspaceRuntime: () => {},
-  isProviderName: () => true,
-  makeId: () => "note-1",
-  mapTranscriptToFeed: () => [],
-  normalizeThreadTitleSource: () => "manual",
-  nowIso: () => "2026-03-20T00:00:00.000Z",
-  persistNow: async () => {},
-  providerAuthMethodsFor: () => [],
-  pushNotification: <T>(notifications: T[], entry: T) => [...notifications, entry],
-  queuePendingThreadMessage: () => {},
-  sendControl: () => sendControlResult,
-  sendThread: () => true,
-  sendUserMessageToThread: async () => {},
-  syncDesktopStateCache: () => {},
-  truncateTitle: (value: string) => value,
-}));
+import { beforeEach, describe, expect, test } from "bun:test";
 
 const { createSkillActions } = await import("../src/app/store.actions/skills");
 
@@ -95,7 +53,7 @@ const failedSkillMutationActions = [
 
 describe("skill store actions", () => {
   beforeEach(() => {
-    sendControlResult = false;
+    // Leave control sockets/session ids unset so the real sendControl helper fails.
   });
 
   test("refreshSkillsCatalog clears loading when sendControl fails", async () => {

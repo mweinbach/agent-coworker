@@ -2062,6 +2062,9 @@ async function main() {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const attemptStartedAt = isoSafeNow();
+      let attemptRepairAttempted = false;
+      let attemptRepairSucceeded = false;
+      let attemptDegraded = false;
 
       const toolLogLines: string[] = [];
       const askEvents: AskEvent[] = [];
@@ -2116,9 +2119,6 @@ async function main() {
       });
 
       try {
-        let attemptRepairAttempted = false;
-        let attemptRepairSucceeded = false;
-        let attemptDegraded = false;
         const res = await runTurnWithDeps(
           {
             config,
@@ -2329,6 +2329,19 @@ async function main() {
       } catch (err) {
         finalRes = null;
         finalError = err;
+        repairAttempted = attemptRepairAttempted;
+        repairSucceeded = attemptRepairSucceeded;
+        degraded = attemptDegraded;
+        finalToolLogLines = toolLogLines;
+        finalAskEvents = askEvents;
+        finalApprovalEvents = approvalEvents;
+        finalTodoEvents = todoEvents;
+        finalSteps = steps;
+        finalBudgets = buildRawLoopBudgetSummary(
+          toolLogLines,
+          steps,
+          attemptRepairAttempted ? 1 : 0,
+        );
 
         const delayMs = computeRetryDelayMs(err, attempt);
         attempts.push({

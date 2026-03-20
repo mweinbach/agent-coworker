@@ -577,7 +577,6 @@ export function createControlSocketHelpers(
                       : evt.content === null
                         ? null
                         : s.workspaceRuntimeById[workspaceId].selectedSkillContent,
-                skillMutationPendingKeys: {},
                 skillMutationError: null,
               },
             },
@@ -592,7 +591,11 @@ export function createControlSocketHelpers(
               [workspaceId]: {
                 ...s.workspaceRuntimeById[workspaceId],
                 selectedSkillPreview: evt.preview,
-                skillMutationPendingKeys: {},
+                skillMutationPendingKeys: (() => {
+                  const pendingKeys = { ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys };
+                  delete pendingKeys.preview;
+                  return pendingKeys;
+                })(),
                 skillMutationError: null,
               },
             },
@@ -610,7 +613,6 @@ export function createControlSocketHelpers(
                   ...s.workspaceRuntimeById[workspaceId].skillUpdateChecksByInstallationId,
                   [evt.result.installationId]: evt.result,
                 },
-                skillMutationPendingKeys: {},
                 skillMutationError: null,
               },
             },

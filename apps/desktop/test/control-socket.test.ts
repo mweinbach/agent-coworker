@@ -370,3 +370,109 @@ describe("control socket skill error recovery", () => {
     expect(state.workspaceRuntimeById[workspaceId].skillsMutationBlockedReason).toBe("still blocked");
   });
 });
+
+describe("control socket skill detail events", () => {
+  const workspaceId = "ws-skill-events";
+
+  function createState(runtimePatch: Record<string, unknown> = {}) {
+    const state = {
+      selectedWorkspaceId: workspaceId,
+      threads: [],
+      selectedThreadId: null,
+      threadRuntimeById: {},
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          ...runtimePatch,
+        },
+      },
+      workspaces: [],
+      notifications: [],
+      providerStatusRefreshing: false,
+      providerLastAuthChallenge: null,
+    } as any;
+    const get = () => state;
+    const set = (updater: any) => {
+      const patch = typeof updater === "function" ? updater(state) : updater;
+      Object.assign(state, patch);
+    };
+    return { state, get, set };
+  }
+
+  beforeEach(() => {
+    MOCK_SOCKETS.length = 0;
+    RUNTIME.controlSockets.clear();
+    RUNTIME.sessionSnapshots.clear();
+    persistCalls = 0;
+  });
+
+  test("skill_installation keeps in-flight mutation keys while loading details", () => {
+    const { state, get, set } = createState({
+      selectedSkillInstallationId: "install-1",
+      skillMutationPendingKeys: { "install:project": true },
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.emit({
+      type: "skill_installation",
+      sessionId: "control-session",
+      installation: { installationId: "install-1" },
+      content: "Skill docs",
+    } as any);
+
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ "install:project": true });
+    expect(state.workspaceRuntimeById[workspaceId].selectedSkillInstallation?.installationId).toBe("install-1");
+    expect(state.workspaceRuntimeById[workspaceId].selectedSkillContent).toBe("Skill docs");
+  });
+
+  test("skill_install_preview only clears the preview pending key", () => {
+    const { state, get, set } = createState({
+      skillMutationPendingKeys: {
+        preview: true,
+        "install:project": true,
+      },
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.emit({
+      type: "skill_install_preview",
+      sessionId: "control-session",
+      preview: { summary: "preview" },
+    } as any);
+
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ "install:project": true });
+    expect(state.workspaceRuntimeById[workspaceId].selectedSkillPreview).toEqual({ summary: "preview" });
+  });
+
+  test("skill_installation_update_check keeps in-flight mutation keys", () => {
+    const { state, get, set } = createState({
+      skillMutationPendingKeys: { "install:project": true },
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.emit({
+      type: "skill_installation_update_check",
+      sessionId: "control-session",
+      result: { installationId: "install-1", canUpdate: true },
+    } as any);
+
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ "install:project": true });
+    expect(state.workspaceRuntimeById[workspaceId].skillUpdateChecksByInstallationId["install-1"]).toEqual({
+      installationId: "install-1",
+      canUpdate: true,
+    });
+  });
+});

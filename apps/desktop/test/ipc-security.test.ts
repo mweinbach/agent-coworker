@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   isTrustedDesktopSenderUrl,
   resolveAllowedDirectoryPath,
+  resolveAllowedOpenPath,
   resolveAllowedPath,
   resolveAllowedRevealOrOpenPath,
 } from "../electron/services/ipcSecurity";
@@ -109,6 +110,28 @@ describe("desktop IPC security helpers", () => {
       }
     } finally {
       await fs.rm(tempWorkspace, { recursive: true, force: true });
+    }
+  });
+
+  test("resolveAllowedOpenPath only allows directories outside workspace roots", async () => {
+    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-ws-"));
+    const workspaceRoot = await fs.realpath(tempWorkspace);
+    const home = os.homedir();
+    const coworkRoot = path.join(home, ".cowork");
+    await fs.mkdir(coworkRoot, { recursive: true });
+    const externalDir = await fs.mkdtemp(path.join(coworkRoot, "ipc-open-path-"));
+    const externalFile = path.join(externalDir, "run.sh");
+    const workspaceFile = path.join(workspaceRoot, "inside.txt");
+    try {
+      await fs.writeFile(externalFile, "#!/bin/sh\n");
+      await fs.writeFile(workspaceFile, "inside workspace\n");
+
+      expect(resolveAllowedOpenPath([workspaceRoot], workspaceFile)).toBe(workspaceFile);
+      expect(resolveAllowedOpenPath([workspaceRoot], externalDir)).toBe(await fs.realpath(externalDir));
+      expect(() => resolveAllowedOpenPath([workspaceRoot], externalFile)).toThrow("outside allowed workspace roots");
+    } finally {
+      await fs.rm(tempWorkspace, { recursive: true, force: true });
+      await fs.rm(externalDir, { recursive: true, force: true });
     }
   });
 });

@@ -28,6 +28,7 @@ import {
 } from "../../src/lib/desktopSchemas";
 import {
   resolveAllowedDirectoryPath,
+  resolveAllowedOpenPath,
   resolveAllowedPath,
   resolveAllowedRevealOrOpenPath,
 } from "../services/ipcSecurity";
@@ -119,7 +120,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openPath, async (_event, args: OpenPathInput) => {
     const input = parseWithSchema(openPathInputSchema, args, "openPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedRevealOrOpenPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    const safePath = resolveAllowedOpenPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
     const errString = await shell.openPath(safePath);
     if (errString) {
       throw new Error(errString);

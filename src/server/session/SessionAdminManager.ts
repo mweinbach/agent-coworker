@@ -150,12 +150,7 @@ export class SessionAdminManager {
         }
       }
 
-      sessions = sessions
-        .map((session) => {
-          const liveSnapshot = this.context.deps.getLiveSessionSnapshotImpl?.(session.sessionId) ?? null;
-          return mergeLiveTopLevelSessionSummary(session, liveSnapshot);
-        })
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      sessions = sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
       this.context.emit({ type: "sessions", sessionId: this.context.id, sessions });
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to list sessions: ${String(err)}`);

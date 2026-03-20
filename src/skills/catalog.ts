@@ -16,6 +16,7 @@ import {
   manifestPathForSkillRoot,
   readSkillInstallManifest,
 } from "./manifest";
+import { isPathInside } from "../utils/paths";
 
 type SkillFrontMatter = {
   name: string;
@@ -167,6 +168,15 @@ async function readFileAsDataUri(targetPath: string): Promise<string | null> {
   }
 }
 
+async function readSkillFileAsDataUri(skillRoot: string, relativePath: string): Promise<string | null> {
+  const resolvedPath = path.resolve(skillRoot, relativePath);
+  if (!isPathInside(skillRoot, resolvedPath)) {
+    return null;
+  }
+
+  return await readFileAsDataUri(resolvedPath);
+}
+
 function parseAgentInterfaceYaml(raw: string): SkillEntry["interface"] | null {
   const lines = raw.split(/\r?\n/);
   let inInterface = false;
@@ -242,14 +252,14 @@ async function readAgentInterface(skillRoot: string): Promise<SkillEntry["interf
   const iconLargeRel = iconLargePathMatch ? stripQuotes(iconLargePathMatch[1] ?? "") : "";
 
   if (iconSmallRel) {
-    const dataUri = await readFileAsDataUri(path.resolve(skillRoot, iconSmallRel));
+    const dataUri = await readSkillFileAsDataUri(skillRoot, iconSmallRel);
     if (dataUri) {
       out.iconSmall = dataUri;
     }
   }
 
   if (iconLargeRel) {
-    const dataUri = await readFileAsDataUri(path.resolve(skillRoot, iconLargeRel));
+    const dataUri = await readSkillFileAsDataUri(skillRoot, iconLargeRel);
     if (dataUri) {
       out.iconLarge = dataUri;
     }

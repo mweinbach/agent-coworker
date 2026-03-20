@@ -88,7 +88,7 @@ describe("skill detail dialog", () => {
       workspaceRuntimeById: {
         "ws-1": {
           ...defaultWorkspaceRuntime(),
-          selectedSkillContent: "# Example skill",
+          selectedSkillContent: null,
           selectedSkillInstallationId: "skill-1",
           selectedSkillInstallation: {
             installationId: "skill-1",

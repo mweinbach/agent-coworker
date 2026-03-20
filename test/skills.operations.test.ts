@@ -160,6 +160,28 @@ describe("updateSkillInstallation", () => {
     expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain('description: "Existing skill"');
     await expect(fs.access(path.join(config.skillsDirs[0]!, "other-skill"))).rejects.toBeDefined();
   });
+
+  test("can update a local installation in place without deleting its source first", async () => {
+    const config = makeConfig(root);
+    const existingSkillDir = await createSkill(config.skillsDirs[0]!, "my-skill", "Existing skill");
+
+    const catalog = await scanSkillCatalog(config.skillsDirs, {
+      includeDisabled: true,
+      adoptManagedWritableInstalls: true,
+    });
+    const installation = {
+      ...catalog.installations[0]!,
+      origin: {
+        kind: "local" as const,
+        sourcePath: existingSkillDir,
+      },
+    };
+
+    const result = await updateSkillInstallation({ config, installation });
+
+    expect(result.catalog.installations.find((entry) => entry.name === "my-skill")?.installationId).toBe(installation.installationId);
+    expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain('description: "Existing skill"');
+  });
 });
 
 describe("copySkillInstallationToScope", () => {
@@ -220,6 +242,26 @@ describe("installSkillsFromSource", () => {
       await expect(installSkillsFromSource({ config, input: bundle, targetScope: "project" })).rejects.toThrow(
         /more than one valid skill named "dup-skill"/,
       );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("can reinstall from an existing local skill directory without deleting it first", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "skills-install-same-root-"));
+    try {
+      const config = makeConfig(root);
+      const existingSkillDir = await createSkill(config.skillsDirs[0]!, "my-skill", "Existing skill");
+
+      const result = await installSkillsFromSource({
+        config,
+        input: existingSkillDir,
+        targetScope: "project",
+      });
+
+      expect(result.installationIds).toHaveLength(1);
+      expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain('description: "Existing skill"');
+      await fs.access(path.join(existingSkillDir, ".cowork-skill.json"));
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

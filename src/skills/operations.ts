@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import type {
@@ -10,6 +11,7 @@ import type {
   SkillMutationTargetScope,
   SkillUpdateCheckResult,
 } from "../types";
+import { sameWorkspacePath } from "../utils/workspacePath";
 import { getInstallationById, getSkillScopeDescriptors, scanSkillCatalog } from "./catalog";
 import { createManagedInstallationId, adoptSkillInstallManifest, writeSkillInstallManifest } from "./manifest";
 import { buildSkillInstallPreview, materializeSkillSource, resolveSkillSource } from "./sourceResolver";
@@ -31,6 +33,10 @@ function requireWritableScope(config: AgentConfig, scope: SkillMutationTargetSco
     skillsDir: descriptor.skillsDir,
     disabledSkillsDir: descriptor.disabledSkillsDir,
   };
+}
+
+function conflictingTargetRoots(paths: WritableScopePaths, skillName: string): string[] {
+  return [path.join(paths.skillsDir, skillName), path.join(paths.disabledSkillsDir, skillName)];
 }
 
 function originFromDescriptor(descriptor: SkillInstallPreview["source"]): SkillInstallOrigin {
@@ -64,8 +70,9 @@ function originFromDescriptor(descriptor: SkillInstallPreview["source"]): SkillI
 }
 
 async function removeConflictingTargets(paths: WritableScopePaths, skillName: string): Promise<void> {
-  await fs.rm(path.join(paths.skillsDir, skillName), { recursive: true, force: true });
-  await fs.rm(path.join(paths.disabledSkillsDir, skillName), { recursive: true, force: true });
+  for (const targetRoot of conflictingTargetRoots(paths, skillName)) {
+    await fs.rm(targetRoot, { recursive: true, force: true });
+  }
 }
 
 async function copySkillRoot(sourceRoot: string, destinationRoot: string): Promise<void> {
@@ -75,6 +82,29 @@ async function copySkillRoot(sourceRoot: string, destinationRoot: string): Promi
     force: true,
     errorOnExist: false,
   });
+}
+
+async function stageCopySourceIfNeeded(sourceRoot: string, conflictingTargets: string[]): Promise<{
+  sourceRoot: string;
+  cleanup: () => Promise<void>;
+}> {
+  const overlapsConflict = conflictingTargets.some((targetRoot) => sameWorkspacePath(sourceRoot, targetRoot));
+  if (!overlapsConflict) {
+    return {
+      sourceRoot,
+      cleanup: async () => {},
+    };
+  }
+
+  const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-coworker-skill-stage-"));
+  const stagedRoot = path.join(stageDir, path.basename(sourceRoot));
+  await copySkillRoot(sourceRoot, stagedRoot);
+  return {
+    sourceRoot: stagedRoot,
+    cleanup: async () => {
+      await fs.rm(stageDir, { recursive: true, force: true });
+    },
+  };
 }
 
 function installSourceFromOrigin(installation: SkillInstallationEntry): string | null {
@@ -185,8 +215,13 @@ export async function installSkillsFromSource(opts: {
     const installedIds: string[] = [];
     for (const candidate of validCandidates) {
       const destinationRoot = path.join(writableScope.skillsDir, candidate.name);
-      await removeConflictingTargets(writableScope, candidate.name);
-      await copySkillRoot(candidate.rootDir, destinationRoot);
+      const stagedSource = await stageCopySourceIfNeeded(candidate.rootDir, conflictingTargetRoots(writableScope, candidate.name));
+      try {
+        await removeConflictingTargets(writableScope, candidate.name);
+        await copySkillRoot(stagedSource.sourceRoot, destinationRoot);
+      } finally {
+        await stagedSource.cleanup();
+      }
       const manifest = await writeSkillInstallManifest({
         skillRoot: destinationRoot,
         installationId: createManagedInstallationId(),
@@ -222,8 +257,16 @@ export async function copySkillInstallationToScope(opts: {
   }
 
   const destinationRoot = path.join(writableScope.skillsDir, opts.installation.name);
-  await removeConflictingTargets(writableScope, opts.installation.name);
-  await copySkillRoot(opts.installation.rootDir, destinationRoot);
+  const stagedSource = await stageCopySourceIfNeeded(
+    opts.installation.rootDir,
+    conflictingTargetRoots(writableScope, opts.installation.name),
+  );
+  try {
+    await removeConflictingTargets(writableScope, opts.installation.name);
+    await copySkillRoot(stagedSource.sourceRoot, destinationRoot);
+  } finally {
+    await stagedSource.cleanup();
+  }
   const manifest = await writeSkillInstallManifest({
     skillRoot: destinationRoot,
     installationId: createManagedInstallationId(),
@@ -391,8 +434,16 @@ export async function updateSkillInstallation(opts: {
 
     const destinationBase = opts.installation.enabled ? writableScope.skillsDir : writableScope.disabledSkillsDir;
     const destinationRoot = path.join(destinationBase, opts.installation.name);
-    await removeConflictingTargets(writableScope, opts.installation.name);
-    await copySkillRoot(selectedCandidate.rootDir, destinationRoot);
+    const stagedSource = await stageCopySourceIfNeeded(
+      selectedCandidate.rootDir,
+      conflictingTargetRoots(writableScope, opts.installation.name),
+    );
+    try {
+      await removeConflictingTargets(writableScope, opts.installation.name);
+      await copySkillRoot(stagedSource.sourceRoot, destinationRoot);
+    } finally {
+      await stagedSource.cleanup();
+    }
     await writeSkillInstallManifest({
       skillRoot: destinationRoot,
       installationId: opts.installation.installationId,

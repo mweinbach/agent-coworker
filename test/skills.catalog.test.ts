@@ -75,4 +75,31 @@ describe("scanSkillCatalog", () => {
     await fs.access(path.join(project, "alpha", ".cowork-skill.json"));
     await fs.access(path.join(global, "beta", ".cowork-skill.json"));
   });
+
+  test("ignores escaped icon paths while still embedding in-tree icons", async () => {
+    const project = path.join(root, ".agent", "skills");
+    const skillDir = path.join(project, "alpha");
+    await fs.mkdir(path.join(skillDir, "agents"), { recursive: true });
+    await fs.mkdir(path.join(skillDir, "assets"), { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), skillDoc("alpha", "Project alpha."), "utf-8");
+    await fs.writeFile(path.join(skillDir, "assets", "icon.png"), "icon-small", "utf-8");
+    await fs.writeFile(path.join(project, "escape.png"), "escaped", "utf-8");
+    await fs.writeFile(
+      path.join(skillDir, "agents", "openai.yaml"),
+      [
+        "interface:",
+        '  display_name: "Alpha"',
+        '  icon_small: "./assets/icon.png"',
+        '  icon_large: "../escape.png"',
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const catalog = await scanSkillCatalog([project], { includeDisabled: true });
+    const alpha = catalog.installations.find((entry) => entry.name === "alpha");
+
+    expect(alpha?.interface?.displayName).toBe("Alpha");
+    expect(alpha?.interface?.iconSmall).toBe(`data:image/png;base64,${Buffer.from("icon-small").toString("base64")}`);
+    expect(alpha?.interface?.iconLarge).toBeUndefined();
+  });
 });

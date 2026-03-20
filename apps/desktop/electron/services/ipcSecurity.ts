@@ -46,21 +46,33 @@ export function resolveAllowedPath(workspaceRoots: string[], requestedPath: stri
  * Workspace roots plus Cowork agent homes where skills and config commonly live.
  * Used for `revealPath` and `openPath` targets outside the active workspace
  * (e.g. ~/.cowork/skills, ~/.agent/skills).
+ *
+ * `builtinSkillRoots` should match server `builtInDir` / `COWORK_BUILTIN_DIR` (see `resolveDesktopBuiltinSkillRootsForReveal`).
  */
-export function getRevealOpenPathRoots(workspaceRoots: string[]): string[] {
+export function getRevealOpenPathRoots(workspaceRoots: string[], builtinSkillRoots: string[] = []): string[] {
   const home = os.homedir();
   const extra: string[] = [path.join(home, ".cowork"), path.join(home, ".agent")];
-  const builtin = process.env.COWORK_BUILTIN_DIR?.trim();
-  if (builtin) {
-    extra.push(path.resolve(builtin));
+  for (const root of builtinSkillRoots) {
+    const trimmed = root.trim();
+    if (trimmed.length > 0) {
+      extra.push(path.resolve(trimmed));
+    }
   }
   return [...workspaceRoots, ...extra];
 }
 
-export function resolveAllowedRevealOrOpenPath(workspaceRoots: string[], requestedPath: string): string {
-  return assertPathWithinRoots(getRevealOpenPathRoots(workspaceRoots), requestedPath, "path");
+export function resolveAllowedRevealOrOpenPath(
+  workspaceRoots: string[],
+  requestedPath: string,
+  builtinSkillRoots: string[] = [],
+): string {
+  return assertPathWithinRoots(getRevealOpenPathRoots(workspaceRoots, builtinSkillRoots), requestedPath, "path");
 }
 
-export function resolveAllowedOpenPath(workspaceRoots: string[], requestedPath: string): string {
-  return resolveAllowedRevealOrOpenPath(workspaceRoots, requestedPath);
+export function resolveAllowedOpenPath(
+  workspaceRoots: string[],
+  requestedPath: string,
+  builtinSkillRoots: string[] = [],
+): string {
+  return resolveAllowedRevealOrOpenPath(workspaceRoots, requestedPath, builtinSkillRoots);
 }

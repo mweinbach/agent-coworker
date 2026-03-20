@@ -200,6 +200,12 @@ export async function copySkillInstallationToScope(opts: {
   installation: SkillInstallationEntry;
   targetScope: SkillMutationTargetScope;
 }): Promise<{ installationId: string; catalog: SkillCatalogSnapshot }> {
+  if (opts.installation.scope === opts.targetScope) {
+    throw new Error(
+      `Cannot copy "${opts.installation.name}" into the ${opts.targetScope} scope because it already lives there; that would delete the source before copying.`,
+    );
+  }
+
   const writableScope = requireWritableScope(opts.config, opts.targetScope);
   if (!opts.installation.skillPath) {
     throw new Error(`Installation "${opts.installation.installationId}" has no readable SKILL.md`);

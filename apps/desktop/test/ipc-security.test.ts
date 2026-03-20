@@ -139,4 +139,22 @@ describe("desktop IPC security helpers", () => {
       await fs.rm(tempWorkspace, { recursive: true, force: true });
     }
   });
+
+  test("resolveAllowedRevealOrOpenPath allows paths under configurable built-in skill roots", async () => {
+    const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-ws-"));
+    const workspaceRoot = await fs.realpath(tempWorkspace);
+    const builtinRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-builtin-"));
+    try {
+      const skillFile = path.join(builtinRoot, "skills", "bundled-skill", "SKILL.md");
+      await fs.mkdir(path.dirname(skillFile), { recursive: true });
+      await fs.writeFile(skillFile, "---\nname: x\n---\n", "utf-8");
+
+      expect(() =>
+        resolveAllowedRevealOrOpenPath([workspaceRoot], skillFile, [builtinRoot]),
+      ).not.toThrow();
+    } finally {
+      await fs.rm(builtinRoot, { recursive: true, force: true });
+      await fs.rm(tempWorkspace, { recursive: true, force: true });
+    }
+  });
 });

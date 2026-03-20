@@ -1,6 +1,7 @@
 import { ipcMain } from "electron";
 
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
+import { resolveDesktopBuiltinSkillRootsForReveal } from "./services/desktopBuiltinPaths";
 import { registerFilesIpc } from "./ipc/files";
 import { handleDesktopInvoke } from "./ipc/invoke";
 import { parseWithSchema } from "./ipc/parse";
@@ -15,6 +16,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
   const context = {
     deps,
     workspaceRoots,
+    builtinSkillRoots: resolveDesktopBuiltinSkillRootsForReveal(),
     handleDesktopInvoke,
     parseWithSchema,
   };

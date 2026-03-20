@@ -35,7 +35,7 @@ import {
 import type { DesktopIpcModuleContext } from "./types";
 
 export function registerFilesIpc(context: DesktopIpcModuleContext): void {
-  const { handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
+  const { builtinSkillRoots, handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.listDirectory, async (_event, args: ListDirectoryInput) => {
     await workspaceRoots.ensureApprovedWorkspaceRoots();
@@ -120,7 +120,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openPath, async (_event, args: OpenPathInput) => {
     const input = parseWithSchema(openPathInputSchema, args, "openPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedOpenPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    const safePath = resolveAllowedOpenPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path, builtinSkillRoots);
     const errString = await shell.openPath(safePath);
     if (errString) {
       throw new Error(errString);
@@ -130,7 +130,11 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.revealPath, async (_event, args: RevealPathInput) => {
     const input = parseWithSchema(revealPathInputSchema, args, "revealPath options");
     await workspaceRoots.ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedRevealOrOpenPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    const safePath = resolveAllowedRevealOrOpenPath(
+      workspaceRoots.getApprovedWorkspaceRoots(),
+      input.path,
+      builtinSkillRoots,
+    );
     shell.showItemInFolder(safePath);
   });
 

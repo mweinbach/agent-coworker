@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { scanSkillCatalog } from "../src/skills/catalog";
-import { checkSkillInstallationUpdate, updateSkillInstallation } from "../src/skills/operations";
+import {
+  checkSkillInstallationUpdate,
+  copySkillInstallationToScope,
+  updateSkillInstallation,
+} from "../src/skills/operations";
 import type { AgentConfig } from "../src/types";
 
 function skillDoc(name: string, description: string): string {
@@ -33,6 +37,14 @@ function makeConfig(root: string): AgentConfig {
     skillsDirs: [path.join(root, ".agent", "skills")],
     memoryDirs: [],
     configDirs: [],
+  };
+}
+
+function makeProjectAndGlobalSkillsConfig(root: string): AgentConfig {
+  const base = makeConfig(root);
+  return {
+    ...base,
+    skillsDirs: [path.join(root, ".agent", "skills"), path.join(root, ".agent-user", "skills")],
   };
 }
 
@@ -146,5 +158,49 @@ describe("updateSkillInstallation", () => {
     );
     expect(await fs.readFile(path.join(existingSkillDir, "SKILL.md"), "utf-8")).toContain('description: "Existing skill"');
     await expect(fs.access(path.join(config.skillsDirs[0]!, "other-skill"))).rejects.toBeDefined();
+  });
+});
+
+describe("copySkillInstallationToScope", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "skills-copy-test-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  test("rejects copy into the same writable scope so the source is not deleted first", async () => {
+    const config = makeConfig(root);
+    const skillDir = await createSkill(config.skillsDirs[0]!, "my-skill", "Skill body");
+    const catalog = await scanSkillCatalog(config.skillsDirs, { includeDisabled: true });
+    const installation = catalog.installations[0]!;
+    expect(installation.scope).toBe("project");
+
+    await expect(
+      copySkillInstallationToScope({ config, installation, targetScope: "project" }),
+    ).rejects.toThrow(/already lives there/);
+
+    expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf-8")).toContain("Skill body");
+  });
+
+  test("allows copy from project scope into global scope", async () => {
+    const config = makeProjectAndGlobalSkillsConfig(root);
+    await createSkill(config.skillsDirs[0]!, "my-skill", "From project");
+    const catalog = await scanSkillCatalog(config.skillsDirs, { includeDisabled: true });
+    const installation = catalog.installations.find((entry) => entry.name === "my-skill")!;
+    expect(installation.scope).toBe("project");
+
+    const result = await copySkillInstallationToScope({
+      config,
+      installation,
+      targetScope: "global",
+    });
+
+    expect(result.installationId.length).toBeGreaterThan(0);
+    const copiedMd = path.join(config.skillsDirs[1]!, "my-skill", "SKILL.md");
+    expect(await fs.readFile(copiedMd, "utf-8")).toContain("From project");
   });
 });

@@ -360,7 +360,6 @@ const sessionOnlyTypes = [
   "list_tools",
   "list_commands",
   "list_skills",
-  "list_sessions",
   "agent_list_get",
   "refresh_provider_status",
   "provider_catalog_get",
@@ -676,6 +675,16 @@ const getMessagesSchema = schemaWithType("get_messages", {
   limit: optionalNumberAtLeast("get_messages invalid limit", 1),
 });
 
+const listSessionsSchema = schemaWithType("list_sessions", {
+  sessionId: requiredSessionId("list_sessions"),
+  scope: z.enum(["all", "workspace"], { error: "list_sessions invalid scope" }).optional(),
+});
+
+const getSessionSnapshotSchema = schemaWithType("get_session_snapshot", {
+  sessionId: requiredSessionId("get_session_snapshot"),
+  targetSessionId: requiredNonEmptyTrimmedString("get_session_snapshot missing/invalid targetSessionId"),
+});
+
 const setSessionTitleSchema = schemaWithType("set_session_title", {
   sessionId: requiredSessionId("set_session_title"),
   title: requiredNonEmptyTrimmedString("set_session_title missing/invalid title"),
@@ -828,6 +837,8 @@ const clientMessageSchema = z.discriminatedUnion("type", [
   workspaceBackupDeltaGetSchema,
   cancelSchema,
   getMessagesSchema,
+  listSessionsSchema,
+  getSessionSnapshotSchema,
   setSessionTitleSchema,
   deleteSessionSchema,
   agentSpawnSchema,

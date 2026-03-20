@@ -19,6 +19,7 @@ import {
   agentRoleSchema,
 } from "../shared/agents";
 import { sessionUsageSnapshotSchema } from "../session/sessionUsageSchema";
+import { sessionSnapshotSchema } from "../shared/sessionSnapshot";
 import type { ServerEvent } from "./protocol";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
@@ -70,6 +71,20 @@ const editableOpenAiProviderOptionsByProviderSchema = z.object({
   }).strict().optional(),
 }).strict();
 const childModelRoutingModeSchema = z.enum(CHILD_MODEL_ROUTING_MODES);
+const persistedSessionSummarySchema = z.object({
+  sessionId: nonEmptyTrimmedStringSchema,
+  title: z.string(),
+  titleSource: z.enum(["default", "model", "heuristic", "manual"]),
+  titleModel: z.string().nullable(),
+  provider: z.string(),
+  model: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  messageCount: z.number().int().nonnegative(),
+  lastEventSeq: z.number().int().nonnegative(),
+  hasPendingAsk: z.boolean(),
+  hasPendingApproval: z.boolean(),
+}).passthrough();
 
 export type ServerEventParseErrorReason = "invalid_json" | "invalid_envelope" | "unknown_type" | "invalid_event";
 
@@ -433,7 +448,13 @@ const serverEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("sessions"),
     sessionId: nonEmptyTrimmedStringSchema,
-    sessions: unknownArraySchema,
+    sessions: z.array(persistedSessionSummarySchema),
+  }).passthrough(),
+  z.object({
+    type: z.literal("session_snapshot"),
+    sessionId: nonEmptyTrimmedStringSchema,
+    targetSessionId: nonEmptyTrimmedStringSchema,
+    snapshot: sessionSnapshotSchema,
   }).passthrough(),
   z.object({
     type: z.literal("agent_spawned"),
@@ -565,6 +586,7 @@ const KNOWN_SERVER_EVENT_TYPES = new Set<string>([
   "session_usage",
   "messages",
   "sessions",
+  "session_snapshot",
   "agent_spawned",
   "agent_list",
   "agent_status",

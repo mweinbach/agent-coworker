@@ -16,6 +16,7 @@ import type { ModelStreamRawFormat } from "./modelStream";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "../types";
 import type { PersistedSessionSummary } from "./sessionStore";
 import type { SessionTitleSource } from "./sessionTitleService";
+import type { SessionSnapshot } from "../shared/sessionSnapshot";
 import { ensurePrivateDirectory, hardenPrivateFile, quarantineCorruptedDb } from "./sessionDb/fileHardening";
 import { importLegacySnapshots } from "./sessionDb/legacyImport";
 import { bootstrapSessionDb } from "./sessionDb/migrations";
@@ -195,8 +196,8 @@ export class SessionDb {
     this.db.close();
   }
 
-  listSessions(): PersistedSessionSummary[] {
-    return this.repository.listSessions();
+  listSessions(opts?: { workingDirectory?: string | null }): PersistedSessionSummary[] {
+    return this.repository.listSessions(opts);
   }
 
   listAgentSessions(parentSessionId: string): PersistentAgentSummary[] {
@@ -215,6 +216,10 @@ export class SessionDb {
     return this.repository.getSessionRecord(sessionId);
   }
 
+  getSessionSnapshot(sessionId: string): SessionSnapshot | null {
+    return this.repository.getSessionSnapshot(sessionId);
+  }
+
   persistSessionMutation(opts: PersistedSessionMutation): number {
     return this.repository.persistSessionMutation(opts);
   }
@@ -225,6 +230,10 @@ export class SessionDb {
 
   listModelStreamChunks(sessionId: string, turnId?: string): PersistedModelStreamChunk[] {
     return this.repository.listModelStreamChunks(sessionId, turnId);
+  }
+
+  persistSessionSnapshot(sessionId: string, snapshot: SessionSnapshot): void {
+    this.repository.persistSessionSnapshot(sessionId, snapshot);
   }
 
   private async bootstrap(): Promise<void> {

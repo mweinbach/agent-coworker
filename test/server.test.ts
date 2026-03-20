@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { startAgentServer, type StartAgentServerOptions } from "../src/server/startServer";
 import { getAiCoworkerPaths } from "../src/connect";
+import { SessionDb } from "../src/server/sessionDb";
 import {
   ASK_SKIP_TOKEN,
   CLIENT_MESSAGE_TYPES,
@@ -324,6 +325,40 @@ function collectSessionEventsUntil(
       clearTimeout(timer);
       ws.close();
       resolve(seen);
+    };
+
+    ws.onerror = (e) => {
+      clearTimeout(timer);
+      ws.close();
+      reject(new Error(`WebSocket error: ${e}`));
+    };
+  });
+}
+
+function createSessionWithAssistantTurn(
+  url: string,
+  text = "hello",
+  timeoutMs = 5000,
+): Promise<{ sessionId: string; assistantText: string }> {
+  return new Promise((resolve, reject) => {
+    let sessionId = "";
+    const ws = new WebSocket(url);
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error("Timed out waiting for assistant_message"));
+    }, timeoutMs);
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+      if (!sessionId && msg.type === "server_hello") {
+        sessionId = msg.sessionId;
+        ws.send(JSON.stringify({ type: "user_message", sessionId, text }));
+        return;
+      }
+      if (msg.type !== "assistant_message" || msg.sessionId !== sessionId) return;
+      clearTimeout(timer);
+      ws.close();
+      resolve({ sessionId, assistantText: msg.text });
     };
 
     ws.onerror = (e) => {
@@ -1360,6 +1395,282 @@ describe("WebSocket Lifecycle", () => {
       });
     } finally {
       server.stop();
+    }
+  });
+
+  test("list_sessions supports workspace-scoped filtering", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-server-home-"));
+    const workspaceA = await makeTmpProject();
+    const workspaceB = await makeTmpProject();
+    const now = new Date().toISOString();
+    const paths = getAiCoworkerPaths({ homedir: homeDir });
+    const db = await SessionDb.create({ paths });
+    db.persistSessionMutation({
+      sessionId: "workspace-a-root",
+      eventType: "session.created",
+      snapshot: {
+        sessionKind: "root",
+        parentSessionId: null,
+        role: null,
+        title: "Workspace A",
+        titleSource: "manual",
+        titleModel: null,
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        workingDirectory: workspaceA,
+        enableMcp: true,
+        createdAt: now,
+        updatedAt: now,
+        status: "active",
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hello a" }],
+        providerState: null,
+        todos: [],
+        harnessContext: null,
+        costTracker: null,
+      },
+    });
+    db.persistSessionMutation({
+      sessionId: "workspace-b-root",
+      eventType: "session.created",
+      snapshot: {
+        sessionKind: "root",
+        parentSessionId: null,
+        role: null,
+        title: "Workspace B",
+        titleSource: "manual",
+        titleModel: null,
+        provider: "openai",
+        model: "gpt-5.4",
+        workingDirectory: workspaceB,
+        enableMcp: true,
+        createdAt: now,
+        updatedAt: now,
+        status: "active",
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hello b" }],
+        providerState: null,
+        todos: [],
+        harnessContext: null,
+        costTracker: null,
+      },
+    });
+    db.close();
+
+    const { server, url } = await startAgentServer(serverOpts(workspaceA, { homedir: homeDir }));
+    try {
+      const workspaceScoped = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({ type: "list_sessions", sessionId, scope: "workspace" }),
+        (msg) => msg.type === "sessions",
+      );
+      const allSessions = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({ type: "list_sessions", sessionId, scope: "all" }),
+        (msg) => msg.type === "sessions",
+      );
+
+      expect(workspaceScoped.sessions.some((session: any) => session.sessionId === "workspace-a-root")).toBe(true);
+      expect(workspaceScoped.sessions.some((session: any) => session.sessionId === "workspace-b-root")).toBe(false);
+      expect(allSessions.sessions.some((session: any) => session.sessionId === "workspace-a-root")).toBe(true);
+      expect(allSessions.sessions.some((session: any) => session.sessionId === "workspace-b-root")).toBe(true);
+    } finally {
+      void server.stop(true);
+    }
+  });
+
+  test("get_session_snapshot returns live in-memory materialized snapshots", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => ({
+        text: "assistant reply",
+        responseMessages: [],
+      })) as any,
+    }));
+
+    try {
+      const created = await createSessionWithAssistantTurn(url, "hello snapshot");
+      const snapshotEvent = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({ type: "get_session_snapshot", sessionId, targetSessionId: created.sessionId }),
+        (msg) => msg.type === "session_snapshot" && msg.targetSessionId === created.sessionId,
+      );
+
+      expect(snapshotEvent.snapshot.sessionId).toBe(created.sessionId);
+      expect(snapshotEvent.snapshot.messageCount).toBe(1);
+      expect(snapshotEvent.snapshot.lastEventSeq).toBeGreaterThan(0);
+      expect(snapshotEvent.snapshot.feed).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "message", role: "user", text: "hello snapshot" }),
+          expect.objectContaining({ kind: "message", role: "assistant", text: "assistant reply" }),
+        ]),
+      );
+    } finally {
+      void server.stop(true);
+    }
+  });
+
+  test("get_session_snapshot reads persisted snapshots from sqlite on cold resume", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-server-home-"));
+    const workspace = await makeTmpProject();
+    const now = new Date().toISOString();
+    const paths = getAiCoworkerPaths({ homedir: homeDir });
+    const db = await SessionDb.create({ paths });
+    db.persistSessionMutation({
+      sessionId: "persisted-session",
+      eventType: "session.created",
+      snapshot: {
+        sessionKind: "root",
+        parentSessionId: null,
+        role: null,
+        title: "Persisted Session",
+        titleSource: "manual",
+        titleModel: null,
+        provider: "openai",
+        model: "gpt-5.4",
+        workingDirectory: workspace,
+        enableMcp: true,
+        createdAt: now,
+        updatedAt: now,
+        status: "active",
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "persist me" },
+          { role: "assistant", content: "persisted reply" },
+        ],
+        providerState: null,
+        todos: [],
+        harnessContext: null,
+        costTracker: null,
+      },
+    });
+    db.persistSessionSnapshot("persisted-session", {
+      sessionId: "persisted-session",
+      title: "Persisted Session",
+      titleSource: "manual",
+      titleModel: null,
+      provider: "openai",
+      model: "gpt-5.4",
+      sessionKind: "root",
+      parentSessionId: null,
+      role: null,
+      mode: null,
+      depth: null,
+      nickname: null,
+      requestedModel: null,
+      effectiveModel: null,
+      requestedReasoningEffort: null,
+      effectiveReasoningEffort: null,
+      executionState: null,
+      lastMessagePreview: "persisted reply",
+      createdAt: now,
+      updatedAt: now,
+      messageCount: 2,
+      lastEventSeq: 1,
+      feed: [
+        {
+          id: "feed-user",
+          kind: "message",
+          role: "user",
+          ts: now,
+          text: "persist me",
+        },
+        {
+          id: "feed-assistant",
+          kind: "message",
+          role: "assistant",
+          ts: now,
+          text: "persisted reply",
+        },
+      ],
+      agents: [],
+      todos: [],
+      sessionUsage: null,
+      lastTurnUsage: null,
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+    db.close();
+
+    const { server, url } = await startAgentServer(serverOpts(workspace, { homedir: homeDir }));
+    try {
+      const snapshotEvent = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({ type: "get_session_snapshot", sessionId, targetSessionId: "persisted-session" }),
+        (msg) => msg.type === "session_snapshot" && msg.targetSessionId === "persisted-session",
+      );
+
+      expect(snapshotEvent.snapshot.sessionId).toBe("persisted-session");
+      expect(snapshotEvent.snapshot.feed).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "message", role: "user", text: "persist me" }),
+          expect.objectContaining({ kind: "message", role: "assistant", text: "persisted reply" }),
+        ]),
+      );
+    } finally {
+      void server.stop(true);
+    }
+  });
+
+  test("get_session_snapshot falls back to a synthesized snapshot when no stored projection exists", async () => {
+    const workspace = await makeTmpProject();
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-server-home-"));
+    const now = "2026-03-19T00:00:01.000Z";
+    const db = await SessionDb.create({ paths: getAiCoworkerPaths({ homedir: homeDir }) });
+    db.persistSessionMutation({
+      sessionId: "legacy-session",
+      eventType: "session.created",
+      snapshot: {
+        sessionKind: "root",
+        parentSessionId: null,
+        role: null,
+        title: "Legacy Session",
+        titleSource: "manual",
+        titleModel: null,
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        workingDirectory: workspace,
+        enableMcp: true,
+        createdAt: now,
+        updatedAt: now,
+        status: "active",
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+        systemPrompt: "legacy",
+        messages: [{ role: "user", content: "legacy hello" }],
+        providerState: null,
+        todos: [],
+        harnessContext: null,
+        costTracker: null,
+      },
+    });
+    db.close();
+
+    const { server, url } = await startAgentServer(serverOpts(workspace, { homedir: homeDir }));
+    try {
+      const snapshotEvent = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({ type: "get_session_snapshot", sessionId, targetSessionId: "legacy-session" }),
+        (msg) =>
+          (msg.type === "session_snapshot" && msg.targetSessionId === "legacy-session")
+          || msg.type === "error",
+      );
+
+      expect(snapshotEvent.type).toBe("session_snapshot");
+      expect(snapshotEvent.snapshot.sessionId).toBe("legacy-session");
+      expect(snapshotEvent.snapshot.messageCount).toBe(1);
+      expect(snapshotEvent.snapshot.feed).toEqual([
+        expect.objectContaining({ kind: "message", role: "user", text: "legacy hello" }),
+      ]);
+      expect(snapshotEvent.snapshot.lastEventSeq).toBe(1);
+    } finally {
+      void server.stop(true);
     }
   });
 

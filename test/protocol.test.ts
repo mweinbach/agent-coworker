@@ -1028,12 +1028,52 @@ describe("safeParseClientMessage", () => {
       expect(msg.type).toBe("list_sessions");
       if (msg.type === "list_sessions") {
         expect(msg.sessionId).toBe("s1");
+        expect(msg.scope).toBeUndefined();
+      }
+    });
+
+    test("list_sessions accepts workspace scope", () => {
+      const msg = expectOk(JSON.stringify({ type: "list_sessions", sessionId: "s1", scope: "workspace" }));
+      expect(msg.type).toBe("list_sessions");
+      if (msg.type === "list_sessions") {
+        expect(msg.scope).toBe("workspace");
       }
     });
 
     test("list_sessions missing sessionId fails", () => {
       const err = expectErr(JSON.stringify({ type: "list_sessions" }));
       expect(err).toBe("list_sessions missing sessionId");
+    });
+
+    test("list_sessions rejects invalid scope", () => {
+      expect(expectErr(JSON.stringify({ type: "list_sessions", sessionId: "s1", scope: "user" }))).toBe(
+        "list_sessions invalid scope",
+      );
+    });
+  });
+
+  describe("get_session_snapshot", () => {
+    test("valid get_session_snapshot message", () => {
+      const msg = expectOk(
+        JSON.stringify({ type: "get_session_snapshot", sessionId: "s1", targetSessionId: "s2" }),
+      );
+      expect(msg.type).toBe("get_session_snapshot");
+      if (msg.type === "get_session_snapshot") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.targetSessionId).toBe("s2");
+      }
+    });
+
+    test("get_session_snapshot validates required fields", () => {
+      expect(expectErr(JSON.stringify({ type: "get_session_snapshot", targetSessionId: "s2" }))).toBe(
+        "get_session_snapshot missing sessionId",
+      );
+      expect(expectErr(JSON.stringify({ type: "get_session_snapshot", sessionId: "s1" }))).toBe(
+        "get_session_snapshot missing/invalid targetSessionId",
+      );
+      expect(
+        expectErr(JSON.stringify({ type: "get_session_snapshot", sessionId: "s1", targetSessionId: "" })),
+      ).toBe("get_session_snapshot missing/invalid targetSessionId");
     });
   });
 
@@ -2241,6 +2281,56 @@ describe("safeParseClientMessage", () => {
 
       expect(evt).not.toBeNull();
       expect(evt?.type).toBe("agent_wait_result");
+    });
+
+    test("safeParseServerEvent accepts session_snapshot", () => {
+      const evt = safeParseServerEvent({
+        type: "session_snapshot",
+        sessionId: "control-1",
+        targetSessionId: "target-1",
+        snapshot: {
+          sessionId: "target-1",
+          title: "Snapshot Session",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "openai",
+          model: "gpt-5.4",
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          mode: null,
+          depth: null,
+          nickname: null,
+          requestedModel: null,
+          effectiveModel: null,
+          requestedReasoningEffort: null,
+          effectiveReasoningEffort: null,
+          executionState: null,
+          lastMessagePreview: "hello",
+          createdAt: "2026-03-19T00:00:00.000Z",
+          updatedAt: "2026-03-19T00:00:01.000Z",
+          messageCount: 2,
+          lastEventSeq: 4,
+          feed: [
+            {
+              id: "item-1",
+              kind: "message",
+              role: "user",
+              ts: "2026-03-19T00:00:00.000Z",
+              text: "hello",
+            },
+          ],
+          agents: [],
+          todos: [],
+          sessionUsage: null,
+          lastTurnUsage: null,
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+        },
+      });
+
+      expect(evt).not.toBeNull();
+      expect(evt?.type).toBe("session_snapshot");
     });
 
     test("error requires code/source", () => {

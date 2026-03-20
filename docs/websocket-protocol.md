@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.24`
+- Current protocol version: `7.25`
 
 ## Table of Contents
 
@@ -31,7 +31,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Tools & Commands: [list_tools](#list_tools) | [list_commands](#list_commands) | [execute_command](#execute_command)
   - Skills: [list_skills](#list_skills) | [read_skill](#read_skill) | [disable_skill](#disable_skill) | [enable_skill](#enable_skill) | [delete_skill](#delete_skill)
   - MCP: [set_enable_mcp](#set_enable_mcp) | [mcp_servers_get](#mcp_servers_get) | [mcp_server_upsert](#mcp_server_upsert) | [mcp_server_delete](#mcp_server_delete) | [mcp_server_validate](#mcp_server_validate) | [mcp_server_auth_authorize](#mcp_server_auth_authorize) | [mcp_server_auth_callback](#mcp_server_auth_callback) | [mcp_server_auth_set_api_key](#mcp_server_auth_set_api_key) | [mcp_servers_migrate_legacy](#mcp_servers_migrate_legacy)
-  - Session Management: [session_close](#session_close) | [get_messages](#get_messages) | [set_session_title](#set_session_title) | [list_sessions](#list_sessions) | [delete_session](#delete_session) | [agent_spawn](#agent_spawn) | [agent_list_get](#agent_list_get) | [set_config](#set_config) | [upload_file](#upload_file) | [get_session_usage](#get_session_usage) | [set_session_usage_budget](#set_session_usage_budget)
+  - Session Management: [session_close](#session_close) | [get_messages](#get_messages) | [set_session_title](#set_session_title) | [list_sessions](#list_sessions) | [get_session_snapshot](#get_session_snapshot) | [delete_session](#delete_session) | [agent_spawn](#agent_spawn) | [agent_list_get](#agent_list_get) | [set_config](#set_config) | [upload_file](#upload_file) | [get_session_usage](#get_session_usage) | [set_session_usage_budget](#set_session_usage_budget)
   - Backup: [session_backup_get](#session_backup_get) | [session_backup_checkpoint](#session_backup_checkpoint) | [session_backup_restore](#session_backup_restore) | [session_backup_delete_checkpoint](#session_backup_delete_checkpoint) | [workspace_backups_get](#workspace_backups_get) | [workspace_backup_checkpoint](#workspace_backup_checkpoint) | [workspace_backup_restore](#workspace_backup_restore) | [workspace_backup_delete_checkpoint](#workspace_backup_delete_checkpoint) | [workspace_backup_delete_entry](#workspace_backup_delete_entry) | [workspace_backup_delta_get](#workspace_backup_delta_get)
   - Harness: [harness_context_get](#harness_context_get) | [harness_context_set](#harness_context_set)
   - Keepalive: [ping](#ping)
@@ -42,12 +42,19 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Provider: [provider_catalog](#provider_catalog) | [provider_auth_methods](#provider_auth_methods) | [provider_auth_challenge](#provider_auth_challenge) | [provider_auth_result](#provider_auth_result) | [provider_status](#provider_status) | [config_updated](#config_updated)
   - Tools & Skills: [tools](#tools) | [commands](#commands) | [skills_list](#skills_list) | [skill_content](#skill_content)
   - MCP: [mcp_servers](#mcp_servers) | [mcp_server_validation](#mcp_server_validation) | [mcp_server_auth_challenge](#mcp_server_auth_challenge) | [mcp_server_auth_result](#mcp_server_auth_result)
-  - Session Data: [messages](#messages) | [sessions](#sessions) | [agent_spawned](#agent_spawned) | [agent_list](#agent_list) | [agent_wait_result](#agent_wait_result) | [session_deleted](#session_deleted) | [file_uploaded](#file_uploaded) | [turn_usage](#turn_usage) | [session_usage](#session_usage) | [budget_warning](#budget_warning) | [budget_exceeded](#budget_exceeded)
+  - Session Data: [messages](#messages) | [sessions](#sessions) | [session_snapshot](#session_snapshot) | [agent_spawned](#agent_spawned) | [agent_list](#agent_list) | [agent_wait_result](#agent_wait_result) | [session_deleted](#session_deleted) | [file_uploaded](#file_uploaded) | [turn_usage](#turn_usage) | [session_usage](#session_usage) | [budget_warning](#budget_warning) | [budget_exceeded](#budget_exceeded)
   - Backup & Observability: [session_backup_state](#session_backup_state) | [workspace_backups](#workspace_backups) | [workspace_backup_delta](#workspace_backup_delta) | [observability_status](#observability_status)
   - Harness: [harness_context](#harness_context)
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.25`:
+
+- New client message: `get_session_snapshot`.
+- New server event: `session_snapshot`.
+- `list_sessions` now accepts optional `scope: "all" | "workspace"`; `"workspace"` filters persisted root sessions to the requester session's current `workingDirectory`.
+- Harness-owned session snapshots are now the authoritative desktop/thread hydration source. Renderer-local caches are warm-start only; `.cowork` plus websocket APIs remain canonical.
 
 Changes in `7.24`:
 
@@ -1751,16 +1758,36 @@ Manually set the session title.
 Enumerate persisted root sessions from the server's canonical session store. Child agents are listed separately via `agent_list_get`.
 
 ```json
-{ "type": "list_sessions", "sessionId": "..." }
+{ "type": "list_sessions", "sessionId": "...", "scope": "workspace" }
 ```
 
-| Field | Type | Required |
-|-------|------|----------|
-| `type` | `"list_sessions"` | Yes |
-| `sessionId` | `string` | Yes |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"list_sessions"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `scope` | `"all" \| "workspace"` | No | Defaults to `"all"`. `"workspace"` restricts results to sessions whose persisted `workingDirectory` matches the requester session. |
 
 **Response:** `sessions`
 **Error:** `validation_failed` when called from a child session.
+
+---
+
+### get_session_snapshot
+
+Request the materialized session snapshot for a persisted root session in the current workspace. The server serves this from the live in-memory projection when available, falls back to the persisted SQLite projection when cold, and can synthesize a best-effort snapshot for imported legacy sessions that predate projections.
+
+```json
+{ "type": "get_session_snapshot", "sessionId": "...", "targetSessionId": "root-session-id" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"get_session_snapshot"` | Yes | — |
+| `sessionId` | `string` | Yes | Requester root session ID |
+| `targetSessionId` | `string` | Yes | Root session to hydrate |
+
+**Response:** `session_snapshot`
+**Error:** `validation_failed` when called from a child session or with a non-root target, `permission_denied` when the target is outside the current workspace.
 
 ---
 
@@ -3269,11 +3296,110 @@ Persisted session list response to `list_sessions`.
 |-------|------|-------------|
 | `sessionId` | `string` | Session identifier |
 | `title` | `string` | Session title |
+| `titleSource` | `"default" \| "model" \| "heuristic" \| "manual"` | Session title provenance |
+| `titleModel` | `string \| null` | Model recorded when the title came from a model-generated title path |
 | `provider` | `ProviderName` | Provider |
 | `model` | `string` | Model |
 | `createdAt` | `string` | ISO 8601 creation timestamp |
 | `updatedAt` | `string` | ISO 8601 last update timestamp |
 | `messageCount` | `number` | Number of messages in history |
+| `lastEventSeq` | `number` | Latest persisted server-event sequence number |
+| `hasPendingAsk` | `boolean` | Whether the session is currently waiting on an ask prompt |
+| `hasPendingApproval` | `boolean` | Whether the session is currently waiting on an approval prompt |
+
+---
+
+### session_snapshot
+
+Materialized harness-owned snapshot response to `get_session_snapshot`.
+
+```json
+{
+  "type": "session_snapshot",
+  "sessionId": "control-session",
+  "targetSessionId": "root-session-id",
+  "snapshot": {
+    "sessionId": "root-session-id",
+    "title": "Fix login bug",
+    "titleSource": "manual",
+    "titleModel": null,
+    "provider": "openai",
+    "model": "gpt-5.4",
+    "sessionKind": "root",
+    "parentSessionId": null,
+    "role": null,
+    "mode": null,
+    "depth": null,
+    "nickname": null,
+    "requestedModel": null,
+    "effectiveModel": null,
+    "requestedReasoningEffort": null,
+    "effectiveReasoningEffort": null,
+    "executionState": null,
+    "lastMessagePreview": "Latest assistant preview",
+    "createdAt": "2026-03-19T18:00:00.000Z",
+    "updatedAt": "2026-03-19T18:30:00.000Z",
+    "messageCount": 24,
+    "lastEventSeq": 83,
+    "feed": [
+      {
+        "id": "item-1",
+        "kind": "message",
+        "role": "user",
+        "ts": "2026-03-19T18:00:00.000Z",
+        "text": "Please investigate the login bug."
+      }
+    ],
+    "agents": [],
+    "todos": [],
+    "sessionUsage": null,
+    "lastTurnUsage": null,
+    "hasPendingAsk": false,
+    "hasPendingApproval": false
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"session_snapshot"` | — |
+| `sessionId` | `string` | Requester/control session identifier |
+| `targetSessionId` | `string` | Hydrated persisted root session |
+| `snapshot` | `SessionSnapshot` | Canonical materialized session snapshot |
+
+**SessionSnapshot:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sessionId` | `string` | Persisted session identifier |
+| `title` | `string` | Session title |
+| `titleSource` | `"default" \| "model" \| "heuristic" \| "manual"` | Session title provenance |
+| `titleModel` | `string \| null` | Model recorded when the title came from the model-title path |
+| `provider` | `ProviderName` | Provider |
+| `model` | `string` | Model |
+| `sessionKind` | `"root" \| "agent"` | Session kind |
+| `parentSessionId` | `string \| null` | Parent session for agent sessions |
+| `role` | `string \| null` | Agent role when `sessionKind` is `"agent"` |
+| `mode` | `string \| null` | Agent mode when present |
+| `depth` | `number \| null` | Agent depth when present |
+| `nickname` | `string \| null` | Optional agent nickname |
+| `requestedModel` | `string \| null` | Requested model, if recorded |
+| `effectiveModel` | `string \| null` | Effective model, if recorded |
+| `requestedReasoningEffort` | `string \| null` | Requested reasoning effort, if recorded |
+| `effectiveReasoningEffort` | `string \| null` | Effective reasoning effort, if recorded |
+| `executionState` | `string \| null` | Agent execution state, when present |
+| `lastMessagePreview` | `string \| null` | Latest assistant preview |
+| `createdAt` | `string` | ISO 8601 creation timestamp |
+| `updatedAt` | `string` | ISO 8601 last update timestamp |
+| `messageCount` | `number` | Number of persisted model/user messages |
+| `lastEventSeq` | `number` | Latest persisted server-event sequence number |
+| `feed` | `SessionFeedItem[]` | Materialized feed ready for thin-client rendering |
+| `agents` | `PersistentAgentSummary[]` | Child-agent summaries for root sessions |
+| `todos` | `TodoItem[]` | Latest todo state |
+| `sessionUsage` | `SessionUsageSnapshot \| null` | Full session usage snapshot |
+| `lastTurnUsage` | `{ turnId: string; usage: TurnUsage } \| null` | Latest turn usage shortcut |
+| `hasPendingAsk` | `boolean` | Whether the session is awaiting ask input |
+| `hasPendingApproval` | `boolean` | Whether the session is awaiting approval input |
 
 ---
 

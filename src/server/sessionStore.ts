@@ -263,11 +263,16 @@ export type PersistedSessionSnapshot =
 export type PersistedSessionSummary = {
   sessionId: string;
   title: string;
+  titleSource: SessionTitleSource;
+  titleModel: string | null;
   provider: AgentConfig["provider"];
   model: string;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  lastEventSeq: number;
+  hasPendingAsk: boolean;
+  hasPendingApproval: boolean;
 };
 
 const sessionTitleSourceSchema = z.enum(["default", "model", "heuristic", "manual"]);
@@ -917,11 +922,16 @@ export async function listPersistedSessionSnapshots(
     summaries.push({
       sessionId: parsed.sessionId,
       title: parsed.session.title,
+      titleSource: parsed.session.titleSource,
+      titleModel: parsed.session.titleModel,
       provider: parsed.session.provider,
       model: parsed.session.model,
       createdAt: parsed.createdAt,
       updatedAt: parsed.updatedAt,
       messageCount: parsed.context.messages.length,
+      lastEventSeq: parsed.context.messages.length,
+      hasPendingAsk: false,
+      hasPendingApproval: false,
     });
   }
 

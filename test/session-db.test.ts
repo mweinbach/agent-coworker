@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { SessionDb } from "../src/server/sessionDb";
+import type { SessionSnapshot } from "../src/shared/sessionSnapshot";
 
 async function makeTmpCoworkHome(prefix = "session-db-test-"): Promise<{
   rootDir: string;
@@ -14,6 +15,49 @@ async function makeTmpCoworkHome(prefix = "session-db-test-"): Promise<{
   const sessionsDir = path.join(rootDir, "sessions");
   await fs.mkdir(sessionsDir, { recursive: true });
   return { rootDir, sessionsDir };
+}
+
+function makeSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
+  return {
+    sessionId: "s-1",
+    title: "Session One",
+    titleSource: "default",
+    titleModel: null,
+    provider: "google",
+    model: "gemini-3-flash-preview",
+    sessionKind: "root",
+    parentSessionId: null,
+    role: null,
+    mode: null,
+    depth: null,
+    nickname: null,
+    requestedModel: null,
+    effectiveModel: null,
+    requestedReasoningEffort: null,
+    effectiveReasoningEffort: null,
+    executionState: null,
+    lastMessagePreview: "hello",
+    createdAt: "2026-03-19T00:00:00.000Z",
+    updatedAt: "2026-03-19T00:00:01.000Z",
+    messageCount: 1,
+    lastEventSeq: 1,
+    feed: [
+      {
+        id: "item-1",
+        kind: "message",
+        role: "user",
+        ts: "2026-03-19T00:00:00.000Z",
+        text: "hello",
+      },
+    ],
+    agents: [],
+    todos: [],
+    sessionUsage: null,
+    lastTurnUsage: null,
+    hasPendingAsk: false,
+    hasPendingApproval: false,
+    ...overrides,
+  };
 }
 
 describe("sessionDb", () => {
@@ -198,6 +242,86 @@ describe("sessionDb", () => {
           },
         },
       ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("filters listed sessions by working directory and persists materialized snapshots", async () => {
+    const paths = await makeTmpCoworkHome();
+    const db = await SessionDb.create({ paths });
+    try {
+      const now = new Date().toISOString();
+      db.persistSessionMutation({
+        sessionId: "workspace-a",
+        eventType: "session.created",
+        snapshot: {
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          title: "Workspace A",
+          titleSource: "default",
+          titleModel: null,
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          workingDirectory: "/tmp/workspace-a",
+          enableMcp: true,
+          createdAt: now,
+          updatedAt: now,
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello a" }],
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+      });
+      db.persistSessionMutation({
+        sessionId: "workspace-b",
+        eventType: "session.created",
+        snapshot: {
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          title: "Workspace B",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "openai",
+          model: "gpt-5.4",
+          workingDirectory: "/tmp/workspace-b",
+          enableMcp: true,
+          createdAt: now,
+          updatedAt: now,
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello b" }],
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+      });
+
+      const persistedSnapshot = makeSnapshot({
+        sessionId: "workspace-a",
+        title: "Workspace A",
+        updatedAt: now,
+      });
+      db.persistSessionSnapshot("workspace-a", persistedSnapshot);
+
+      expect(db.listSessions({ workingDirectory: "/tmp/workspace-a" }).map((session) => session.sessionId)).toEqual([
+        "workspace-a",
+      ]);
+      expect(db.listSessions({ workingDirectory: "/tmp/workspace-b" }).map((session) => session.sessionId)).toEqual([
+        "workspace-b",
+      ]);
+      expect(db.getSessionSnapshot("workspace-a")).toEqual(persistedSnapshot);
+      expect(db.getSessionSnapshot("workspace-b")).toBeNull();
     } finally {
       db.close();
     }

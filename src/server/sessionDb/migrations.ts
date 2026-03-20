@@ -11,6 +11,7 @@ const COST_TRACKER_MIGRATION = 6;
 const BACKUPS_ENABLED_OVERRIDE_MIGRATION = 7;
 const AGENT_REALIGNMENT_MIGRATION = 8;
 const PROVIDER_OPTIONS_MIGRATION = 9;
+const SESSION_SNAPSHOTS_MIGRATION = 10;
 
 type BootstrapSessionDbOptions = {
   db: Database;
@@ -26,6 +27,7 @@ type BootstrapSessionDbOptions = {
     | "addCostTrackerColumn"
     | "addBackupsEnabledOverrideColumn"
     | "addProviderOptionsColumn"
+    | "addSessionSnapshotsTable"
   >;
   importLegacySnapshots: () => Promise<void>;
 };
@@ -83,6 +85,11 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   if (!appliedMigrations.has(PROVIDER_OPTIONS_MIGRATION)) {
     opts.repository.addProviderOptionsColumn();
     opts.repository.markMigration(PROVIDER_OPTIONS_MIGRATION);
+  }
+
+  if (!appliedMigrations.has(SESSION_SNAPSHOTS_MIGRATION)) {
+    opts.repository.addSessionSnapshotsTable();
+    opts.repository.markMigration(SESSION_SNAPSHOTS_MIGRATION);
   }
 
   if (!appliedMigrations.has(LEGACY_IMPORT_MIGRATION)) {

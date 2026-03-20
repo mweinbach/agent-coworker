@@ -1,4 +1,5 @@
 import type { AiCoworkerPaths } from "../../connect";
+import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type { PersistedSessionMutation, SessionDb } from "../sessionDb";
 import type { PersistedSessionSnapshot } from "../sessionStore";
 
@@ -16,6 +17,8 @@ export class PersistenceManager {
       }) => Promise<string | void>;
       buildCanonicalSnapshot: (updatedAt: string) => PersistedSessionMutation["snapshot"];
       buildPersistedSnapshotAt: (updatedAt: string) => PersistedSessionSnapshot;
+      buildSessionSnapshotAt: (updatedAt: string, lastEventSeq: number) => SessionSnapshot;
+      onPersistedLastEventSeq?: (lastEventSeq: number) => void;
       emitTelemetry: (
         name: string,
         status: "ok" | "error",
@@ -32,7 +35,7 @@ export class PersistenceManager {
       const startedAt = Date.now();
       const updatedAt = new Date().toISOString();
       if (this.opts.sessionDb) {
-        this.opts.sessionDb.persistSessionMutation({
+        const lastEventSeq = this.opts.sessionDb.persistSessionMutation({
           sessionId: this.opts.sessionId,
           eventType: reason,
           eventTs: updatedAt,
@@ -40,6 +43,11 @@ export class PersistenceManager {
           payload: { reason },
           snapshot: this.opts.buildCanonicalSnapshot(updatedAt),
         });
+        this.opts.sessionDb.persistSessionSnapshot(
+          this.opts.sessionId,
+          this.opts.buildSessionSnapshotAt(updatedAt, lastEventSeq),
+        );
+        this.opts.onPersistedLastEventSeq?.(lastEventSeq);
       } else {
         const snapshot = this.opts.buildPersistedSnapshotAt(updatedAt);
         await this.opts.writePersistedSessionSnapshot({

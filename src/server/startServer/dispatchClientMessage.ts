@@ -142,7 +142,9 @@ export function dispatchClientMessage({
     case "set_session_title":
       return session.setSessionTitle(message.title);
     case "list_sessions":
-      return void session.listSessions();
+      return void session.listSessions(message.scope);
+    case "get_session_snapshot":
+      return void session.getSessionSnapshot(message.targetSessionId);
     case "delete_session":
       return void session.deleteSession(message.targetSessionId);
     case "memory_list":

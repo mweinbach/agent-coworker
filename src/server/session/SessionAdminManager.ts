@@ -42,18 +42,63 @@ export class SessionAdminManager {
     });
   }
 
-  async listSessions() {
+  async listSessions(scope: "all" | "workspace" = "all") {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
       this.context.emitError("validation_failed", "session", "Only root sessions can list sessions");
       return;
     }
     try {
       const sessions = this.context.deps.sessionDb
-        ? this.context.deps.sessionDb.listSessions()
+        ? this.context.deps.sessionDb.listSessions({
+            ...(scope === "workspace" ? { workingDirectory: this.context.state.config.workingDirectory } : {}),
+          })
         : await listPersistedSessionSnapshots(this.context.getCoworkPaths());
       this.context.emit({ type: "sessions", sessionId: this.context.id, sessions });
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to list sessions: ${String(err)}`);
+    }
+  }
+
+  async getSessionSnapshot(targetSessionId: string) {
+    if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
+      this.context.emitError("validation_failed", "session", "Only root sessions can fetch session snapshots");
+      return;
+    }
+    try {
+      const record = this.context.deps.sessionDb?.getSessionRecord(targetSessionId) ?? null;
+      if (!record) {
+        this.context.emitError("validation_failed", "session", `Unknown target session: ${targetSessionId}`);
+        return;
+      }
+      if (record.sessionKind !== "root") {
+        this.context.emitError("validation_failed", "session", "Only root sessions can be hydrated via session snapshots");
+        return;
+      }
+      if (record.workingDirectory !== this.context.state.config.workingDirectory) {
+        this.context.emitError("permission_denied", "session", "Target session is outside the active workspace");
+        return;
+      }
+
+      const liveSnapshot = this.context.deps.getLiveSessionSnapshotImpl?.(targetSessionId) ?? null;
+      const snapshot =
+        liveSnapshot
+        ?? this.context.deps.sessionDb?.getSessionSnapshot(targetSessionId)
+        ?? this.context.deps.buildLegacySessionSnapshotImpl?.(record)
+        ?? null;
+
+      if (!snapshot) {
+        this.context.emitError("internal_error", "session", `No snapshot available for session: ${targetSessionId}`);
+        return;
+      }
+
+      this.context.emit({
+        type: "session_snapshot",
+        sessionId: this.context.id,
+        targetSessionId,
+        snapshot,
+      });
+    } catch (err) {
+      this.context.emitError("internal_error", "session", `Failed to load session snapshot: ${String(err)}`);
     }
   }
 

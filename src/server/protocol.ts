@@ -18,6 +18,7 @@ import { type ProviderAuthMethod, type ProviderAuthChallenge } from "../provider
 import type { ProviderCatalogEntry } from "../providers/connectionCatalog";
 import type { ModelStreamPartType, ModelStreamRawFormat } from "./modelStream";
 import type { PersistedSessionSummary } from "./sessionStore";
+import type { SessionSnapshot } from "../shared/sessionSnapshot";
 import type {
   SessionBackupPublicState,
   WorkspaceBackupDeltaPreview,
@@ -160,7 +161,8 @@ export type ClientMessage =
   | { type: "reset"; sessionId: string }
   | { type: "get_messages"; sessionId: string; offset?: number; limit?: number }
   | { type: "set_session_title"; sessionId: string; title: string }
-  | { type: "list_sessions"; sessionId: string }
+  | { type: "list_sessions"; sessionId: string; scope?: "all" | "workspace" }
+  | { type: "get_session_snapshot"; sessionId: string; targetSessionId: string }
   | { type: "delete_session"; sessionId: string; targetSessionId: string }
   | { type: "memory_list"; sessionId: string; scope?: "workspace" | "user" }
   | { type: "memory_upsert"; sessionId: string; scope: "workspace" | "user"; id?: string; content: string }
@@ -454,6 +456,12 @@ export type ServerEvent =
     limit: number;
   }
   | { type: "sessions"; sessionId: string; sessions: PersistedSessionSummary[] }
+  | {
+    type: "session_snapshot";
+    sessionId: string;
+    targetSessionId: string;
+    snapshot: SessionSnapshot;
+  }
   | { type: "agent_spawned"; sessionId: string; agent: PersistentAgentSummary }
   | { type: "agent_list"; sessionId: string; agents: PersistentAgentSummary[] }
   | { type: "agent_status"; sessionId: string; agent: PersistentAgentSummary }
@@ -474,7 +482,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.24";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.25";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -527,6 +535,7 @@ export const CLIENT_MESSAGE_TYPES = [
   "get_messages",
   "set_session_title",
   "list_sessions",
+  "get_session_snapshot",
   "delete_session",
   "memory_list",
   "memory_upsert",
@@ -584,6 +593,7 @@ export const SERVER_EVENT_TYPES = [
   "budget_exceeded",
   "messages",
   "sessions",
+  "session_snapshot",
   "agent_spawned",
   "agent_list",
   "agent_status",

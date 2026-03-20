@@ -5,6 +5,7 @@ import type { PersistentAgentSummary } from "../../shared/agents";
 import type { PersistedModelStreamChunk, PersistedSessionMutation, PersistedSessionRecord } from "../sessionDb";
 import type { PersistedSessionSnapshot, PersistedSessionSummary } from "../sessionStore";
 import type { ModelMessage } from "../../types";
+import { sessionSnapshotSchema, type SessionSnapshot } from "../../shared/sessionSnapshot";
 import { mapPersistedSessionRecordRow, mapPersistedSessionSubagentSummaryRow, mapPersistedSessionSummaryRow } from "./mappers";
 import {
   parseBooleanInteger,
@@ -24,15 +25,49 @@ export class SessionDbRepository {
     this.db = db;
   }
 
-  listSessions(): PersistedSessionSummary[] {
-    const rows = this.db
-      .query(
-        `SELECT session_id, title, provider, model, created_at, updated_at, message_count
-         FROM sessions
-         WHERE session_kind = 'root'
-         ORDER BY updated_at DESC`,
-      )
-      .all() as Array<Record<string, unknown>>;
+  listSessions(opts?: { workingDirectory?: string | null }): PersistedSessionSummary[] {
+    const rows = (opts?.workingDirectory
+      ? this.db
+          .query(
+            `SELECT
+               session_id,
+               title,
+               title_source,
+               title_model,
+               provider,
+               model,
+               created_at,
+               updated_at,
+               message_count,
+               last_event_seq,
+               has_pending_ask,
+               has_pending_approval
+             FROM sessions
+             WHERE session_kind = 'root'
+               AND working_directory = ?
+             ORDER BY updated_at DESC`,
+          )
+          .all(opts.workingDirectory)
+      : this.db
+          .query(
+            `SELECT
+               session_id,
+               title,
+               title_source,
+               title_model,
+               provider,
+               model,
+               created_at,
+               updated_at,
+               message_count,
+               last_event_seq,
+               has_pending_ask,
+               has_pending_approval
+             FROM sessions
+             WHERE session_kind = 'root'
+             ORDER BY updated_at DESC`,
+          )
+          .all()) as Array<Record<string, unknown>>;
 
     return rows.map(mapPersistedSessionSummaryRow);
   }
@@ -158,6 +193,14 @@ export class SessionDbRepository {
 
     if (!row) return null;
     return mapPersistedSessionRecordRow(row);
+  }
+
+  getSessionSnapshot(sessionId: string): SessionSnapshot | null {
+    const row = this.db
+      .query("SELECT snapshot_json FROM session_snapshots WHERE session_id = ? LIMIT 1")
+      .get(sessionId) as Record<string, unknown> | null;
+    if (!row) return null;
+    return parseJsonStringWithSchema(row.snapshot_json, sessionSnapshotSchema, "session_snapshots.snapshot_json");
   }
 
   persistSessionMutation(opts: PersistedSessionMutation): number {
@@ -379,6 +422,18 @@ export class SessionDbRepository {
       );
   }
 
+  persistSessionSnapshot(sessionId: string, snapshot: SessionSnapshot): void {
+    this.db
+      .query(
+        `INSERT INTO session_snapshots (session_id, updated_at, snapshot_json)
+         VALUES (?, ?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET
+           updated_at = excluded.updated_at,
+           snapshot_json = excluded.snapshot_json`,
+      )
+      .run(sessionId, snapshot.updatedAt, toJsonString(snapshot));
+  }
+
   listModelStreamChunks(sessionId: string, turnId?: string): PersistedModelStreamChunk[] {
     const rows = turnId
       ? (this.db
@@ -492,6 +547,14 @@ export class SessionDbRepository {
          normalizer_version INTEGER NOT NULL,
          raw_event_json TEXT NOT NULL,
          PRIMARY KEY(session_id, turn_id, chunk_index)
+       )`,
+    );
+
+    this.db.exec(
+      `CREATE TABLE IF NOT EXISTS session_snapshots (
+         session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+         updated_at TEXT NOT NULL,
+         snapshot_json TEXT NOT NULL
        )`,
     );
 
@@ -629,6 +692,16 @@ export class SessionDbRepository {
     );
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_session_model_stream_chunks_session_turn ON session_model_stream_chunks(session_id, turn_id, chunk_index)",
+    );
+  }
+
+  addSessionSnapshotsTable(): void {
+    this.db.exec(
+      `CREATE TABLE IF NOT EXISTS session_snapshots (
+         session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+         updated_at TEXT NOT NULL,
+         snapshot_json TEXT NOT NULL
+       )`,
     );
   }
 

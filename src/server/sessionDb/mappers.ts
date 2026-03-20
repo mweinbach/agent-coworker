@@ -43,11 +43,16 @@ const providerOptionsSchema = z.record(z.string(), z.unknown());
 const summaryRowSchema = z.object({
   session_id: nonEmptyStringSchema,
   title: nonEmptyStringSchema,
+  title_source: sessionTitleSourceSchema,
+  title_model: z.union([nonEmptyStringSchema, z.null()]),
   provider: providerNameSchema,
   model: nonEmptyStringSchema,
   created_at: isoTimestampSchema,
   updated_at: isoTimestampSchema,
   message_count: nonNegativeIntegerSchema,
+  last_event_seq: nonNegativeIntegerSchema,
+  has_pending_ask: sqliteBooleanIntSchema,
+  has_pending_approval: sqliteBooleanIntSchema,
 }).strict();
 
 const subagentSummaryRowSchema = z.object({
@@ -137,11 +142,16 @@ export function mapPersistedSessionSummaryRow(row: Record<string, unknown>): Per
   return {
     sessionId: parsed.data.session_id,
     title: parsed.data.title,
+    titleSource: parsed.data.title_source,
+    titleModel: parsed.data.title_model,
     provider: parsed.data.provider,
     model: parsed.data.model,
     createdAt: parsed.data.created_at,
     updatedAt: parsed.data.updated_at,
     messageCount: parsed.data.message_count,
+    lastEventSeq: parsed.data.last_event_seq,
+    hasPendingAsk: Boolean(parsed.data.has_pending_ask),
+    hasPendingApproval: Boolean(parsed.data.has_pending_approval),
   };
 }
 

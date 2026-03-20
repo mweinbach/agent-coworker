@@ -21,6 +21,7 @@ import { resolveAuthHomeDir } from "../utils/authHome";
 
 import { AgentControl } from "./agents/AgentControl";
 import { AgentSession } from "./session/AgentSession";
+import { createLegacySessionSnapshot } from "./session/SessionSnapshotProjector";
 import { SessionDb } from "./sessionDb";
 import { WorkspaceBackupService } from "./workspaceBackups";
 import {
@@ -430,6 +431,9 @@ export async function startAgentServer(
         checkpointId: string;
       }) =>
         await workspaceBackupService.getCheckpointDelta(opts.workingDirectory, opts.targetSessionId, opts.checkpointId),
+      getLiveSessionSnapshotImpl: (sessionId: string) => sessionBindings.get(sessionId)?.session?.buildSessionSnapshot() ?? null,
+      buildLegacySessionSnapshotImpl: (record: import("./sessionDb").PersistedSessionRecord) =>
+        createLegacySessionSnapshot(record),
     };
   };
 
@@ -472,6 +476,7 @@ export async function startAgentServer(
         const common = buildSessionCommon(binding, persisted.sessionKind);
         const session = AgentSession.fromPersisted({
           persisted,
+          initialSessionSnapshot: sessionDb.getSessionSnapshot(persisted.sessionId) ?? createLegacySessionSnapshot(persisted),
           baseConfig: { ...config },
           ...common,
         });

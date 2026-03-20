@@ -54,10 +54,12 @@ import type {
 import type { SessionConfigPatch } from "../protocol";
 import { SessionMetadataManager } from "./SessionMetadataManager";
 import { SessionRuntimeSupport } from "./SessionRuntimeSupport";
+import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
 import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
 import { SkillManager } from "./SkillManager";
 import { TurnExecutionManager } from "./TurnExecutionManager";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
+import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 
 function makeId(): string {
   return crypto.randomUUID();
@@ -128,6 +130,46 @@ function initialCurrentTurnOutcome(hydrated?: HydratedSessionState): SessionRunt
   return "completed";
 }
 
+function buildInitialSessionSnapshot(opts: {
+  sessionId: string;
+  state: SessionRuntimeState;
+  lastEventSeq: number;
+  hasPendingAsk: boolean;
+  hasPendingApproval: boolean;
+}): SessionSnapshot {
+  return {
+    sessionId: opts.sessionId,
+    title: opts.state.sessionInfo.title,
+    titleSource: opts.state.sessionInfo.titleSource,
+    titleModel: opts.state.sessionInfo.titleModel,
+    provider: opts.state.sessionInfo.provider,
+    model: opts.state.sessionInfo.model,
+    sessionKind: opts.state.sessionInfo.sessionKind ?? "root",
+    parentSessionId: opts.state.sessionInfo.parentSessionId ?? null,
+    role: opts.state.sessionInfo.role ?? null,
+    mode: opts.state.sessionInfo.mode ?? null,
+    depth: typeof opts.state.sessionInfo.depth === "number" ? opts.state.sessionInfo.depth : null,
+    nickname: opts.state.sessionInfo.nickname ?? null,
+    requestedModel: opts.state.sessionInfo.requestedModel ?? null,
+    effectiveModel: opts.state.sessionInfo.effectiveModel ?? null,
+    requestedReasoningEffort: opts.state.sessionInfo.requestedReasoningEffort ?? null,
+    effectiveReasoningEffort: opts.state.sessionInfo.effectiveReasoningEffort ?? null,
+    executionState: opts.state.sessionInfo.executionState ?? null,
+    lastMessagePreview: opts.state.sessionInfo.lastMessagePreview ?? null,
+    createdAt: opts.state.sessionInfo.createdAt,
+    updatedAt: opts.state.sessionInfo.updatedAt,
+    messageCount: opts.state.allMessages.length,
+    lastEventSeq: opts.lastEventSeq,
+    feed: [],
+    agents: [],
+    todos: structuredClone(opts.state.todos),
+    sessionUsage: opts.state.costTracker?.getSnapshot() ?? null,
+    lastTurnUsage: null,
+    hasPendingAsk: opts.hasPendingAsk,
+    hasPendingApproval: opts.hasPendingApproval,
+  };
+}
+
 const MAX_DISCONNECTED_REPLAY_EVENTS = 256;
 const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<ServerEvent["type"]>([
   "user_message",
@@ -167,6 +209,7 @@ export class AgentSession {
   private readonly context: SessionContext;
   private readonly runtimeSupport: SessionRuntimeSupport;
   private readonly snapshotBuilder: SessionSnapshotBuilder;
+  private readonly sessionSnapshotProjector: SessionSnapshotProjector;
 
   private readonly persistenceManager: PersistenceManager;
   private readonly historyManager: HistoryManager;
@@ -183,6 +226,7 @@ export class AgentSession {
   private readonly memoryStore: MemoryStore;
   private bufferDisconnectedEvents = false;
   private disconnectedReplayEvents: ServerEvent[] = [];
+  private persistedLastEventSeq: number;
 
   constructor(opts: {
     config: AgentConfig;
@@ -218,7 +262,11 @@ export class AgentSession {
     deleteWorkspaceBackupCheckpointImpl?: SessionDependencies["deleteWorkspaceBackupCheckpointImpl"];
     deleteWorkspaceBackupEntryImpl?: SessionDependencies["deleteWorkspaceBackupEntryImpl"];
     getWorkspaceBackupDeltaImpl?: SessionDependencies["getWorkspaceBackupDeltaImpl"];
+    getLiveSessionSnapshotImpl?: SessionDependencies["getLiveSessionSnapshotImpl"];
+    buildLegacySessionSnapshotImpl?: SessionDependencies["buildLegacySessionSnapshotImpl"];
     hydratedState?: HydratedSessionState;
+    initialSessionSnapshot?: SessionSnapshot;
+    initialLastEventSeq?: number;
     seedContext?: SeededSessionContext;
     skipInitialPersist?: boolean;
   }) {
@@ -229,6 +277,7 @@ export class AgentSession {
     const seededHarnessContext = hydrated?.harnessContext
       ?? (opts.seedContext?.harnessContext ? structuredClone(opts.seedContext.harnessContext) : null);
     this.id = hydrated?.sessionId ?? makeId();
+    this.persistedLastEventSeq = Math.max(0, Math.floor(opts.initialLastEventSeq ?? opts.initialSessionSnapshot?.lastEventSeq ?? 0));
 
     const now = new Date().toISOString();
     this.state = {
@@ -323,6 +372,8 @@ export class AgentSession {
       deleteWorkspaceBackupCheckpointImpl: opts.deleteWorkspaceBackupCheckpointImpl,
       deleteWorkspaceBackupEntryImpl: opts.deleteWorkspaceBackupEntryImpl,
       getWorkspaceBackupDeltaImpl: opts.getWorkspaceBackupDeltaImpl,
+      getLiveSessionSnapshotImpl: opts.getLiveSessionSnapshotImpl,
+      buildLegacySessionSnapshotImpl: opts.buildLegacySessionSnapshotImpl,
     };
 
     if (seededHarnessContext) {
@@ -336,6 +387,7 @@ export class AgentSession {
           this.disconnectedReplayEvents.splice(0, this.disconnectedReplayEvents.length - MAX_DISCONNECTED_REPLAY_EVENTS);
         }
       }
+      this.sessionSnapshotProjector?.applyEvent(evt);
       opts.emit(evt);
     };
 
@@ -396,6 +448,15 @@ export class AgentSession {
       writePersistedSessionSnapshot: this.deps.writePersistedSessionSnapshotImpl,
       buildCanonicalSnapshot: (updatedAt) => this.buildCanonicalSnapshot(updatedAt),
       buildPersistedSnapshotAt: (updatedAt) => this.buildPersistedSnapshotAt(updatedAt),
+      buildSessionSnapshotAt: (updatedAt, lastEventSeq) => {
+        const snapshot = this.buildSessionSnapshot();
+        snapshot.updatedAt = updatedAt;
+        snapshot.lastEventSeq = lastEventSeq;
+        return snapshot;
+      },
+      onPersistedLastEventSeq: (lastEventSeq) => {
+        this.persistedLastEventSeq = lastEventSeq;
+      },
       emitTelemetry: (name, status, attributes, durationMs) => this.emitTelemetry(name, status, attributes, durationMs),
       emitError: (message) => this.emitError("internal_error", "session", message),
       formatError: (err) => this.formatErrorMessage(err),
@@ -464,6 +525,17 @@ export class AgentSession {
     this.attachCostTrackerListeners(costTracker);
     this.state.costTracker = costTracker;
 
+    const initialSnapshot = opts.initialSessionSnapshot
+      ? structuredClone(opts.initialSessionSnapshot)
+      : buildInitialSessionSnapshot({
+          sessionId: this.id,
+          state: this.state,
+          lastEventSeq: this.persistedLastEventSeq,
+          hasPendingAsk: this.hasPendingAsk,
+          hasPendingApproval: this.hasPendingApproval,
+        });
+    this.sessionSnapshotProjector = new SessionSnapshotProjector(initialSnapshot);
+
     if (!opts.skipInitialPersist) {
       this.queuePersistSessionSnapshot("session.created");
     }
@@ -501,6 +573,7 @@ export class AgentSession {
     deleteWorkspaceBackupCheckpointImpl?: SessionDependencies["deleteWorkspaceBackupCheckpointImpl"];
     deleteWorkspaceBackupEntryImpl?: SessionDependencies["deleteWorkspaceBackupEntryImpl"];
     getWorkspaceBackupDeltaImpl?: SessionDependencies["getWorkspaceBackupDeltaImpl"];
+    initialSessionSnapshot?: SessionSnapshot | null;
   }): AgentSession {
     const { persisted } = opts;
     const resolvedPersistedModel = getKnownResolvedModelMetadata(persisted.provider, persisted.model);
@@ -572,6 +645,8 @@ export class AgentSession {
       deleteWorkspaceBackupCheckpointImpl: opts.deleteWorkspaceBackupCheckpointImpl,
       deleteWorkspaceBackupEntryImpl: opts.deleteWorkspaceBackupEntryImpl,
       getWorkspaceBackupDeltaImpl: opts.getWorkspaceBackupDeltaImpl,
+      ...(opts.initialSessionSnapshot ? { initialSessionSnapshot: opts.initialSessionSnapshot } : {}),
+      initialLastEventSeq: persisted.lastEventSeq,
       hydratedState: {
         sessionId: persisted.sessionId,
         sessionInfo,
@@ -596,6 +671,42 @@ export class AgentSession {
     }
 
     return session;
+  }
+
+  buildSessionSnapshot(): SessionSnapshot {
+    const snapshot = this.sessionSnapshotProjector.getSnapshot();
+    snapshot.title = this.state.sessionInfo.title;
+    snapshot.titleSource = this.state.sessionInfo.titleSource;
+    snapshot.titleModel = this.state.sessionInfo.titleModel;
+    snapshot.provider = this.state.sessionInfo.provider;
+    snapshot.model = this.state.sessionInfo.model;
+    snapshot.sessionKind = this.state.sessionInfo.sessionKind ?? "root";
+    snapshot.parentSessionId = this.state.sessionInfo.parentSessionId ?? null;
+    snapshot.role = this.state.sessionInfo.role ?? null;
+    snapshot.mode = this.state.sessionInfo.mode ?? null;
+    snapshot.depth = typeof this.state.sessionInfo.depth === "number" ? this.state.sessionInfo.depth : null;
+    snapshot.nickname = this.state.sessionInfo.nickname ?? null;
+    snapshot.requestedModel = this.state.sessionInfo.requestedModel ?? null;
+    snapshot.effectiveModel = this.state.sessionInfo.effectiveModel ?? null;
+    snapshot.requestedReasoningEffort = this.state.sessionInfo.requestedReasoningEffort ?? null;
+    snapshot.effectiveReasoningEffort = this.state.sessionInfo.effectiveReasoningEffort ?? null;
+    snapshot.executionState = this.state.sessionInfo.executionState ?? null;
+    snapshot.lastMessagePreview = this.state.sessionInfo.lastMessagePreview ?? null;
+    snapshot.createdAt = this.state.sessionInfo.createdAt;
+    snapshot.updatedAt = this.state.sessionInfo.updatedAt;
+    snapshot.messageCount = this.state.allMessages.length;
+    snapshot.lastEventSeq = this.persistedLastEventSeq;
+    snapshot.todos = structuredClone(this.state.todos);
+    snapshot.sessionUsage = this.state.costTracker?.getSnapshot() ?? null;
+    snapshot.lastTurnUsage = snapshot.sessionUsage?.turns?.length
+      ? {
+          turnId: snapshot.sessionUsage.turns[snapshot.sessionUsage.turns.length - 1]!.turnId,
+          usage: { ...snapshot.sessionUsage.turns[snapshot.sessionUsage.turns.length - 1]!.usage },
+        }
+      : snapshot.lastTurnUsage;
+    snapshot.hasPendingAsk = this.hasPendingAsk;
+    snapshot.hasPendingApproval = this.hasPendingApproval;
+    return snapshot;
   }
 
   getPublicConfig() {
@@ -948,8 +1059,12 @@ export class AgentSession {
     this.metadataManager.setSessionTitle(title);
   }
 
-  async listSessions() {
-    await this.adminManager.listSessions();
+  async listSessions(scope: "all" | "workspace" = "all") {
+    await this.adminManager.listSessions(scope);
+  }
+
+  async getSessionSnapshot(targetSessionId: string) {
+    await this.adminManager.getSessionSnapshot(targetSessionId);
   }
 
   async listAgentSessions() {

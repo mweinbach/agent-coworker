@@ -29,6 +29,7 @@ import type {
 import type { SessionDb, SessionPersistenceStatus } from "../sessionDb";
 import type { generateSessionTitle, SessionTitleSource } from "../sessionTitleService";
 import type { writePersistedSessionSnapshot } from "../sessionStore";
+import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 
 export type SessionBackupFactory = (opts: SessionBackupInitOptions) => Promise<SessionBackupHandle>;
 
@@ -202,6 +203,8 @@ export type SessionDependencies = {
     targetSessionId: string;
     checkpointId: string;
   }) => Promise<WorkspaceBackupDeltaPreview>;
+  getLiveSessionSnapshotImpl?: (sessionId: string) => SessionSnapshot | null;
+  buildLegacySessionSnapshotImpl?: (record: import("../sessionDb").PersistedSessionRecord) => SessionSnapshot;
 };
 
 export type SessionContext = {

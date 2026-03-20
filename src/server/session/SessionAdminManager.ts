@@ -3,8 +3,19 @@ import path from "node:path";
 
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 import { sameWorkspacePath } from "../../utils/workspacePath";
-import { deletePersistedSessionSnapshot, listPersistedSessionSnapshots } from "../sessionStore";
+import {
+  deletePersistedSessionSnapshot,
+  listPersistedSessionSnapshots,
+  type PersistedSessionSummary,
+} from "../sessionStore";
 import type { SessionContext } from "./SessionContext";
+
+function shouldIncludeTopLevelSessionSummary(session: PersistedSessionSummary): boolean {
+  return session.messageCount > 0
+    || session.titleSource !== "default"
+    || session.hasPendingAsk
+    || session.hasPendingApproval;
+}
 
 export class SessionAdminManager {
   constructor(private readonly context: SessionContext) {}
@@ -49,13 +60,14 @@ export class SessionAdminManager {
       return;
     }
     try {
-      const sessions = this.context.deps.sessionDb
+      const sessions = (this.context.deps.sessionDb
         ? this.context.deps.sessionDb.listSessions({
             ...(scope === "workspace" ? { workingDirectory: this.context.state.config.workingDirectory } : {}),
           })
         : await listPersistedSessionSnapshots(this.context.getCoworkPaths(), {
             ...(scope === "workspace" ? { workingDirectory: this.context.state.config.workingDirectory } : {}),
-          });
+          }))
+        .filter(shouldIncludeTopLevelSessionSummary);
       this.context.emit({ type: "sessions", sessionId: this.context.id, sessions });
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to list sessions: ${String(err)}`);

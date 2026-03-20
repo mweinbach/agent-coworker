@@ -162,6 +162,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
   
 
     selectWorkspace: async (workspaceId: string) => {
+      const wasSelected = get().selectedWorkspaceId === workspaceId;
       set((s) => ({
         selectedWorkspaceId: workspaceId,
         view: s.view === "settings" ? "settings" : "chat",
@@ -171,10 +172,12 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       const ws = get().workspaces.find((w) => w.id === workspaceId);
       if (!ws) return;
   
-      set((s) => ({
-        workspaces: s.workspaces.map((w) => (w.id === workspaceId ? { ...w, lastOpenedAt: nowIso() } : w)),
-      }));
-      await persistNow(get);
+      if (!wasSelected) {
+        set((s) => ({
+          workspaces: s.workspaces.map((w) => (w.id === workspaceId ? { ...w, lastOpenedAt: nowIso() } : w)),
+        }));
+        await persistNow(get);
+      }
   
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);

@@ -178,6 +178,7 @@ export function defaultThreadRuntime(): ThreadRuntime {
     activeTurnId: null,
     pendingSteer: null,
     feed: [],
+    hydrating: false,
     transcriptOnly: false,
   };
 }

@@ -227,8 +227,8 @@ const { useAppStore } = await import("../src/app/store");
 const { buildCachedDesktopStateSeed } = await import("../src/app/store.actions/bootstrap");
 const { createDefaultUpdaterState } = await import("../src/lib/desktopApi");
 
-function resetStoreToCachedSeed() {
-  const cachedSeed = buildCachedDesktopStateSeed(cachedState);
+function resetStoreToCachedSeed(value: unknown = cachedState) {
+  const cachedSeed = buildCachedDesktopStateSeed(value);
   if (!cachedSeed) {
     throw new Error("Expected cached desktop seed");
   }
@@ -325,6 +325,7 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.contextSidebarCollapsed).toBe(true);
     expect(seed?.contextSidebarWidth).toBe(420);
     expect(seed?.messageBarHeight).toBe(180);
+    expect(seed?.threadRuntimeById?.["thread-cached"]?.hydrating).toBeUndefined();
   });
 
   test("buildCachedDesktopStateSeed accepts legacy cached payloads", () => {
@@ -332,6 +333,18 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.selectedWorkspaceId).toBe("ws-cached");
     expect(seed?.selectedThreadId).toBe("thread-cached");
     expect(seed?.view).toBe("skills");
+  });
+
+  test("buildCachedDesktopStateSeed marks a cached chat thread as hydrating", () => {
+    const chatCachedState = {
+      ...cachedState,
+      ui: {
+        ...cachedState.ui,
+        view: "chat",
+      },
+    };
+    const seed = buildCachedDesktopStateSeed(chatCachedState);
+    expect(seed?.threadRuntimeById?.["thread-cached"]?.hydrating).toBe(true);
   });
 
   test("init keeps cached state visible until authoritative load completes", async () => {
@@ -347,6 +360,31 @@ describe("desktop bootstrap cache", () => {
     expect(state.selectedThreadId).toBe("thread-live");
     expect(state.view).toBe("skills");
     expect(state.sidebarCollapsed).toBe(true);
+  });
+
+  test("init marks the selected startup thread as hydrating before deferred restore finishes", async () => {
+    const chatCachedState = {
+      ...cachedState,
+      ui: {
+        ...cachedState.ui,
+        view: "chat",
+        selectedWorkspaceId: "ws-live",
+        selectedThreadId: "thread-live",
+      },
+    };
+    localStorageMock.setItem(DESKTOP_STATE_CACHE_KEY, JSON.stringify(chatCachedState));
+    resetStoreToCachedSeed(chatCachedState);
+
+    await useAppStore.getState().init();
+
+    expect(useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating).toBe(true);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useAppStore.getState().threadRuntimeById["thread-live"]?.hydrating).toBe(false);
   });
 
   test("init preserves cached state when authoritative load fails", async () => {

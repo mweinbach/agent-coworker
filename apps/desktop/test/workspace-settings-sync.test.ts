@@ -424,6 +424,7 @@ describe("workspace settings sync", () => {
     };
 
     await useAppStore.getState().init();
+    await flushAsyncWork();
 
     const state = useAppStore.getState();
     expect(state.selectedWorkspaceId).toBe("ws-load");
@@ -488,6 +489,7 @@ describe("workspace settings sync", () => {
     };
 
     await useAppStore.getState().init();
+    await flushAsyncWork();
 
     const state = useAppStore.getState();
     expect(state.selectedWorkspaceId).toBe("ws-new");

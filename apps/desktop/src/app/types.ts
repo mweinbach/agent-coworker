@@ -275,6 +275,7 @@ export type ThreadRuntime = {
   activeTurnId: string | null;
   pendingSteer?: ThreadPendingSteer | null;
   feed: FeedItem[];
+  hydrating?: boolean;
   transcriptOnly: boolean;
 };
 

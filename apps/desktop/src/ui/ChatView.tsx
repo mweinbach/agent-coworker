@@ -1,7 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
-import { AlertTriangleIcon, MessageSquareIcon, RotateCcwIcon } from "lucide-react";
+import { AlertTriangleIcon, LoaderCircleIcon, MessageSquareIcon, RotateCcwIcon } from "lucide-react";
 import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
 
 import { useAppStore } from "../app/store";
@@ -497,6 +497,7 @@ function ThreadModelSelector({
 }
 
 export function ChatView() {
+  const bootstrapPending = useAppStore((s) => s.bootstrapPending);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const thread = useAppStore((s) => {
     if (!s.selectedThreadId) return null;
@@ -690,7 +691,8 @@ export function ChatView() {
   const busy = rt?.busy === true;
   const disabled = hasPromptModal;
   const transcriptOnly = rt?.transcriptOnly === true;
-  const disconnected = !transcriptOnly && thread.status !== "active";
+  const hydrating = rt?.hydrating === true || (bootstrapPending && Boolean(selectedThreadId) && Boolean(thread) && rt === null);
+  const disconnected = !hydrating && !transcriptOnly && thread.status !== "active";
   const modelSelectorConfig = visibleFeed.length === 0 && rt?.config?.provider && rt?.config?.model ? rt.config : null;
   const usageHeadline = formatSessionUsageHeadline(rt?.sessionUsage ?? null, rt?.lastTurnUsage ?? null, {
     showTokens: developerMode,
@@ -762,11 +764,19 @@ export function ChatView() {
             ) : null}
 
             {visibleFeed.length === 0 ? (
-              <ConversationEmptyState
-                icon={<MessageSquareIcon className="size-6" />}
-                title="New thread"
-                description="Send a message to start."
-              />
+              hydrating ? (
+                <ConversationEmptyState
+                  icon={<LoaderCircleIcon className="size-6 animate-spin" />}
+                  title="Loading thread"
+                  description="Restoring messages and reconnecting the session."
+                />
+              ) : (
+                <ConversationEmptyState
+                  icon={<MessageSquareIcon className="size-6" />}
+                  title="New thread"
+                  description="Send a message to start."
+                />
+              )
             ) : (
               renderItems.map((item) =>
                 item.kind === "activity-group" ? (

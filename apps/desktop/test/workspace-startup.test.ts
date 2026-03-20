@@ -231,6 +231,33 @@ describe("workspace startup flow", () => {
     expect(runtime?.error).toBeNull();
   });
 
+  test("selectWorkspace does not persist when the workspace is already selected", async () => {
+    const workspaceId = "ws-existing";
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: workspaceId,
+          name: "Workspace",
+          path: "/tmp/workspace",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: workspaceId,
+    });
+
+    const selectPromise = useAppStore.getState().selectWorkspace(workspaceId);
+    await flushAsyncWork();
+
+    expect(savedStates).toHaveLength(0);
+    expect(startCalls).toHaveLength(1);
+
+    startDeferreds[0]?.resolve({ url: "ws://existing" });
+    await selectPromise;
+  });
+
   test("provider auth method refresh stays quiet while the control socket is still handshaking", async () => {
     const workspaceId = "ws-provider";
     useAppStore.setState({

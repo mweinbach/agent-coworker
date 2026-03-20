@@ -232,6 +232,12 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       const rt = get().threadRuntimeById[threadId];
       const alreadyLoaded = rt?.feed && rt.feed.length > 0;
       if (!alreadyLoaded) {
+        set((s) => ({
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: { ...s.threadRuntimeById[threadId], hydrating: true },
+          },
+        }));
         try {
           const transcript = await readTranscript({ threadId });
           const feed = mapTranscriptToFeed(transcript);
@@ -240,7 +246,14 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
           set((s) => ({
             threadRuntimeById: {
               ...s.threadRuntimeById,
-              [threadId]: { ...s.threadRuntimeById[threadId], ...usageState, agents, feed, transcriptOnly: false },
+              [threadId]: {
+                ...s.threadRuntimeById[threadId],
+                ...usageState,
+                agents,
+                feed,
+                hydrating: false,
+                transcriptOnly: false,
+              },
             },
           }));
         } catch (error) {
@@ -260,7 +273,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       set((s) => ({
         threadRuntimeById: {
           ...s.threadRuntimeById,
-          [threadId]: { ...s.threadRuntimeById[threadId], transcriptOnly: false },
+          [threadId]: { ...s.threadRuntimeById[threadId], hydrating: false, transcriptOnly: false },
         },
       }));
   

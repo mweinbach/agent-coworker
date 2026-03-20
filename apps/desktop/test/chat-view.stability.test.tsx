@@ -219,6 +219,101 @@ describe("desktop chat view stability", () => {
     }
   });
 
+  test("shows a loading state while the selected startup thread is still hydrating", async () => {
+    useAppStore.setState({
+      ready: true,
+      bootstrapPending: false,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Existing thread",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:01:00.000Z",
+          status: "active",
+          sessionId: "session-1",
+          lastEventSeq: 0,
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          wsUrl: null,
+          connected: false,
+          sessionId: null,
+          config: null,
+          sessionConfig: null,
+          sessionKind: null,
+          parentSessionId: null,
+          role: null,
+          mode: null,
+          depth: 0,
+          nickname: null,
+          requestedModel: null,
+          effectiveModel: null,
+          requestedReasoningEffort: null,
+          effectiveReasoningEffort: null,
+          executionState: null,
+          lastMessagePreview: null,
+          agents: [],
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: null,
+          busy: false,
+          busySince: null,
+          activeTurnId: null,
+          pendingSteer: null,
+          feed: [],
+          hydrating: true,
+          transcriptOnly: false,
+        },
+      },
+      composerText: "",
+    });
+
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(
+            StrictMode,
+            null,
+            createElement(ChatView),
+          ),
+        );
+      });
+
+      expect(container.textContent).toContain("Existing thread");
+      expect(container.textContent).toContain("Loading thread");
+      expect(container.textContent).not.toContain("Send a message to start.");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("busy composer stays editable and swaps between stop and send based on draft text", async () => {
     useAppStore.setState({
       ready: true,

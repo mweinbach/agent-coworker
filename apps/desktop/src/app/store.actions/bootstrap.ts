@@ -32,6 +32,7 @@ import {
   buildContextPreamble,
   ensureControlSocket,
   ensureServerRunning,
+  defaultThreadRuntime,
   ensureThreadRuntime,
   ensureThreadSocket,
   ensureWorkspaceRuntime,
@@ -342,6 +343,21 @@ function extractCachedDesktopState(value: unknown): {
   };
 }
 
+function runAfterInitialPaint(task: () => void): void {
+  if (typeof window === "undefined") {
+    setTimeout(task, 0);
+    return;
+  }
+
+  const schedule = typeof window.requestAnimationFrame === "function"
+    ? window.requestAnimationFrame.bind(window)
+    : (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0);
+
+  schedule(() => {
+    setTimeout(task, 0);
+  });
+}
+
 export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDataState> | null {
   try {
     const cached = extractCachedDesktopState(value);
@@ -370,6 +386,14 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       onboardingState: state.onboarding ?? DEFAULT_ONBOARDING_STATE,
       onboardingVisible: false,
       onboardingStep: "welcome",
+      threadRuntimeById: ui.selectedThreadId && ui.view === "chat"
+        ? {
+            [ui.selectedThreadId]: {
+              ...defaultThreadRuntime(),
+              hydrating: true,
+            },
+          }
+        : {},
       view: ui.view,
       settingsPage: ui.settingsPage,
       lastNonSettingsView: ui.lastNonSettingsView,
@@ -461,13 +485,42 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
         }
 
         if (ui.selectedThreadId && ui.view === "chat") {
-          await get().selectThread(ui.selectedThreadId);
+          set((s) => ({
+            threadRuntimeById: {
+              ...s.threadRuntimeById,
+              [ui.selectedThreadId]: {
+                ...defaultThreadRuntime(),
+                ...s.threadRuntimeById[ui.selectedThreadId],
+                hydrating: true,
+              },
+            },
+          }));
+          runAfterInitialPaint(() => {
+            const current = get();
+            if (current.selectedThreadId !== ui.selectedThreadId || current.view !== "chat") {
+              return;
+            }
+            void current.selectThread(ui.selectedThreadId);
+          });
         } else if (ui.selectedWorkspaceId && ui.view === "chat") {
-          await get().selectWorkspace(ui.selectedWorkspaceId);
+          runAfterInitialPaint(() => {
+            const current = get();
+            if (current.selectedWorkspaceId !== ui.selectedWorkspaceId || current.view !== "chat") {
+              return;
+            }
+            void current.selectWorkspace(ui.selectedWorkspaceId);
+          });
         } else if (ui.selectedWorkspaceId && ui.view === "skills") {
-          ensureWorkspaceRuntime(get, set, ui.selectedWorkspaceId);
-          await ensureServerRunning(get, set, ui.selectedWorkspaceId);
-          ensureControlSocket(get, set, ui.selectedWorkspaceId);
+          runAfterInitialPaint(() => {
+            const current = get();
+            if (current.selectedWorkspaceId !== ui.selectedWorkspaceId || current.view !== "skills") {
+              return;
+            }
+            ensureWorkspaceRuntime(get, set, ui.selectedWorkspaceId);
+            void ensureServerRunning(get, set, ui.selectedWorkspaceId).then(() => {
+              ensureControlSocket(get, set, ui.selectedWorkspaceId);
+            });
+          });
         }
         return;
       } catch (error) {

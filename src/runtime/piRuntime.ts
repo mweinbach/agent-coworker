@@ -450,17 +450,15 @@ async function maybeRewriteNvidiaFetchRequest(
   return [input, { ...(init ?? {}), body: rewrittenBody }];
 }
 
-const NVIDIA_FETCH_PATCH_STATE = Symbol.for("cowork.nvidia.fetchPatchState");
-const AWS_BEDROCK_PROXY_FETCH_PATCH_STATE = Symbol.for("cowork.awsBedrockProxy.fetchPatchState");
+const FETCH_REWRITE_STACK = Symbol.for("cowork.fetchRewriteStack");
 
-type NvidiaFetchPatchState = {
-  refCount: number;
-  originalFetch: typeof fetch;
+type FetchRewriteEntry = {
+  rewrite: (input: RequestInfo | URL, init?: RequestInit) => Promise<[RequestInfo | URL, RequestInit | undefined]>;
 };
 
-type AwsBedrockProxyFetchPatchState = {
-  refCount: number;
+type FetchPatchState = {
   originalFetch: typeof fetch;
+  entries: FetchRewriteEntry[];
 };
 
 type OpenAiProxyPromptCachingTtl = "5m" | "1h";
@@ -645,101 +643,73 @@ async function maybeRewriteOpenAiProxyFetchRequest(
   return [input, { ...(init ?? {}), body: rewrittenBody }];
 }
 
-async function withPatchedNvidiaFetch<T>(run: () => Promise<T>): Promise<T> {
-  const globalWithState = globalThis as typeof globalThis & {
-    [NVIDIA_FETCH_PATCH_STATE]?: NvidiaFetchPatchState;
-  };
-  const existingState = globalWithState[NVIDIA_FETCH_PATCH_STATE];
-  if (existingState) {
-    existingState.refCount += 1;
+async function withPatchedFetch<T>(
+  rewrite: FetchRewriteEntry["rewrite"],
+  run: () => Promise<T>,
+): Promise<T> {
+  const g = globalThis as typeof globalThis & { [FETCH_REWRITE_STACK]?: FetchPatchState };
+  const existing = g[FETCH_REWRITE_STACK];
+  const entry: FetchRewriteEntry = { rewrite };
+
+  if (existing) {
+    existing.entries.push(entry);
     try {
       return await run();
     } finally {
-      existingState.refCount -= 1;
-      if (existingState.refCount === 0) {
-        globalThis.fetch = existingState.originalFetch;
-        delete globalWithState[NVIDIA_FETCH_PATCH_STATE];
+      const idx = existing.entries.indexOf(entry);
+      if (idx >= 0) existing.entries.splice(idx, 1);
+      if (existing.entries.length === 0) {
+        globalThis.fetch = existing.originalFetch;
+        delete g[FETCH_REWRITE_STACK];
       }
     }
   }
 
   const originalFetch = globalThis.fetch;
+  const state: FetchPatchState = { originalFetch, entries: [entry] };
+
   const wrappedFetch = Object.assign(
     async (input: RequestInfo | URL, init?: RequestInit) => {
-      const [nextInput, nextInit] = await maybeRewriteNvidiaFetchRequest(input, init);
-      return originalFetch.call(globalThis, nextInput as any, nextInit as any);
+      let currentInput = input;
+      let currentInit = init;
+      for (const e of state.entries) {
+        [currentInput, currentInit] = await e.rewrite(currentInput, currentInit);
+      }
+      return originalFetch.call(globalThis, currentInput as any, currentInit as any);
     },
     originalFetch,
   );
 
   globalThis.fetch = wrappedFetch as typeof fetch;
-  globalWithState[NVIDIA_FETCH_PATCH_STATE] = {
-    refCount: 1,
-    originalFetch,
-  };
+  g[FETCH_REWRITE_STACK] = state;
 
   try {
     return await run();
   } finally {
-    const currentState = globalWithState[NVIDIA_FETCH_PATCH_STATE];
-    if (currentState) {
-      currentState.refCount -= 1;
-      if (currentState.refCount === 0) {
-        globalThis.fetch = currentState.originalFetch;
-        delete globalWithState[NVIDIA_FETCH_PATCH_STATE];
-      }
+    const idx = state.entries.indexOf(entry);
+    if (idx >= 0) state.entries.splice(idx, 1);
+    if (state.entries.length === 0) {
+      globalThis.fetch = state.originalFetch;
+      delete g[FETCH_REWRITE_STACK];
     }
   }
+}
+
+async function withPatchedNvidiaFetch<T>(run: () => Promise<T>): Promise<T> {
+  return withPatchedFetch(
+    (input, init) => maybeRewriteNvidiaFetchRequest(input, init),
+    run,
+  );
 }
 
 async function withPatchedOpenAiProxyFetch<T>(
   context: OpenAiProxyFetchRewriteContext,
   run: () => Promise<T>,
 ): Promise<T> {
-  const globalWithState = globalThis as typeof globalThis & {
-    [AWS_BEDROCK_PROXY_FETCH_PATCH_STATE]?: AwsBedrockProxyFetchPatchState;
-  };
-  const existingState = globalWithState[AWS_BEDROCK_PROXY_FETCH_PATCH_STATE];
-  if (existingState) {
-    existingState.refCount += 1;
-    try {
-      return await run();
-    } finally {
-      existingState.refCount -= 1;
-      if (existingState.refCount === 0) {
-        globalThis.fetch = existingState.originalFetch;
-        delete globalWithState[AWS_BEDROCK_PROXY_FETCH_PATCH_STATE];
-      }
-    }
-  }
-
-  const originalFetch = globalThis.fetch;
-  const wrappedFetch = Object.assign(
-    async (input: RequestInfo | URL, init?: RequestInit) => {
-      const [nextInput, nextInit] = await maybeRewriteOpenAiProxyFetchRequest(input, init, context);
-      return originalFetch.call(globalThis, nextInput as any, nextInit as any);
-    },
-    originalFetch,
+  return withPatchedFetch(
+    (input, init) => maybeRewriteOpenAiProxyFetchRequest(input, init, context),
+    run,
   );
-
-  globalThis.fetch = wrappedFetch as typeof fetch;
-  globalWithState[AWS_BEDROCK_PROXY_FETCH_PATCH_STATE] = {
-    refCount: 1,
-    originalFetch,
-  };
-
-  try {
-    return await run();
-  } finally {
-    const currentState = globalWithState[AWS_BEDROCK_PROXY_FETCH_PATCH_STATE];
-    if (currentState) {
-      currentState.refCount -= 1;
-      if (currentState.refCount === 0) {
-        globalThis.fetch = currentState.originalFetch;
-        delete globalWithState[AWS_BEDROCK_PROXY_FETCH_PATCH_STATE];
-      }
-    }
-  }
 }
 
 type RuntimeStepOverrides = RuntimeStepOverride;

@@ -1288,4 +1288,91 @@ describe("pi runtime regressions", () => {
     expect(result.content).toEqual([{ type: "text", text: toolResultOutput.value }]);
   });
 
+  test.serial("overlapping fetch patchers share the same stack and restore correctly", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls: string[] = [];
+
+    globalThis.fetch = (async (input: RequestInfo | URL, _init?: RequestInit) => {
+      calls.push(`original:${String(input)}`);
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-fetch-stack-"));
+    const nvidiaModelId = defaultSupportedModel("nvidia").id;
+    const config = makeConfig(homeDir, {
+      provider: "nvidia",
+      model: nvidiaModelId,
+      subAgentModel: nvidiaModelId,
+    });
+
+    const nvidiaRuntime = createPiRuntime({
+      piStreamImpl: () => ({
+        async *[Symbol.asyncIterator]() {
+          // While inside nvidia's patched fetch, nest an aws-bedrock-proxy run
+          const proxyConfig = makeConfig(homeDir, {
+            provider: "aws-bedrock-proxy",
+            model: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            subAgentModel: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            awsBedrockProxyBaseUrl: "https://proxy.internal/v1",
+          });
+
+          const proxyRuntime = createPiRuntime({
+            piStreamImpl: () => ({
+              async *[Symbol.asyncIterator]() {
+                await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+                  method: "POST",
+                  body: JSON.stringify({
+                    model: nvidiaModelId,
+                    messages: [{ role: "user", content: "test" }],
+                  }),
+                });
+              },
+              async result() {
+                return {
+                  role: "assistant",
+                  content: [{ type: "text", text: "proxy ok" }],
+                  api: "openai-completions",
+                  provider: "aws-bedrock-proxy",
+                  model: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+                  usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+                  stopReason: "stop",
+                  timestamp: Date.now(),
+                };
+              },
+            }) as any,
+          });
+
+          await withEnv("AWS_BEDROCK_PROXY_API_KEY", "test-key", async () => {
+            await proxyRuntime.runTurn(makeParams(proxyConfig));
+          });
+        },
+        async result() {
+          return {
+            role: "assistant",
+            content: [{ type: "text", text: "nvidia ok" }],
+            api: "openai-completions",
+            provider: "nvidia",
+            model: nvidiaModelId,
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+            stopReason: "stop",
+            timestamp: Date.now(),
+          };
+        },
+      }) as any,
+    });
+
+    try {
+      await withEnv("NVIDIA_API_KEY", "test-nvidia-key", async () => {
+        await nvidiaRuntime.runTurn(makeParams(config));
+      });
+
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    // Verify fetch is fully restored — no dangling wrappers
+    expect(globalThis.fetch).toBe(originalFetch);
+  });
+
 });

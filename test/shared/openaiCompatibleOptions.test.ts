@@ -216,4 +216,48 @@ describe("OpenAI compatible provider option helpers", () => {
       },
     });
   });
+
+  test("mergeEditableOpenAiCompatibleProviderOptions deep-merges promptCaching preserving ttl", () => {
+    const base = {
+      "aws-bedrock-proxy": {
+        reasoningEffort: "high",
+        promptCaching: { enabled: true, ttl: "5m" },
+      },
+    };
+    const patch = {
+      "aws-bedrock-proxy": {
+        promptCaching: { enabled: false },
+      },
+    };
+
+    const merged = mergeEditableOpenAiCompatibleProviderOptions(base, patch as any);
+
+    expect(merged).toEqual({
+      "aws-bedrock-proxy": {
+        reasoningEffort: "high",
+        promptCaching: { enabled: false, ttl: "5m" },
+      },
+    });
+  });
+
+  test("mergeEditableOpenAiCompatibleProviderOptions deep-merges promptCaching preserving enabled", () => {
+    const base = {
+      "aws-bedrock-proxy": {
+        promptCaching: { enabled: true, ttl: "5m" },
+      },
+    };
+    const patch = {
+      "aws-bedrock-proxy": {
+        promptCaching: { ttl: "1h" },
+      },
+    };
+
+    const merged = mergeEditableOpenAiCompatibleProviderOptions(base, patch as any);
+
+    expect(merged).toEqual({
+      "aws-bedrock-proxy": {
+        promptCaching: { enabled: true, ttl: "1h" },
+      },
+    });
+  });
 });

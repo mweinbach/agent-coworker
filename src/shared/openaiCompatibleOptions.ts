@@ -491,10 +491,14 @@ export function mergeEditableOpenAiCompatibleProviderOptions(
       continue;
     }
 
-    current[provider] = {
-      ...currentSection,
-      ...cleanedPatch,
-    };
+    const merged = { ...currentSection, ...cleanedPatch };
+
+    // Deep-merge promptCaching so that patching { enabled: false } doesn't drop ttl
+    if (provider === "aws-bedrock-proxy" && isPlainObject((cleanedPatch as any).promptCaching) && isPlainObject(currentSection.promptCaching)) {
+      (merged as any).promptCaching = { ...currentSection.promptCaching, ...(cleanedPatch as any).promptCaching };
+    }
+
+    current[provider] = merged;
   }
 
   return Object.keys(current).length > 0 ? current : undefined;

@@ -151,11 +151,23 @@ async function persistProjectConfigPatch(
         //   sectionPatch    — the incoming patch from this set_config call
         // Launch-time options are intentionally overridable by persisted config and new patches so
         // that user changes made via the UI/CLI survive server restarts.
-        currentProviderOptions[provider] = {
+        const merged: Record<string, unknown> = {
           ...runtimeSection,
           ...currentSection,
           ...sectionPatch,
         };
+
+        // Deep-merge promptCaching so that patching { enabled: false } doesn't drop ttl
+        const patchAsRecord = sectionPatch as Record<string, unknown>;
+        if (isPlainObject(patchAsRecord.promptCaching)) {
+          const basePromptCaching = {
+            ...(isPlainObject(runtimeSection.promptCaching) ? runtimeSection.promptCaching : {}),
+            ...(isPlainObject(currentSection.promptCaching) ? currentSection.promptCaching : {}),
+          };
+          merged.promptCaching = { ...basePromptCaching, ...patchAsRecord.promptCaching };
+        }
+
+        currentProviderOptions[provider] = merged;
       }
       next[key] = Object.keys(currentProviderOptions).length > 0 ? currentProviderOptions : undefined;
       continue;

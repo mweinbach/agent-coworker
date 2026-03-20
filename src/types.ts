@@ -232,6 +232,127 @@ export interface SkillEntry {
   };
 }
 
+export type SkillScope = SkillEntry["source"];
+
+export type SkillMutationTargetScope = "project" | "global";
+
+export type SkillInstallState = "effective" | "shadowed" | "disabled" | "invalid";
+
+export type SkillInstallOriginKind = "github" | "skills.sh" | "local" | "manual" | "bootstrap" | "unknown";
+
+export interface SkillInstallOrigin {
+  kind: SkillInstallOriginKind;
+  url?: string;
+  repo?: string;
+  ref?: string;
+  subdir?: string;
+  sourcePath?: string;
+  sourceHash?: string;
+}
+
+export interface SkillInstallManifest {
+  version: 1;
+  installationId: string;
+  installedAt: string;
+  updatedAt: string;
+  origin?: SkillInstallOrigin;
+}
+
+export type SkillInstallationDiagnosticSeverity = "info" | "warning" | "error";
+
+export interface SkillInstallationDiagnostic {
+  code: string;
+  severity: SkillInstallationDiagnosticSeverity;
+  message: string;
+}
+
+export interface SkillScopeDescriptor {
+  scope: SkillScope;
+  skillsDir: string;
+  disabledSkillsDir?: string;
+  writable: boolean;
+  readable: boolean;
+}
+
+export interface SkillInstallationEntry {
+  installationId: string;
+  name: string;
+  description: string;
+  scope: SkillScope;
+  enabled: boolean;
+  writable: boolean;
+  managed: boolean;
+  effective: boolean;
+  state: SkillInstallState;
+  rootDir: string;
+  skillPath: string | null;
+  manifestPath?: string;
+  path: string;
+  triggers: string[];
+  descriptionSource: "frontmatter" | "directory" | "unknown";
+  interface?: SkillEntry["interface"];
+  diagnostics: SkillInstallationDiagnostic[];
+  origin?: SkillInstallOrigin;
+  manifest?: SkillInstallManifest;
+  shadowedByInstallationId?: string;
+  shadowedByScope?: SkillScope;
+  installedAt?: string;
+  updatedAt?: string;
+  fileModifiedAt?: string;
+}
+
+export interface SkillCatalogSnapshot {
+  scopes: SkillScopeDescriptor[];
+  effectiveSkills: SkillInstallationEntry[];
+  installations: SkillInstallationEntry[];
+}
+
+export type SkillSourceInputKind =
+  | "skills.sh"
+  | "github_repo"
+  | "github_tree"
+  | "github_blob"
+  | "github_raw"
+  | "github_shorthand"
+  | "local_path";
+
+export interface SkillSourceDescriptor {
+  kind: SkillSourceInputKind;
+  raw: string;
+  displaySource: string;
+  url?: string;
+  repo?: string;
+  ref?: string;
+  subdir?: string;
+  localPath?: string;
+  requestedSkillName?: string;
+}
+
+export interface SkillInstallPreviewCandidate {
+  name: string;
+  description: string;
+  relativeRootPath: string;
+  conflictsWithInstallationId?: string;
+  conflictsWithScope?: SkillScope;
+  wouldBeEffective: boolean;
+  shadowedInstallationIds: string[];
+  diagnostics: SkillInstallationDiagnostic[];
+}
+
+export interface SkillInstallPreview {
+  source: SkillSourceDescriptor;
+  targetScope: SkillMutationTargetScope;
+  candidates: SkillInstallPreviewCandidate[];
+  warnings: string[];
+}
+
+export interface SkillUpdateCheckResult {
+  installationId: string;
+  canUpdate: boolean;
+  reason?: string;
+  preview?: SkillInstallPreview;
+}
+
 export interface TodoItem {
   content: string;
   status: "pending" | "in_progress" | "completed";

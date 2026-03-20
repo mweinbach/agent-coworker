@@ -8,6 +8,7 @@ The harness has two complementary layers:
 - the **real-boundary session layer** (the WebSocket server/session/runtime path)
 
 Harness context now lives in both worlds: it is persisted session state and also injected into runtime turns as structured task contract data.
+Raw-loop strict mode now validates final contracts and artifacts instead of treating tool choreography alone as success.
 
 - `config.md`: harness config precedence, environment variables, and config-file keys.
 - `observability.md`: Langfuse-only telemetry wiring and runtime behavior.

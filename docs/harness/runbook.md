@@ -37,6 +37,10 @@ If telemetry is enabled but credentials are missing, runs continue and emit a wa
   - Repeatable filter; keeps only the named model IDs within the selected scenario
 - `bun scripts/run_raw_agent_loops.ts --report-only`
   - Sets the harness config flag carried into run metadata; current raw-loop invocations already default to this mode
+- `bun scripts/run_raw_agent_loops.ts --strict-mode`
+  - Forces strict raw-loop validation for the selected runs
+- `bun scripts/run_raw_agent_loops.ts --no-strict-mode`
+  - Explicitly disables strict validation even if config/env enabled it
 - `bun scripts/run_raw_agent_loops.ts --help`
   - Prints the accepted flags and scenario names
 
@@ -101,7 +105,15 @@ Per-run artifacts:
 - `system.txt`
 - `input_messages.json`
 
-`harness_context.json` records the structured run intent injected into the raw-loop turn prompt path. `run_meta.json` includes resolved model metadata plus observability health snapshots at start and end of the run. `artifacts_index.json` hashes the files produced inside the run directory.
+`harness_context.json` records the structured run intent injected into the raw-loop turn prompt path. `run_meta.json` includes:
+
+- resolved model metadata
+- strict/degraded/repair state
+- final validation outcome (`schemaOk`, `artifactOk`, `semanticOk`, issues, warnings)
+- recorded tool/loop budgets
+- observability health snapshots at start and end of the run
+
+`artifacts_index.json` hashes the files produced inside the run directory.
 
 ## Runtime Notes
 
@@ -109,6 +121,8 @@ Per-run artifacts:
 - Built-in skills are disabled by default for raw-loop runs unless `COWORK_DISABLE_BUILTIN_SKILLS` is explicitly overridden in the environment.
 - Anthropic runs resolve model aliases against the live Anthropic models endpoint and persist the raw response in the run root for traceability.
 - Per-run failures are retried with backoff. If all attempts fail, the runner exits non-zero after writing the attempt traces and final metadata.
+- In **strict mode**, a missing or malformed final contract fails the run immediately.
+- In **non-strict mode**, the runner may attempt one repair/finalization pass without tools. Repaired runs are marked degraded in metadata rather than looking identical to clean first-pass successes.
 
 ## Validation Gates
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -986,6 +987,39 @@ describe("WebSocket Lifecycle", () => {
       const resumed = await collectMessages(`${second.url}?resumeSessionId=${originalSessionId}`, 1);
       expect(resumed[0]?.type).toBe("server_hello");
       expect(resumed[0]?.sessionId).toBe(originalSessionId);
+      expect(resumed[0]?.isResume).toBe(true);
+      expect(resumed[0]?.resumedFromStorage).toBe(true);
+    } finally {
+      second.server.stop();
+    }
+  });
+
+  test("resumeSessionId falls back to a synthesized snapshot when the stored projection is malformed", async () => {
+    const tmpDir = await makeTmpProject();
+    const runTurnImpl = (async () => ({
+      text: "assistant reply",
+      responseMessages: [],
+    })) as any;
+
+    const first = await startAgentServer(serverOpts(tmpDir, { runTurnImpl }));
+    const created = await createSessionWithAssistantTurn(first.url, "resume fallback");
+    first.server.stop();
+
+    const paths = getAiCoworkerPaths({ homedir: tmpDir });
+    const sqlite = new Database(path.join(paths.rootDir, "sessions.db"));
+    try {
+      sqlite
+        .query("UPDATE session_snapshots SET snapshot_json = ? WHERE session_id = ?")
+        .run(JSON.stringify({ sessionId: created.sessionId }), created.sessionId);
+    } finally {
+      sqlite.close();
+    }
+
+    const second = await startAgentServer(serverOpts(tmpDir, { runTurnImpl }));
+    try {
+      const resumed = await collectMessages(`${second.url}?resumeSessionId=${created.sessionId}`, 1);
+      expect(resumed[0]?.type).toBe("server_hello");
+      expect(resumed[0]?.sessionId).toBe(created.sessionId);
       expect(resumed[0]?.isResume).toBe(true);
       expect(resumed[0]?.resumedFromStorage).toBe(true);
     } finally {

@@ -22,7 +22,7 @@ import { resolveAuthHomeDir } from "../utils/authHome";
 import { AgentControl } from "./agents/AgentControl";
 import { AgentSession } from "./session/AgentSession";
 import { createLegacySessionSnapshot } from "./session/SessionSnapshotProjector";
-import { SessionDb } from "./sessionDb";
+import { SessionDb, type PersistedSessionRecord } from "./sessionDb";
 import { WorkspaceBackupService } from "./workspaceBackups";
 import {
   WEBSOCKET_PROTOCOL_VERSION,
@@ -456,6 +456,14 @@ export async function startAgentServer(
     }
   };
 
+  const loadInitialSessionSnapshot = (persisted: PersistedSessionRecord) => {
+    try {
+      return sessionDb.getSessionSnapshot(persisted.sessionId) ?? createLegacySessionSnapshot(persisted);
+    } catch {
+      return createLegacySessionSnapshot(persisted);
+    }
+  };
+
   const buildSession = (
     binding: SessionBinding,
     persistedSessionId?: string,
@@ -476,7 +484,7 @@ export async function startAgentServer(
         const common = buildSessionCommon(binding, persisted.sessionKind);
         const session = AgentSession.fromPersisted({
           persisted,
-          initialSessionSnapshot: sessionDb.getSessionSnapshot(persisted.sessionId) ?? createLegacySessionSnapshot(persisted),
+          initialSessionSnapshot: loadInitialSessionSnapshot(persisted),
           baseConfig: { ...config },
           ...common,
         });

@@ -216,6 +216,32 @@ export function createControlSocketHelpers(
     return removedSessionIds;
   }
 
+  function reconcileSelectedThreadId(
+    allThreads: ThreadRecord[],
+    nextThreads: ThreadRecord[],
+    workspaceId: string,
+    selectedWorkspaceId: string | null,
+    selectedThreadId: string | null,
+  ): string | null {
+    if (!selectedThreadId) {
+      return null;
+    }
+    if (nextThreads.some((thread) => thread.id === selectedThreadId)) {
+      return selectedThreadId;
+    }
+
+    const migratedThreadId = nextThreads.find((thread) => thread.legacyTranscriptId === selectedThreadId)?.id ?? null;
+    if (migratedThreadId) {
+      return migratedThreadId;
+    }
+
+    const fallbackWorkspaceId =
+      allThreads.find((thread) => thread.id === selectedThreadId)?.workspaceId
+      ?? selectedWorkspaceId
+      ?? workspaceId;
+    return nextThreads.find((thread) => thread.workspaceId === fallbackWorkspaceId)?.id ?? null;
+  }
+
   function withTimeout<T>(
     register: (resolve: (value: T | null) => void) => (() => void) | void,
   ): Promise<T | null> {
@@ -564,12 +590,13 @@ export function createControlSocketHelpers(
               workspaceId,
               evt.sessions,
             );
-            const selectedThreadId =
-              s.selectedThreadId
-              && !nextThreads.some((thread) => thread.id === s.selectedThreadId)
-              && nextThreads.some((thread) => thread.legacyTranscriptId === s.selectedThreadId)
-                ? nextThreads.find((thread) => thread.legacyTranscriptId === s.selectedThreadId)?.id ?? s.selectedThreadId
-                : s.selectedThreadId;
+            const selectedThreadId = reconcileSelectedThreadId(
+              s.threads,
+              nextThreads,
+              workspaceId,
+              s.selectedWorkspaceId,
+              s.selectedThreadId,
+            );
             return {
               threads: nextThreads,
               selectedThreadId,

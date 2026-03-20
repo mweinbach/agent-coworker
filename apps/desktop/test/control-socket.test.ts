@@ -166,6 +166,7 @@ describe("control socket workspace sessions", () => {
 
   test("sessions evict cached snapshots for removed workspace sessions", () => {
     const state = {
+      selectedWorkspaceId: workspaceId,
       threads: [
         makeThread("session-keep", workspaceId),
         makeThread("session-drop", workspaceId),
@@ -221,5 +222,48 @@ describe("control socket workspace sessions", () => {
     expect(RUNTIME.sessionSnapshots.has("session-drop")).toBe(false);
     expect(RUNTIME.sessionSnapshots.has("session-foreign")).toBe(true);
     expect(persistCalls).toBe(1);
+  });
+
+  test("sessions pick a remaining workspace thread when the selected thread disappears", () => {
+    const state = {
+      selectedWorkspaceId: workspaceId,
+      threads: [
+        makeThread("session-drop", workspaceId),
+        makeThread("session-keep", workspaceId),
+      ],
+      selectedThreadId: "session-drop",
+      threadRuntimeById: {},
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          serverUrl: "ws://mock",
+          error: null,
+          controlSessionId: null,
+          controlConfig: null,
+          controlSessionConfig: null,
+        },
+      },
+      workspaces: [],
+      notifications: [],
+      providerStatusRefreshing: false,
+      providerLastAuthChallenge: null,
+    } as any;
+    const get = () => state;
+    const set = (updater: any) => {
+      const patch = typeof updater === "function" ? updater(state) : updater;
+      Object.assign(state, patch);
+    };
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.emit({
+      type: "sessions",
+      sessionId: "control-session",
+      sessions: [makeSessionSummary("session-keep")],
+    });
+
+    expect(state.selectedThreadId).toBe("session-keep");
   });
 });

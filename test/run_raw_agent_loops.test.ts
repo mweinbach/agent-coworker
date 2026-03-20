@@ -3,6 +3,7 @@ import path from "node:path";
 
 import {
   buildRawLoopHarnessContext,
+  buildRawLoopBudgetSummary,
   buildGoogleCustomtoolsToolCoverageRuns,
   buildMixedRuns,
   createRawLoopAgentControl,
@@ -406,6 +407,26 @@ describe("raw loop harness context", () => {
         scenario: "mixed",
       },
       updatedAt: "2026-03-20T12:00:00.000Z",
+    });
+  });
+
+  test("buildRawLoopBudgetSummary uses traced step count instead of tool-call count", () => {
+    expect(buildRawLoopBudgetSummary(
+      ["tool> bash {}", "tool> read {}"],
+      [
+        { scope: "tool-call", step: { type: "tool-call", toolName: "bash" } },
+        { scope: "tool-result", step: { type: "tool-result", toolName: "bash" } },
+        { scope: "tool-call", step: { type: "tool-call", toolName: "read" } },
+        { scope: "assistant", step: { type: "final-answer" } },
+      ] as any,
+      1,
+    )).toEqual({
+      toolCalls: 2,
+      bashCalls: 1,
+      webCalls: 0,
+      spawnedAgents: 0,
+      totalSteps: 4,
+      repairPassCount: 1,
     });
   });
 });

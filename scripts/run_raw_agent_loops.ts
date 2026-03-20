@@ -12,7 +12,6 @@ import {
   buildPathArtifactAssertions,
   type FinalContract,
   type ValidationIssue,
-  validateFinalContract,
   validateWithOptionalRepair,
 } from "../src/harness/rawLoopValidation";
 import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
@@ -437,6 +436,38 @@ export function summarizeRawLoopBudgets(toolCallNames: string[]) {
   };
 }
 
+export function buildRawLoopBudgetSummary(
+  toolLogLines: string[],
+  steps: TracedStep[],
+  repairPassCount: number,
+) {
+  const toolCallNames = collectToolCallNamesFromToolLog(toolLogLines);
+  return {
+    ...summarizeRawLoopBudgets(toolCallNames),
+    totalSteps: steps.length,
+    repairPassCount,
+  };
+}
+
+function traceToolExecution(steps: TracedStep[], toolName: string, input: unknown, output: unknown) {
+  steps.push({
+    scope: "tool-call",
+    step: {
+      type: "tool-call",
+      toolName,
+      input,
+    },
+  });
+  steps.push({
+    scope: "tool-result",
+    step: {
+      type: "tool-result",
+      toolName,
+      output,
+    },
+  });
+}
+
 function withExecuteGuard(
   original: any,
   shouldBlock: () => boolean,
@@ -686,6 +717,17 @@ function createToolsWithTracing(
   };
 
   const wrapped: Record<string, any> = { ...baseTools };
+
+  for (const [toolName, toolDef] of Object.entries(wrapped)) {
+    wrapped[toolName] = withExecuteGuard(
+      toolDef,
+      () => false,
+      "",
+      (input, output) => {
+        traceToolExecution(steps, toolName, input, output);
+      },
+    );
+  }
 
   if (skillGuard?.requiredSkillName && skillGuard.guardedToolNames && skillGuard.guardedToolNames.length > 0) {
     let requiredSkillLoaded = false;
@@ -2010,14 +2052,7 @@ async function main() {
           parsed?: unknown;
         }
       | null = null;
-    let finalBudgets = {
-      toolCalls: 0,
-      bashCalls: 0,
-      webCalls: 0,
-      spawnedAgents: 0,
-      totalSteps: 0,
-      repairPassCount: 0,
-    };
+    let finalBudgets = buildRawLoopBudgetSummary([], [], 0);
     let finalRes:
       | {
           text: string;
@@ -2026,50 +2061,6 @@ async function main() {
         }
       | null = null;
     let finalError: unknown = null;
-
-    const validateRunOutput = async (opts: {
-      finalText: string;
-      toolLogLines: string[];
-      askEvents: AskEvent[];
-      approvalEvents: ApprovalEvent[];
-      todoEvents: TodoEvent[];
-      steps: TracedStep[];
-    }) => {
-      const toolCallNames = collectToolCallNamesFromToolLog(opts.toolLogLines);
-      const budgetSummary = summarizeRawLoopBudgets(toolCallNames);
-      const validationResult = run.finalContract
-        ? await validateFinalContract({
-            finalText: opts.finalText,
-            runDir,
-            trace: {
-              toolLogLines: opts.toolLogLines,
-              askEvents: opts.askEvents,
-              approvalEvents: opts.approvalEvents,
-              todoEvents: opts.todoEvents,
-              steps: opts.steps,
-            },
-            contract: run.finalContract,
-          })
-        : {
-            ok: opts.finalText.includes("<<END_RUN>>"),
-            schemaOk: opts.finalText.includes("<<END_RUN>>"),
-            artifactOk: true,
-            semanticOk: true,
-            issues: opts.finalText.includes("<<END_RUN>>")
-              ? []
-              : [{ code: "missing_end_run", message: "Final output must include <<END_RUN>>" }],
-            warnings: [],
-            parsed: undefined,
-          };
-
-      return {
-        validationResult,
-        budgetSummary: {
-          ...budgetSummary,
-          totalSteps: toolCallNames.length,
-        },
-      };
-    };
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const attemptStartedAt = isoSafeNow();
@@ -2186,14 +2177,7 @@ async function main() {
         let finalText = String(res?.text ?? "");
         let finalReasoningText = res?.reasoningText;
         let finalResponseMessages = (res?.responseMessages ?? []) as ModelMessage[];
-        let { budgetSummary } = await validateRunOutput({
-          finalText,
-          toolLogLines,
-          askEvents,
-          approvalEvents,
-          todoEvents,
-          steps,
-        });
+        let budgetSummary = buildRawLoopBudgetSummary(toolLogLines, steps, 0);
         const validationOutcome = await validateWithOptionalRepair({
           finalText,
           runDir,
@@ -2250,20 +2234,25 @@ async function main() {
         attemptRepairSucceeded = validationOutcome.repairSucceeded;
         attemptDegraded = validationOutcome.degraded;
         finalText = validationOutcome.finalText;
-
-        if (attemptRepairAttempted) {
-          const repaired = await validateRunOutput({
-            finalText,
-            toolLogLines,
-            askEvents,
-            approvalEvents,
-            todoEvents,
-            steps,
-          });
-          budgetSummary = repaired.budgetSummary;
-        }
+        budgetSummary = buildRawLoopBudgetSummary(
+          toolLogLines,
+          steps,
+          attemptRepairAttempted ? 1 : 0,
+        );
 
         if (!validationResult.ok) {
+          finalValidation = {
+            schemaOk: validationResult.schemaOk,
+            artifactOk: validationResult.artifactOk,
+            semanticOk: validationResult.semanticOk,
+            issues: validationResult.issues,
+            warnings: validationResult.warnings,
+            parsed: validationResult.parsed,
+          };
+          repairAttempted = attemptRepairAttempted;
+          repairSucceeded = attemptRepairSucceeded;
+          degraded = attemptDegraded;
+          finalBudgets = budgetSummary;
           throw new Error(
             `Final contract validation failed: ${validationResult.issues.map((entry) => entry.message).join("; ")}`
           );

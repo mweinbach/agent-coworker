@@ -71,6 +71,15 @@ function getFieldValue(parsed: unknown, field: string): unknown {
   return (parsed as Record<string, unknown>)[field];
 }
 
+async function canonicalizePathForBoundaryCheck(absPath: string): Promise<string> {
+  const resolved = path.resolve(absPath);
+  try {
+    return await fs.realpath(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
 function parseJsonFinalOutput(finalText: string): unknown {
   return JSON.parse(finalText.trim());
 }
@@ -135,7 +144,11 @@ async function validateArtifactAssertions(
           issues.push(issue("not_absolute", `Field "${assertion.field}" must be an absolute path`, assertion.field));
           break;
         }
-        const relative = path.relative(runDir, value);
+        const [canonicalRunDir, canonicalValue] = await Promise.all([
+          canonicalizePathForBoundaryCheck(runDir),
+          canonicalizePathForBoundaryCheck(value),
+        ]);
+        const relative = path.relative(canonicalRunDir, canonicalValue);
         if (relative.startsWith("..") || path.isAbsolute(relative)) {
           issues.push(issue("outside_run_dir", `Field "${assertion.field}" must stay within the run directory`, assertion.field));
         }

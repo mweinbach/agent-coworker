@@ -80,6 +80,32 @@ describe("raw-loop final contract validation", () => {
     expect(result.issues.some((entry) => entry.code === "outside_run_dir")).toBe(true);
   });
 
+  test("fails artifact validation when a symlink inside the run directory escapes it", async () => {
+    const runDir = await makeRunDir();
+    const outsideDir = await makeRunDir();
+    const outsidePath = path.join(outsideDir, "outside-report.md");
+    const symlinkPath = path.join(runDir, "report.md");
+    await fs.writeFile(outsidePath, "# outside\n", "utf-8");
+    await fs.symlink(outsidePath, symlinkPath);
+
+    const result = await validateFinalContract({
+      finalText: JSON.stringify({
+        report: symlinkPath,
+        end: "<<END_RUN>>",
+      }),
+      runDir,
+      trace: {},
+      contract: {
+        format: "json",
+        schema: z.object({ report: z.string(), end: z.literal("<<END_RUN>>") }).strict(),
+        artifactAssertions: buildPathArtifactAssertions("report", ".md"),
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((entry) => entry.code === "outside_run_dir")).toBe(true);
+  });
+
   test("passes valid schema and artifact assertions", async () => {
     const runDir = await makeRunDir();
     const reportPath = path.join(runDir, "report.md");

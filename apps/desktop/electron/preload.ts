@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { contextBridge, ipcRenderer } from "electron";
 import { z } from "zod";
 
@@ -52,6 +53,28 @@ import {
   trashPathInputSchema,
   updaterStateSchema,
 } from "../src/lib/desktopSchemas";
+
+const DEBUG_LOG_PATH = "/opt/cursor/logs/debug.log";
+
+function writeDebugLog(
+  hypothesisId: string,
+  location: string,
+  message: string,
+  data: Record<string, unknown> = {},
+): void {
+  try {
+    appendFileSync(
+      DEBUG_LOG_PATH,
+      `${JSON.stringify({ hypothesisId, location, message, data, timestamp: Date.now() })}\n`,
+    );
+  } catch {
+    // Ignore debug log write failures.
+  }
+}
+
+// #region agent log
+writeDebugLog("C", "apps/desktop/electron/preload.ts:module", "preload module init");
+// #endregion
 
 function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
   const parsed = schema.safeParse(value);
@@ -331,3 +354,9 @@ const desktopApi = Object.freeze<DesktopApi>({
 });
 
 contextBridge.exposeInMainWorld("cowork", desktopApi);
+
+// #region agent log
+writeDebugLog("C", "apps/desktop/electron/preload.ts:expose", "preload bridge exposed", {
+  hasDesktopApi: typeof desktopApi === "object",
+});
+// #endregion

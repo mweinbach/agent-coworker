@@ -8,6 +8,7 @@ import {
   extractInlineRepoPaths,
   extractMarkdownLinks,
   protocolVersionNeedle,
+  resolveDocReferencePath,
 } from "../scripts/check_docs";
 import { WEBSOCKET_PROTOCOL_VERSION } from "../src/server/protocol";
 
@@ -76,5 +77,29 @@ describe("docs checker parity", () => {
     )).toEqual([
       "./observability.md",
     ]);
+  });
+
+  test("resolveDocReferencePath treats bare markdown doc links as doc-relative", () => {
+    const cwd = repoRoot();
+
+    expect(resolveDocReferencePath(cwd, "docs/harness/index.md", "README.md", "markdown")).toBe(
+      path.join(cwd, "docs", "harness", "README.md"),
+    );
+  });
+
+  test("resolveDocReferencePath keeps bare inline top-level docs repo-rooted", () => {
+    const cwd = repoRoot();
+
+    expect(resolveDocReferencePath(cwd, "docs/harness/index.md", "README.md", "inline")).toBe(
+      path.join(cwd, "README.md"),
+    );
+  });
+
+  test("resolveDocReferencePath resolves dot-dot markdown links from the current doc directory", () => {
+    const cwd = repoRoot();
+
+    expect(resolveDocReferencePath(cwd, "docs/harness/index.md", "../../README.md", "markdown")).toBe(
+      path.join(cwd, "README.md"),
+    );
   });
 });

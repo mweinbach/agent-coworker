@@ -78,7 +78,6 @@ function isPlainRelativeDocLink(reference: string): boolean {
   if (normalized.startsWith("./") || normalized.startsWith("../")) return false;
   if (normalized.startsWith("~")) return false;
   if (normalized.startsWith(".")) return false;
-  if (TOP_LEVEL_DOCS.includes(normalized)) return false;
   if (REPO_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return false;
   return /\.md$/i.test(normalized);
 }
@@ -135,22 +134,47 @@ export function collectRepoPathReferences(text: string): string[] {
   ])];
 }
 
+export function resolveDocReferencePath(
+  cwd: string,
+  docPath: string,
+  reference: string,
+  kind: "markdown" | "inline",
+): string {
+  const normalized = normalizeDocReference(reference);
+  const docDir = path.dirname(path.join(cwd, docPath));
+
+  if (kind === "markdown") {
+    if (isPlainRelativeDocLink(normalized) || normalized.startsWith("./") || normalized.startsWith("../")) {
+      return path.resolve(docDir, normalized);
+    }
+    return path.resolve(cwd, normalized);
+  }
+
+  if (normalized.startsWith("./") || normalized.startsWith("../")) {
+    return path.resolve(docDir, normalized);
+  }
+  return path.resolve(cwd, normalized);
+}
+
 async function validateReferencedPaths(
   cwd: string,
   docPath: string,
   text: string,
 ): Promise<CheckResult[]> {
-  const docDir = path.dirname(path.join(cwd, docPath));
-  const references = collectRepoPathReferences(text);
+  const references = [
+    ...extractMarkdownLinks(text).map((reference) => ({ kind: "markdown" as const, reference })),
+    ...extractInlineRepoPaths(text).map((reference) => ({ kind: "inline" as const, reference })),
+  ];
   const checks: CheckResult[] = [];
+  const seen = new Set<string>();
 
-  for (const reference of references) {
+  for (const { kind, reference } of references) {
     const normalized = normalizeDocReference(reference);
-    const resolved = isPlainRelativeDocLink(normalized)
-      ? path.resolve(docDir, normalized)
-      : normalized.startsWith("./") || normalized.startsWith("../")
-      ? path.resolve(docDir, normalized)
-      : path.resolve(cwd, normalized);
+    const key = `${kind}:${normalized}`;
+    if (!normalized || seen.has(key)) continue;
+    seen.add(key);
+
+    const resolved = resolveDocReferencePath(cwd, docPath, normalized, kind);
     if (!(await pathExists(resolved))) {
       checks.push({
         ok: false,

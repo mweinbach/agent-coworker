@@ -2265,10 +2265,7 @@ async function main() {
         repairAttempted = attemptRepairAttempted;
         repairSucceeded = attemptRepairSucceeded;
         degraded = attemptDegraded;
-        finalBudgets = {
-          ...budgetSummary,
-          repairPassCount: attemptRepairAttempted ? 1 : 0,
-        };
+        finalBudgets = budgetSummary;
 
         finalToolLogLines = toolLogLines;
         finalAskEvents = askEvents;

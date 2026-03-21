@@ -374,6 +374,69 @@ describe("desktop JSON-RPC event mapping", () => {
     expect(runtime?.feed.some((item) => "text" in item && typeof item.text === "string" && item.text.includes("Hello from JSON-RPC"))).toBe(true);
   });
 
+  test("shared JSON-RPC notifications hydrate live session metadata immediately", async () => {
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances[0];
+    expect(socket).toBeDefined();
+
+    socket.notify("cowork/session/info", {
+      type: "session_info",
+      sessionId,
+      title: "Renamed over JSON-RPC",
+      titleSource: "manual",
+      titleModel: null,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:03.000Z",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+    });
+    socket.notify("cowork/session/configUpdated", {
+      type: "config_updated",
+      sessionId,
+      config: {
+        provider: "openai",
+        model: "gpt-5.4-mini",
+        workingDirectory: "/tmp/workspace",
+      },
+    });
+    socket.notify("cowork/session/settings", {
+      type: "session_settings",
+      sessionId,
+      enableMcp: false,
+      enableMemory: true,
+      memoryRequireApproval: false,
+    });
+    socket.notify("cowork/session/config", {
+      type: "session_config",
+      sessionId,
+      config: {
+        yolo: false,
+        observabilityEnabled: false,
+        backupsEnabled: true,
+        defaultBackupsEnabled: true,
+        enableMemory: true,
+        memoryRequireApproval: false,
+        preferredChildModel: "gpt-5.4-mini",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "openai:gpt-5.4-mini",
+        allowedChildModelRefs: [],
+        maxSteps: 100,
+        toolOutputOverflowChars: 25000,
+      },
+    });
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    const runtime = useAppStore.getState().threadRuntimeById[threadId];
+    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.title).toBe("Renamed over JSON-RPC");
+    expect(runtime?.config?.model).toBe("gpt-5.4-mini");
+    expect(runtime?.enableMcp).toBe(false);
+    expect(runtime?.sessionConfig?.preferredChildModel).toBe("gpt-5.4-mini");
+  });
+
   test("server ask requests open a prompt and answerAsk responds on the shared socket", async () => {
     await useAppStore.getState().reconnectThread(threadId);
     await flushAsyncWork();

@@ -35,8 +35,15 @@ class MockJsonRpcSocket {
   static instances: MockJsonRpcSocket[] = [];
   readonly readyPromise = Promise.resolve();
 
-  constructor(public readonly opts: { onOpen?: () => void }) {
+  constructor(public readonly opts: { onOpen?: () => void; onNotification?: (message: { method: string; params?: unknown }) => void }) {
     MockJsonRpcSocket.instances.push(this);
+  }
+
+  private notify(method: string, params: unknown) {
+    this.opts.onNotification?.({
+      method,
+      params,
+    });
   }
 
   connect() {
@@ -110,64 +117,95 @@ class MockJsonRpcSocket {
       };
     }
     if (method === "cowork/session/title/set") {
+      const event = {
+        type: "session_info",
+        sessionId: "jsonrpc-thread-1",
+        title: params && typeof (params as any).title === "string" ? (params as any).title : "Renamed",
+        titleSource: "manual",
+        titleModel: null,
+        createdAt: "2026-03-21T00:00:00.000Z",
+        updatedAt: "2026-03-21T00:00:00.000Z",
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+      };
+      this.notify("cowork/session/info", event);
       return {
-        event: {
-          type: "session_info",
-          sessionId: "jsonrpc-thread-1",
-          title: params && typeof (params as any).title === "string" ? (params as any).title : "Renamed",
-          titleSource: "manual",
-          titleModel: null,
-          createdAt: "2026-03-21T00:00:00.000Z",
-          updatedAt: "2026-03-21T00:00:00.000Z",
-          provider: "google",
-          model: "gemini-3.1-pro-preview",
-        },
+        event,
       };
     }
     if (method === "cowork/session/model/set") {
-      return {
-        event: {
-          type: "config_updated",
-          sessionId: "jsonrpc-thread-1",
-          config: {
-            provider: (params as any)?.provider ?? "google",
-            model: (params as any)?.model ?? "gemini-3.1-pro-preview",
-            workingDirectory: "/tmp/jsonrpc-workspace",
-          },
+      const event = {
+        type: "config_updated",
+        sessionId: "jsonrpc-thread-1",
+        config: {
+          provider: (params as any)?.provider ?? "google",
+          model: (params as any)?.model ?? "gemini-3.1-pro-preview",
+          workingDirectory: "/tmp/jsonrpc-workspace",
         },
+      };
+      this.notify("cowork/session/configUpdated", event);
+      return {
+        event,
       };
     }
     if (method === "cowork/session/usageBudget/set") {
+      const event = {
+        type: "session_usage",
+        sessionId: "jsonrpc-thread-1",
+        usage: null,
+      };
+      this.notify("cowork/session/usage", event);
       return {
-        event: {
-          type: "session_usage",
-          sessionId: "jsonrpc-thread-1",
-          usage: null,
-        },
+        event,
       };
     }
     if (method === "cowork/session/defaults/apply") {
-      return {
-        event: {
-          type: "session_config",
-          sessionId: "jsonrpc-control",
-          config: {
-            yolo: false,
-            observabilityEnabled: true,
-            backupsEnabled: true,
-            defaultBackupsEnabled: true,
+      const threadId = typeof (params as any)?.threadId === "string" ? (params as any).threadId : null;
+      const configEvent = {
+        type: "session_config",
+        sessionId: threadId ?? "jsonrpc-control",
+        config: {
+          yolo: false,
+          observabilityEnabled: true,
+          backupsEnabled: true,
+          defaultBackupsEnabled: true,
+          enableMemory: true,
+          memoryRequireApproval: false,
+          preferredChildModel: "gemini-3.1-pro-preview",
+          childModelRoutingMode: "same-provider",
+          preferredChildModelRef: "google:gemini-3.1-pro-preview",
+          allowedChildModelRefs: [],
+          maxSteps: 100,
+          toolOutputOverflowChars: 25000,
+          userName: "",
+          userProfile: { instructions: "", work: "", details: "" },
+        },
+      };
+      if (threadId) {
+        if (typeof (params as any)?.provider === "string" && typeof (params as any)?.model === "string") {
+          this.notify("cowork/session/configUpdated", {
+            type: "config_updated",
+            sessionId: threadId,
+            config: {
+              provider: (params as any).provider,
+              model: (params as any).model,
+              workingDirectory: "/tmp/jsonrpc-workspace",
+            },
+          });
+        }
+        if (typeof (params as any)?.enableMcp === "boolean") {
+          this.notify("cowork/session/settings", {
+            type: "session_settings",
+            sessionId: threadId,
+            enableMcp: (params as any).enableMcp,
             enableMemory: true,
             memoryRequireApproval: false,
-            preferredChildModel: "gemini-3.1-pro-preview",
-            childModelRoutingMode: "same-provider",
-            preferredChildModelRef: "google:gemini-3.1-pro-preview",
-            allowedChildModelRefs: [],
-            maxSteps: 100,
-            toolOutputOverflowChars: 25000,
-            userName: "",
-            userProfile: { instructions: "", work: "", details: "" },
-          },
-        },
+          });
+        }
+        this.notify("cowork/session/config", configEvent);
+      }
+      return {
+        event: configEvent,
       };
     }
     if (method === "cowork/provider/catalog/read") {
@@ -293,9 +331,9 @@ const { useAppStore } = await import("../src/app/store");
 const { RUNTIME } = await import("../src/app/store.helpers");
 
 async function flushAsyncWork() {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 8; i += 1) {
+    await Promise.resolve();
+  }
 }
 
 describe("desktop JSON-RPC single connection path", () => {
@@ -374,8 +412,9 @@ describe("desktop JSON-RPC single connection path", () => {
       "cowork/skills/list",
       "thread/list",
       "thread/start",
-      "turn/start",
+      "cowork/session/defaults/apply",
       "thread/read",
+      "turn/start",
     ]);
 
     const state = useAppStore.getState();
@@ -468,13 +507,49 @@ describe("desktop JSON-RPC single connection path", () => {
       "cowork/skills/list",
       "thread/list",
       "thread/start",
-      "turn/start",
+      "cowork/session/defaults/apply",
       "thread/read",
+      "turn/start",
       "cowork/session/title/set",
       "cowork/session/model/set",
       "cowork/session/usageBudget/set",
       "cowork/session/defaults/apply",
       "cowork/session/defaults/apply",
     ]);
+
+    const runtime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
+    expect(useAppStore.getState().threads.find((thread) => thread.id === "jsonrpc-thread-1")?.title).toBe("Renamed thread");
+    expect(runtime?.enableMcp).toBe(false);
+  });
+
+  test("draft model selection applies before the first turn starts", async () => {
+    await useAppStore.getState().selectWorkspace("ws-jsonrpc");
+    await useAppStore.getState().newThread({
+      workspaceId: "ws-jsonrpc",
+      titleHint: "Draft only",
+    });
+
+    const draftThreadId = useAppStore.getState().selectedThreadId;
+    expect(draftThreadId).toBeTruthy();
+    useAppStore.getState().setThreadModel(draftThreadId!, "openai", "gpt-5.4-mini");
+    jsonRpcRequests.length = 0;
+
+    await useAppStore.getState().sendMessage("use the draft selection");
+    await flushAsyncWork();
+
+    expect(jsonRpcRequests.map((entry) => entry.method)).toEqual([
+      "thread/list",
+      "thread/start",
+      "cowork/session/defaults/apply",
+      "thread/read",
+      "turn/start",
+    ]);
+    expect(jsonRpcRequests.find((entry) => entry.method === "cowork/session/defaults/apply")?.params).toMatchObject({
+      threadId: "jsonrpc-thread-1",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+    });
+    expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.config?.model).toBe("gpt-5.4-mini");
+    expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.config?.provider).toBe("openai");
   });
 });

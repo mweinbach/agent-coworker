@@ -175,6 +175,8 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - memories
 - workspace backups
 
+`cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session.
+
 ### Core JSON-RPC notifications currently available
 
 - `thread/started`
@@ -184,6 +186,11 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - `item/completed`
 - `turn/completed`
 - `serverRequest/resolved`
+- `cowork/session/settings`
+- `cowork/session/info`
+- `cowork/session/configUpdated`
+- `cowork/session/config`
+- `cowork/session/usage`
 
 ### Server-initiated JSON-RPC requests currently available
 

@@ -171,6 +171,46 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("thread-scoped defaults apply emits live session state notifications", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      const applied = await rpc.sendRequest("cowork/session/defaults/apply", {
+        cwd: tmpDir,
+        threadId: started.result.thread.id,
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        enableMcp: false,
+        config: {
+          backupsEnabled: false,
+        },
+      });
+
+      expect(applied.result.event.type).toBe("session_config");
+      expect(applied.result.event.sessionId).toBe(started.result.thread.id);
+
+      const configUpdated = await rpc.waitFor((message) => message.method === "cowork/session/configUpdated");
+      const sessionSettings = await rpc.waitFor((message) => message.method === "cowork/session/settings");
+      const sessionConfig = await rpc.waitFor((message) => message.method === "cowork/session/config");
+
+      expect(configUpdated.params.sessionId).toBe(started.result.thread.id);
+      expect(configUpdated.params.config.model).toBe("gemini-3-flash-preview");
+      expect(sessionSettings.params.sessionId).toBe(started.result.thread.id);
+      expect(sessionSettings.params.enableMcp).toBe(false);
+      expect(sessionConfig.params.sessionId).toBe(started.result.thread.id);
+      expect(sessionConfig.params.config.backupsEnabled).toBe(false);
+
+      rpc.close();
+    } finally {
+      server.stop();
+    }
+  });
+
   test("server-initiated user input requests resolve over JSON-RPC responses", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir, {

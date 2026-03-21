@@ -314,6 +314,10 @@
               "type": "string",
               "minLength": 1
             },
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
             "provider": {
               "type": "string",
               "minLength": 1
@@ -3137,6 +3141,103 @@
             "requestId"
           ],
           "additionalProperties": false
+        },
+        "cowork/session/settings": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "session_settings"
+            },
+            "enableMcp": {
+              "type": "boolean"
+            },
+            "enableMemory": {
+              "type": "boolean"
+            },
+            "memoryRequireApproval": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "enableMcp",
+            "enableMemory",
+            "memoryRequireApproval"
+          ],
+          "additionalProperties": {}
+        },
+        "cowork/session/info": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "session_info"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "title"
+          ],
+          "additionalProperties": {}
+        },
+        "cowork/session/configUpdated": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "config_updated"
+            },
+            "config": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "type",
+            "config"
+          ],
+          "additionalProperties": {}
+        },
+        "cowork/session/config": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "session_config"
+            },
+            "config": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "type",
+            "config"
+          ],
+          "additionalProperties": {}
+        },
+        "cowork/session/usage": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "session_usage"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": {}
         }
       },
       "required": [
@@ -3146,7 +3247,12 @@
         "item/agentMessage/delta",
         "item/completed",
         "turn/completed",
-        "serverRequest/resolved"
+        "serverRequest/resolved",
+        "cowork/session/settings",
+        "cowork/session/info",
+        "cowork/session/configUpdated",
+        "cowork/session/config",
+        "cowork/session/usage"
       ],
       "additionalProperties": false
     },

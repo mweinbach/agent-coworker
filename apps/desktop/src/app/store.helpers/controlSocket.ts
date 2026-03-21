@@ -982,10 +982,19 @@ export function createControlSocketHelpers(
         set((s) => {
           const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
           const hadPendingMemories = workspaceRuntime?.memoriesLoading ?? false;
+          const userConfigLastResult = s.pendingUserConfigSave
+            ? {
+                type: "user_config_result" as const,
+                sessionId: workspaceRuntime?.controlSessionId ?? "",
+                ok: false,
+                message: "Control connection closed before global user config save completed.",
+              }
+            : s.userConfigLastResult;
           return {
             providerStatusRefreshing: false,
             providerLastAuthChallenge: null,
             pendingUserConfigSave: false,
+            userConfigLastResult,
             notifications: hadPendingMemories
               ? deps.pushNotification(s.notifications, {
                   id: deps.makeId(),

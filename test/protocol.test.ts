@@ -541,6 +541,22 @@ describe("safeParseClientMessage", () => {
           awsBedrockProxyBaseUrl: "httpx://proxy.example.com/v1",
         },
       }))).toBe("user_config_set config.awsBedrockProxyBaseUrl must be a valid http(s) URL");
+
+      expect(expectErr(JSON.stringify({
+        type: "user_config_set",
+        sessionId: "s1",
+        config: {
+          awsBedrockProxyBaseUrl: "https://proxy.example.com/v1?tenant=a",
+        },
+      }))).toBe("user_config_set config.awsBedrockProxyBaseUrl must be a valid http(s) URL");
+
+      expect(expectErr(JSON.stringify({
+        type: "user_config_set",
+        sessionId: "s1",
+        config: {
+          awsBedrockProxyBaseUrl: "https://proxy.example.com/v1#frag",
+        },
+      }))).toBe("user_config_set config.awsBedrockProxyBaseUrl must be a valid http(s) URL");
     });
 
     test("provider_auth_authorize validation", () => {

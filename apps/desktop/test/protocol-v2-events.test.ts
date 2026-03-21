@@ -273,6 +273,28 @@ describe("desktop protocol v2 mapping", () => {
     expect(notification?.detail).toBe("Unable to update global user config.");
   });
 
+  test("control socket close publishes a failed user config result for an in-flight save", async () => {
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+
+    await useAppStore.getState().setGlobalOpenAiProxyBaseUrl("https://proxy.example.com/v1");
+
+    expect(useAppStore.getState().pendingUserConfigSave).toBe(true);
+    expect(useAppStore.getState().userConfigLastResult).toBeNull();
+
+    controlSocket.close();
+
+    const state = useAppStore.getState();
+    expect(state.pendingUserConfigSave).toBe(false);
+    expect(state.userConfigLastResult).toEqual({
+      type: "user_config_result",
+      sessionId: "control-session",
+      ok: false,
+      message: "Control connection closed before global user config save completed.",
+    });
+  });
+
   test("requestWorkspaceMemories waits for the initial control hello before surfacing not connected", async () => {
     const requestPromise = useAppStore.getState().requestWorkspaceMemories(workspaceId);
     await flushAsyncWork();

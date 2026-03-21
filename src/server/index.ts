@@ -13,7 +13,7 @@ globalSettings.AI_SDK_LOG_WARNINGS = false;
 
 function printUsage() {
   console.log(
-    "Usage: bun src/server/index.ts [--dir <directory_path>] [--host <hostname>] [--port <port>] [--yolo] [--json]"
+    "Usage: bun src/server/index.ts [--dir <directory_path>] [--host <hostname>] [--port <port>] [--yolo] [--json] [--ws-protocol-default <legacy|jsonrpc>]"
   );
 }
 
@@ -24,12 +24,20 @@ async function resolveAndValidateDir(dirArg: string): Promise<string> {
   return resolved;
 }
 
-function parseArgs(argv: string[]): { dir?: string; host: string; port: number; yolo: boolean; json: boolean } {
+function parseArgs(argv: string[]): {
+  dir?: string;
+  host: string;
+  port: number;
+  yolo: boolean;
+  json: boolean;
+  wsProtocolDefault?: "legacy" | "jsonrpc";
+} {
   let dir: string | undefined;
   let host = "127.0.0.1";
   let port = 7337;
   let yolo = false;
   let json = false;
+  let wsProtocolDefault: "legacy" | "jsonrpc" | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -69,10 +77,20 @@ function parseArgs(argv: string[]): { dir?: string; host: string; port: number; 
       json = true;
       continue;
     }
+    if (a === "--ws-protocol-default") {
+      const v = argv[i + 1];
+      if (!v) throw new Error(`Missing value for ${a}`);
+      if (v !== "legacy" && v !== "jsonrpc") {
+        throw new Error(`Invalid value for ${a}: ${v}`);
+      }
+      wsProtocolDefault = v;
+      i++;
+      continue;
+    }
     throw new Error(`Unknown argument: ${a}`);
   }
 
-  return { dir, host, port, yolo, json };
+  return { dir, host, port, yolo, json, wsProtocolDefault };
 }
 
 function resolveListeningHints(host: string): string[] {
@@ -90,7 +108,7 @@ function resolveListeningHints(host: string): string[] {
 }
 
 async function main() {
-  const { dir, host, port, yolo, json } = parseArgs(process.argv.slice(2));
+  const { dir, host, port, yolo, json, wsProtocolDefault } = parseArgs(process.argv.slice(2));
 
   const cwd = dir ? await resolveAndValidateDir(dir) : process.cwd();
   if (dir) process.chdir(cwd);
@@ -102,6 +120,7 @@ async function main() {
     env: { ...process.env, AGENT_WORKING_DIR: cwd },
     providerOptions: DEFAULT_PROVIDER_OPTIONS,
     yolo,
+    ...(wsProtocolDefault ? { wsProtocolDefault } : {}),
   });
 
   // Graceful shutdown on signals so child processes are cleaned up.
@@ -138,6 +157,7 @@ async function main() {
         hostHints,
         port: server.port,
         cwd: config.workingDirectory,
+        wsProtocolDefault: wsProtocolDefault ?? process.env.COWORK_WS_DEFAULT_PROTOCOL ?? "legacy",
       })
     );
     return;

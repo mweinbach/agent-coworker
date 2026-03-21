@@ -29,10 +29,18 @@ import {
   WEBSOCKET_PROTOCOL_VERSION,
   type ServerEvent,
 } from "./protocol";
+import { decodeJsonRpcMessage } from "./jsonrpc/decodeJsonRpcMessage";
+import { dispatchJsonRpcMessage } from "./jsonrpc/dispatchJsonRpcMessage";
 import { decodeClientMessage } from "./startServer/decodeClientMessage";
 import { dispatchClientMessage } from "./startServer/dispatchClientMessage";
 import { type SessionBinding, type StartServerSocketData } from "./startServer/types";
 import type { SeededSessionContext, SessionDependencies, SessionInfoState } from "./session/SessionContext";
+import {
+  parseWsProtocolDefault,
+  resolveWsProtocol,
+  splitWebSocketSubprotocolHeader,
+  type WsProtocolMode,
+} from "./wsProtocol/negotiation";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const errorWithCodeSchema = z.object({
@@ -222,6 +230,7 @@ export interface StartAgentServerOptions {
   connectProviderImpl?: typeof connectModelProvider;
   getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
   runTurnImpl?: typeof runTurnFn;
+  wsProtocolDefault?: WsProtocolMode;
 }
 
 export async function startAgentServer(
@@ -237,6 +246,7 @@ export async function startAgentServer(
   const env: Record<string, string | undefined> & {
     COWORK_BUILTIN_DIR?: string;
   } = { ...rawEnv };
+  const wsProtocolDefault = opts.wsProtocolDefault ?? parseWsProtocolDefault(env.COWORK_WS_DEFAULT_PROTOCOL);
 
   await ensureDefaultGlobalSkillsReady({
     homedir: opts.homedir,
@@ -581,73 +591,97 @@ export async function startAgentServer(
     },
   });
 
-  function createServer(port: number): ReturnType<typeof Bun.serve> {
-    return Bun.serve<StartServerSocketData>({
-      hostname,
-      port,
-      fetch(req, srv) {
-        const url = new URL(req.url);
-        if (url.pathname === "/ws") {
-          const resumeSessionIdRaw = url.searchParams.get("resumeSessionId");
-          const resumeSessionId = resumeSessionIdRaw && resumeSessionIdRaw.trim() ? resumeSessionIdRaw.trim() : undefined;
-          const upgraded = srv.upgrade(req, { data: { resumeSessionId } });
-          if (upgraded) return;
-          return new Response("WebSocket upgrade failed", { status: 400 });
-        }
-        return new Response("OK", { status: 200 });
+  const openJsonRpcSocket = (ws: Bun.ServerWebSocket<StartServerSocketData>) => {
+    ws.data.rpc = {
+      initializeRequestReceived: false,
+      initializedNotificationReceived: false,
+      capabilities: {
+        experimentalApi: false,
+        optOutNotificationMethods: [],
       },
-      websocket: {
-        open(ws) {
-          const resumeSessionId = ws.data.resumeSessionId;
-          const resumable =
-            resumeSessionId && sessionBindings.has(resumeSessionId)
-              ? sessionBindings.get(resumeSessionId)
-              : undefined;
-          const resumableSession = resumable?.session ?? null;
+    };
+  };
 
-          let session: AgentSession;
-          let binding: SessionBinding;
-          let isResume = false;
-          let resumedFromStorage = false;
+  const openLegacySocket = (ws: Bun.ServerWebSocket<StartServerSocketData>) => {
+    const resumeSessionId = ws.data.resumeSessionId;
+    const resumable =
+      resumeSessionId && sessionBindings.has(resumeSessionId)
+        ? sessionBindings.get(resumeSessionId)
+        : undefined;
+    const resumableSession = resumable?.session ?? null;
 
-          if (resumable && resumable.socket === null && resumableSession) {
-            binding = resumable;
-            binding.socket = ws;
-            session = resumableSession;
-            isResume = true;
-          } else {
-            binding = {
-              session: null,
-              socket: ws,
-            };
-            const built = buildSession(binding, resumeSessionId);
-            session = built.session;
-            isResume = built.isResume;
-            resumedFromStorage = built.resumedFromStorage;
-            binding.session = session;
-            sessionBindings.set(session.id, binding);
+    let session: AgentSession;
+    let binding: SessionBinding;
+    let isResume = false;
+    let resumedFromStorage = false;
+
+    if (resumable && resumable.socket === null && resumableSession) {
+      binding = resumable;
+      binding.socket = ws;
+      session = resumableSession;
+      isResume = true;
+    } else {
+      binding = {
+        session: null,
+        socket: ws,
+      };
+      const built = buildSession(binding, resumeSessionId);
+      session = built.session;
+      isResume = built.isResume;
+      resumedFromStorage = built.resumedFromStorage;
+      binding.session = session;
+      sessionBindings.set(session.id, binding);
+    }
+
+    ws.data.session = session;
+    ws.data.resumeSessionId = session.id;
+
+    const emitToCurrentSocket = (evt: ServerEvent) => {
+      try {
+        ws.send(JSON.stringify(evt));
+      } catch {
+        // ignore
+      }
+    };
+
+    const sessionInfo = session.getSessionInfoEvent();
+    const hello: ServerEvent = {
+      type: "server_hello",
+      sessionId: session.id,
+      protocolVersion: WEBSOCKET_PROTOCOL_VERSION,
+      capabilities: {
+        modelStreamChunk: "v1",
+      },
+      config: session.getPublicConfig(),
+      sessionKind: sessionInfo.sessionKind,
+      ...(sessionInfo.parentSessionId ? { parentSessionId: sessionInfo.parentSessionId } : {}),
+      ...(sessionInfo.role ? { role: sessionInfo.role } : {}),
+      ...(sessionInfo.mode ? { mode: sessionInfo.mode } : {}),
+      ...(typeof sessionInfo.depth === "number" ? { depth: sessionInfo.depth } : {}),
+      ...(sessionInfo.nickname ? { nickname: sessionInfo.nickname } : {}),
+      ...(sessionInfo.requestedModel ? { requestedModel: sessionInfo.requestedModel } : {}),
+      ...(sessionInfo.effectiveModel ? { effectiveModel: sessionInfo.effectiveModel } : {}),
+      ...(sessionInfo.requestedReasoningEffort
+        ? { requestedReasoningEffort: sessionInfo.requestedReasoningEffort }
+        : {}),
+      ...(sessionInfo.effectiveReasoningEffort
+        ? { effectiveReasoningEffort: sessionInfo.effectiveReasoningEffort }
+        : {}),
+      ...(sessionInfo.executionState ? { executionState: sessionInfo.executionState } : {}),
+      ...(sessionInfo.lastMessagePreview ? { lastMessagePreview: sessionInfo.lastMessagePreview } : {}),
+      ...(isResume
+        ? {
+            isResume: true,
+            ...(resumedFromStorage ? { resumedFromStorage: true } : {}),
+            busy: session.isBusy,
+            ...(session.isBusy && session.activeTurnId ? { turnId: session.activeTurnId } : {}),
+            messageCount: session.messageCount,
+            hasPendingAsk: session.hasPendingAsk,
+            hasPendingApproval: session.hasPendingApproval,
           }
-
-          ws.data.session = session;
-          ws.data.resumeSessionId = session.id;
-
-          const emitToCurrentSocket = (evt: ServerEvent) => {
-            try {
-              ws.send(JSON.stringify(evt));
-            } catch {
-              // ignore
-            }
-          };
-
-          const sessionInfo = session.getSessionInfoEvent();
-          const hello: ServerEvent = {
-            type: "server_hello",
-            sessionId: session.id,
-            protocolVersion: WEBSOCKET_PROTOCOL_VERSION,
-            capabilities: {
-              modelStreamChunk: "v1",
-            },
-            config: session.getPublicConfig(),
+        : {}),
+      ...(sessionInfo.sessionKind !== "root"
+        ? {
             sessionKind: sessionInfo.sessionKind,
             ...(sessionInfo.parentSessionId ? { parentSessionId: sessionInfo.parentSessionId } : {}),
             ...(sessionInfo.role ? { role: sessionInfo.role } : {}),
@@ -664,70 +698,102 @@ export async function startAgentServer(
               : {}),
             ...(sessionInfo.executionState ? { executionState: sessionInfo.executionState } : {}),
             ...(sessionInfo.lastMessagePreview ? { lastMessagePreview: sessionInfo.lastMessagePreview } : {}),
-            ...(isResume
-              ? {
-                  isResume: true,
-                  ...(resumedFromStorage ? { resumedFromStorage: true } : {}),
-                  busy: session.isBusy,
-                  ...(session.isBusy && session.activeTurnId ? { turnId: session.activeTurnId } : {}),
-                  messageCount: session.messageCount,
-                  hasPendingAsk: session.hasPendingAsk,
-                  hasPendingApproval: session.hasPendingApproval,
-                }
-              : {}),
-            ...(sessionInfo.sessionKind !== "root"
-              ? {
-                  sessionKind: sessionInfo.sessionKind,
-                  ...(sessionInfo.parentSessionId ? { parentSessionId: sessionInfo.parentSessionId } : {}),
-                  ...(sessionInfo.role ? { role: sessionInfo.role } : {}),
-                  ...(sessionInfo.mode ? { mode: sessionInfo.mode } : {}),
-                  ...(typeof sessionInfo.depth === "number" ? { depth: sessionInfo.depth } : {}),
-                  ...(sessionInfo.nickname ? { nickname: sessionInfo.nickname } : {}),
-                  ...(sessionInfo.requestedModel ? { requestedModel: sessionInfo.requestedModel } : {}),
-                  ...(sessionInfo.effectiveModel ? { effectiveModel: sessionInfo.effectiveModel } : {}),
-                  ...(sessionInfo.requestedReasoningEffort
-                    ? { requestedReasoningEffort: sessionInfo.requestedReasoningEffort }
-                    : {}),
-                  ...(sessionInfo.effectiveReasoningEffort
-                    ? { effectiveReasoningEffort: sessionInfo.effectiveReasoningEffort }
-                    : {}),
-                  ...(sessionInfo.executionState ? { executionState: sessionInfo.executionState } : {}),
-                  ...(sessionInfo.lastMessagePreview ? { lastMessagePreview: sessionInfo.lastMessagePreview } : {}),
-                }
-              : {}),
-          };
-
-          ws.send(JSON.stringify(hello));
-
-          const settings: ServerEvent = {
-            type: "session_settings",
-            sessionId: session.id,
-            enableMcp: session.getEnableMcp(),
-            enableMemory: session.getEnableMemory(),
-            memoryRequireApproval: session.getMemoryRequireApproval(),
-          };
-          ws.send(JSON.stringify(settings));
-          ws.send(JSON.stringify(session.getSessionConfigEvent()));
-          ws.send(JSON.stringify(session.getSessionInfoEvent()));
-
-          ws.send(JSON.stringify(session.getObservabilityStatusEvent()));
-          void session.emitProviderCatalog();
-          session.emitProviderAuthMethods();
-          void session.refreshProviderStatus();
-          void session.emitMcpServers();
-          // Feature 7: push backup state on connect
-          void session.getSessionBackupState();
-          if (isResume) {
-            for (const evt of session.drainDisconnectedReplayEvents()) {
-              emitToCurrentSocket(evt);
-            }
           }
-          // Feature 1: replay pending prompts on reconnect
-          if (isResume) {
-            session.replayPendingPrompts();
+        : {}),
+    };
+
+    ws.send(JSON.stringify(hello));
+
+    const settings: ServerEvent = {
+      type: "session_settings",
+      sessionId: session.id,
+      enableMcp: session.getEnableMcp(),
+      enableMemory: session.getEnableMemory(),
+      memoryRequireApproval: session.getMemoryRequireApproval(),
+    };
+    ws.send(JSON.stringify(settings));
+    ws.send(JSON.stringify(session.getSessionConfigEvent()));
+    ws.send(JSON.stringify(session.getSessionInfoEvent()));
+
+    ws.send(JSON.stringify(session.getObservabilityStatusEvent()));
+    void session.emitProviderCatalog();
+    session.emitProviderAuthMethods();
+    void session.refreshProviderStatus();
+    void session.emitMcpServers();
+    void session.getSessionBackupState();
+    if (isResume) {
+      for (const evt of session.drainDisconnectedReplayEvents()) {
+        emitToCurrentSocket(evt);
+      }
+    }
+    if (isResume) {
+      session.replayPendingPrompts();
+    }
+  };
+
+  const closeLegacySocket = (ws: Bun.ServerWebSocket<StartServerSocketData>) => {
+    const session = ws.data.session;
+    if (!session) return;
+    const binding = sessionBindings.get(session.id);
+    if (!binding) return;
+
+    if (binding.socket === ws) {
+      binding.socket = null;
+      session.beginDisconnectedReplayBuffer();
+    }
+  };
+
+  function createServer(port: number): ReturnType<typeof Bun.serve> {
+    return Bun.serve<StartServerSocketData>({
+      hostname,
+      port,
+      fetch(req, srv) {
+        const url = new URL(req.url);
+        if (url.pathname === "/ws") {
+          const resumeSessionIdRaw = url.searchParams.get("resumeSessionId");
+          const resumeSessionId = resumeSessionIdRaw && resumeSessionIdRaw.trim() ? resumeSessionIdRaw.trim() : undefined;
+          const protocolResult = resolveWsProtocol({
+            offeredSubprotocols: splitWebSocketSubprotocolHeader(req.headers.get("sec-websocket-protocol")),
+            requestedProtocol: url.searchParams.get("protocol"),
+            defaultProtocol: wsProtocolDefault,
+          });
+          if (!protocolResult.ok) {
+            return new Response(protocolResult.error, { status: 400 });
           }
+          const upgraded = srv.upgrade(req, {
+            data: {
+              resumeSessionId,
+              protocolMode: protocolResult.protocol.mode,
+              selectedSubprotocol: protocolResult.protocol.selectedSubprotocol,
+            },
+          });
+          if (upgraded) return;
+          return new Response("WebSocket upgrade failed", { status: 400 });
+        }
+        return new Response("OK", { status: 200 });
+      },
+      websocket: {
+        open(ws) {
+          if (ws.data.protocolMode === "jsonrpc") {
+            openJsonRpcSocket(ws);
+            return;
+          }
+          openLegacySocket(ws);
         },
         message(ws, raw) {
+          if (ws.data.protocolMode === "jsonrpc") {
+            const decoded = decodeJsonRpcMessage(raw);
+            if (!decoded.ok) {
+              ws.send(JSON.stringify(decoded.response));
+              return;
+            }
+            dispatchJsonRpcMessage({
+              ws,
+              message: decoded.message,
+            });
+            return;
+          }
+
           const session = ws.data.session;
           if (!session) return;
 
@@ -745,15 +811,10 @@ export async function startAgentServer(
           });
         },
         close(ws) {
-          const session = ws.data.session;
-          if (!session) return;
-          const binding = sessionBindings.get(session.id);
-          if (!binding) return;
-
-          if (binding.socket === ws) {
-            binding.socket = null;
-            session.beginDisconnectedReplayBuffer();
+          if (ws.data.protocolMode === "jsonrpc") {
+            return;
           }
+          closeLegacySocket(ws);
         },
       },
     });

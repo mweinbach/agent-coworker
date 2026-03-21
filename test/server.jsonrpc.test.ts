@@ -1,0 +1,153 @@
+import { describe, expect, test } from "bun:test";
+
+import { startAgentServer } from "../src/server/startServer";
+import { makeTmpProject, serverOpts } from "./helpers/wsHarness";
+
+function waitForOpen(ws: WebSocket): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Timed out waiting for websocket open")), 5_000);
+    ws.onopen = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    ws.onerror = (event) => {
+      clearTimeout(timer);
+      reject(new Error(`WebSocket error: ${event}`));
+    };
+  });
+}
+
+function waitForSingleMessage(ws: WebSocket): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Timed out waiting for websocket message")), 5_000);
+    ws.onmessage = (event) => {
+      clearTimeout(timer);
+      resolve(JSON.parse(typeof event.data === "string" ? event.data : ""));
+    };
+    ws.onerror = (event) => {
+      clearTimeout(timer);
+      reject(new Error(`WebSocket error: ${event}`));
+    };
+  });
+}
+
+async function expectNoMessage(ws: WebSocket, durationMs = 150): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.onmessage = null;
+      resolve();
+    }, durationMs);
+    ws.onmessage = (event) => {
+      clearTimeout(timer);
+      reject(new Error(`Unexpected websocket message: ${typeof event.data === "string" ? event.data : "<binary>"}`));
+    };
+    ws.onerror = (event) => {
+      clearTimeout(timer);
+      reject(new Error(`WebSocket error: ${event}`));
+    };
+  });
+}
+
+describe("server JSON-RPC websocket mode", () => {
+  test("legacy remains the default websocket protocol", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const ws = new WebSocket(url);
+      const hello = await waitForSingleMessage(ws);
+      expect(hello.type).toBe("server_hello");
+      ws.close();
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("query-param JSON-RPC mode requires initialize handshake", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const ws = new WebSocket(`${url}?protocol=jsonrpc`);
+      await waitForOpen(ws);
+      await expectNoMessage(ws);
+
+      ws.send(JSON.stringify({
+        id: 1,
+        method: "thread/list",
+        params: {},
+      }));
+      const notInitialized = await waitForSingleMessage(ws);
+      expect(notInitialized).toEqual({
+        id: 1,
+        error: {
+          code: -32002,
+          message: "Not initialized",
+        },
+      });
+
+      ws.send(JSON.stringify({
+        id: 2,
+        method: "initialize",
+        params: {
+          clientInfo: {
+            name: "test-client",
+            version: "1.0.0",
+          },
+        },
+      }));
+      const initializeResponse = await waitForSingleMessage(ws);
+      expect(initializeResponse.id).toBe(2);
+      expect(initializeResponse.result.protocolVersion).toBe("0.1");
+      expect(initializeResponse.result.transport.protocolMode).toBe("jsonrpc");
+
+      ws.send(JSON.stringify({ method: "initialized" }));
+      await expectNoMessage(ws);
+
+      ws.send(JSON.stringify({
+        id: 3,
+        method: "thread/list",
+        params: {},
+      }));
+      const methodNotFound = await waitForSingleMessage(ws);
+      expect(methodNotFound).toEqual({
+        id: 3,
+        error: {
+          code: -32601,
+          message: "Unknown method: thread/list",
+        },
+      });
+      ws.close();
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("subprotocol JSON-RPC mode initializes without sending legacy hello", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const ws = new WebSocket(url, "cowork.jsonrpc.v1");
+      await waitForOpen(ws);
+      await expectNoMessage(ws);
+      expect(ws.protocol).toBe("cowork.jsonrpc.v1");
+
+      ws.send(JSON.stringify({
+        id: 1,
+        method: "initialize",
+        params: {
+          clientInfo: {
+            name: "subprotocol-client",
+          },
+        },
+      }));
+      const response = await waitForSingleMessage(ws);
+      expect(response.id).toBe(1);
+      expect(response.result.serverInfo.subprotocol).toBe("cowork.jsonrpc.v1");
+      ws.close();
+    } finally {
+      server.stop();
+    }
+  });
+});

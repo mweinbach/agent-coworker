@@ -374,6 +374,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     return ok;
   }
 
+  function flushOneQueuedThreadMessageIfReady(get: StoreGet, set: StoreSet, threadId: string) {
+    if (get().threadRuntimeById[threadId]?.busy || hasPendingDraftModelSelection(threadId)) {
+      return false;
+    }
+    return flushOneQueuedThreadMessage(get, set, threadId);
+  }
+
   function applyModelStreamUpdateToThreadFeed(
     get: StoreGet,
     set: StoreSet,
@@ -509,13 +516,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           }
         } else {
           sentPendingFirstMessage = pendingFirstMessageQueued
-            ? flushOneQueuedThreadMessage(get, set, threadId)
+            ? flushOneQueuedThreadMessageIfReady(get, set, threadId)
             : sendUserMessageToThread(get, set, threadId, pendingFirstMessage);
         }
       }
 
       if (!resumedBusy && !sentPendingFirstMessage) {
-        flushOneQueuedThreadMessage(get, set, threadId);
+        flushOneQueuedThreadMessageIfReady(get, set, threadId);
       }
       return;
     }
@@ -548,9 +555,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           pendingApply.mode,
           pendingApply.draftModelSelection,
         );
-        if (!hasPendingDraftModelSelection(threadId) && !get().threadRuntimeById[threadId]?.busy) {
-          flushOneQueuedThreadMessage(get, set, threadId);
-        }
+        flushOneQueuedThreadMessageIfReady(get, set, threadId);
       }
       return;
     }
@@ -585,7 +590,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       }
       if (!evt.busy) {
         clearPendingThreadSteers(threadId);
-        flushOneQueuedThreadMessage(get, set, threadId);
+        flushOneQueuedThreadMessageIfReady(get, set, threadId);
       }
       return;
     }
@@ -651,9 +656,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           pendingApply.mode,
           pendingApply.draftModelSelection,
         );
-        if (!hasPendingDraftModelSelection(threadId) && !get().threadRuntimeById[threadId]?.busy) {
-          flushOneQueuedThreadMessage(get, set, threadId);
-        }
+        flushOneQueuedThreadMessageIfReady(get, set, threadId);
       }
       return;
     }

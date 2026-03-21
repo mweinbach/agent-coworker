@@ -127,13 +127,6 @@ export function extractInlineRepoPaths(text: string): string[] {
     .filter((value) => looksLikeInlineRepoPath(value));
 }
 
-export function collectRepoPathReferences(text: string): string[] {
-  return [...new Set([
-    ...extractMarkdownLinks(text),
-    ...extractInlineRepoPaths(text),
-  ])];
-}
-
 export function resolveDocReferencePath(
   cwd: string,
   docPath: string,

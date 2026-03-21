@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  collectRepoPathReferences,
   extractInlineRepoPaths,
   extractMarkdownLinks,
   protocolVersionNeedle,
@@ -53,26 +52,33 @@ describe("docs checker parity", () => {
     expect(extractInlineRepoPaths("Use `bun test`, `camelCase`, and `ServerEvent` in prose.")).toEqual([]);
   });
 
-  test("collectRepoPathReferences merges markdown links and inline repo paths", () => {
-    expect(collectRepoPathReferences(
+  test("extractMarkdownLinks keeps top-level repo docs", () => {
+    expect(extractMarkdownLinks(
       "See [Protocol](docs/websocket-protocol.md), `src/server/startServer/dispatchClientMessage.ts`, and [README](README.md).",
     )).toEqual([
       "docs/websocket-protocol.md",
       "README.md",
+    ]);
+  });
+
+  test("extractInlineRepoPaths keeps repo source paths from mixed prose", () => {
+    expect(extractInlineRepoPaths(
+      "See [Protocol](docs/websocket-protocol.md), `src/server/startServer/dispatchClientMessage.ts`, and [README](README.md).",
+    )).toEqual([
       "src/server/startServer/dispatchClientMessage.ts",
     ]);
   });
 
-  test("collectRepoPathReferences keeps plain relative markdown doc links", () => {
-    expect(collectRepoPathReferences(
+  test("extractMarkdownLinks keeps plain relative markdown doc links", () => {
+    expect(extractMarkdownLinks(
       "See [Protocol](websocket-protocol.md) from this doc.",
     )).toEqual([
       "websocket-protocol.md",
     ]);
   });
 
-  test("collectRepoPathReferences keeps dot-relative markdown doc links", () => {
-    expect(collectRepoPathReferences(
+  test("extractMarkdownLinks keeps dot-relative markdown doc links", () => {
+    expect(extractMarkdownLinks(
       "See [Observability](./observability.md) from this doc.",
     )).toEqual([
       "./observability.md",

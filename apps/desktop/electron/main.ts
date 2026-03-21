@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -6,10 +7,11 @@ import { app, BrowserWindow, Menu, Notification, shell } from "electron";
 import { DESKTOP_EVENT_CHANNELS, type DesktopMenuCommand, type UpdaterState } from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
 import {
-  defaultDesktopShellBackgroundColor,
+  applySystemAppearanceToWindow,
   getInitialWindowAppearanceOptions,
   getSystemAppearanceSnapshot,
   registerSystemAppearanceListener,
+  syncWindowAppearance,
 } from "./services/appearance";
 import { installDesktopApplicationMenu } from "./services/menu";
 import { PersistenceService } from "./services/persistence";
@@ -18,14 +20,16 @@ import { ServerManager } from "./services/serverManager";
 import { createBeforeQuitHandler } from "./services/shutdown";
 import { DesktopUpdaterService } from "./services/updater";
 import {
-  macosBrowserWindowOptions,
+  applyPlatformWindowCreated,
+  getPlatformBrowserWindowOptions,
   shouldUseMacosNativeGlass,
-  syncWindowChromeAppearance,
 } from "./services/windowEnhancements";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PACKAGED_RENDERER_DIR = path.resolve(path.join(__dirname, "../renderer"));
+const DESKTOP_SMOKE_WORKSPACE_ENV = "COWORK_DESKTOP_SMOKE_WORKSPACE";
+const DESKTOP_SMOKE_OUTPUT_ENV = "COWORK_DESKTOP_SMOKE_OUTPUT";
 
 const serverManager = new ServerManager();
 const persistence = new PersistenceService();
@@ -187,6 +191,67 @@ function applyWindowSecurity(win: BrowserWindow): void {
   });
 }
 
+function resolveDesktopSmokeConfig(): { workspacePath: string; outputPath: string } | null {
+  const workspacePath = process.env[DESKTOP_SMOKE_WORKSPACE_ENV]?.trim();
+  const outputPath = process.env[DESKTOP_SMOKE_OUTPUT_ENV]?.trim();
+  if (!workspacePath || !outputPath) {
+    return null;
+  }
+  return { workspacePath, outputPath };
+}
+
+async function maybeRunPackagedSmoke(): Promise<boolean> {
+  const smokeConfig = resolveDesktopSmokeConfig();
+  if (!smokeConfig) {
+    return false;
+  }
+
+  const workspaceId = "__desktop_smoke__";
+
+  try {
+    const listening = await serverManager.startWorkspaceServer({
+      workspaceId,
+      workspacePath: smokeConfig.workspacePath,
+      yolo: true,
+    });
+
+    await fs.mkdir(path.dirname(smokeConfig.outputPath), { recursive: true });
+    await fs.writeFile(
+      smokeConfig.outputPath,
+      `${JSON.stringify({
+        ok: true,
+        type: "server_listening",
+        url: listening.url,
+        platform: process.platform,
+        arch: process.arch,
+      }, null, 2)}\n`,
+      "utf8"
+    );
+    await serverManager.stopWorkspaceServer(workspaceId);
+    app.exit(0);
+    return true;
+  } catch (error) {
+    await fs.mkdir(path.dirname(smokeConfig.outputPath), { recursive: true });
+    await fs.writeFile(
+      smokeConfig.outputPath,
+      `${JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        platform: process.platform,
+        arch: process.arch,
+      }, null, 2)}\n`,
+      "utf8"
+    );
+    try {
+      await serverManager.stopWorkspaceServer(workspaceId);
+    } catch {
+      // Ignore cleanup failures in smoke mode.
+    }
+    app.exit(1);
+    return true;
+  }
+}
+
 async function createWindow(): Promise<void> {
   const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
     prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
@@ -198,7 +263,7 @@ async function createWindow(): Promise<void> {
     width: 1240,
     height: 820,
     ...getInitialWindowAppearanceOptions({ useDarkColors, useMacosNativeGlass }),
-    ...macosBrowserWindowOptions(process.platform, { useDarkColors, useMacosNativeGlass }),
+    ...getPlatformBrowserWindowOptions(process.platform, { useDarkColors, useMacosNativeGlass }),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
@@ -212,13 +277,10 @@ async function createWindow(): Promise<void> {
     },
   });
   mainWindow = win;
-  if (process.platform === "darwin") {
-    win.setWindowButtonVisibility(true);
-  } else if (process.platform === "win32") {
-    win.setMenu(null);
-  }
+  applyPlatformWindowCreated(win, process.platform);
   applyWindowSecurity(win);
-  syncWindowChromeAppearance(win, {
+  syncWindowAppearance(win, {
+    platform: process.platform,
     useDarkColors,
     useMacosNativeGlass,
   });
@@ -302,7 +364,11 @@ if (!gotSingleInstanceLock) {
     mainWindow.focus();
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    if (await maybeRunPackagedSmoke()) {
+      return;
+    }
+
     unregisterIpc = registerDesktopIpc({
       persistence,
       serverManager,
@@ -313,27 +379,7 @@ if (!gotSingleInstanceLock) {
         if (win.isDestroyed()) {
           continue;
         }
-        syncWindowChromeAppearance(win, {
-          platform: appearance.platform as NodeJS.Platform,
-          useDarkColors: appearance.shouldUseDarkColors,
-          useMacosNativeGlass: shouldUseMacosNativeGlass(
-            appearance.platform as NodeJS.Platform,
-            process.env,
-            { prefersReducedTransparency: appearance.prefersReducedTransparency },
-          ),
-        });
-        if (appearance.platform === "darwin") {
-          const useMacosNativeGlass = shouldUseMacosNativeGlass(
-            "darwin",
-            process.env,
-            { prefersReducedTransparency: appearance.prefersReducedTransparency },
-          );
-          win.setBackgroundColor(
-            useMacosNativeGlass
-              ? "#00000000"
-              : defaultDesktopShellBackgroundColor(appearance.shouldUseDarkColors),
-          );
-        }
+        applySystemAppearanceToWindow(win, appearance);
       }
       emitDesktopEvent(DESKTOP_EVENT_CHANNELS.systemAppearanceChanged, appearance);
     });

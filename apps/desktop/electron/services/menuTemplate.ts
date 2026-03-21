@@ -44,99 +44,171 @@ export function buildDesktopMenuTemplate(
   options: InstallDesktopMenuOptions,
   platform: NodeJS.Platform = process.platform,
 ): MenuItemConstructorOptions[] {
-  const isMac = platform === "darwin";
   const buildUpdatesItem = () => commandItem("Check for Updates…", "openUpdates", options.sendCommand, undefined, sfSymbol("arrow.triangle.2.circlepath"));
-
-  const fileMenu: MenuItemConstructorOptions = {
-    label: isMac ? "File" : "&File",
-    submenu: [
-      commandItem("New Thread", "newThread", options.sendCommand, "CmdOrCtrl+N", sfSymbol("plus.message")),
-      commandItem("Skills", "openSkills", options.sendCommand, "CmdOrCtrl+Shift+K", sfSymbol("wand.and.stars")),
-      { type: "separator" },
-      commandItem("Settings", "openSettings", options.sendCommand, "CmdOrCtrl+,", sfSymbol("gearshape")),
-      commandItem("Workspace Settings", "openWorkspacesSettings", options.sendCommand, undefined, sfSymbol("folder.badge.gearshape")),
-      ...(isMac
-        ? [{ type: "separator" as const }, { role: "close" as const }]
-        : [{ type: "separator" as const }, { role: "quit" as const }]),
-    ],
-  };
-
-  const editMenu: MenuItemConstructorOptions = {
-    label: isMac ? "Edit" : "&Edit",
-    submenu: [
-      { role: "undo" },
-      { role: "redo" },
-      { type: "separator" },
-      { role: "cut" },
-      { role: "copy" },
-      { role: "paste" },
-      { role: "selectAll" },
-    ],
-  };
-
-  const viewMenu: MenuItemConstructorOptions = {
-    label: isMac ? "View" : "&View",
-    submenu: [
-      commandItem("Toggle Sidebar", "toggleSidebar", options.sendCommand, "CmdOrCtrl+B", sfSymbol("sidebar.left")),
-      { type: "separator" },
-      { role: "resetZoom" },
-      { role: "zoomIn" },
-      { role: "zoomOut" },
-      { type: "separator" },
-      { role: "togglefullscreen" },
-      ...(options.includeDevTools
-        ? [
-            { type: "separator" as const },
-            { role: "reload" as const },
-            { role: "forceReload" as const },
-            { role: "toggleDevTools" as const },
-          ]
-        : []),
-    ],
-  };
-
-  const windowMenu: MenuItemConstructorOptions = {
-    label: isMac ? "Window" : "&Window",
-    role: "windowMenu",
-    submenu: isMac
-      ? [{ role: "minimize" }, { role: "zoom" }, { type: "separator" }, { role: "front" }]
-      : [{ role: "minimize" }, { role: "close" }],
-  };
-
-  const helpMenu: MenuItemConstructorOptions = {
-    label: isMac ? "Help" : "&Help",
-    submenu: [
-      buildUpdatesItem(),
-      { type: "separator" },
-      {
-        label: "Cowork on GitHub",
-        click: () => {
-          options.openExternal("https://github.com/mweinbach/agent-coworker");
-        },
-      },
-    ],
-  };
-
-  const template: MenuItemConstructorOptions[] = [];
-
-  if (isMac) {
-    template.push({
-      role: "appMenu",
+  const buildSharedMenus = (labels: {
+    file: string;
+    edit: string;
+    view: string;
+    window: string;
+    help: string;
+  }): MenuItemConstructorOptions[] => {
+    const fileMenu: MenuItemConstructorOptions = {
+      label: labels.file,
       submenu: [
-        { role: "about" },
+        commandItem("New Thread", "newThread", options.sendCommand, "CmdOrCtrl+N", sfSymbol("plus.message")),
+        commandItem("Skills", "openSkills", options.sendCommand, "CmdOrCtrl+Shift+K", sfSymbol("wand.and.stars")),
+        { type: "separator" },
+        commandItem("Settings", "openSettings", options.sendCommand, "CmdOrCtrl+,", sfSymbol("gearshape")),
+        commandItem("Workspace Settings", "openWorkspacesSettings", options.sendCommand, undefined, sfSymbol("folder.badge.gearshape")),
+      ],
+    };
+
+    const editMenu: MenuItemConstructorOptions = {
+      label: labels.edit,
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "selectAll" },
+      ],
+    };
+
+    const viewMenu: MenuItemConstructorOptions = {
+      label: labels.view,
+      submenu: [
+        commandItem("Toggle Sidebar", "toggleSidebar", options.sendCommand, "CmdOrCtrl+B", sfSymbol("sidebar.left")),
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+        ...(options.includeDevTools
+          ? [
+              { type: "separator" as const },
+              { role: "reload" as const },
+              { role: "forceReload" as const },
+              { role: "toggleDevTools" as const },
+            ]
+          : []),
+      ],
+    };
+
+    const windowMenu: MenuItemConstructorOptions = {
+      label: labels.window,
+      role: "windowMenu",
+      submenu: [{ role: "minimize" }, { role: "close" }],
+    };
+
+    const helpMenu: MenuItemConstructorOptions = {
+      label: labels.help,
+      submenu: [
         buildUpdatesItem(),
         { type: "separator" },
-        { role: "services" },
-        { type: "separator" },
-        { role: "hide" },
-        { role: "hideOthers" },
-        { role: "unhide" },
-        { type: "separator" },
-        { role: "quit" },
+        {
+          label: "Cowork on GitHub",
+          click: () => {
+            options.openExternal("https://github.com/mweinbach/agent-coworker");
+          },
+        },
       ],
-    });
+    };
+
+    return [fileMenu, editMenu, viewMenu, windowMenu, helpMenu];
+  };
+
+  if (platform === "darwin") {
+    return [
+      {
+        role: "appMenu",
+        submenu: [
+          { role: "about" },
+          buildUpdatesItem(),
+          { type: "separator" },
+          { role: "services" },
+          { type: "separator" },
+          { role: "hide" },
+          { role: "hideOthers" },
+          { role: "unhide" },
+          { type: "separator" },
+          { role: "quit" },
+        ],
+      },
+      {
+        label: "File",
+        submenu: [
+          commandItem("New Thread", "newThread", options.sendCommand, "CmdOrCtrl+N", sfSymbol("plus.message")),
+          commandItem("Skills", "openSkills", options.sendCommand, "CmdOrCtrl+Shift+K", sfSymbol("wand.and.stars")),
+          { type: "separator" },
+          commandItem("Settings", "openSettings", options.sendCommand, "CmdOrCtrl+,", sfSymbol("gearshape")),
+          commandItem("Workspace Settings", "openWorkspacesSettings", options.sendCommand, undefined, sfSymbol("folder.badge.gearshape")),
+          { type: "separator" },
+          { role: "close" },
+        ],
+      },
+      {
+        label: "Edit",
+        submenu: [
+          { role: "undo" },
+          { role: "redo" },
+          { type: "separator" },
+          { role: "cut" },
+          { role: "copy" },
+          { role: "paste" },
+          { role: "selectAll" },
+        ],
+      },
+      {
+        label: "View",
+        submenu: [
+          commandItem("Toggle Sidebar", "toggleSidebar", options.sendCommand, "CmdOrCtrl+B", sfSymbol("sidebar.left")),
+          { type: "separator" },
+          { role: "resetZoom" },
+          { role: "zoomIn" },
+          { role: "zoomOut" },
+          { type: "separator" },
+          { role: "togglefullscreen" },
+          ...(options.includeDevTools
+            ? [
+                { type: "separator" as const },
+                { role: "reload" as const },
+                { role: "forceReload" as const },
+                { role: "toggleDevTools" as const },
+              ]
+            : []),
+        ],
+      },
+      {
+        label: "Window",
+        role: "windowMenu",
+        submenu: [{ role: "minimize" }, { role: "zoom" }, { type: "separator" }, { role: "front" }],
+      },
+      {
+        label: "Help",
+        submenu: [
+          buildUpdatesItem(),
+          { type: "separator" },
+          {
+            label: "Cowork on GitHub",
+            click: () => {
+              options.openExternal("https://github.com/mweinbach/agent-coworker");
+            },
+          },
+        ],
+      },
+    ];
   }
 
-  template.push(fileMenu, editMenu, viewMenu, windowMenu, helpMenu);
-  return template;
+  const [fileMenu, editMenu, viewMenu, windowMenu, helpMenu] = buildSharedMenus({
+    file: "&File",
+    edit: "&Edit",
+    view: "&View",
+    window: "&Window",
+    help: "&Help",
+  });
+  (fileMenu.submenu as MenuItemConstructorOptions[]).push({ type: "separator" }, { role: "quit" });
+  return [fileMenu, editMenu, viewMenu, windowMenu, helpMenu];
 }

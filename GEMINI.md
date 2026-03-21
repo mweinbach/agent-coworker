@@ -1,6 +1,6 @@
 # Agent Coworker Project Context
 
-`agent-coworker` is a terminal-first "coworker" AI agent designed to assist with software engineering tasks such as file management, code editing, shell execution, and web research. It is built for speed and extensibility, using a WebSocket-based server-client architecture.
+`agent-coworker` is a "coworker" AI agent designed to assist with software engineering tasks such as file management, code editing, shell execution, and web research. It is built for speed and extensibility, using a WebSocket-based server-client architecture.
 
 ## Project Overview
 
@@ -8,16 +8,16 @@
 *   **Main Technologies:**
     *   **Runtime:** Bun (high-performance JavaScript/TypeScript runtime).
     *   **Agent runtime:** repo-owned runtime adapters selected by provider/runtime config.
-    *   **UI/UX:** OpenTUI + Solid.js for the terminal interface; Electron for the desktop application.
+    *   **UI/UX:** Electron for the desktop application. An archived TUI (OpenTUI + Solid.js) is available but no longer maintained.
     *   **Communication:** Custom WebSocket protocol for decoupled client-server interaction.
 *   **Core Architecture:**
     *   **Server (`src/server/`):** Manages `AgentSession` state, LLM orchestration, and WebSocket communication.
     *   **Agent (`src/agent.ts`):** Implements the agent loop, system prompt management, and tool execution.
     *   **Tools (`src/tools/`):** Built-in capabilities including `bash`, `read`, `write`, `edit`, `glob`, `grep`, `webSearch`, `webFetch`, and `spawnAgent`.
     *   **Clients:**
-        *   **TUI (`apps/TUI/`):** Default interactive terminal UI built with OpenTUI + Solid.js. `src/tui/` is a thin launcher wrapper.
+        *   **Desktop (`apps/desktop/`):** Primary native GUI using Electron.
         *   **CLI (`src/cli/`):** Minimal REPL for direct interaction.
-        *   **Desktop (`apps/desktop/`):** Native GUI wrapper using Electron.
+        *   **TUI (`apps/TUI/`):** Archived terminal UI built with OpenTUI + Solid.js. No longer maintained.
 
 ## Building and Running
 
@@ -27,16 +27,19 @@
 
 ### Key Commands
 *   **Install:** `bun install`
-*   **Start TUI (Recommended):** `bun run start` (Launches server + TUI).
+*   **Start Desktop (Recommended):** `bun run start` (Launches Electron app).
 *   **Start CLI REPL:** `bun run cli`
 *   **Start Server Only:** `bun run serve`
 *   **Run Tests:** `bun test`
 *   **Desktop Development:** `bun run desktop:dev`
+*   **Archived TUI:** `bun run tui` (No longer maintained).
 
 ### Execution Flags
-*   `--dir <path>`: Sets the working directory for the agent.
+These apply to `bun run cli`, `bun run serve`, and `bun src/index.ts` / `cowork`. They are **not** passed through `bun run start` (Electron dev); use workspace selection in the desktop app.
+
+*   `--dir <path>`: Sets the working directory for the agent (CLI, server, or non-desktop `src/index.ts` entry).
 *   `--yolo`: Bypasses command approval for risky operations (use with caution).
-*   `--port <number>`: Specifies the WebSocket server port (default: 7337).
+*   `--port <number>`: Specifies the WebSocket server port (default: 7337; server / relevant entrypoints).
 
 ## Development Conventions
 
@@ -59,7 +62,7 @@
 
 ## Key Files and Directories
 
-*   `src/index.ts`: Main entry point for the CLI/TUI.
+*   `src/index.ts`: Main entry point (routes to CLI or archived TUI).
 *   `src/agent.ts`: The core agent loop and LLM logic.
 *   `src/server/protocol.ts`: Source of truth for the WebSocket protocol.
 *   `docs/websocket-protocol.md`: Detailed documentation for building alternative clients.

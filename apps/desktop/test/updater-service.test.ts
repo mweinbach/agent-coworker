@@ -9,6 +9,7 @@ class FakeUpdater implements UpdaterClient {
   autoInstallOnAppQuit = true;
   allowPrerelease = true;
   disableDifferentialDownload = false;
+  channel: string | null = null;
   private readonly handlers = new Map<string, Handler[]>();
 
   on(event: string, handler: Handler): this {
@@ -136,6 +137,33 @@ describe("desktop updater service", () => {
     expect(updater.disableDifferentialDownload).toBe(false);
   });
 
+  test("selects the dedicated Windows ARM64 update channel", () => {
+    const updater = new FakeUpdater();
+
+    new DesktopUpdaterService({
+      currentVersion: "0.1.20",
+      isPackaged: true,
+      updater,
+      platform: "win32",
+      arch: "arm64",
+    });
+
+    expect(updater.channel).toBe("latest-arm64");
+  });
+
+  test("keeps Linux updater defaults isolated from macOS settings", () => {
+    const updater = new FakeUpdater();
+
+    new DesktopUpdaterService({
+      currentVersion: "0.1.20",
+      isPackaged: true,
+      updater,
+      platform: "linux",
+    });
+
+    expect(updater.disableDifferentialDownload).toBe(false);
+  });
+
   test("records updater errors without throwing", async () => {
     const updater = new FakeUpdater();
     updater.checkForUpdates = async () => {
@@ -179,6 +207,26 @@ describe("desktop updater service", () => {
     const updater = new FakeUpdater();
     updater.checkForUpdates = async () => {
       throw new Error("Cannot find latest-mac.yml in the latest release artifacts: HttpError: 404");
+    };
+    const service = new DesktopUpdaterService({
+      currentVersion: "0.1.9",
+      isPackaged: true,
+      updater,
+      now: () => "2026-03-08T15:39:19.000Z",
+    });
+
+    await service.checkForUpdates();
+
+    const state = service.getState();
+    expect(state.phase).toBe("disabled");
+    expect(state.error).toBeNull();
+    expect(state.message).toContain("no update feed is published");
+  });
+
+  test("treats missing latest-arm64.yml checks as unavailable instead of an error", async () => {
+    const updater = new FakeUpdater();
+    updater.checkForUpdates = async () => {
+      throw new Error("Cannot find latest-arm64.yml in the latest release artifacts: HttpError: 404");
     };
     const service = new DesktopUpdaterService({
       currentVersion: "0.1.9",

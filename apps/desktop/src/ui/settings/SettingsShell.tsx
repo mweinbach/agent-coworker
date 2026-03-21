@@ -125,8 +125,8 @@ export function SettingsShell() {
 
   return (
     <div
-      className="settings-shell relative grid h-full min-h-0 grid-cols-[var(--settings-sidebar-width)_minmax(0,1fr)] bg-transparent max-[960px]:grid-cols-1"
-      style={{ ["--settings-sidebar-width" as string]: `${sidebarWidth}px` }}
+      className="settings-shell relative grid h-full min-h-0 min-w-0 bg-transparent"
+      style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}
     >
       <div className="settings-shell__drag-zone" aria-hidden="true" />
       <SettingsNavigation

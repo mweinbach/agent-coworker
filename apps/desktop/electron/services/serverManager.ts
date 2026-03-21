@@ -9,12 +9,16 @@ import { z } from "zod";
 import { app } from "electron";
 
 import { resolvePackagedBuiltinDistDir } from "./desktopBuiltinPaths";
+import {
+  buildSourceEnvForAttempt,
+  getServerTerminationSignal,
+  getSourceStartupAttemptCount,
+} from "./serverPlatform";
 import { assertSafeId, assertWorkspaceDirectory } from "./validation";
-import { findPackagedSidecarBinary } from "./sidecar";
+import { findPackagedSidecarLaunchCommand } from "./sidecar";
 
 const SERVER_STARTUP_TIMEOUT_MS = 15_000;
 const STDERR_TAIL_LIMIT = 16_384;
-const WINDOWS_SOURCE_START_ATTEMPTS = 2;
 const SERVER_LOG_FILE_NAME = "server.log";
 const DEBUG_SERVER_STDERR = process.env.COWORK_DESKTOP_DEBUG_SERVER_STDERR === "1";
 
@@ -80,8 +84,8 @@ function getSidecarSearchDirs(): string[] {
   return [path.join(appRoot, "resources", "binaries")];
 }
 
-function findSidecarBinary(): string {
-  return findPackagedSidecarBinary(getSidecarSearchDirs(), {
+function findSidecarLaunchCommand() {
+  return findPackagedSidecarLaunchCommand(getSidecarSearchDirs(), {
     explicitPath: process.env.COWORK_DESKTOP_SIDECAR_PATH,
   });
 }
@@ -112,10 +116,11 @@ async function gracefulKill(child: ServerChildProcess): Promise<void> {
   }
 
   try {
-    if (process.platform === "win32") {
-      child.kill();
+    const signal = getServerTerminationSignal();
+    if (signal) {
+      child.kill(signal);
     } else {
-      child.kill("SIGTERM");
+      child.kill();
     }
   } catch {
     // ignore; process may already be gone
@@ -237,37 +242,6 @@ function buildServerEnv(): NodeJS.ProcessEnv {
   };
 }
 
-function buildSourceEnvForAttempt(baseEnv: NodeJS.ProcessEnv, attempt: number): { env: NodeJS.ProcessEnv; cleanup: () => void } {
-  if (process.platform !== "win32") {
-    return { env: baseEnv, cleanup: () => {} };
-  }
-
-  const tempRoot = path.join(app.getPath("temp"), "cowork-bun-transpiler-cache");
-  fs.mkdirSync(tempRoot, { recursive: true });
-  const cacheDir = fs.mkdtempSync(path.join(tempRoot, "run-"));
-
-  const env: NodeJS.ProcessEnv = {
-    ...baseEnv,
-    BUN_RUNTIME_TRANSPILER_CACHE_PATH: cacheDir,
-  };
-
-  // If Bun crashes during startup, retry once with async transpilation disabled.
-  if (attempt > 1) {
-    env.BUN_FEATURE_FLAG_DISABLE_ASYNC_TRANSPILER = "1";
-  }
-
-  return {
-    env,
-    cleanup: () => {
-      try {
-        fs.rmSync(cacheDir, { recursive: true, force: true });
-      } catch {
-        // Best effort cleanup.
-      }
-    },
-  };
-}
-
 function isLikelyBunSegfault(stderrOutput: string): boolean {
   const normalized = stderrOutput.toLowerCase();
   return (
@@ -351,7 +325,7 @@ export class ServerManager {
     const spawnArgs = buildSpawnArgs(workspacePath, yolo);
     const { repoRoot, sourceEntry } = resolveSourceStartup(useSource);
 
-    const sidecar = !useSource ? findSidecarBinary() : null;
+    const sidecar = !useSource ? findSidecarLaunchCommand() : null;
     const builtInDir = !useSource ? resolvePackagedBuiltinDistDir() : null;
     if (!useSource && !builtInDir) {
       throw new Error(`Bundled dist directory not found: ${path.join(process.resourcesPath, "dist")}`);
@@ -361,7 +335,7 @@ export class ServerManager {
       `workspace=${workspaceId} start requested mode=${useSource ? "source" : "packaged"} workspacePath=${workspacePath}`
     );
 
-    const attemptCount = useSource && process.platform === "win32" ? WINDOWS_SOURCE_START_ATTEMPTS : 1;
+    const attemptCount = getSourceStartupAttemptCount(useSource);
     let previousError: unknown = null;
 
     for (let attempt = 1; attempt <= attemptCount; attempt += 1) {
@@ -375,7 +349,7 @@ export class ServerManager {
             stdio: ["ignore", "pipe", "pipe"],
             env: sourceEnvForAttempt!.env,
           })
-        : spawn(sidecar!, spawnArgs, {
+        : spawn(sidecar!.command, [...sidecar!.args, ...spawnArgs], {
             cwd: process.resourcesPath,
             stdio: ["ignore", "pipe", "pipe"],
             env: {
@@ -386,7 +360,7 @@ export class ServerManager {
           });
 
       logServerManagerEvent(
-        `workspace=${workspaceId} attempt=${attempt}/${attemptCount} spawn=${useSource ? "bun" : sidecar!}`
+        `workspace=${workspaceId} attempt=${attempt}/${attemptCount} spawn=${useSource ? "bun" : `${sidecar!.command} ${sidecar!.args.join(" ")}`.trim()}`
       );
 
       let cleaned = false;
@@ -528,8 +502,10 @@ export class ServerManager {
 export const __internal = {
   buildServerEnv,
   buildSourceEnvForAttempt,
-  findSidecarBinary,
+  findSidecarLaunchCommand,
+  getServerTerminationSignal,
   getServerLogPath,
+  getSourceStartupAttemptCount,
   isLikelyBunSegfault,
   logServerManagerEvent,
   flushServerManagerLogWrites,

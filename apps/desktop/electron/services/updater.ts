@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import type { ProgressInfo, UpdateDownloadedEvent, UpdateInfo } from "electron-updater";
 
 import { createDefaultUpdaterState, type UpdaterReleaseInfo, type UpdaterState } from "../../src/lib/desktopApi";
+import { applyUpdaterPlatformDefaults } from "./updaterPlatform";
 
 const AUTOMATIC_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const STARTUP_CHECK_DELAY_MS = 10 * 1000;
@@ -17,6 +18,7 @@ export interface UpdaterClient {
   autoInstallOnAppQuit: boolean;
   allowPrerelease: boolean;
   disableDifferentialDownload?: boolean;
+  channel?: string | null;
   on(event: string, handler: UpdaterEventHandler): this;
   checkForUpdates(): Promise<unknown>;
   quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
@@ -73,6 +75,7 @@ type DesktopUpdaterServiceOptions = {
   notifyUpdateReady?: (state: UpdaterState) => void;
   updater?: UpdaterClient;
   platform?: NodeJS.Platform;
+  arch?: string;
   now?: () => string;
   setIntervalFn?: typeof setInterval;
   clearIntervalFn?: typeof clearInterval;
@@ -89,7 +92,7 @@ function toMessage(error: unknown): string {
 
 function isMissingReleaseFeedMessage(message: string): boolean {
   const normalized = message.toLowerCase();
-  return /latest(?:-[a-z]+)?\.yml/.test(normalized) && (normalized.includes("404") || normalized.includes("cannot find"));
+  return /latest(?:-[a-z0-9-]+)?\.yml/.test(normalized) && (normalized.includes("404") || normalized.includes("cannot find"));
 }
 
 function normalizeReleaseNotes(value: unknown): string | undefined {
@@ -155,6 +158,7 @@ export class DesktopUpdaterService {
   private readonly notifyUpdateReady?: (state: UpdaterState) => void;
   private readonly updater: UpdaterClient;
   private readonly platform: NodeJS.Platform;
+  private readonly arch: string;
   private readonly now: () => string;
   private readonly setIntervalFn: typeof setInterval;
   private readonly clearIntervalFn: typeof clearInterval;
@@ -173,6 +177,7 @@ export class DesktopUpdaterService {
     this.notifyUpdateReady = options.notifyUpdateReady;
     this.updater = options.updater ?? getDefaultUpdaterClient();
     this.platform = options.platform ?? process.platform;
+    this.arch = options.arch ?? process.arch;
     this.now = options.now ?? (() => new Date().toISOString());
     this.setIntervalFn = options.setIntervalFn ?? setInterval;
     this.clearIntervalFn = options.clearIntervalFn ?? clearInterval;
@@ -184,11 +189,7 @@ export class DesktopUpdaterService {
       this.updater.autoDownload = true;
       this.updater.autoInstallOnAppQuit = false;
       this.updater.allowPrerelease = false;
-      if (this.platform === "darwin") {
-        // ShipIt can reject a differential-patched app even when the published zip
-        // is validly signed and notarized. Prefer the known-good full zip path.
-        this.updater.disableDifferentialDownload = true;
-      }
+      applyUpdaterPlatformDefaults(this.updater, this.platform, this.arch);
       this.registerListeners();
     }
   }

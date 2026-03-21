@@ -1,20 +1,20 @@
 # Repository Guidelines
 
-agent-coworker is a terminal-first coworker agent built on Bun + TypeScript (ESM) with a WebSocket server, an OpenTUI + Solid.js TUI, and a CLI REPL.
+agent-coworker is a coworker agent built on Bun + TypeScript (ESM) with a WebSocket server and CLI REPL.
 
 When you have access to subagents or agent teams, feel free to use them. Subagents are good for delegating tasks for searching and performing specific actions. Be specific with your delegation, and feel free to use them liberally.  
 
-All logic for the application should be done in the harness itself, consider the desktop app and TUI just UI layers. The only things that should be specific to those are things that are relavent, like UI layout or platform-specific behavior. All logic on how the agent works on the users system, saves files, etc should be done in the harness THEN exposed and connected to the UI layers via the websocket. 
+All logic for the application should be done in the harness itself, consider the desktop app just a UI layer. The only things that should be specific to that are things that are relavent, like UI layout or platform-specific behavior. All logic on how the agent works on the users system, saves files, etc should be done in the harness THEN exposed and connected to the UI layers via the websocket. 
 
 ## Project Structure & Module Organization
 
 - `src/`: application code
 - `src/server/`: WebSocket server, protocol, and session state
-- `src/tui/`: thin TUI wrapper (launches the main TUI from `apps/TUI/`)
+- `src/tui/`: thin TUI wrapper (archived, may be removed)
 - `src/cli/`: CLI REPL and argument parsing
 - `src/providers/`: model/provider integrations (OpenAI/Google/Anthropic and `*-cli`)
 - `src/tools/`: built-in tools (`bash`, `read`, `write`, `webSearch`, etc.)
-- `apps/TUI/`: main TUI built with OpenTUI + Solid.js
+- `apps/TUI/`: main TUI built with OpenTUI + Solid.js (archived, may be removed)
 - `apps/desktop/`: Electron desktop application
 - `test/`: Bun tests (`*.test.ts`)
 - `config/`: built-in defaults and MCP server defaults
@@ -25,13 +25,13 @@ All logic for the application should be done in the harness itself, consider the
 ## Build, Test, and Development Commands
 
 - `bun install`: install dependencies.
-- `bun run start`: run the default TUI (starts the server automatically).
+- `bun run start`: run the desktop app (starts the server automatically).
 - `bun run cli`: run the plain CLI REPL.
 - `bun run serve`: run the server only.
 - `bun run dev`: watch mode for local iteration.
 - `bun test`: run the full test suite.
 
-Example: `bun run start -- --dir /path/to/project`
+Example (CLI with initial workspace): `bun run cli -- --dir /path/to/project`. Desktop `bun run start` does not forward `--dir` (use in-app workspace selection).
 
 Always run tests while doing work, make sure you run these tests.
 
@@ -49,7 +49,7 @@ Always run tests while doing work, make sure you run these tests.
 ## Commit & Pull Request Guidelines
 
 - Commit messages must use [Conventional Commits](https://www.conventionalcommits.org/) format (e.g. `fix: …`, `feat: …`, `refactor: …`, `chore: …`, `test: …`, `docs: …`). Keep subjects short and imperative.
-- PRs should include: what/why, how to test (`bun test`), and screenshots or a short recording for TUI changes. Keep changes focused and add tests for fixes/features.
+- PRs should include: what/why, how to test (`bun test`), and screenshots or a short recording for desktop app changes. Keep changes focused and add tests for fixes/features.
 
 ## WebSocket-First Development
 
@@ -97,7 +97,7 @@ Bun is installed at `~/.bun/bin/bun`. Ensure `$BUN_INSTALL/bin` is on `PATH` (th
 | Service | Command | Notes |
 |---|---|---|
 | WebSocket server | `bun run serve` | Listens on `ws://127.0.0.1:7337/ws`. Add `--json` for machine-readable startup output. |
-| TUI | `bun run start` | Starts the server automatically. Requires a real terminal (won't work headless). |
+| Desktop app | `bun run start` | Starts the server automatically. |
 | CLI REPL | `bun run cli` | Also auto-starts the server. Needs TTY input. |
 
 For headless/cloud testing, prefer `bun run serve` and interact via WebSocket (see `docs/websocket-protocol.md`).
@@ -106,7 +106,7 @@ For headless/cloud testing, prefer `bun run serve` and interact via WebSocket (s
 
 - `bun test` runs the full suite (~1590 tests). All tests are deterministic and require no network or API keys.
 - Two tests are skipped by default (remote MCP integration tests requiring network).
-- There is no configured linter or formatter. `bun run typecheck` is the code quality check; it runs the repo-root core typecheck plus `apps/desktop` (including `electron/*`). `apps/TUI` is not part of the default typecheck command.
+- There is no configured linter or formatter. `bun run typecheck` is the code quality check; it runs the repo-root core typecheck plus `apps/desktop` (including `electron/*`). `apps/TUI` is archived and not part of the default typecheck command.
 
 ### Desktop App
 

@@ -9,15 +9,15 @@ Agent-coworker follows a **WebSocket-first** architecture where the server manag
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Clients                                  │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────────────────┐ │
-│  │   TUI   │  │   CLI   │  │ Desktop │  │ Custom Client       │ │
-│  │(OpenTUI)│  │  REPL   │  │(Electron)│ │ (WebSocket)         │ │
-│  └────┬────┘  └────┬────┘  └────┬────┘  └──────────┬──────────┘ │
-└───────┼────────────┼────────────┼──────────────────┼────────────┘
-        │            │            │                  │
-        └────────────┴────────────┴──────────────────┘
-                              │
-                              ▼ WebSocket Protocol
+│  ┌─────────┐  ┌─────────┐  ┌─────────────────────┐             │
+│  │   CLI   │  │ Desktop │  │ Custom Client       │             │
+│  │  REPL   │  │(Electron)│ │ (WebSocket)         │             │
+│  └────┬────┘  └────┬────┘  └──────────┬──────────┘             │
+└───────┼────────────┼──────────────────┼────────────────────────┘
+        │            │                  │
+        └────────────┴──────────────────┘
+                      │
+                      ▼ WebSocket Protocol
                     ┌─────────────────────┐
                     │   WebSocket Server  │
                     │   (src/server/)     │
@@ -28,7 +28,7 @@ Agent-coworker follows a **WebSocket-first** architecture where the server manag
         ▼                      ▼                      ▼
 ┌───────────────┐    ┌─────────────────┐    ┌───────────────┐
 │ AgentSession  │    │  Agent Loop     │    │  MCP Manager  │
-│ (session.ts)  │    │  (agent.ts)     │    │   (mcp/)      │
+│(AgentSession) │    │  (agent.ts)     │    │   (mcp/)      │
 └───────────────┘    └─────────────────┘    └───────────────┘
         │                      │                      │
         │                      ▼                      │
@@ -58,7 +58,7 @@ The server is the heart of the system. It handles:
 
 **Key Files:**
 - `startServer.ts` — Server initialization and WebSocket routing
-- `session.ts` — Per-session state, message history, and turn execution
+- `session/AgentSession.ts` — Per-session state, message history, and turn execution
 - `protocol.ts` — TypeScript types for `ClientMessage` and `ServerEvent` unions
 - `sessionBackup.ts` — Filesystem backup and checkpoint management
 
@@ -104,6 +104,11 @@ Built-in capabilities exposed to the agent:
 | `spawnAgent` | Delegate to a child agent | No |
 | `skill` | Load skill instructions | No |
 | `memory` | Read/write persistent memory | No |
+| `notebookEdit` | Edit Jupyter notebook cells | Yes (write path) |
+| `usage` | Query session token/cost usage | No |
+| `exa` | Web search via Exa backend | No |
+| `persistentAgents` | Long-running background agents | No |
+| `api-keys` | Manage provider API keys | No |
 
 Each tool is a factory function accepting a `ToolContext` with access to:
 - `config` — Current agent configuration
@@ -120,7 +125,7 @@ Model provider integrations with unified interface:
 |----------|--------------|---------------|
 | Google | API Key | `gemini-3-flash-preview` |
 | OpenAI | API Key | `gpt-5.2` |
-| Anthropic | API Key | `claude-4-6-sonnet` |
+| Anthropic | API Key | `claude-sonnet-4-6` |
 | Codex CLI | OAuth, API Key | (uses OpenAI) |
 
 Each provider exports:
@@ -155,8 +160,9 @@ skills/
 
 Skills are discovered from layered directories:
 1. Project: `.agent/skills/`
-2. User: `~/.agent/skills/`
-3. Built-in: `skills/`
+2. Global: `~/.cowork/skills/`
+3. User: `~/.agent/skills/`
+4. Built-in: `skills/`
 
 ### 7. Observability (`src/observability/`)
 
@@ -173,7 +179,26 @@ OpenTelemetry + Langfuse integration for production monitoring:
 
 ## Clients
 
-### TUI (`apps/TUI/`)
+### Desktop (`apps/desktop/`)
+
+Electron + React wrapper (primary client):
+
+- Native menus and dialogs
+- Desktop notifications
+- Per-workspace server processes
+- Persistent workspace/thread state
+
+### CLI REPL (`src/cli/`)
+
+Minimal readline-based interface:
+
+- Connects to server via WebSocket
+- Supports `--yolo` mode to bypass approvals
+- Persistent prompt history in `~/.cowork/state/prompt-history.jsonl`
+
+### TUI (`apps/TUI/`) — Archived
+
+> **Note**: The TUI is archived and no longer maintained. It may be removed in a future release.
 
 Built with OpenTUI + Solid.js (not React):
 
@@ -184,29 +209,12 @@ ExitProvider → KVProvider → ThemeProvider → DialogProvider
 → PromptProvider → App
 ```
 
-**Key Features:**
+**Key Features (when it was maintained):**
 - 31 built-in themes
 - Command palette (`Ctrl+K`)
 - Tool-specific renderers
 - Session management
 - Sidebar with context/todos
-
-### CLI REPL (`src/cli/`)
-
-Minimal readline-based interface:
-
-- Connects to server via WebSocket
-- Supports `--yolo` mode to bypass approvals
-- Persistent prompt history in `~/.cowork/state/prompt-history.jsonl`
-
-### Desktop (`apps/desktop/`)
-
-Electron + React wrapper:
-
-- Native menus and dialogs
-- Desktop notifications
-- Per-workspace server processes
-- Persistent workspace/thread state
 
 ## Data Flow
 
@@ -340,4 +348,5 @@ Write operations are restricted to:
 - [WebSocket Protocol Reference](websocket-protocol.md) — Full message contract
 - [Session Storage Architecture](session-storage-architecture.md) — Persistence details
 - [Harness Config Guide](harness/config.md) — Config precedence and harness/runtime flags
+- [Bundling & Integration Guide](bundling-guide.md) — How to build custom apps on top of the cowork server
 - [Custom Tools Guide](custom-tools.md) — Tool extension and customization reference

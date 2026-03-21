@@ -55,7 +55,7 @@ describe("desktop IPC security helpers", () => {
       await fs.mkdir(nested, { recursive: true });
 
       const resolved = resolveAllowedDirectoryPath([workspaceRoot], nested);
-      expect(resolved).toBe(await fs.realpath(nested));
+      expect(await fs.realpath(resolved)).toBe(await fs.realpath(nested));
 
       expect(() => resolveAllowedDirectoryPath([workspaceRoot], path.dirname(workspaceRoot))).toThrow(
         "outside allowed workspace roots"

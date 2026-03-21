@@ -38,4 +38,21 @@ describe("desktop native confirm dialog", () => {
     expect(built.options.cancelId).toBe(1);
     expect(built.options.defaultId).toBe(1);
   });
+
+  test("keeps Linux on the default non-mac dialog order", () => {
+    const built = buildConfirmDialog(
+      {
+        title: "Remove workspace",
+        message: "Remove workspace?",
+        confirmLabel: "Remove",
+        cancelLabel: "Cancel",
+        defaultAction: "confirm",
+      },
+      "linux",
+    );
+
+    expect(built.confirmButtonIndex).toBe(0);
+    expect(built.options.buttons).toEqual(["Remove", "Cancel"]);
+    expect(built.options.defaultId).toBe(0);
+  });
 });

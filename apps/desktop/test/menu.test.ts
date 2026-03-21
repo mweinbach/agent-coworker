@@ -47,4 +47,18 @@ describe("desktop application menu", () => {
     updateEntry?.click?.();
     expect(commands).toContain("openUpdates");
   });
+
+  test("keeps Linux on the non-mac menu path without an app menu role", () => {
+    const template = buildDesktopMenuTemplate(
+      {
+        includeDevTools: false,
+        openExternal: () => {},
+        sendCommand: () => {},
+      },
+      "linux",
+    );
+
+    expect(template[0]?.role).not.toBe("appMenu");
+    expect(template[0]?.label).toBe("&File");
+  });
 });

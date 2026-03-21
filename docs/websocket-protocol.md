@@ -53,7 +53,7 @@ Changes in `7.28`:
 
 - New client message: `apply_session_defaults`.
 - Clients can now apply provider/model, editable session defaults, and MCP enablement in one composite write instead of replaying `set_model`, `set_config`, and `set_enable_mcp` separately.
-- The harness now serializes session-db bootstrap and write mutations across processes so desktop, TUI, and CLI instances can safely share the same per-user SQLite database.
+- The harness now serializes session-db bootstrap and write mutations across processes so desktop and CLI instances can safely share the same per-user SQLite database.
 
 Changes in `7.27`:
 
@@ -934,13 +934,13 @@ Represents whether a managed installation can be refreshed from its recorded ori
 Optional client identity handshake. This is the only message that does NOT require `sessionId`.
 
 ```json
-{ "type": "client_hello", "client": "tui", "version": "1.0.0" }
+{ "type": "client_hello", "client": "desktop", "version": "1.0.0" }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `type` | `"client_hello"` | Yes | — |
-| `client` | `string` | Yes | Client identifier (e.g. `"tui"`, `"cli"`, or custom) |
+| `client` | `string` | Yes | Client identifier (e.g. `"desktop"`, `"cli"`, or custom) |
 | `version` | `string` | No | Client version string |
 
 **Response:** None. The server acknowledges by ignoring this message; `server_hello` is sent on connection open regardless.

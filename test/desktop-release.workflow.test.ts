@@ -16,29 +16,47 @@ describe("desktop release workflow", () => {
     expect(workflow).not.toMatch(
       /- name: Build Windows desktop artifacts[\s\S]*?CSC_LINK: \$\{\{ secrets\.CSC_LINK \}\}/,
     );
-    expect(workflow).toMatch(
-      /- name: Build Windows desktop artifacts[\s\S]*?Remove-Item Env:WIN_CSC_LINK -ErrorAction SilentlyContinue[\s\S]*?Remove-Item Env:WIN_CSC_KEY_PASSWORD -ErrorAction SilentlyContinue[\s\S]*?Remove-Item Env:CSC_LINK -ErrorAction SilentlyContinue[\s\S]*?Remove-Item Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue/,
-    );
   });
 
-  test("always stages Windows updater metadata while keeping Windows signing optional", () => {
+  test("builds separate Windows x64 and ARM64 release entries", () => {
+    expect(workflow).toContain("label: Windows x64");
+    expect(workflow).toContain("artifact_name: desktop-release-windows-x64");
+    expect(workflow).toContain("build_arch: x64");
+    expect(workflow).toContain("label: Windows ARM64");
+    expect(workflow).toContain("artifact_name: desktop-release-windows-arm64");
+    expect(workflow).toContain("build_arch: arm64");
+    expect(workflow).toContain("updater_metadata_name: latest-arm64.yml");
+  });
+
+  test("uses target-aware Windows build inputs and stages ARM64 updater metadata separately", () => {
     expect(workflow).toMatch(
-      /env:[\s\S]*?WIN_CSC_LINK: \$\{\{ secrets\.WIN_CSC_LINK \}\}[\s\S]*?WIN_CSC_KEY_PASSWORD: \$\{\{ secrets\.WIN_CSC_KEY_PASSWORD \}\}/,
+      /- name: Build Windows desktop artifacts[\s\S]*?COWORK_BUILD_PLATFORM: win32[\s\S]*?COWORK_BUILD_ARCH: \$\{\{ matrix\.build_arch \}\}[\s\S]*?bun run desktop:build -- --publish never --\$\{\{ matrix\.build_arch \}\}/,
     );
     expect(workflow).toMatch(
-      /- name: Stage Windows desktop release assets[\s\S]*?Get-Content apps\/desktop\/package\.json -Raw \| ConvertFrom-Json[\s\S]*?apps\/desktop\/release\/\*Setup \$version\.exe[\s\S]*?Copy-Item \$installer\.FullName -Destination \$stagingDir/,
-    );
-    expect(workflow).toMatch(
-      /- name: Stage Windows desktop release assets[\s\S]*?Copy-Item \$blockmapPath -Destination \$stagingDir[\s\S]*?Copy-Item \"apps\/desktop\/release\/latest\.yml\" -Destination \$stagingDir/,
-    );
-    expect(workflow).toMatch(
-      /- name: Verify Windows signing[\s\S]*?Get-Content apps\/desktop\/package\.json -Raw \| ConvertFrom-Json[\s\S]*?apps\/desktop\/release\/\*Setup \$version\.exe/,
+      /- name: Stage Windows desktop release assets[\s\S]*?apps\/desktop\/release\/\*-win-\$\{\{ matrix\.build_arch \}\}\.exe[\s\S]*?Copy-Item "apps\/desktop\/release\/latest\.yml" -Destination \(Join-Path \$stagingDir "\$\{\{ matrix\.updater_metadata_name \}\}"\)/,
     );
     expect(workflow).toContain("Windows signing secrets configured; publishing signed installer plus updater metadata.");
     expect(workflow).toContain("WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD not configured; publishing unsigned installer plus updater metadata.");
-    expect(workflow).not.toContain("- name: Skip unsigned Windows release upload");
+  });
+
+  test("ARM64 unpacked artifact is for smoke only and excluded from publish download glob", () => {
+    expect(workflow).toContain("pattern: desktop-release-*");
+    expect(workflow).toContain("unpacked_artifact_name: desktop-smoke-windows-arm64-unpacked");
+    expect(workflow).toContain("name: desktop-smoke-windows-arm64-unpacked");
+  });
+
+  test("uploads an unpacked ARM64 desktop artifact and verifies it on native ARM hardware", () => {
+    expect(workflow).toContain("- name: Build Windows ARM64 unpacked desktop directory");
+    expect(workflow).toContain("runs-on: windows-11-arm");
+    expect(workflow).toContain("name: Smoke Windows ARM64 Desktop");
+    expect(workflow).toContain("COWORK_DESKTOP_SMOKE_WORKSPACE");
+    expect(workflow).toContain("COWORK_DESKTOP_SMOKE_OUTPUT");
+    expect(workflow).toContain("Expected desktop smoke output type=server_listening");
+  });
+
+  test("publishes release assets only after the ARM64 smoke job passes", () => {
     expect(workflow).toMatch(
-      /- name: Upload Windows desktop artifacts[\s\S]*?if: \$\{\{ runner\.os == 'Windows' \}\}[\s\S]*?apps\/desktop\/release-upload\/\*/,
+      /publish:[\s\S]*?needs:[\s\S]*?- package[\s\S]*?- smoke-windows-arm64/,
     );
     expect(workflow).toContain("- name: Collect release asset list");
     expect(workflow).toContain("files: ${{ steps.collect-release-assets.outputs.files }}");

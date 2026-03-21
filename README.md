@@ -1,8 +1,8 @@
 # agent-coworker
 
-A local-first coding agent backend with official TUI, CLI, and desktop clients.
+A local-first coding agent backend with CLI and desktop clients. An archived TUI is available but no longer maintained.
 
-`agent-coworker` is built around one architectural decision: the agent lives behind a WebSocket server, not inside a single UI. The server owns sessions, tool execution, provider auth, MCP, persistence, safety checks, and streaming. The TUI, CLI REPL, Electron app, and any custom client are thin clients on top of the same protocol.
+`agent-coworker` is built around one architectural decision: the agent lives behind a WebSocket server, not inside a single UI. The server owns sessions, tool execution, provider auth, MCP, persistence, safety checks, and streaming. The CLI REPL, Electron app, and any custom client are thin clients on top of the same protocol.
 
 If you want "an AI terminal app", you can use it that way. If you want "an agent backend with a documented control plane and multiple frontends", that is what this repo actually is.
 
@@ -24,7 +24,7 @@ Cowork takes the opposite approach:
 
 ## Highlights
 
-- Official interfaces: terminal TUI, plain CLI REPL, Electron desktop app, and custom WebSocket clients.
+- Interfaces: plain CLI REPL, Electron desktop app, and custom WebSocket clients.
 - Local-first workflow: your repo stays on your machine; external calls only happen through the providers and tools you configure.
 - Server-side tools for shell, files, search, fetch, notebook edits, memory, task tracking, and subagent delegation.
 - Persistent session history in `~/.cowork/sessions.db`, with resume support across restarts.
@@ -72,17 +72,13 @@ bun run cli
 
 ### 3. Run it
 
-Default TUI:
+Desktop app (default):
 
 ```bash
 bun run start
 ```
 
-Target a specific workspace:
-
-```bash
-bun run start -- --dir /path/to/project
-```
+This runs the Electron app in dev mode (`electron-vite` under `apps/desktop`). It does not accept `--dir`; add or select a workspace in the UI.
 
 Plain CLI REPL:
 
@@ -90,10 +86,17 @@ Plain CLI REPL:
 bun run cli
 ```
 
+Open the CLI with a specific workspace directory:
+
+```bash
+bun run cli -- --dir /path/to/project
+```
+
 Standalone server for headless use or custom clients:
 
 ```bash
 bun run serve
+bun run serve -- --dir /path/to/project
 bun run serve -- --json
 ```
 
@@ -101,24 +104,30 @@ Build a standalone Bun binary (`cowork-server`) that can be bundled into other a
 
 ```bash
 bun run build:server-binary
-./dist/cowork-server --host 0.0.0.0 --port 7337
-```
+./dist/cowork-server --host 0.0.0.0 --port 7337```
 
 On startup, `cowork-server` logs the bound WebSocket URL and, when using `--host 0.0.0.0`, prints reachable LAN IPv4 addresses for easy embedding/debugging.
+Windows ARM64 release builds are staged as runnable bundles instead of single compiled executables. Those bundles include `bun.exe`, a Bun-targeted server bundle, the launcher script, and the built-in `prompts/`, `config/`, and `docs/` assets.
 
-TUI requires a real terminal. For headless or cloud workflows, prefer `bun run serve` or the compiled `cowork-server` binary and connect over WebSocket.
+## Clients
 
-## Official clients
+### Desktop
 
-### TUI
+The Electron app is the primary workstation client with:
 
-The default interface is a terminal UI built with OpenTUI and Solid.js. It is not a thin text wrapper around the CLI; it renders the same structured server events the desktop app uses:
+- workspace management
+- provider settings and auth
+- MCP settings and validation
+- chat transcript rendering
+- thread history
+- native menus, dialogs, notifications, and updater plumbing
+- Windows x64 and Windows ARM64 packaged releases
 
-- streamed assistant text, reasoning, and tool activity
-- approval and ask prompts
-- todo state
-- session backup status
-- session lists, themes, prompt stash, and command palette flows
+Run it in development with:
+
+```bash
+bun run desktop:dev
+```
 
 ### CLI REPL
 
@@ -133,23 +142,6 @@ Useful commands include:
 - `/resume <sessionId>`
 - `/tools`
 
-### Desktop
-
-The Electron app is a fuller workstation client with:
-
-- workspace management
-- provider settings and auth
-- MCP settings and validation
-- chat transcript rendering
-- thread history
-- native menus, dialogs, notifications, and updater plumbing
-
-Run it in development with:
-
-```bash
-bun run desktop:dev
-```
-
 ### Custom clients
 
 The WebSocket protocol is documented in [docs/websocket-protocol.md](docs/websocket-protocol.md). It covers much more than chat:
@@ -161,10 +153,30 @@ The WebSocket protocol is documented in [docs/websocket-protocol.md](docs/websoc
 - subagent creation and persistent subagent session management
 - observability and harness context
 
+## Archived clients
+
+### TUI (archived)
+
+> **Note**: The TUI is archived and no longer maintained. It may be removed in a future release.
+
+The terminal UI was built with OpenTUI and Solid.js. It is not a thin text wrapper around the CLI; it renders the same structured server events the desktop app uses:
+
+- streamed assistant text, reasoning, and tool activity
+- approval and ask prompts
+- todo state
+- session backup status
+- session lists, themes, prompt stash, and command palette flows
+
+To run the archived TUI:
+
+```bash
+bun run tui
+```
+
 ## Architecture
 
 ```text
-TUI / CLI / Desktop / Custom Client
+CLI / Desktop / Custom Client
                 |
                 v
         WebSocket protocol
@@ -260,7 +272,7 @@ Notes:
 
 - `bun install` at the repo root also installs desktop dependencies.
 - `bun run typecheck` covers the root project and `apps/desktop`.
-- `apps/TUI` is not part of the default typecheck command.
+- `apps/TUI` is archived and not part of the default typecheck command.
 - The test suite is deterministic and does not require provider credentials.
 
 ## Repository map
@@ -269,11 +281,11 @@ Notes:
 | --- | --- |
 | `src/server/` | WebSocket server, protocol, session orchestration, persistence, backup |
 | `src/cli/` | CLI REPL and command parsing |
-| `src/tui/` | Thin TUI entrypoint that launches the main OpenTUI app |
+| `src/tui/` | Thin TUI entrypoint (archived, may be removed) |
 | `src/tools/` | Built-in server-side tools |
 | `src/providers/` | Provider catalog, auth, and model adapters |
 | `src/mcp/` | MCP config, auth, and client lifecycle |
-| `apps/TUI/` | Main OpenTUI + Solid TUI implementation |
+| `apps/TUI/` | Main OpenTUI + Solid TUI implementation (archived, may be removed) |
 | `apps/desktop/` | Electron desktop app |
 | `skills/` | Bundled built-in skills |
 | `docs/` | Protocol, architecture, storage, MCP, and harness docs |
@@ -282,7 +294,7 @@ Notes:
 
 | Document | What it covers |
 | --- | --- |
-| [docs/websocket-protocol.md](docs/websocket-protocol.md) | Canonical WebSocket contract for official and custom clients |
+| [docs/websocket-protocol.md](docs/websocket-protocol.md) | Canonical WebSocket contract for custom clients |
 | [docs/architecture.md](docs/architecture.md) | Component-level system overview |
 | [docs/mcp-guide.md](docs/mcp-guide.md) | MCP setup, layering, and auth |
 | [docs/session-storage-architecture.md](docs/session-storage-architecture.md) | SQLite session storage and resume behavior |

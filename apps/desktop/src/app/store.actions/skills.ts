@@ -38,12 +38,14 @@ import {
   providerAuthMethodsFor,
   pushNotification,
   queuePendingThreadMessage,
+  requestJsonRpcControlEvent,
   sendControl,
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,
   syncDesktopStateCache,
   truncateTitle,
+  workspaceUsesJsonRpc,
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
@@ -146,6 +148,7 @@ export function createSkillActions(
     refreshSkillsCatalog: async () => {
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) return;
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
@@ -156,6 +159,29 @@ export function createSkillActions(
           },
         },
       }));
+      if (workspaceUsesJsonRpc(get, workspaceId)) {
+        const okCatalog = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/catalog/read", { cwd });
+        const okList = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/list", { cwd });
+        if (!(okCatalog && okList)) {
+          set((s) => ({
+            workspaceRuntimeById: {
+              ...s.workspaceRuntimeById,
+              [workspaceId]: {
+                ...s.workspaceRuntimeById[workspaceId],
+                skillCatalogLoading: false,
+              },
+            },
+            notifications: pushNotification(s.notifications, {
+              id: makeId(),
+              ts: nowIso(),
+              kind: "error",
+              title: "Not connected",
+              detail: "Unable to refresh skills catalog.",
+            }),
+          }));
+        }
+        return;
+      }
       const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "skills_catalog_get", sessionId }));
       if (!ok) {
         set((s) => ({
@@ -181,8 +207,14 @@ export function createSkillActions(
     selectSkill: async (skillName: string) => {
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) return;
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+      if (workspaceUsesJsonRpc(get, workspaceId)) {
+        const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/read", { cwd, skillName });
+        if (!ok) return;
+      } else {
       const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "read_skill", sessionId, skillName }));
       if (!ok) return;
+      }
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
@@ -210,11 +242,14 @@ export function createSkillActions(
         }));
         return;
       }
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "skill_installation_get",
-        sessionId,
-        installationId,
-      }));
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+      const ok = workspaceUsesJsonRpc(get, workspaceId)
+        ? await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/read", { cwd, installationId })
+        : sendControl(get, workspaceId, (sessionId) => ({
+            type: "skill_installation_get",
+            sessionId,
+            installationId,
+          }));
       if (!ok) return;
       set((s) => ({
         workspaceRuntimeById: {
@@ -232,6 +267,7 @@ export function createSkillActions(
     previewSkillInstall: async (sourceInput: string, targetScope: "project" | "global") => {
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) return;
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
       const key = skillPendingKey("preview");
       set((s) => ({
         workspaceRuntimeById: {
@@ -246,12 +282,14 @@ export function createSkillActions(
           },
         },
       }));
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "skill_install_preview",
-        sessionId,
-        sourceInput,
-        targetScope,
-      }));
+      const ok = workspaceUsesJsonRpc(get, workspaceId)
+        ? await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/install/preview", { cwd, sourceInput, targetScope })
+        : sendControl(get, workspaceId, (sessionId) => ({
+            type: "skill_install_preview",
+            sessionId,
+            sourceInput,
+            targetScope,
+          }));
       if (!ok) {
         set((s) => ({
           workspaceRuntimeById: {
@@ -281,6 +319,7 @@ export function createSkillActions(
       if (!workspaceId) {
         throw new Error("No workspace selected");
       }
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
       const key = skillPendingKey(`install:${targetScope}`);
       set((s) => ({
         workspaceRuntimeById: {
@@ -303,12 +342,14 @@ export function createSkillActions(
         reject: installPromise.reject,
       });
 
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "skill_install",
-        sessionId,
-        sourceInput,
-        targetScope,
-      }));
+      const ok = workspaceUsesJsonRpc(get, workspaceId)
+        ? await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/install", { cwd, sourceInput, targetScope })
+        : sendControl(get, workspaceId, (sessionId) => ({
+            type: "skill_install",
+            sessionId,
+            sourceInput,
+            targetScope,
+          }));
       if (!ok) {
         if (existing) {
           RUNTIME.skillInstallWaiters.set(workspaceId, existing);
@@ -328,7 +369,10 @@ export function createSkillActions(
     disableSkill: async (skillName: string) => {
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) return;
-      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "disable_skill", sessionId, skillName }));
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+      const ok = workspaceUsesJsonRpc(get, workspaceId)
+        ? await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/disable", { cwd, skillName })
+        : sendControl(get, workspaceId, (sessionId) => ({ type: "disable_skill", sessionId, skillName }));
       if (!ok) {
         set((s) => ({
           notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to disable skill." }),
@@ -340,7 +384,10 @@ export function createSkillActions(
     enableSkill: async (skillName: string) => {
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) return;
-      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "enable_skill", sessionId, skillName }));
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+      const ok = workspaceUsesJsonRpc(get, workspaceId)
+        ? await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/enable", { cwd, skillName })
+        : sendControl(get, workspaceId, (sessionId) => ({ type: "enable_skill", sessionId, skillName }));
       if (!ok) {
         set((s) => ({
           notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to enable skill." }),
@@ -352,7 +399,10 @@ export function createSkillActions(
     deleteSkill: async (skillName: string) => {
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) return;
-      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "delete_skill", sessionId, skillName }));
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+      const ok = workspaceUsesJsonRpc(get, workspaceId)
+        ? await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/delete", { cwd, skillName })
+        : sendControl(get, workspaceId, (sessionId) => ({ type: "delete_skill", sessionId, skillName }));
       if (!ok) {
         set((s) => ({
           notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to delete skill." }),
@@ -363,6 +413,7 @@ export function createSkillActions(
     disableSkillInstallation: async (installationId: string) => {
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) return;
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
       const key = skillPendingKey("disable", installationId);
       set((s) => ({
         workspaceRuntimeById: {
@@ -376,7 +427,9 @@ export function createSkillActions(
           },
         },
       }));
-      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_disable", sessionId, installationId }));
+      const ok = workspaceUsesJsonRpc(get, workspaceId)
+        ? await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/disable", { cwd, installationId })
+        : sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_disable", sessionId, installationId }));
       if (!ok) {
         clearFailedSkillMutationSend(set, workspaceId, key, "Unable to disable skill installation.");
       }
@@ -385,6 +438,7 @@ export function createSkillActions(
     enableSkillInstallation: async (installationId: string) => {
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) return;
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
       const key = skillPendingKey("enable", installationId);
       set((s) => ({
         workspaceRuntimeById: {
@@ -398,7 +452,9 @@ export function createSkillActions(
           },
         },
       }));
-      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_enable", sessionId, installationId }));
+      const ok = workspaceUsesJsonRpc(get, workspaceId)
+        ? await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/enable", { cwd, installationId })
+        : sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_enable", sessionId, installationId }));
       if (!ok) {
         clearFailedSkillMutationSend(set, workspaceId, key, "Unable to enable skill installation.");
       }
@@ -407,6 +463,7 @@ export function createSkillActions(
     deleteSkillInstallation: async (installationId: string) => {
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) return;
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
       const key = skillPendingKey("delete", installationId);
       set((s) => ({
         workspaceRuntimeById: {
@@ -420,7 +477,9 @@ export function createSkillActions(
           },
         },
       }));
-      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_delete", sessionId, installationId }));
+      const ok = workspaceUsesJsonRpc(get, workspaceId)
+        ? await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/delete", { cwd, installationId })
+        : sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_delete", sessionId, installationId }));
       if (!ok) {
         clearFailedSkillMutationSend(set, workspaceId, key, "Unable to delete skill installation.");
       }
@@ -429,6 +488,7 @@ export function createSkillActions(
     copySkillInstallation: async (installationId: string, targetScope: "project" | "global") => {
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) return;
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
       const key = skillPendingKey(`copy:${targetScope}`, installationId);
       set((s) => ({
         workspaceRuntimeById: {
@@ -442,12 +502,14 @@ export function createSkillActions(
           },
         },
       }));
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "skill_installation_copy",
-        sessionId,
-        installationId,
-        targetScope,
-      }));
+      const ok = workspaceUsesJsonRpc(get, workspaceId)
+        ? await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/copy", { cwd, installationId, targetScope })
+        : sendControl(get, workspaceId, (sessionId) => ({
+            type: "skill_installation_copy",
+            sessionId,
+            installationId,
+            targetScope,
+          }));
       if (!ok) {
         clearFailedSkillMutationSend(set, workspaceId, key, "Unable to copy skill installation.");
       }
@@ -456,17 +518,21 @@ export function createSkillActions(
     checkSkillInstallationUpdate: async (installationId: string) => {
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) return;
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "skill_installation_check_update",
-        sessionId,
-        installationId,
-      }));
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+      const ok = workspaceUsesJsonRpc(get, workspaceId)
+        ? await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/checkUpdate", { cwd, installationId })
+        : sendControl(get, workspaceId, (sessionId) => ({
+            type: "skill_installation_check_update",
+            sessionId,
+            installationId,
+          }));
       if (!ok) return;
     },
 
     updateSkillInstallation: async (installationId: string) => {
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) return;
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
       const key = skillPendingKey("update", installationId);
       set((s) => ({
         workspaceRuntimeById: {
@@ -480,7 +546,9 @@ export function createSkillActions(
           },
         },
       }));
-      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_update", sessionId, installationId }));
+      const ok = workspaceUsesJsonRpc(get, workspaceId)
+        ? await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/update", { cwd, installationId })
+        : sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_update", sessionId, installationId }));
       if (!ok) {
         clearFailedSkillMutationSend(set, workspaceId, key, "Unable to update skill installation.");
       }

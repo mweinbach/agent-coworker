@@ -8,6 +8,7 @@ import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
 import { RUNTIME } from "./runtimeState";
 import {
   ensureWorkspaceJsonRpcSocket,
+  requestJsonRpc,
   requestJsonRpcThreadList,
   requestJsonRpcThreadRead,
   workspaceUsesJsonRpc,
@@ -1103,12 +1104,375 @@ export function createControlSocketHelpers(
     });
   }
 
+  function applyJsonRpcControlEvent(get: StoreGet, set: StoreSet, workspaceId: string, evt: ServerEvent) {
+    if (evt.type === "mcp_servers") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            mcpServers: evt.servers,
+            mcpLegacy: evt.legacy,
+            mcpFiles: evt.files,
+            mcpWarnings: evt.warnings ?? [],
+          },
+        },
+      }));
+      return;
+    }
+
+    if (evt.type === "mcp_server_validation") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            mcpValidationByName: {
+              ...s.workspaceRuntimeById[workspaceId].mcpValidationByName,
+              [evt.name]: evt,
+            },
+          },
+        },
+        notifications: deps.pushNotification(s.notifications, {
+          id: deps.makeId(),
+          ts: deps.nowIso(),
+          kind: evt.ok ? "info" : "error",
+          title: evt.ok ? `MCP validation passed: ${evt.name}` : `MCP validation failed: ${evt.name}`,
+          detail: evt.message,
+        }),
+      }));
+      return;
+    }
+
+    if (evt.type === "mcp_server_auth_challenge") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            mcpLastAuthChallenge: evt,
+          },
+        },
+        notifications: deps.pushNotification(s.notifications, {
+          id: deps.makeId(),
+          ts: deps.nowIso(),
+          kind: "info",
+          title: `MCP auth challenge: ${evt.name}`,
+          detail: `${evt.challenge.instructions}${evt.challenge.url ? ` URL: ${evt.challenge.url}` : ""}`,
+        }),
+      }));
+      return;
+    }
+
+    if (evt.type === "mcp_server_auth_result") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            mcpLastAuthResult: evt,
+          },
+        },
+        notifications: deps.pushNotification(s.notifications, {
+          id: deps.makeId(),
+          ts: deps.nowIso(),
+          kind: evt.ok ? "info" : "error",
+          title: evt.ok ? `MCP auth updated: ${evt.name}` : `MCP auth failed: ${evt.name}`,
+          detail: evt.message,
+        }),
+      }));
+      return;
+    }
+
+    if (evt.type === "skills_list") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: (() => {
+            const prev = s.workspaceRuntimeById[workspaceId];
+            const selected = prev?.selectedSkillName ?? null;
+            const exists = selected ? evt.skills.some((sk) => sk.name === selected) : true;
+            return {
+              ...prev,
+              skills: evt.skills,
+              selectedSkillName: exists ? prev?.selectedSkillName ?? null : null,
+              selectedSkillContent: exists ? prev?.selectedSkillContent ?? null : null,
+            };
+          })(),
+        },
+      }));
+      return;
+    }
+
+    if (evt.type === "skills_catalog") {
+      const installWaiter = RUNTIME.skillInstallWaiters.get(workspaceId);
+      const workspaceRuntimeBefore = get().workspaceRuntimeById[workspaceId];
+      const clearedMutationPendingKeys = evt.clearedMutationPendingKeys ?? [];
+      const shouldResolveInstall =
+        installWaiter != null &&
+        workspaceRuntimeBefore != null &&
+        clearedMutationPendingKeys.includes(installWaiter.pendingKey) &&
+        workspaceRuntimeBefore.skillMutationPendingKeys[installWaiter.pendingKey] === true;
+
+      set((s) => {
+        const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
+        const selectedInstallationId = workspaceRuntime.selectedSkillInstallationId;
+        const selectedInstallation =
+          selectedInstallationId
+            ? evt.catalog.installations.find((installation) => installation.installationId === selectedInstallationId) ?? null
+            : null;
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...workspaceRuntime,
+              skillsCatalog: evt.catalog,
+              skillCatalogLoading: false,
+              skillCatalogError: null,
+              skillsMutationBlocked: evt.mutationBlocked,
+              skillsMutationBlockedReason: evt.mutationBlockedReason ?? null,
+              skillMutationPendingKeys: omitSkillMutationPendingKeys(
+                workspaceRuntime.skillMutationPendingKeys,
+                clearedMutationPendingKeys,
+              ),
+              skillMutationError: null,
+              selectedSkillInstallationId: selectedInstallation ? selectedInstallationId : null,
+              selectedSkillInstallation: selectedInstallation,
+            },
+          },
+        };
+      });
+
+      if (shouldResolveInstall && installWaiter) {
+        RUNTIME.skillInstallWaiters.delete(workspaceId);
+        installWaiter.resolve();
+      }
+      return;
+    }
+
+    if (evt.type === "skill_content") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            selectedSkillName: evt.skill.name,
+            selectedSkillContent: evt.content,
+          },
+        },
+      }));
+      return;
+    }
+
+    if (evt.type === "skill_installation") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            selectedSkillInstallationId: evt.installation?.installationId ?? s.workspaceRuntimeById[workspaceId].selectedSkillInstallationId,
+            selectedSkillInstallation: evt.installation,
+            selectedSkillContent:
+              typeof evt.content === "string"
+                ? evt.content
+                : evt.content === null
+                  ? null
+                  : s.workspaceRuntimeById[workspaceId].selectedSkillContent,
+            skillMutationError: null,
+          },
+        },
+      }));
+      return;
+    }
+
+    if (evt.type === "skill_install_preview") {
+      set((s) => {
+        const rt = s.workspaceRuntimeById[workspaceId];
+        const previewPending = rt.skillMutationPendingKeys.preview === true;
+        const fromUserPreviewRequest = evt.fromUserPreviewRequest !== false;
+        const nextPreview =
+          fromUserPreviewRequest || !previewPending ? evt.preview : rt.selectedSkillPreview;
+        const pendingKeys = { ...rt.skillMutationPendingKeys };
+        if (fromUserPreviewRequest) {
+          delete pendingKeys.preview;
+        }
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...rt,
+              selectedSkillPreview: nextPreview,
+              skillMutationPendingKeys: pendingKeys,
+              skillMutationError: null,
+            },
+          },
+        };
+      });
+      return;
+    }
+
+    if (evt.type === "skill_installation_update_check") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            skillUpdateChecksByInstallationId: {
+              ...s.workspaceRuntimeById[workspaceId].skillUpdateChecksByInstallationId,
+              [evt.result.installationId]: evt.result,
+            },
+            skillMutationError: null,
+          },
+        },
+      }));
+      return;
+    }
+
+    if (evt.type === "workspace_backups") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            workspaceBackupsPath: evt.workspacePath,
+            workspaceBackups: evt.backups,
+            workspaceBackupsLoading: false,
+            workspaceBackupsError: null,
+            workspaceBackupPendingActionKeys: {},
+          },
+        },
+      }));
+      return;
+    }
+
+    if (evt.type === "workspace_backup_delta") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            workspaceBackupDelta: evt,
+            workspaceBackupDeltaLoading: false,
+            workspaceBackupDeltaError: null,
+          },
+        },
+      }));
+      return;
+    }
+
+    if (evt.type === "memory_list") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            memories: evt.memories,
+            memoriesLoading: false,
+          },
+        },
+      }));
+      return;
+    }
+
+    if (evt.type === "provider_status") {
+      const byName: Partial<Record<ProviderName, ProviderStatus>> = {};
+      for (const p of evt.providers) byName[p.provider] = p;
+      const connected = evt.providers
+        .filter((p) => p.authorized || p.verified)
+        .map((p) => p.provider)
+        .filter((provider): provider is ProviderName => deps.isProviderName(provider));
+      set((s) => ({
+        providerStatusByName: { ...s.providerStatusByName, ...byName },
+        providerStatusLastUpdatedAt: deps.nowIso(),
+        providerStatusRefreshing: false,
+        providerConnected: connected,
+      }));
+      void deps.persist(get);
+      return;
+    }
+
+    if (evt.type === "provider_catalog") {
+      const connected = evt.connected.filter((provider): provider is ProviderName =>
+        deps.isProviderName(provider),
+      );
+      set((s) => ({
+        providerCatalog: evt.all,
+        providerDefaultModelByProvider: evt.default,
+        providerConnected: connected,
+      }));
+      return;
+    }
+
+    if (evt.type === "provider_auth_methods") {
+      set(() => ({ providerAuthMethodsByProvider: evt.methods }));
+      return;
+    }
+
+    if (evt.type === "provider_auth_challenge") {
+      const sanitized = sanitizeProviderAuthChallenge(evt);
+      const command = sanitized.challenge.command ? ` Command: ${sanitized.challenge.command}` : "";
+      const url = sanitized.challenge.url ? ` URL: ${sanitized.challenge.url}` : "";
+      set((s) => ({
+        providerLastAuthChallenge: sanitized,
+        notifications: deps.pushNotification(s.notifications, {
+          id: deps.makeId(),
+          ts: deps.nowIso(),
+          kind: "info",
+          title: `Auth challenge: ${sanitized.provider}`,
+          detail: `${sanitized.challenge.instructions}${url}${command}`,
+        }),
+      }));
+      return;
+    }
+
+    if (evt.type === "provider_auth_result") {
+      const title = evt.ok
+        ? evt.methodId === "logout"
+          ? `Provider disconnected: ${evt.provider}`
+          : evt.mode === "oauth_pending"
+            ? `Provider auth pending: ${evt.provider}`
+            : `Provider connected: ${evt.provider}`
+        : `Provider auth failed: ${evt.provider}`;
+      set((s) => ({
+        providerLastAuthResult: evt,
+        notifications: deps.pushNotification(s.notifications, {
+          id: deps.makeId(),
+          ts: deps.nowIso(),
+          kind: evt.ok ? "info" : "error",
+          title,
+          detail: evt.message,
+        }),
+      }));
+    }
+  }
+
+  async function requestJsonRpcControlEvent(
+    get: StoreGet,
+    set: StoreSet,
+    workspaceId: string,
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<boolean> {
+    try {
+      const result = await requestJsonRpc(get, set, workspaceId, method, params);
+      const event = (result as { event?: ServerEvent }).event;
+      if (!event) {
+        return false;
+      }
+      applyJsonRpcControlEvent(get, set, workspaceId, event);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   return {
     ensureControlSocket,
     waitForControlSession,
     sendControl,
     requestWorkspaceSessions,
     requestSessionSnapshot,
+    requestJsonRpcControlEvent,
     __internal: {
       getPendingWaiterCounts: () => ({
         controlSessionWaiters: [...controlSessionWaiters.values()].reduce((total, waiters) => total + waiters.size, 0),

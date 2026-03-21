@@ -1305,9 +1305,6 @@ export async function startAgentServer(
           const session = binding.session;
           if (!session || session.sessionKind !== "root") continue;
           if (cwd && session.getWorkingDirectory() !== cwd) continue;
-          if (!shouldIncludeJsonRpcThreadSummary(session.buildSessionSnapshot())) {
-            continue;
-          }
           threads.set(session.id, buildJsonRpcThreadFromSession(session));
         }
         sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, {

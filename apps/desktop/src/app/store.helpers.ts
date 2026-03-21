@@ -50,6 +50,7 @@ import {
 } from "./store.helpers/runtimeState";
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
 import { createTranscriptBuffer } from "./store.helpers/transcriptBuffer";
+import { workspaceUsesJsonRpc } from "./store.helpers/jsonRpcSocket";
 
 function nowIso() {
   return new Date().toISOString();
@@ -336,7 +337,14 @@ function pushNotification(notifications: Notification[], entry: Notification): N
 }
 
 const { appendThreadTranscript } = createTranscriptBuffer({ nowIso });
-const { ensureControlSocket, waitForControlSession, sendControl, requestWorkspaceSessions, requestSessionSnapshot } = createControlSocketHelpers({
+const {
+  ensureControlSocket,
+  waitForControlSession,
+  sendControl,
+  requestWorkspaceSessions,
+  requestSessionSnapshot,
+  requestJsonRpcControlEvent,
+} = createControlSocketHelpers({
   nowIso,
   makeId,
   persist,
@@ -463,6 +471,8 @@ export {
   waitForControlSession,
   requestWorkspaceSessions,
   requestSessionSnapshot,
+  requestJsonRpcControlEvent,
+  workspaceUsesJsonRpc,
   ensureThreadSocket,
   sendControl,
   sendThread,

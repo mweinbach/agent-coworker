@@ -109,6 +109,69 @@ class MockJsonRpcSocket {
         },
       };
     }
+    if (method === "cowork/provider/catalog/read") {
+      return {
+        event: {
+          type: "provider_catalog",
+          sessionId: "jsonrpc-control",
+          all: [{ id: "google", name: "Google", models: [], defaultModel: "gemini-3.1-pro-preview" }],
+          default: { google: "gemini-3.1-pro-preview" },
+          connected: ["google"],
+        },
+      };
+    }
+    if (method === "cowork/memory/list") {
+      return {
+        event: {
+          type: "memory_list",
+          sessionId: "jsonrpc-control",
+          memories: [{ id: "mem-1", scope: "workspace", content: "Remember this", createdAt: "2026-03-21T00:00:00.000Z", updatedAt: "2026-03-21T00:00:00.000Z" }],
+        },
+      };
+    }
+    if (method === "cowork/backups/workspace/read") {
+      return {
+        event: {
+          type: "workspace_backups",
+          sessionId: "jsonrpc-control",
+          workspacePath: "/tmp/jsonrpc-workspace",
+          backups: [],
+        },
+      };
+    }
+    if (method === "cowork/mcp/servers/read") {
+      return {
+        event: {
+          type: "mcp_servers",
+          sessionId: "jsonrpc-control",
+          servers: [],
+          legacy: {
+            workspace: { path: "/tmp/jsonrpc-workspace/.agent/mcp-servers.json", exists: false },
+            user: { path: "/home/test/.agent/mcp-servers.json", exists: false },
+          },
+          files: [],
+        },
+      };
+    }
+    if (method === "cowork/skills/catalog/read") {
+      return {
+        event: {
+          type: "skills_catalog",
+          sessionId: "jsonrpc-control",
+          catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+          mutationBlocked: false,
+        },
+      };
+    }
+    if (method === "cowork/skills/list") {
+      return {
+        event: {
+          type: "skills_list",
+          sessionId: "jsonrpc-control",
+          skills: [],
+        },
+      };
+    }
     return {};
   }
 
@@ -253,5 +316,45 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(state.threads[0]?.id).toBe("jsonrpc-thread-1");
     expect(state.threadRuntimeById["jsonrpc-thread-1"]?.sessionId).toBe("jsonrpc-thread-1");
     expect(state.threadRuntimeById["jsonrpc-thread-1"]?.connected).toBe(true);
+  });
+
+  test("routes provider, memory, and backup control requests over the shared JsonRpcSocket", async () => {
+    await useAppStore.getState().selectWorkspace("ws-jsonrpc");
+    await useAppStore.getState().requestProviderCatalog();
+    await useAppStore.getState().requestWorkspaceMemories("ws-jsonrpc");
+    await useAppStore.getState().requestWorkspaceBackups("ws-jsonrpc");
+    await flushAsyncWork();
+
+    expect(MockJsonRpcSocket.instances).toHaveLength(1);
+    expect(jsonRpcRequests.map((entry) => entry.method)).toEqual([
+      "thread/list",
+      "cowork/provider/catalog/read",
+      "cowork/memory/list",
+      "cowork/backups/workspace/read",
+    ]);
+
+    const state = useAppStore.getState();
+    expect(state.providerCatalog).toHaveLength(1);
+    expect(state.workspaceRuntimeById["ws-jsonrpc"]?.memories).toHaveLength(1);
+    expect(state.workspaceRuntimeById["ws-jsonrpc"]?.workspaceBackups).toEqual([]);
+  });
+
+  test("routes MCP and skills control requests over the shared JsonRpcSocket", async () => {
+    await useAppStore.getState().selectWorkspace("ws-jsonrpc");
+    await useAppStore.getState().requestWorkspaceMcpServers("ws-jsonrpc");
+    await useAppStore.getState().refreshSkillsCatalog();
+    await flushAsyncWork();
+
+    expect(jsonRpcRequests.map((entry) => entry.method)).toEqual([
+      "thread/list",
+      "cowork/mcp/servers/read",
+      "cowork/skills/catalog/read",
+      "cowork/skills/list",
+    ]);
+
+    const runtime = useAppStore.getState().workspaceRuntimeById["ws-jsonrpc"];
+    expect(runtime?.mcpServers).toEqual([]);
+    expect(runtime?.skillsCatalog?.installations).toEqual([]);
+    expect(runtime?.skills).toEqual([]);
   });
 });

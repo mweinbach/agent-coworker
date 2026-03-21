@@ -152,16 +152,19 @@ body {
   color: var(--text);
 }
 
-/* Fixed next to macOS traffic lights; unchanged when sidebar toggles */
+/* Fixed next to macOS traffic lights; unchanged when sidebar toggles.
+   Must sit above .app-window-drag-strip (z-60) wherever both exist, and opt
+   out of Electron titlebar drag so clicks reach the button. */
 .app-sidebar-collapse-control {
   position: absolute;
   top: 0;
   left: 0;
-  z-index: 15;
+  z-index: 70;
   display: flex;
   height: 3rem;
   align-items: center;
   padding-left: 1rem;
+  -webkit-app-region: no-drag;
 }
 
 :root[data-platform="darwin"] .app-sidebar-collapse-control {

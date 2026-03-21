@@ -98,7 +98,7 @@ const ChatShell = memo(function ChatShell({
 
   return (
     <div className="app-shell app-shell--chat relative flex h-full min-h-0 flex-row text-foreground">
-      <div className="app-window-drag-strip" aria-hidden="true" />
+      {/* Title drag is handled by .app-titlebar-backdrop; avoid a high-z drag strip that eats clicks on the collapse control */}
       <div className="app-titlebar-backdrop" aria-hidden="true" />
       <div className="app-titlebar-title">Cowork</div>
       <SidebarCollapseControl />

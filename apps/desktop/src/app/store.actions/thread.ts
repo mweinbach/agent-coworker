@@ -29,6 +29,7 @@ import {
   providerAuthMethodsFor,
   pushNotification,
   queuePendingThreadMessage,
+  requestJsonRpcControlEvent,
   requestSessionSnapshot,
   sendControl,
   sendThread,
@@ -36,6 +37,7 @@ import {
   normalizeThreadTitleSource,
   syncDesktopStateCache,
   truncateTitle,
+  workspaceUsesJsonRpc,
 } from "../store.helpers";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
 import type {
@@ -314,11 +316,16 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
 
       await ensureServerRunning(get, set, thread.workspaceId);
       ensureControlSocket(get, set, thread.workspaceId);
-      const ok = sendControl(get, thread.workspaceId, (sessionId) => ({
-        type: "delete_session",
-        sessionId,
-        targetSessionId,
-      }));
+      const ok = workspaceUsesJsonRpc(get, thread.workspaceId)
+        ? await requestJsonRpcControlEvent(get, set, thread.workspaceId, "cowork/session/delete", {
+            cwd: get().workspaces.find((workspace) => workspace.id === thread.workspaceId)?.path,
+            targetSessionId,
+          })
+        : sendControl(get, thread.workspaceId, (sessionId) => ({
+            type: "delete_session",
+            sessionId,
+            targetSessionId,
+          }));
 
       if (ok) {
         set((s) => ({

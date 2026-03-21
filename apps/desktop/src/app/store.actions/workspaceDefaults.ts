@@ -38,12 +38,14 @@ import {
   providerAuthMethodsFor,
   pushNotification,
   queuePendingThreadMessage,
+  requestJsonRpcControlEvent,
   sendControl,
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,
   truncateTitle,
   waitForControlSession,
+  workspaceUsesJsonRpc,
 } from "../store.helpers";
 import { mergeWorkspaceProviderOptions, normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import type { DraftModelSelection } from "../store.helpers/runtimeState";
@@ -490,7 +492,15 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         : null;
 
       const persisted = controlReady
-        ? (!controlMessage || sendControl(get, workspaceId, () => controlMessage))
+        ? workspaceUsesJsonRpc(get, workspaceId)
+          ? (!controlMessage || (controlMessage.type === "apply_session_defaults" && await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/session/defaults/apply", {
+              cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+              ...(controlMessage.provider !== undefined ? { provider: controlMessage.provider } : {}),
+              ...(controlMessage.model !== undefined ? { model: controlMessage.model } : {}),
+              ...(controlMessage.enableMcp !== undefined ? { enableMcp: controlMessage.enableMcp } : {}),
+              ...(controlMessage.config !== undefined ? { config: controlMessage.config } : {}),
+            })))
+          : (!controlMessage || sendControl(get, workspaceId, () => controlMessage))
         : false;
 
       if (!persisted) {

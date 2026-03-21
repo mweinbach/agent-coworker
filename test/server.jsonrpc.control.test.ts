@@ -132,4 +132,39 @@ describe("server JSON-RPC control methods", () => {
       server.stop();
     }
   });
+
+  test("session control methods return legacy-compatible event payloads", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const created = await rpc.request("thread/start", { cwd: tmpDir });
+      const threadId = created.result.thread.id as string;
+
+      const renamed = await rpc.request("cowork/session/title/set", {
+        threadId,
+        title: "Renamed session",
+      });
+      expect(renamed.result.event.type).toBe("session_info");
+      expect(renamed.result.event.title).toBe("Renamed session");
+
+      const modelUpdated = await rpc.request("cowork/session/model/set", {
+        threadId,
+        provider: "google",
+        model: "gemini-3-flash-preview",
+      });
+      expect(modelUpdated.result.event.type).toBe("config_updated");
+      expect(modelUpdated.result.event.config.model).toBe("gemini-3-flash-preview");
+
+      const usageUpdated = await rpc.request("cowork/session/usageBudget/set", {
+        threadId,
+        stopAtUsd: null,
+      });
+      expect(usageUpdated.result.event.type).toBe("session_usage");
+      rpc.close();
+    } finally {
+      server.stop();
+    }
+  });
 });

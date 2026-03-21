@@ -46,6 +46,7 @@ import {
   buildSyntheticSessionSettings,
   ensureWorkspaceJsonRpcSocket,
   findThreadIdForJsonRpcNotification,
+  requestJsonRpc,
   registerWorkspaceJsonRpcRouter,
   respondToJsonRpcRequest,
   resumeJsonRpcThread,
@@ -352,10 +353,44 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         return true;
       }
       if (message.type === "set_session_title") {
-        return false;
+        void requestJsonRpc(get, undefined, workspaceId, "cowork/session/title/set", {
+          threadId: sessionId,
+          title: message.title,
+        });
+        return true;
       }
-      if (message.type === "set_model" || message.type === "apply_session_defaults" || message.type === "set_session_usage_budget") {
-        return false;
+      if (message.type === "set_model") {
+        void requestJsonRpc(get, undefined, workspaceId, "cowork/session/model/set", {
+          threadId: sessionId,
+          provider: message.provider,
+          model: message.model,
+        });
+        return true;
+      }
+      if (message.type === "set_session_usage_budget") {
+        void requestJsonRpc(get, undefined, workspaceId, "cowork/session/usageBudget/set", {
+          threadId: sessionId,
+          ...(message.warnAtUsd !== undefined ? { warnAtUsd: message.warnAtUsd } : {}),
+          ...(message.stopAtUsd !== undefined ? { stopAtUsd: message.stopAtUsd } : {}),
+        });
+        return true;
+      }
+      if (message.type === "set_config") {
+        void requestJsonRpc(get, undefined, workspaceId, "cowork/session/config/set", {
+          threadId: sessionId,
+          config: message.config,
+        });
+        return true;
+      }
+      if (message.type === "apply_session_defaults") {
+        void requestJsonRpc(get, undefined, workspaceId, "cowork/session/defaults/apply", {
+          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+          ...(message.provider !== undefined ? { provider: message.provider } : {}),
+          ...(message.model !== undefined ? { model: message.model } : {}),
+          ...(message.enableMcp !== undefined ? { enableMcp: message.enableMcp } : {}),
+          ...(message.config !== undefined ? { config: message.config } : {}),
+        });
+        return true;
       }
       if (message.type === "ask_response") {
         return respondToJsonRpcRequest(workspaceId, message.requestId, { answer: message.answer });

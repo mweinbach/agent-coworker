@@ -109,6 +109,67 @@ class MockJsonRpcSocket {
         },
       };
     }
+    if (method === "cowork/session/title/set") {
+      return {
+        event: {
+          type: "session_info",
+          sessionId: "jsonrpc-thread-1",
+          title: params && typeof (params as any).title === "string" ? (params as any).title : "Renamed",
+          titleSource: "manual",
+          titleModel: null,
+          createdAt: "2026-03-21T00:00:00.000Z",
+          updatedAt: "2026-03-21T00:00:00.000Z",
+          provider: "google",
+          model: "gemini-3.1-pro-preview",
+        },
+      };
+    }
+    if (method === "cowork/session/model/set") {
+      return {
+        event: {
+          type: "config_updated",
+          sessionId: "jsonrpc-thread-1",
+          config: {
+            provider: (params as any)?.provider ?? "google",
+            model: (params as any)?.model ?? "gemini-3.1-pro-preview",
+            workingDirectory: "/tmp/jsonrpc-workspace",
+          },
+        },
+      };
+    }
+    if (method === "cowork/session/usageBudget/set") {
+      return {
+        event: {
+          type: "session_usage",
+          sessionId: "jsonrpc-thread-1",
+          usage: null,
+        },
+      };
+    }
+    if (method === "cowork/session/defaults/apply") {
+      return {
+        event: {
+          type: "session_config",
+          sessionId: "jsonrpc-control",
+          config: {
+            yolo: false,
+            observabilityEnabled: true,
+            backupsEnabled: true,
+            defaultBackupsEnabled: true,
+            enableMemory: true,
+            memoryRequireApproval: false,
+            preferredChildModel: "gemini-3.1-pro-preview",
+            childModelRoutingMode: "same-provider",
+            preferredChildModelRef: "google:gemini-3.1-pro-preview",
+            allowedChildModelRefs: [],
+            maxSteps: 100,
+            toolOutputOverflowChars: 25000,
+            userName: "",
+            userProfile: { instructions: "", work: "", details: "" },
+          },
+        },
+      };
+    }
     if (method === "cowork/provider/catalog/read") {
       return {
         event: {
@@ -356,5 +417,34 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(runtime?.mcpServers).toEqual([]);
     expect(runtime?.skillsCatalog?.installations).toEqual([]);
     expect(runtime?.skills).toEqual([]);
+  });
+
+  test("routes remaining thread and workspace-default controls over the shared JsonRpcSocket", async () => {
+    await useAppStore.getState().selectWorkspace("ws-jsonrpc");
+    await useAppStore.getState().newThread({
+      workspaceId: "ws-jsonrpc",
+      titleHint: "Draft",
+      firstMessage: "hello over jsonrpc",
+    });
+    await flushAsyncWork();
+
+    useAppStore.getState().renameThread("jsonrpc-thread-1", "Renamed thread");
+    useAppStore.getState().setThreadModel("jsonrpc-thread-1", "google", "gemini-3.1-flash-lite-preview");
+    useAppStore.getState().clearThreadUsageHardCap("jsonrpc-thread-1");
+    await useAppStore.getState().updateWorkspaceDefaults("ws-jsonrpc", {
+      defaultEnableMcp: false,
+    });
+    await flushAsyncWork();
+
+    expect(jsonRpcRequests.map((entry) => entry.method)).toEqual([
+      "thread/list",
+      "thread/start",
+      "turn/start",
+      "cowork/session/title/set",
+      "cowork/session/model/set",
+      "cowork/session/usageBudget/set",
+      "cowork/session/defaults/apply",
+      "cowork/session/defaults/apply",
+    ]);
   });
 });

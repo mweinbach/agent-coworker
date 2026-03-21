@@ -1431,6 +1431,121 @@ export async function startAgentServer(
         sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, {}));
         return;
       }
+      case "cowork/session/title/set": {
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const title = typeof params.title === "string" ? params.title : "";
+        const binding = sessionBindings.get(threadId);
+        const session = binding?.session;
+        if (!session || !title.trim()) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires threadId and title`,
+          }));
+          return;
+        }
+        const event = await captureSessionEvent(
+          binding!,
+          () => session.setSessionTitle(title),
+          (event): event is Extract<ServerEvent, { type: "session_info" }> => event.type === "session_info",
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/session/model/set": {
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const model = typeof params.model === "string" ? params.model : "";
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        const binding = sessionBindings.get(threadId);
+        const session = binding?.session;
+        if (!session || !model.trim()) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires threadId and model`,
+          }));
+          return;
+        }
+        const event = await captureSessionEvent(
+          binding!,
+          async () => await session.setModel(model, provider),
+          (event): event is Extract<ServerEvent, { type: "config_updated" }> => event.type === "config_updated",
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/session/usageBudget/set": {
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const binding = sessionBindings.get(threadId);
+        const session = binding?.session;
+        if (!session) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires threadId`,
+          }));
+          return;
+        }
+        const warnAtUsd = typeof params.warnAtUsd === "number" || params.warnAtUsd === null ? params.warnAtUsd as number | null : undefined;
+        const stopAtUsd = typeof params.stopAtUsd === "number" || params.stopAtUsd === null ? params.stopAtUsd as number | null : undefined;
+        const event = await captureSessionEvent(
+          binding!,
+          () => session.setSessionUsageBudget(warnAtUsd, stopAtUsd),
+          (event): event is Extract<ServerEvent, { type: "session_usage" }> => event.type === "session_usage",
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/session/config/set": {
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const configPatch = params.config as any;
+        const binding = sessionBindings.get(threadId);
+        const session = binding?.session;
+        if (!session || !configPatch || typeof configPatch !== "object") {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires threadId and config`,
+          }));
+          return;
+        }
+        const event = await captureSessionEvent(
+          binding!,
+          async () => await session.setConfig(configPatch),
+          (event): event is Extract<ServerEvent, { type: "session_config" }> => event.type === "session_config",
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/session/defaults/apply": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const binding = getOrCreateWorkspaceControlBinding(cwd);
+        const session = binding.session!;
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        const model = typeof params.model === "string" ? params.model : undefined;
+        const enableMcp = typeof params.enableMcp === "boolean" ? params.enableMcp : undefined;
+        const configPatch = params.config as any;
+        const event = await captureSessionEvent(
+          binding,
+          async () => await session.applySessionDefaults({
+            ...(provider !== undefined && model !== undefined ? { provider, model } : {}),
+            ...(enableMcp !== undefined ? { enableMcp } : {}),
+            ...(configPatch && typeof configPatch === "object" ? { config: configPatch } : {}),
+          }),
+          (event): event is Extract<ServerEvent, { type: "session_config" }> => event.type === "session_config",
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/session/delete": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
+        const binding = getOrCreateWorkspaceControlBinding(cwd);
+        const session = binding.session!;
+        const event = await captureSessionEvent(
+          binding,
+          async () => await session.deleteSession(targetSessionId),
+          (event): event is Extract<ServerEvent, { type: "session_deleted" }> => event.type === "session_deleted",
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
       case "cowork/provider/catalog/read": {
         const cwd = requireWorkspacePath(params, message.method);
         const event = await withWorkspaceControlSession(cwd, async (binding, session) =>

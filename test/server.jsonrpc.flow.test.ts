@@ -146,6 +146,7 @@ describe("server JSON-RPC flows", () => {
 
       const turnResponse = await rpc.sendRequest("turn/start", {
         threadId: started.result.thread.id,
+        clientMessageId: "msg-1",
         input: [{ type: "text", text: "hello there" }],
       });
       expect(turnResponse.result.turn.threadId).toBe(started.result.thread.id);
@@ -162,6 +163,7 @@ describe("server JSON-RPC flows", () => {
 
       expect(turnStarted.params.threadId).toBe(started.result.thread.id);
       expect(userItemStarted.params.item.content[0].text).toBe("hello there");
+      expect(userItemStarted.params.item.clientMessageId).toBe("msg-1");
       expect(agentDelta.params.delta).toBe("streamed reply");
       expect(agentCompleted.params.item.text).toBe("streamed reply");
       expect(turnCompleted.params.turn.status).toBe("completed");
@@ -302,6 +304,7 @@ describe("server JSON-RPC flows", () => {
       await rpc.waitFor((message) => message.method === "thread/started");
       await rpc.sendRequest("turn/start", {
         threadId: started.result.thread.id,
+        clientMessageId: "journal-msg-1",
         input: [{ type: "text", text: "build the journal" }],
       });
       await rpc.waitFor((message) => message.method === "turn/completed");
@@ -313,7 +316,7 @@ describe("server JSON-RPC flows", () => {
       expect(read.result.thread.turns).toHaveLength(1);
       expect(read.result.thread.turns[0].items).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ type: "userMessage" }),
+          expect.objectContaining({ type: "userMessage", clientMessageId: "journal-msg-1" }),
           expect.objectContaining({ type: "agentMessage", text: "journal reply" }),
         ]),
       );

@@ -416,6 +416,11 @@ describe("desktop JSON-RPC single connection path", () => {
       "thread/read",
       "turn/start",
     ]);
+    const turnStartParams = jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params as
+      | { threadId?: string; clientMessageId?: string }
+      | undefined;
+    expect(turnStartParams?.threadId).toBe("jsonrpc-thread-1");
+    expect(turnStartParams?.clientMessageId).toEqual(expect.any(String));
 
     const state = useAppStore.getState();
     expect(state.threads[0]?.id).toBe("jsonrpc-thread-1");

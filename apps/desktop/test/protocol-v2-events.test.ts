@@ -438,6 +438,94 @@ describe("desktop JSON-RPC event mapping", () => {
     expect(runtime?.sessionConfig?.preferredChildModel).toBe("gpt-5.4-mini");
   });
 
+  test("shared JSON-RPC notifications map remaining live thread events", async () => {
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    RUNTIME.pendingThreadSteers.set(threadId, new Map([
+      ["steer-1", {
+        clientMessageId: "steer-1",
+        text: "tighten scope",
+        expectedTurnId: "turn-1",
+        accepted: false,
+      }],
+    ]));
+    useAppStore.setState((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId]!,
+          busy: true,
+          activeTurnId: "turn-1",
+          pendingSteer: {
+            clientMessageId: "steer-1",
+            text: "tighten scope",
+            status: "sending",
+          },
+        },
+      },
+    }));
+
+    const socket = MockJsonRpcSocket.instances[0];
+    expect(socket).toBeDefined();
+
+    socket.notify("cowork/session/steerAccepted", {
+      type: "steer_accepted",
+      sessionId,
+      turnId: "turn-1",
+      text: "tighten scope",
+      clientMessageId: "steer-1",
+    });
+    socket.notify("cowork/session/agentList", {
+      type: "agent_list",
+      sessionId,
+      agents: [{
+        agentId: "agent-1",
+        parentSessionId: sessionId,
+        role: "research",
+        mode: "delegate",
+        depth: 1,
+        title: "Research worker",
+        provider: "openai",
+        effectiveModel: "gpt-5.4-mini",
+        createdAt: "2024-01-01T00:00:01.000Z",
+        updatedAt: "2024-01-01T00:00:02.000Z",
+        lifecycleState: "active",
+        executionState: "running",
+        busy: true,
+      }],
+    });
+    socket.notify("cowork/todos", {
+      type: "todos",
+      sessionId,
+      todos: [{ id: "todo-1", content: "Ship the fix", status: "pending" }],
+    });
+    socket.notify("cowork/log", {
+      type: "log",
+      sessionId,
+      line: "live log line",
+    });
+    socket.notify("error", {
+      type: "error",
+      sessionId,
+      source: "session",
+      code: "internal_error",
+      message: "boom",
+    });
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    const state = useAppStore.getState();
+    const runtime = state.threadRuntimeById[threadId];
+    expect(runtime?.pendingSteer?.status).toBe("accepted");
+    expect(runtime?.agents).toHaveLength(1);
+    expect(state.latestTodosByThreadId[threadId]).toEqual([{ id: "todo-1", content: "Ship the fix", status: "pending" }]);
+    expect(runtime?.feed.some((item) => item.kind === "log" && item.line === "live log line")).toBe(true);
+    expect(runtime?.feed.some((item) => item.kind === "error" && item.message === "boom")).toBe(true);
+    expect(state.notifications.some((entry) => entry.detail === "session/internal_error: boom")).toBe(true);
+  });
+
   test("server ask requests open a prompt and answerAsk responds on the shared socket", async () => {
     await useAppStore.getState().reconnectThread(threadId);
     await flushAsyncWork();

@@ -164,6 +164,7 @@
 - For shared workspace/session path comparisons, never rely on raw resolved-string equality across platforms; Windows workspace identity must case-fold after lexical normalization, and the helper should expose deterministic test coverage for `win32` semantics from non-Windows CI.
 - When the user asks to fix CI or review feedback in this repo, keep verification scoped to the failing checks unless they explicitly ask for build/package validation; do not default to the desktop build matrix.
 - When a CI failure only reproduces on GitHub Actions, treat the runner environment as authoritative: compare the workflow OS/runtime to the local machine immediately and harden the failing test against environment-sensitive module/mock behavior instead of waiting for a local repro.
+- When a desktop Linux smoke run shows a blank renderer or `Render frame was disposed` errors, do not treat native window chrome or menu interactivity alone as proof the UI is healthy; debug the renderer failure and visible content before signing off.
 
 ## 2026-03-18 Tool Output Overflow Audit
 

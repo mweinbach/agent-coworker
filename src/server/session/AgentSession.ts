@@ -44,6 +44,8 @@ import type {
   HydratedSessionState,
   PersistedModelSelection,
   PersistedProjectConfigPatch,
+  PersistedUserConfigPatch,
+  PersistedUserConfigState,
   SeededSessionContext,
   SessionBackupFactory,
   SessionContext,
@@ -245,6 +247,8 @@ export class AgentSession {
     runTurnImpl?: typeof runTurn;
     persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
     persistProjectConfigPatchImpl?: (patch: PersistedProjectConfigPatch) => Promise<void> | void;
+    readUserConfigImpl?: () => Promise<PersistedUserConfigState> | PersistedUserConfigState;
+    persistUserConfigPatchImpl?: (patch: PersistedUserConfigPatch) => Promise<PersistedUserConfigState>;
     generateSessionTitleImpl?: typeof generateSessionTitle;
     sessionDb?: SessionDb | null;
     writePersistedSessionSnapshotImpl?: typeof writePersistedSessionSnapshot;
@@ -355,6 +359,8 @@ export class AgentSession {
       runTurnImpl: opts.runTurnImpl ?? runTurn,
       persistModelSelectionImpl: opts.persistModelSelectionImpl,
       persistProjectConfigPatchImpl: opts.persistProjectConfigPatchImpl,
+      readUserConfigImpl: opts.readUserConfigImpl,
+      persistUserConfigPatchImpl: opts.persistUserConfigPatchImpl,
       generateSessionTitleImpl: opts.generateSessionTitleImpl ?? generateSessionTitle,
       sessionDb: opts.sessionDb ?? null,
       writePersistedSessionSnapshotImpl: opts.writePersistedSessionSnapshotImpl ?? writePersistedSessionSnapshot,
@@ -561,6 +567,8 @@ export class AgentSession {
     runTurnImpl?: typeof runTurn;
     persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
     persistProjectConfigPatchImpl?: (patch: PersistedProjectConfigPatch) => Promise<void> | void;
+    readUserConfigImpl?: () => Promise<PersistedUserConfigState> | PersistedUserConfigState;
+    persistUserConfigPatchImpl?: (patch: PersistedUserConfigPatch) => Promise<PersistedUserConfigState>;
     generateSessionTitleImpl?: typeof generateSessionTitle;
     sessionDb?: SessionDb | null;
     writePersistedSessionSnapshotImpl?: typeof writePersistedSessionSnapshot;
@@ -635,6 +643,8 @@ export class AgentSession {
       runTurnImpl: opts.runTurnImpl,
       persistModelSelectionImpl: opts.persistModelSelectionImpl,
       persistProjectConfigPatchImpl: opts.persistProjectConfigPatchImpl,
+      readUserConfigImpl: opts.readUserConfigImpl,
+      persistUserConfigPatchImpl: opts.persistUserConfigPatchImpl,
       generateSessionTitleImpl: opts.generateSessionTitleImpl,
       sessionDb: opts.sessionDb,
       writePersistedSessionSnapshotImpl: opts.writePersistedSessionSnapshotImpl,

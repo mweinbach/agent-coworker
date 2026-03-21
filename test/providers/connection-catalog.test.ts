@@ -26,7 +26,13 @@ describe("providers/connectionCatalog", () => {
 
     const entryIds = payload.all.map((entry) => entry.id);
     expect(entryIds).toEqual(PROVIDER_NAMES);
-    expect(payload.all).toEqual(await listProviderCatalogEntries());
+    const staticEntries = await listProviderCatalogEntries();
+    const payloadWithoutAws = payload.all.filter((entry) => entry.id !== "aws-bedrock-proxy");
+    const staticWithoutAws = staticEntries.filter((entry) => entry.id !== "aws-bedrock-proxy");
+    expect(payloadWithoutAws).toEqual(staticWithoutAws);
+    const awsEntry = payload.all.find((entry) => entry.id === "aws-bedrock-proxy");
+    expect(awsEntry?.state).toBe("unreachable");
+    expect(awsEntry?.message).toBe("Set the AWS Bedrock Proxy URL before saving a proxy token.");
     expect(Object.keys(payload.default)).toEqual(PROVIDER_NAMES);
     for (const entry of payload.all) {
       expect(payload.default[entry.id]).toBe(entry.defaultModel);
@@ -333,8 +339,7 @@ describe("providers/connectionCatalog", () => {
     expect(entry?.defaultModel).toBe("router-shadow");
   });
 
-  test("falls back to static AWS Bedrock Proxy models when discovery fails", async () => {
-    const staticEntry = (await listProviderCatalogEntries()).find((provider) => provider.id === "aws-bedrock-proxy");
+  test("marks AWS Bedrock Proxy as unreachable when discovery fails", async () => {
     const payload = await getProviderCatalog({
       readStore: async () => ({
         version: 1,
@@ -357,7 +362,41 @@ describe("providers/connectionCatalog", () => {
     });
 
     const entry = payload.all.find((provider) => provider.id === "aws-bedrock-proxy");
-    expect(entry).toEqual(staticEntry);
+    expect(entry?.models).toEqual([]);
+    expect(entry?.defaultModel).toBe("");
+    expect(entry?.state).toBe("unreachable");
+    expect(entry?.message).toBe("Proxy /models request failed (503): temporary outage");
+  });
+
+  test("retains active AWS Bedrock Proxy model when discovery fails", async () => {
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          "aws-bedrock-proxy": {
+            service: "aws-bedrock-proxy",
+            mode: "api_key",
+            apiKey: "proxy-token",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.example.com",
+        },
+      },
+      activeProvider: "aws-bedrock-proxy",
+      activeModel: "router-shadow",
+      fetchImpl: (async () => new Response("temporary outage", { status: 503 })) as unknown as typeof fetch,
+    });
+
+    const entry = payload.all.find((provider) => provider.id === "aws-bedrock-proxy");
+    expect(entry?.models.map((model) => model.id)).toEqual(["router-shadow"]);
+    expect(entry?.defaultModel).toBe("router-shadow");
+    expect(entry?.state).toBe("unreachable");
+    expect(entry?.message).toBe("Proxy /models request failed (503): temporary outage");
   });
 
   test("connected providers exclude oauth_pending entries", async () => {

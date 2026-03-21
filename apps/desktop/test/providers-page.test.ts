@@ -818,6 +818,67 @@ describe("desktop providers page", () => {
     expect(html).toContain("title=\"Add a workspace first.\"");
   });
 
+  test("aws-bedrock-proxy fetch models shows unreachable proxy message", async () => {
+    const harness = setupJsdom();
+    const requestProviderCatalog = mock(async () => {
+      useAppStore.setState({
+        ...useAppStore.getState(),
+        providerCatalog: [
+          {
+            id: "aws-bedrock-proxy",
+            name: "AWS Bedrock Proxy",
+            state: "unreachable",
+            message: "Proxy /models request failed (503): temporary outage",
+            models: [],
+            defaultModel: "",
+          },
+        ] as any,
+      });
+    });
+    const requestProviderAuthMethods = mock(async () => {});
+    const requestUserConfig = mock(async () => {});
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          ...useAppStore.getState(),
+          providerCatalog: [
+            { id: "aws-bedrock-proxy", name: "AWS Bedrock Proxy", models: [], defaultModel: "" },
+          ] as any,
+          providerAuthMethodsByProvider: {
+            "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+          } as any,
+          requestProviderCatalog,
+          requestProviderAuthMethods,
+          requestUserConfig,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(ProvidersPage, { initialExpandedSectionId: "provider:aws-bedrock-proxy" }));
+      });
+
+      const fetchModelsButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Fetch models");
+      if (!fetchModelsButton) throw new Error("missing Fetch models button");
+      await act(async () => {
+        fetchModelsButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(requestProviderCatalog).toHaveBeenCalled();
+      expect(container.textContent).toContain("Proxy /models request failed (503): temporary outage");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("renders LM Studio as a local provider card without API token controls", () => {
     useAppStore.setState({
       ...useAppStore.getState(),

@@ -11,7 +11,11 @@ import {
 import { isLmStudioError, listLmStudioModels, resolveLmStudioProviderOptions } from "./lmstudio/client";
 import { getOpenCodeDisplayName } from "./opencodeShared";
 import { resolveAuthHomeDir } from "../utils/authHome";
-import { discoverAwsBedrockProxyModelsDetailed, resolveAwsBedrockProxyBaseUrl } from "./awsBedrockProxyShared";
+import {
+  discoverAwsBedrockProxyModelsDetailed,
+  formatAwsBedrockProxyDiscoveryFailure,
+  resolveAwsBedrockProxyBaseUrl,
+} from "./awsBedrockProxyShared";
 
 function storedProviderApiKey(store: Awaited<ReturnType<typeof readConnectionStore>>, provider: ProviderName): string | undefined {
   const entry = store.services[provider];
@@ -189,9 +193,9 @@ export async function getProviderCatalog(opts: {
       apiKey: savedKey,
       fetchImpl: opts.fetchImpl,
     });
-    const mergedModels = discovery.ok ? discovery.models : proxyEntry.models;
+    const discoveredModels = discovery.ok ? discovery.models : [];
     const activeProxyModel = opts.activeProvider === "aws-bedrock-proxy" ? opts.activeModel?.trim() : undefined;
-    const hasActiveModel = Boolean(activeProxyModel && mergedModels.some((model) => model.id === activeProxyModel));
+    const hasActiveModel = Boolean(activeProxyModel && discoveredModels.some((model) => model.id === activeProxyModel));
     const models = activeProxyModel && !hasActiveModel
       ? [
           {
@@ -200,13 +204,14 @@ export async function getProviderCatalog(opts: {
             knowledgeCutoff: "Unknown",
             supportsImageInput: false,
           },
-          ...mergedModels,
+          ...discoveredModels,
         ]
-      : mergedModels;
+      : discoveredModels;
     all[awsBedrockProxyIndex] = {
       ...proxyEntry,
       models,
-      defaultModel: models[0]?.id ?? proxyEntry.defaultModel,
+      defaultModel: models[0]?.id ?? (discovery.ok ? proxyEntry.defaultModel : ""),
+      ...(discovery.ok ? {} : { state: "unreachable" as const, message: formatAwsBedrockProxyDiscoveryFailure(discovery) }),
     };
   }
 

@@ -93,9 +93,24 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
   const resolveProviderWorkspaceId = (): string | null =>
     get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
 
-  const ensureProviderControlReady = async (): Promise<string | null> => {
+  const notifyProviderControlUnavailable = (detail: string) => {
+    set((s) => ({
+      notifications: pushNotification(s.notifications, {
+        id: makeId(),
+        ts: nowIso(),
+        kind: "error",
+        title: "Not connected",
+        detail,
+      }),
+    }));
+  };
+
+  const ensureProviderControlReady = async (opts?: { notifyDetail?: string }): Promise<string | null> => {
     const workspaceId = resolveProviderWorkspaceId();
-    if (!workspaceId) return null;
+    if (!workspaceId) {
+      if (opts?.notifyDetail) notifyProviderControlUnavailable(opts.notifyDetail);
+      return null;
+    }
 
     await ensureServerRunning(get, set, workspaceId);
     const socket = ensureControlSocket(get, set, workspaceId);
@@ -449,7 +464,9 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
 
   
     refreshProviderStatus: async () => {
-      const workspaceId = await ensureProviderControlReady();
+      const workspaceId = await ensureProviderControlReady({
+        notifyDetail: "Unable to refresh provider status.",
+      });
       if (!workspaceId) return;
 
       const path = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
@@ -457,7 +474,9 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
     },
 
     setGlobalOpenAiProxyBaseUrl: async (baseUrl) => {
-      const workspaceId = await ensureProviderControlReady();
+      const workspaceId = await ensureProviderControlReady({
+        notifyDetail: "Unable to update global user config.",
+      });
       if (!workspaceId) return;
 
       const normalizedBaseUrl = typeof baseUrl === "string" ? baseUrl.trim() : "";
@@ -495,6 +514,7 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
     },
 
     setLmStudioEnabled: async (enabled) => {
+      const previousEnabled = get().providerUiState.lmstudio.enabled;
       set((s) => ({
         providerUiState: {
           ...s.providerUiState,
@@ -504,7 +524,28 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
           },
         },
       }));
-      await persistNow(get);
+      try {
+        await persistNow(get);
+      } catch (error) {
+        console.error("Failed to persist LM Studio enabled state", error);
+        set((s) => ({
+          providerUiState: {
+            ...s.providerUiState,
+            lmstudio: {
+              ...s.providerUiState.lmstudio,
+              enabled: previousEnabled,
+            },
+          },
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Save failed",
+            detail: "Unable to save LM Studio settings.",
+          }),
+        }));
+        return;
+      }
       if (enabled) {
         await get().refreshProviderStatus();
       }
@@ -513,6 +554,7 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
     setLmStudioModelVisible: async (modelId, visible) => {
       const normalizedModelId = modelId.trim();
       if (!normalizedModelId) return;
+      const previousHiddenModels = get().providerUiState.lmstudio.hiddenModels;
       set((s) => {
         const hiddenModels = new Set(s.providerUiState.lmstudio.hiddenModels);
         if (visible) {
@@ -530,7 +572,27 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
           },
         };
       });
-      await persistNow(get);
+      try {
+        await persistNow(get);
+      } catch (error) {
+        console.error("Failed to persist LM Studio model visibility", error);
+        set((s) => ({
+          providerUiState: {
+            ...s.providerUiState,
+            lmstudio: {
+              ...s.providerUiState.lmstudio,
+              hiddenModels: previousHiddenModels,
+            },
+          },
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Save failed",
+            detail: "Unable to save LM Studio model visibility.",
+          }),
+        }));
+      }
     },
   
   };

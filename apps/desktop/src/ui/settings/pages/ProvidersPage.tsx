@@ -420,7 +420,23 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     if (providerCatalogVersion <= bedrockModelsRefreshStartVersion) return;
     setBedrockModelsRefreshing(false);
     const entry = providerCatalog.find((candidate) => candidate.id === "aws-bedrock-proxy");
-    if (!entry || !Array.isArray(entry.models) || entry.models.length === 0) {
+    if (!entry) {
+      setBedrockModelsRefreshResult({
+        ok: false,
+        message: "Model catalog refreshed, but the AWS Bedrock Proxy entry was missing.",
+      });
+      return;
+    }
+    if (entry.state === "unreachable") {
+      setBedrockModelsRefreshResult({
+        ok: false,
+        message: typeof entry.message === "string" && entry.message.trim()
+          ? entry.message
+          : "Model fetch failed. Check proxy URL/token and try again.",
+      });
+      return;
+    }
+    if (!Array.isArray(entry.models) || entry.models.length === 0) {
       setBedrockModelsRefreshResult({
         ok: false,
         message: "Model catalog refreshed, but no models were reported by the proxy.",

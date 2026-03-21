@@ -1,6 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
 
-import { discoverAwsBedrockProxyModelsDetailed } from "../../src/providers/awsBedrockProxyShared";
+import {
+  discoverAwsBedrockProxyModelsDetailed,
+  resolveAwsBedrockProxyApiKey,
+  resolveAwsBedrockProxyBaseUrl,
+} from "../../src/providers/awsBedrockProxyShared";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -104,5 +108,65 @@ describe("aws-bedrock-proxy discovery", () => {
       code: "timeout",
       message: "The /models request timed out.",
     });
+  });
+});
+
+describe("aws-bedrock-proxy shared option resolution", () => {
+  test("resolveAwsBedrockProxyApiKey prefers saved key, then AWS env, then legacy env", () => {
+    expect(resolveAwsBedrockProxyApiKey({
+      savedKey: " saved-token ",
+      env: {
+        AWS_BEDROCK_PROXY_API_KEY: "aws-env-token",
+        OPENAI_PROXY_API_KEY: "legacy-env-token",
+      } as NodeJS.ProcessEnv,
+    })).toBe("saved-token");
+
+    expect(resolveAwsBedrockProxyApiKey({
+      env: {
+        AWS_BEDROCK_PROXY_API_KEY: "aws-env-token",
+        OPENAI_PROXY_API_KEY: "legacy-env-token",
+      } as NodeJS.ProcessEnv,
+    })).toBe("aws-env-token");
+
+    expect(resolveAwsBedrockProxyApiKey({
+      env: {
+        OPENAI_PROXY_API_KEY: "legacy-env-token",
+      } as NodeJS.ProcessEnv,
+    })).toBe("legacy-env-token");
+  });
+
+  test("resolveAwsBedrockProxyBaseUrl enforces precedence and rejects invalid URLs", () => {
+    expect(resolveAwsBedrockProxyBaseUrl({
+      baseUrl: "https://proxy.explicit.example.com/v1/",
+      providerOptions: {
+        "aws-bedrock-proxy": { baseUrl: "https://proxy.provider-options.example.com/v1" },
+      },
+      env: {
+        AWS_BEDROCK_PROXY_BASE_URL: "https://proxy.env.example.com/v1",
+      } as NodeJS.ProcessEnv,
+    })).toBe("https://proxy.explicit.example.com/v1");
+
+    expect(resolveAwsBedrockProxyBaseUrl({
+      providerOptions: {
+        "aws-bedrock-proxy": { baseUrl: "https://proxy.provider-options.example.com/v1/" },
+      },
+      env: {
+        AWS_BEDROCK_PROXY_BASE_URL: "https://proxy.env.example.com/v1",
+      } as NodeJS.ProcessEnv,
+    })).toBe("https://proxy.provider-options.example.com/v1");
+
+    expect(resolveAwsBedrockProxyBaseUrl({
+      providerOptions: {
+        "aws-bedrock-proxy": { baseUrl: "htps://bad-url" },
+      },
+      env: {
+        AWS_BEDROCK_PROXY_BASE_URL: "https://proxy.env.example.com/v1/",
+      } as NodeJS.ProcessEnv,
+    })).toBe("https://proxy.env.example.com/v1");
+
+    expect(resolveAwsBedrockProxyBaseUrl({
+      baseUrl: "javascript:alert(1)",
+      env: {} as NodeJS.ProcessEnv,
+    })).toBeUndefined();
   });
 });

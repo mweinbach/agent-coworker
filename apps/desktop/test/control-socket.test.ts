@@ -1,43 +1,41 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
-type MockSocketOpts = {
-  url: string;
-  client: string;
-  autoReconnect?: boolean;
-  resumeSessionId?: string;
-  onEvent?: (evt: any) => void;
-  onClose?: (reason: string) => void;
-};
+const jsonRpcRequests: Array<{ method: string; params?: unknown }> = [];
+const jsonRpcHandlers = new Map<string, (params?: any) => any | Promise<any>>();
 
-const MOCK_SOCKETS: MockAgentSocket[] = [];
+class MockJsonRpcSocket {
+  static instances: MockJsonRpcSocket[] = [];
+  readonly readyPromise = Promise.resolve();
 
-class MockAgentSocket {
-  public sent: any[] = [];
-  public url: string;
-
-  constructor(public readonly opts: MockSocketOpts) {
-    this.url = opts.url;
-    MOCK_SOCKETS.push(this);
+  constructor(public readonly opts: { onOpen?: () => void; onClose?: () => void }) {
+    MockJsonRpcSocket.instances.push(this);
   }
 
-  connect() {}
+  connect() {
+    this.opts.onOpen?.();
+  }
 
-  send(msg: any) {
-    this.sent.push(msg);
+  async request(method: string, params?: unknown) {
+    jsonRpcRequests.push({ method, params });
+    const handler = jsonRpcHandlers.get(method);
+    if (!handler) {
+      return {};
+    }
+    return await handler(params);
+  }
+
+  respond() {
     return true;
   }
 
   close() {
-    this.opts.onClose?.("closed");
-  }
-
-  emit(evt: any) {
-    this.opts.onEvent?.(evt);
+    this.opts.onClose?.();
   }
 }
 
 mock.module("../src/lib/agentSocket", () => ({
-  AgentSocket: MockAgentSocket,
+  AgentSocket: class {},
+  JsonRpcSocket: MockJsonRpcSocket,
 }));
 
 const { createControlSocketHelpers } = await import("../src/app/store.helpers/controlSocket");
@@ -51,29 +49,9 @@ const deps = {
   persist: () => {
     persistCalls += 1;
   },
-  pushNotification: <T>(notifications: T[]) => notifications,
+  pushNotification: <T>(notifications: T[], entry: T) => [...notifications, entry],
   isProviderName: () => true,
 };
-
-function socketByClient(client: string): MockAgentSocket {
-  const socket = [...MOCK_SOCKETS].reverse().find((entry) => entry.opts.client === client);
-  if (!socket) {
-    throw new Error(`Missing mock socket for client=${client}`);
-  }
-  return socket;
-}
-
-function emitServerHello(socket: MockAgentSocket, sessionId: string) {
-  socket.emit({
-    type: "server_hello",
-    sessionId,
-    protocolVersion: "2.0",
-    config: {
-      provider: "openai",
-      model: "gpt-5.2",
-    },
-  });
-}
 
 function makeThread(threadId: string, workspaceId: string) {
   return {
@@ -92,109 +70,101 @@ function makeThread(threadId: string, workspaceId: string) {
   };
 }
 
-function makeSessionSummary(sessionId: string) {
+function makeThreadListEntry(threadId: string) {
   return {
-    sessionId,
-    title: sessionId,
-    titleSource: "manual",
+    id: threadId,
+    title: threadId,
+    modelProvider: "openai",
+    model: "gpt-5.2",
     createdAt: "2026-03-20T00:00:00.000Z",
     updatedAt: "2026-03-20T00:00:00.000Z",
-    messageCount: 1,
-    lastEventSeq: 1,
   };
 }
 
-describe("control socket helper timeouts", () => {
-  const workspaceId = "ws-timeouts";
+function createState(workspaceId: string, patch: Record<string, unknown> = {}) {
   const state = {
+    selectedWorkspaceId: workspaceId,
+    selectedThreadId: null,
+    threads: [],
+    threadRuntimeById: {},
     workspaceRuntimeById: {
       [workspaceId]: {
+        ...defaultWorkspaceRuntime(),
         serverUrl: "ws://mock",
-        error: null,
-        controlSessionId: "control-session",
+        ...((patch.workspaceRuntimeById as Record<string, unknown> | undefined)?.[workspaceId] ?? {}),
       },
     },
+    workspaces: [
+      {
+        id: workspaceId,
+        name: "Workspace",
+        path: "/tmp/workspace",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        lastOpenedAt: "2026-03-20T00:00:00.000Z",
+        wsProtocol: "jsonrpc",
+        defaultEnableMcp: true,
+        defaultBackupsEnabled: true,
+        yolo: false,
+      },
+    ],
+    notifications: [],
+    providerStatusByName: {},
+    providerStatusLastUpdatedAt: null,
+    providerStatusRefreshing: false,
+    providerCatalog: [],
+    providerDefaultModelByProvider: {},
+    providerConnected: [],
+    providerAuthMethodsByProvider: {},
+    providerLastAuthChallenge: null,
+    providerLastAuthResult: null,
+    view: "chat",
+    ...patch,
+  } as any;
+  const get = () => state;
+  const set = (updater: any) => {
+    const patchValue = typeof updater === "function" ? updater(state) : updater;
+    Object.assign(state, patchValue);
   };
-  const get = () => state as any;
-  const set = (() => {}) as any;
+  return { state, get, set };
+}
 
+function installFakeSocket(workspaceId: string, request: (method: string, params?: any) => any | Promise<any>) {
+  RUNTIME.jsonRpcSockets.set(workspaceId, {
+    readyPromise: Promise.resolve(),
+    request,
+    respond: () => true,
+    close: () => {},
+  } as any);
+}
+
+describe("control socket helpers over JSON-RPC", () => {
   beforeEach(() => {
-    MOCK_SOCKETS.length = 0;
-    RUNTIME.controlSockets.clear();
+    jsonRpcRequests.length = 0;
+    jsonRpcHandlers.clear();
+    MockJsonRpcSocket.instances.length = 0;
+    RUNTIME.jsonRpcSockets.clear();
     RUNTIME.skillInstallWaiters.clear();
     RUNTIME.sessionSnapshots.clear();
     persistCalls = 0;
   });
 
-  test("requestWorkspaceSessions unregisters timed-out waiters", async () => {
-    const helpers = createControlSocketHelpers(deps, { requestTimeoutMs: 25 });
-    RUNTIME.controlSockets.set(workspaceId, {
-      send: () => true,
-    } as any);
-
-    const requestPromise = helpers.requestWorkspaceSessions(get, set, workspaceId);
-    await Promise.resolve();
-
-    expect(helpers.__internal.getPendingWaiterCounts().workspaceSessionWaiters).toBe(1);
-    await expect(requestPromise).resolves.toBeNull();
-    expect(helpers.__internal.getPendingWaiterCounts().workspaceSessionWaiters).toBe(0);
-  });
-
-  test("requestSessionSnapshot unregisters timed-out waiters", async () => {
-    const helpers = createControlSocketHelpers(deps, { requestTimeoutMs: 25 });
-    RUNTIME.controlSockets.set(workspaceId, {
-      send: () => true,
-    } as any);
-
-    const requestPromise = helpers.requestSessionSnapshot(get, set, workspaceId, "target-session");
-    await Promise.resolve();
-
-    expect(helpers.__internal.getPendingWaiterCounts().sessionSnapshotWaiters).toBe(1);
-    await expect(requestPromise).resolves.toBeNull();
-    expect(helpers.__internal.getPendingWaiterCounts().sessionSnapshotWaiters).toBe(0);
-  });
-});
-
-describe("control socket workspace sessions", () => {
-  const workspaceId = "ws-sessions";
-
-  beforeEach(() => {
-    MOCK_SOCKETS.length = 0;
-    RUNTIME.controlSockets.clear();
-    RUNTIME.skillInstallWaiters.clear();
-    RUNTIME.sessionSnapshots.clear();
-    persistCalls = 0;
-  });
-
-  test("sessions evict cached snapshots for removed workspace sessions", () => {
-    const state = {
-      selectedWorkspaceId: workspaceId,
+  test("requestWorkspaceSessions evicts removed cached snapshots and reconciles selection", async () => {
+    const workspaceId = "ws-sessions";
+    const { state, get, set } = createState(workspaceId, {
       threads: [
-        makeThread("session-keep", workspaceId),
         makeThread("session-drop", workspaceId),
+        makeThread("session-keep", workspaceId),
         makeThread("session-foreign", "ws-other"),
       ],
-      selectedThreadId: null,
-      threadRuntimeById: {},
-      workspaceRuntimeById: {
-        [workspaceId]: {
-          serverUrl: "ws://mock",
-          error: null,
-          controlSessionId: null,
-          controlConfig: null,
-          controlSessionConfig: null,
-        },
-      },
-      workspaces: [],
-      notifications: [],
-      providerStatusRefreshing: false,
-      providerLastAuthChallenge: null,
-    } as any;
-    const get = () => state;
-    const set = (updater: any) => {
-      const patch = typeof updater === "function" ? updater(state) : updater;
-      Object.assign(state, patch);
-    };
+      selectedThreadId: "session-drop",
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("session-keep")],
+      };
+    });
 
     RUNTIME.sessionSnapshots.set("session-keep", {
       fingerprint: { updatedAt: "2026-03-20T00:00:00.000Z", messageCount: 1, lastEventSeq: 1 },
@@ -210,484 +180,167 @@ describe("control socket workspace sessions", () => {
     } as any);
 
     const helpers = createControlSocketHelpers(deps);
-    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+    const sessions = await helpers.requestWorkspaceSessions(get as any, set as any, workspaceId);
 
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "sessions",
-      sessionId: "control-session",
-      sessions: [makeSessionSummary("session-keep")],
-    });
-
+    expect(sessions?.map((session) => session.sessionId)).toEqual(["session-keep"]);
+    expect(state.selectedThreadId).toBe("session-keep");
     expect(RUNTIME.sessionSnapshots.has("session-keep")).toBe(true);
     expect(RUNTIME.sessionSnapshots.has("session-drop")).toBe(false);
     expect(RUNTIME.sessionSnapshots.has("session-foreign")).toBe(true);
     expect(persistCalls).toBe(1);
   });
 
-  test("sessions pick a remaining workspace thread when the selected thread disappears", () => {
-    const state = {
-      selectedWorkspaceId: workspaceId,
-      threads: [
-        makeThread("session-drop", workspaceId),
-        makeThread("session-keep", workspaceId),
-      ],
-      selectedThreadId: "session-drop",
-      threadRuntimeById: {},
-      workspaceRuntimeById: {
-        [workspaceId]: {
-          serverUrl: "ws://mock",
-          error: null,
-          controlSessionId: null,
-          controlConfig: null,
-          controlSessionConfig: null,
+  test("requestSessionSnapshot reads coworkSnapshot from thread/read", async () => {
+    const workspaceId = "ws-snapshot";
+    const { get, set } = createState(workspaceId);
+    installFakeSocket(workspaceId, async (method, params) => {
+      expect(method).toBe("thread/read");
+      expect(params).toEqual({ threadId: "session-1", includeTurns: true });
+      return {
+        coworkSnapshot: {
+          sessionId: "session-1",
+          title: "Snapshot title",
         },
-      },
-      workspaces: [],
-      notifications: [],
-      providerStatusRefreshing: false,
-      providerLastAuthChallenge: null,
-    } as any;
-    const get = () => state;
-    const set = (updater: any) => {
-      const patch = typeof updater === "function" ? updater(state) : updater;
-      Object.assign(state, patch);
-    };
-
-    const helpers = createControlSocketHelpers(deps);
-    helpers.ensureControlSocket(get as any, set as any, workspaceId);
-
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "sessions",
-      sessionId: "control-session",
-      sessions: [makeSessionSummary("session-keep")],
+      };
     });
 
-    expect(state.selectedThreadId).toBe("session-keep");
-  });
-});
-
-describe("control socket skill error recovery", () => {
-  const workspaceId = "ws-skills";
-
-  beforeEach(() => {
-    MOCK_SOCKETS.length = 0;
-    RUNTIME.controlSockets.clear();
-    RUNTIME.skillInstallWaiters.clear();
-    RUNTIME.sessionSnapshots.clear();
-    persistCalls = 0;
+    const helpers = createControlSocketHelpers(deps);
+    const snapshot = await helpers.requestSessionSnapshot(get as any, set as any, workspaceId, "session-1");
+    expect(snapshot).toEqual({
+      sessionId: "session-1",
+      title: "Snapshot title",
+    });
   });
 
-  test("error clears pending skill state without clearing the server skill-mutation block", () => {
-    const state = {
-      selectedWorkspaceId: workspaceId,
-      threads: [],
-      selectedThreadId: null,
-      threadRuntimeById: {},
+  test("requestJsonRpcControlEvent resolves matching skill install waiters", async () => {
+    const workspaceId = "ws-skills";
+    const { state, get, set } = createState(workspaceId, {
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          skillMutationPendingKeys: {
+            preview: true,
+            "install:project": true,
+          },
+        },
+      },
+    });
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("cowork/skills/catalog/read");
+      return {
+        event: {
+          type: "skills_catalog",
+          sessionId: "jsonrpc-control",
+          catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+          mutationBlocked: false,
+          clearedMutationPendingKeys: ["install:project"],
+        },
+      };
+    });
+
+    const resolved = Promise.withResolvers<void>();
+    RUNTIME.skillInstallWaiters.set(workspaceId, {
+      pendingKey: "install:project",
+      resolve: resolved.resolve,
+      reject: resolved.reject,
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const ok = await helpers.requestJsonRpcControlEvent(get as any, set as any, workspaceId, "cowork/skills/catalog/read", {
+      cwd: "/tmp/workspace",
+    });
+
+    await resolved.promise;
+    expect(ok).toBe(true);
+    expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ preview: true });
+    expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
+  });
+
+  test("requestJsonRpcControlEvent applies error events and rejects pending install waiters", async () => {
+    const workspaceId = "ws-error";
+    const { state, get, set } = createState(workspaceId, {
       workspaceRuntimeById: {
         [workspaceId]: {
           ...defaultWorkspaceRuntime(),
           serverUrl: "ws://mock",
           skillCatalogLoading: true,
-          skillMutationPendingKeys: { preview: true },
-          skillsMutationBlocked: true,
-          skillsMutationBlockedReason: "catalog locked",
-        },
-      },
-      workspaces: [],
-      notifications: [],
-      providerStatusRefreshing: false,
-      providerLastAuthChallenge: null,
-    } as any;
-    const get = () => state;
-    const set = (updater: any) => {
-      const patch = typeof updater === "function" ? updater(state) : updater;
-      Object.assign(state, patch);
-    };
-
-    const helpers = createControlSocketHelpers(deps);
-    helpers.ensureControlSocket(get as any, set as any, workspaceId);
-
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "error",
-      sessionId: "control-session",
-      source: "session",
-      code: "internal_error",
-      message: "EACCES: permission denied",
-    });
-
-    expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].skillCatalogError).toBe("EACCES: permission denied");
-    expect(state.workspaceRuntimeById[workspaceId].skillsMutationBlocked).toBe(true);
-    expect(state.workspaceRuntimeById[workspaceId].skillsMutationBlockedReason).toBe("catalog locked");
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe("EACCES: permission denied");
-  });
-
-  test("error leaves skill state alone when no skill work is pending", () => {
-    const state = {
-      selectedWorkspaceId: workspaceId,
-      threads: [],
-      selectedThreadId: null,
-      threadRuntimeById: {},
-      workspaceRuntimeById: {
-        [workspaceId]: {
-          ...defaultWorkspaceRuntime(),
-          serverUrl: "ws://mock",
-          skillCatalogError: "keep catalog error",
-          skillMutationError: "keep mutation error",
-          skillsMutationBlocked: true,
-          skillsMutationBlockedReason: "still blocked",
-        },
-      },
-      workspaces: [],
-      notifications: [],
-      providerStatusRefreshing: false,
-      providerLastAuthChallenge: null,
-    } as any;
-    const get = () => state;
-    const set = (updater: any) => {
-      const patch = typeof updater === "function" ? updater(state) : updater;
-      Object.assign(state, patch);
-    };
-
-    const helpers = createControlSocketHelpers(deps);
-    helpers.ensureControlSocket(get as any, set as any, workspaceId);
-
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "error",
-      sessionId: "control-session",
-      source: "session",
-      code: "internal_error",
-      message: "provider skill handshake failed",
-    });
-
-    expect(state.workspaceRuntimeById[workspaceId].skillCatalogError).toBe("keep catalog error");
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe("keep mutation error");
-    expect(state.workspaceRuntimeById[workspaceId].skillsMutationBlocked).toBe(true);
-    expect(state.workspaceRuntimeById[workspaceId].skillsMutationBlockedReason).toBe("still blocked");
-  });
-
-  test("error rejects skill install waiter when pending key matches", async () => {
-    const state = {
-      selectedWorkspaceId: workspaceId,
-      threads: [],
-      selectedThreadId: null,
-      threadRuntimeById: {},
-      workspaceRuntimeById: {
-        [workspaceId]: {
-          ...defaultWorkspaceRuntime(),
-          serverUrl: "ws://mock",
           skillMutationPendingKeys: { "install:global": true },
         },
       },
-      workspaces: [],
-      notifications: [],
-      providerStatusRefreshing: false,
-      providerLastAuthChallenge: null,
-    } as any;
-    const get = () => state;
-    const set = (updater: any) => {
-      const patch = typeof updater === "function" ? updater(state) : updater;
-      Object.assign(state, patch);
-    };
-
-    const helpers = createControlSocketHelpers(deps);
-    helpers.ensureControlSocket(get as any, set as any, workspaceId);
-
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    const installPromise = new Promise<void>((resolve, reject) => {
-      RUNTIME.skillInstallWaiters.set(workspaceId, {
-        pendingKey: "install:global",
-        resolve,
-        reject,
-      });
     });
-
-    controlSocket.emit({
-      type: "error",
-      sessionId: "control-session",
-      source: "session",
-      code: "internal_error",
-      message: "install failed on disk",
-    });
-
-    await expect(installPromise).rejects.toThrow("install failed on disk");
-    expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
-  });
-});
-
-describe("control socket skill catalog loading", () => {
-  const workspaceId = "ws-skill-loading";
-
-  beforeEach(() => {
-    MOCK_SOCKETS.length = 0;
-    RUNTIME.controlSockets.clear();
-    RUNTIME.skillInstallWaiters.clear();
-    RUNTIME.sessionSnapshots.clear();
-    persistCalls = 0;
-  });
-
-  test("server_hello restores the loading state for an open skills view", () => {
-    const state = {
-      selectedWorkspaceId: workspaceId,
-      threads: [],
-      selectedThreadId: null,
-      threadRuntimeById: {},
-      workspaceRuntimeById: {
-        [workspaceId]: {
-          ...defaultWorkspaceRuntime(),
-          serverUrl: "ws://mock",
-          skillCatalogError: "stale error",
-        },
+    installFakeSocket(workspaceId, async () => ({
+      event: {
+        type: "error",
+        sessionId: "jsonrpc-control",
+        source: "session",
+        code: "internal_error",
+        message: "install failed on disk",
       },
-      workspaces: [],
-      notifications: [],
-      providerStatusRefreshing: false,
-      providerLastAuthChallenge: null,
-      view: "skills",
-    } as any;
-    const get = () => state;
-    const set = (updater: any) => {
-      const patch = typeof updater === "function" ? updater(state) : updater;
-      Object.assign(state, patch);
-    };
+    }));
 
-    const helpers = createControlSocketHelpers(deps);
-    helpers.ensureControlSocket(get as any, set as any, workspaceId);
-
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(true);
-    expect(state.workspaceRuntimeById[workspaceId].skillCatalogError).toBeNull();
-    expect(controlSocket.sent).toContainEqual({
-      type: "skills_catalog_get",
-      sessionId: "control-session",
-    });
-  });
-});
-
-describe("control socket skill detail events", () => {
-  const workspaceId = "ws-skill-events";
-
-  function createState(runtimePatch: Record<string, unknown> = {}) {
-    const state = {
-      selectedWorkspaceId: workspaceId,
-      threads: [],
-      selectedThreadId: null,
-      threadRuntimeById: {},
-      workspaceRuntimeById: {
-        [workspaceId]: {
-          ...defaultWorkspaceRuntime(),
-          serverUrl: "ws://mock",
-          ...runtimePatch,
-        },
-      },
-      workspaces: [],
-      notifications: [],
-      providerStatusRefreshing: false,
-      providerLastAuthChallenge: null,
-    } as any;
-    const get = () => state;
-    const set = (updater: any) => {
-      const patch = typeof updater === "function" ? updater(state) : updater;
-      Object.assign(state, patch);
-    };
-    return { state, get, set };
-  }
-
-  beforeEach(() => {
-    MOCK_SOCKETS.length = 0;
-    RUNTIME.controlSockets.clear();
-    RUNTIME.skillInstallWaiters.clear();
-    RUNTIME.sessionSnapshots.clear();
-    persistCalls = 0;
-  });
-
-  test("skills_catalog resolves skill install waiter when pending key matches", async () => {
-    const { state, get, set } = createState({
-      skillMutationPendingKeys: {
-        preview: true,
-        "install:project": true,
-      },
-    });
-
-    const helpers = createControlSocketHelpers(deps);
-    helpers.ensureControlSocket(get as any, set as any, workspaceId);
-
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    const installPromise = new Promise<void>((resolve, reject) => {
-      RUNTIME.skillInstallWaiters.set(workspaceId, {
-        pendingKey: "install:project",
-        resolve,
-        reject,
-      });
-    });
-
-    controlSocket.emit({
-      type: "skills_catalog",
-      sessionId: "control-session",
-      catalog: { scopes: [], effectiveSkills: [], installations: [] },
-      mutationBlocked: false,
-      clearedMutationPendingKeys: ["install:project"],
-    } as any);
-
-    await installPromise;
-    expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ preview: true });
-  });
-
-  test("skills_catalog from plain refresh keeps unrelated pending keys and install waiter", async () => {
-    const { state, get, set } = createState({
-      skillCatalogLoading: true,
-      skillMutationPendingKeys: {
-        preview: true,
-        "install:project": true,
-      },
-    });
-
-    const helpers = createControlSocketHelpers(deps);
-    helpers.ensureControlSocket(get as any, set as any, workspaceId);
-
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    let installResolved = false;
+    const rejected = Promise.withResolvers<void>();
     RUNTIME.skillInstallWaiters.set(workspaceId, {
-      pendingKey: "install:project",
-      resolve: () => {
-        installResolved = true;
-      },
-      reject: () => {
-        throw new Error("install waiter should not reject");
-      },
+      pendingKey: "install:global",
+      resolve: rejected.resolve,
+      reject: rejected.reject,
     });
 
-    controlSocket.emit({
-      type: "skills_catalog",
-      sessionId: "control-session",
-      catalog: { scopes: [], effectiveSkills: [], installations: [] },
-      mutationBlocked: false,
-    } as any);
+    const helpers = createControlSocketHelpers(deps);
+    await expect(
+      Promise.all([
+        helpers.requestJsonRpcControlEvent(get as any, set as any, workspaceId, "cowork/skills/install", {
+          cwd: "/tmp/workspace",
+          sourceInput: "foo",
+          targetScope: "global",
+        }),
+        rejected.promise,
+      ]),
+    ).rejects.toThrow("install failed on disk");
 
-    await Promise.resolve();
-    expect(installResolved).toBe(false);
-    expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(true);
+    expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
     expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
-      preview: true,
-      "install:project": true,
-    });
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe("install failed on disk");
+    expect(state.notifications).toHaveLength(1);
   });
 
-  test("skill_installation keeps in-flight mutation keys while loading details", () => {
-    const { state, get, set } = createState({
-      selectedSkillInstallationId: "install-1",
-      skillMutationPendingKeys: { "install:project": true },
-    });
-
-    const helpers = createControlSocketHelpers(deps);
-    helpers.ensureControlSocket(get as any, set as any, workspaceId);
-
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "skill_installation",
-      sessionId: "control-session",
-      installation: { installationId: "install-1" },
-      content: "Skill docs",
-    } as any);
-
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ "install:project": true });
-    expect(state.workspaceRuntimeById[workspaceId].selectedSkillInstallation?.installationId).toBe("install-1");
-    expect(state.workspaceRuntimeById[workspaceId].selectedSkillContent).toBe("Skill docs");
-  });
-
-  test("skill_install_preview only clears the preview pending key", () => {
-    const { state, get, set } = createState({
-      skillMutationPendingKeys: {
-        preview: true,
-        "install:project": true,
+  test("closing the shared workspace socket clears pending control runtime", async () => {
+    const workspaceId = "ws-close";
+    const { state, get, set } = createState(workspaceId, {
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          memoriesLoading: true,
+          skillCatalogLoading: true,
+          skillMutationPendingKeys: { preview: true },
+        },
       },
+      view: "skills",
+    });
+
+    const rejected = Promise.withResolvers<void>();
+    RUNTIME.skillInstallWaiters.set(workspaceId, {
+      pendingKey: "preview",
+      resolve: rejected.resolve,
+      reject: rejected.reject,
     });
 
     const helpers = createControlSocketHelpers(deps);
     helpers.ensureControlSocket(get as any, set as any, workspaceId);
 
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "skill_install_preview",
-      sessionId: "control-session",
-      preview: { summary: "preview" },
-    } as any);
+    const socket = MockJsonRpcSocket.instances[0];
+    expect(socket).toBeDefined();
+    socket.close();
 
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ "install:project": true });
-    expect(state.workspaceRuntimeById[workspaceId].selectedSkillPreview).toEqual({ summary: "preview" });
-  });
-
-  test("skill_install_preview from install/update does not clear preview pending or clobber in-flight preview", () => {
-    const { state, get, set } = createState({
-      skillMutationPendingKeys: {
-        preview: true,
-        "install:project": true,
-      },
-      selectedSkillPreview: { summary: "waiting-for-user-preview" },
-    });
-
-    const helpers = createControlSocketHelpers(deps);
-    helpers.ensureControlSocket(get as any, set as any, workspaceId);
-
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "skill_install_preview",
-      sessionId: "control-session",
-      fromUserPreviewRequest: false,
-      preview: { summary: "side-effect-from-install" },
-    } as any);
-
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
-      preview: true,
-      "install:project": true,
-    });
-    expect(state.workspaceRuntimeById[workspaceId].selectedSkillPreview).toEqual({
-      summary: "waiting-for-user-preview",
-    });
-  });
-
-  test("skill_installation_update_check keeps in-flight mutation keys", () => {
-    const { state, get, set } = createState({
-      skillMutationPendingKeys: { "install:project": true },
-    });
-
-    const helpers = createControlSocketHelpers(deps);
-    helpers.ensureControlSocket(get as any, set as any, workspaceId);
-
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "skill_installation_update_check",
-      sessionId: "control-session",
-      result: { installationId: "install-1", canUpdate: true },
-    } as any);
-
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ "install:project": true });
-    expect(state.workspaceRuntimeById[workspaceId].skillUpdateChecksByInstallationId["install-1"]).toEqual({
-      installationId: "install-1",
-      canUpdate: true,
-    });
+    await expect(rejected.promise).rejects.toThrow("Control connection closed");
+    expect(state.workspaceRuntimeById[workspaceId].controlSessionId).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].controlSessionConfig).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].memoriesLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
+    expect(state.notifications).toHaveLength(1);
   });
 });

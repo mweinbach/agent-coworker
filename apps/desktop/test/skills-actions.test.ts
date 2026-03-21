@@ -54,7 +54,7 @@ const failedSkillMutationActions = [
 
 describe("skill store actions", () => {
   beforeEach(() => {
-    RUNTIME.controlSockets.clear();
+    RUNTIME.jsonRpcSockets.clear();
     RUNTIME.skillInstallWaiters.clear();
   });
 
@@ -98,14 +98,19 @@ describe("skill store actions", () => {
   test("installSkills registers its waiter before sending the control message", async () => {
     const state = createState();
     state.workspaceRuntimeById[workspaceId].controlSessionId = "control-session";
+    state.workspaceRuntimeById[workspaceId].serverUrl = "ws://mock";
+    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
     const { get, set } = createStoreHarness(state);
 
     let waiterPendingKey: string | null = null;
-    RUNTIME.controlSockets.set(workspaceId, {
-      send: () => {
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => {
         waiterPendingKey = RUNTIME.skillInstallWaiters.get(workspaceId)?.pendingKey ?? null;
-        return false;
+        throw new Error("request failed");
       },
+      respond: () => true,
+      close: () => {},
     } as any);
 
     await expect(createSkillActions(set as any, get as any).installSkills("owner/repo", "global")).rejects.toThrow(

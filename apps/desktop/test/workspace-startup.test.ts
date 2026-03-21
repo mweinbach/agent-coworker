@@ -161,8 +161,6 @@ describe("workspace startup flow", () => {
     stopCalls.length = 0;
     savedStates.length = 0;
     pickedWorkspaceDirectory = null;
-    RUNTIME.controlSockets.clear();
-    RUNTIME.threadSockets.clear();
     RUNTIME.optimisticUserMessageIds.clear();
     RUNTIME.pendingThreadMessages.clear();
     RUNTIME.threadSelectionRequests.clear();

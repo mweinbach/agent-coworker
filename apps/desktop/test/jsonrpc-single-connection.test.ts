@@ -304,8 +304,6 @@ describe("desktop JSON-RPC single connection path", () => {
     savedStates.length = 0;
     jsonRpcRequests.length = 0;
     MockJsonRpcSocket.instances.length = 0;
-    RUNTIME.controlSockets.clear();
-    RUNTIME.threadSockets.clear();
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.pendingThreadMessages.clear();
     RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
@@ -363,12 +361,9 @@ describe("desktop JSON-RPC single connection path", () => {
     });
     await flushAsyncWork();
 
-    expect(RUNTIME.controlSockets.has("ws-jsonrpc")).toBe(false);
     expect(RUNTIME.jsonRpcSockets.has("ws-jsonrpc")).toBe(true);
     expect(MockJsonRpcSocket.instances).toHaveLength(1);
-    expect(RUNTIME.threadSockets.size).toBe(0);
     expect(jsonRpcRequests.map((entry) => entry.method)).toEqual([
-      "thread/list",
       "thread/list",
       "cowork/provider/catalog/read",
       "cowork/provider/authMethods/read",
@@ -377,6 +372,7 @@ describe("desktop JSON-RPC single connection path", () => {
       "cowork/memory/list",
       "cowork/skills/catalog/read",
       "cowork/skills/list",
+      "thread/list",
       "thread/start",
       "turn/start",
       "thread/read",
@@ -398,7 +394,6 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(MockJsonRpcSocket.instances).toHaveLength(1);
     expect(jsonRpcRequests.map((entry) => entry.method)).toEqual([
       "thread/list",
-      "thread/list",
       "cowork/provider/catalog/read",
       "cowork/provider/authMethods/read",
       "cowork/provider/status/refresh",
@@ -406,6 +401,7 @@ describe("desktop JSON-RPC single connection path", () => {
       "cowork/memory/list",
       "cowork/skills/catalog/read",
       "cowork/skills/list",
+      "thread/list",
       "cowork/provider/catalog/read",
       "cowork/memory/list",
       "cowork/backups/workspace/read",
@@ -425,7 +421,6 @@ describe("desktop JSON-RPC single connection path", () => {
 
     expect(jsonRpcRequests.map((entry) => entry.method)).toEqual([
       "thread/list",
-      "thread/list",
       "cowork/provider/catalog/read",
       "cowork/provider/authMethods/read",
       "cowork/provider/status/refresh",
@@ -433,6 +428,7 @@ describe("desktop JSON-RPC single connection path", () => {
       "cowork/memory/list",
       "cowork/skills/catalog/read",
       "cowork/skills/list",
+      "thread/list",
       "cowork/mcp/servers/read",
       "cowork/skills/catalog/read",
       "cowork/skills/list",
@@ -463,7 +459,6 @@ describe("desktop JSON-RPC single connection path", () => {
 
     expect(jsonRpcRequests.map((entry) => entry.method)).toEqual([
       "thread/list",
-      "thread/list",
       "cowork/provider/catalog/read",
       "cowork/provider/authMethods/read",
       "cowork/provider/status/refresh",
@@ -471,6 +466,7 @@ describe("desktop JSON-RPC single connection path", () => {
       "cowork/memory/list",
       "cowork/skills/catalog/read",
       "cowork/skills/list",
+      "thread/list",
       "thread/start",
       "turn/start",
       "thread/read",

@@ -1,38 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
-type MockSocketOpts = {
-  client: string;
-  autoReconnect?: boolean;
-  resumeSessionId?: string;
-  onEvent?: (evt: any) => void;
-  onClose?: (reason: string) => void;
-};
-
-class MockAgentSocket {
-  sent: any[] = [];
-
-  constructor(public readonly opts: MockSocketOpts) {
-    MOCK_SOCKETS.push(this);
-  }
-
-  connect() {}
-
-  send(message?: any) {
-    this.sent.push(message);
-    return true;
-  }
-
-  close() {
-    this.opts.onClose?.("closed");
-  }
-
-  emit(evt: any) {
-    this.opts.onEvent?.(evt);
-  }
-}
-
-const MOCK_SOCKETS: MockAgentSocket[] = [];
 const jsonRpcRequests: Array<{ method: string; params?: unknown }> = [];
+const jsonRpcResponseOverrides = new Map<string, (params?: unknown) => unknown | Promise<unknown>>();
 let mockedLoadedState: any = { version: 2, workspaces: [], threads: [] };
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -57,7 +26,7 @@ class MockJsonRpcSocket {
   static instances: MockJsonRpcSocket[] = [];
   readonly readyPromise = Promise.resolve();
 
-  constructor(public readonly opts: { onOpen?: () => void }) {
+  constructor(public readonly opts: { onOpen?: () => void; onClose?: () => void; onNotification?: (message: any) => void }) {
     MockJsonRpcSocket.instances.push(this);
   }
 
@@ -67,6 +36,10 @@ class MockJsonRpcSocket {
 
   async request(method: string, params?: unknown) {
     jsonRpcRequests.push({ method, params });
+    const override = jsonRpcResponseOverrides.get(method);
+    if (override) {
+      return await override(params);
+    }
 
     if (method === "thread/list") {
       const cwd =
@@ -242,7 +215,13 @@ class MockJsonRpcSocket {
     return true;
   }
 
-  close() {}
+  close() {
+    this.opts.onClose?.();
+  }
+
+  notify(method: string, params?: unknown) {
+    this.opts.onNotification?.({ method, params });
+  }
 }
 
 mock.module("../src/lib/desktopCommands", () => ({
@@ -282,72 +261,132 @@ mock.module("../src/lib/desktopCommands", () => ({
 }));
 
 mock.module("../src/lib/agentSocket", () => ({
-  AgentSocket: MockAgentSocket,
+  AgentSocket: class {},
   JsonRpcSocket: MockJsonRpcSocket,
 }));
 
 const { useAppStore } = await import("../src/app/store");
-const { RUNTIME } = await import("../src/app/store.helpers");
+const { RUNTIME, requestJsonRpcControlEvent } = await import("../src/app/store.helpers");
 
-function socketByClient(client: string): MockAgentSocket {
-  const socket = [...MOCK_SOCKETS].reverse().find((entry) => entry.opts.client === client);
-  if (!socket) throw new Error(`Missing mock socket for client=${client}`);
-  return socket;
+function requestsFor(method: string) {
+  return jsonRpcRequests.filter((entry) => entry.method === method);
 }
 
-function socketsByClient(client: string): MockAgentSocket[] {
-  return MOCK_SOCKETS.filter((entry) => entry.opts.client === client);
+function latestRequest(method: string) {
+  return requestsFor(method).at(-1) ?? null;
 }
 
-function emitServerHello(socket: MockAgentSocket, sessionId: string) {
-  socket.emit({
-    type: "server_hello",
-    sessionId,
-    protocolVersion: "6.0",
-    config: {
-      provider: "openai",
-      model: "gpt-5.2",
-      workingDirectory: "/tmp/workspace",
-      outputDirectory: "/tmp/workspace/output",
+function setControlSessionConfigResponse(config: Record<string, unknown>) {
+  jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async () => ({
+    event: {
+      type: "session_config",
+      sessionId: "jsonrpc-control",
+      config,
     },
-  });
+  }));
 }
 
-function emitThreadSessionDefaults(
-  socket: MockAgentSocket,
-  sessionId: string,
-  overrides: {
-    settings?: Partial<Record<string, unknown>>;
-    config?: Partial<Record<string, unknown>>;
-  } = {},
-) {
-  socket.emit({
-    type: "session_settings",
-    sessionId,
-    enableMcp: true,
-    enableMemory: true,
-    memoryRequireApproval: false,
-    ...(overrides.settings ?? {}),
-  });
-  socket.emit({
-    type: "session_config",
-    sessionId,
-    config: {
-      yolo: false,
-      observabilityEnabled: false,
-      backupsEnabled: true,
-      defaultBackupsEnabled: true,
-      enableMemory: true,
-      memoryRequireApproval: false,
-      preferredChildModel: "gpt-5.2",
-      childModelRoutingMode: "same-provider",
-      preferredChildModelRef: "openai:gpt-5.2",
-      allowedChildModelRefs: [],
-      maxSteps: 100,
-      toolOutputOverflowChars: 25000,
-      ...(overrides.config ?? {}),
+function primeWorkspaceConnection() {
+  const workspaceId = useAppStore.getState().selectedWorkspaceId ?? useAppStore.getState().workspaces[0]?.id;
+  if (!workspaceId) {
+    throw new Error("expected workspace");
+  }
+  useAppStore.setState((state) => ({
+    ...state,
+    workspaceRuntimeById: {
+      ...state.workspaceRuntimeById,
+      [workspaceId]: {
+        ...state.workspaceRuntimeById[workspaceId],
+        serverUrl: "ws://mock",
+        starting: false,
+        error: null,
+      },
     },
-  });
+  }));
+}
+
+function seedConnectedThread(overrides: Partial<Record<string, unknown>> = {}) {
+  const workspaceId = useAppStore.getState().selectedWorkspaceId ?? useAppStore.getState().workspaces[0]?.id;
+  if (!workspaceId) {
+    throw new Error("expected workspace");
+  }
+  const threadId = `thread-${crypto.randomUUID()}`;
+  const sessionId = String(overrides.sessionId ?? `session-${crypto.randomUUID()}`);
+  useAppStore.setState((state) => ({
+    ...state,
+    threads: [
+      ...state.threads,
+      {
+        id: threadId,
+        workspaceId,
+        title: "Live thread",
+        titleSource: "manual",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        lastMessageAt: "2024-01-01T00:00:02.000Z",
+        status: "active",
+        sessionId,
+        messageCount: 2,
+        lastEventSeq: 4,
+        draft: false,
+        legacyTranscriptId: null,
+      },
+    ],
+    threadRuntimeById: {
+      ...state.threadRuntimeById,
+      [threadId]: {
+        wsUrl: "ws://mock",
+        connected: true,
+        sessionId,
+        config: {
+          provider: "openai",
+          model: "gpt-5.2",
+          workingDirectory: "/tmp/workspace",
+          outputDirectory: "/tmp/workspace/output",
+        },
+        sessionConfig: {
+          yolo: false,
+          observabilityEnabled: false,
+          backupsEnabled: true,
+          defaultBackupsEnabled: true,
+          enableMemory: true,
+          memoryRequireApproval: false,
+          preferredChildModel: "gpt-5.2",
+          childModelRoutingMode: "same-provider",
+          preferredChildModelRef: "openai:gpt-5.2",
+          allowedChildModelRefs: [],
+          maxSteps: 100,
+          toolOutputOverflowChars: 25000,
+          ...(overrides.sessionConfig ?? {}),
+        },
+        enableMcp: overrides.enableMcp ?? true,
+        feed: [],
+        hydrating: false,
+        transcriptOnly: false,
+        busy: overrides.busy ?? false,
+        busySince: null,
+        activeTurnId: null,
+        pendingSteer: null,
+        sessionKind: "root",
+        parentSessionId: null,
+        role: null,
+        mode: null,
+        depth: 0,
+        nickname: null,
+        requestedModel: "gpt-5.2",
+        effectiveModel: "gpt-5.2",
+        requestedReasoningEffort: null,
+        effectiveReasoningEffort: null,
+        executionState: null,
+        lastMessagePreview: "Live thread",
+        agents: [],
+        sessionUsage: null,
+        lastTurnUsage: null,
+        draftComposerProvider: null,
+        draftComposerModel: null,
+      },
+    },
+  }));
+  return { threadId, sessionId };
 }
 
 function makeSessionSnapshot(
@@ -407,12 +446,10 @@ describe("workspace settings sync", () => {
 
   beforeEach(() => {
     workspaceId = `ws-${crypto.randomUUID()}`;
-    MOCK_SOCKETS.length = 0;
     MockJsonRpcSocket.instances.length = 0;
     jsonRpcRequests.length = 0;
+    jsonRpcResponseOverrides.clear();
     mockedLoadedState = { version: 2, workspaces: [], threads: [] };
-    RUNTIME.controlSockets.clear();
-    RUNTIME.threadSockets.clear();
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.optimisticUserMessageIds.clear();
     RUNTIME.pendingThreadMessages.clear();
@@ -781,30 +818,32 @@ describe("workspace settings sync", () => {
   });
 
   test("control session_config hydrates the workspace defaults from the harness", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    controlSocket.emit({
-      type: "session_config",
-      sessionId: "control-session",
-      config: {
-        yolo: false,
-        observabilityEnabled: true,
-        backupsEnabled: false,
-        defaultBackupsEnabled: false,
-        toolOutputOverflowChars: 12000,
-        defaultToolOutputOverflowChars: 12000,
-        preferredChildModel: "gpt-5-mini",
-        childModelRoutingMode: "cross-provider-allowlist",
-        preferredChildModelRef: "opencode-zen:glm-5",
-        allowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
-        maxSteps: 75,
-        userName: "Alex",
-        userProfile: { instructions: "", work: "", details: "" },
-      },
+    primeWorkspaceConnection();
+    setControlSessionConfigResponse({
+      yolo: false,
+      observabilityEnabled: true,
+      backupsEnabled: false,
+      defaultBackupsEnabled: false,
+      toolOutputOverflowChars: 12000,
+      defaultToolOutputOverflowChars: 12000,
+      preferredChildModel: "gpt-5-mini",
+      childModelRoutingMode: "cross-provider-allowlist",
+      preferredChildModelRef: "opencode-zen:glm-5",
+      allowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
+      maxSteps: 75,
+      userName: "Alex",
+      userProfile: { instructions: "", work: "", details: "" },
     });
 
+    const ok = await requestJsonRpcControlEvent(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      workspaceId,
+      "cowork/session/defaults/apply",
+      { cwd: "/tmp/workspace" },
+    );
+
+    expect(ok).toBe(true);
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(workspace?.defaultPreferredChildModel).toBe("gpt-5-mini");
@@ -821,31 +860,28 @@ describe("workspace settings sync", () => {
     expect(runtime?.controlSessionConfig?.allowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
     expect(runtime?.controlSessionConfig?.backupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.defaultBackupsEnabled).toBe(false);
-    expect(runtime?.controlSessionConfig?.toolOutputOverflowChars).toBe(12000);
-    expect((runtime?.controlSessionConfig as any)?.userName).toBe("Alex");
-    expect((runtime?.controlSessionConfig as any)?.userProfile).toEqual({ instructions: "", work: "", details: "" });
+    expect(runtime?.controlSessionConfig?.defaultToolOutputOverflowChars).toBe(12000);
   });
 
   test("control session_config keeps session backup overrides separate from the workspace default", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    controlSocket.emit({
-      type: "session_config",
-      sessionId: "control-session",
-      config: {
-        yolo: false,
-        observabilityEnabled: true,
-        backupsEnabled: false,
-        defaultBackupsEnabled: true,
-        toolOutputOverflowChars: 25000,
-        preferredChildModel: "gpt-5-mini",
-        maxSteps: 75,
-        userName: "Alex",
-        userProfile: { instructions: "", work: "", details: "" },
-      },
+    primeWorkspaceConnection();
+    setControlSessionConfigResponse({
+      yolo: false,
+      observabilityEnabled: true,
+      backupsEnabled: false,
+      defaultBackupsEnabled: true,
+      toolOutputOverflowChars: 25000,
+      preferredChildModel: "gpt-5-mini",
+      maxSteps: 75,
     });
+
+    await requestJsonRpcControlEvent(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      workspaceId,
+      "cowork/session/defaults/apply",
+      { cwd: "/tmp/workspace" },
+    );
 
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
@@ -857,31 +893,17 @@ describe("workspace settings sync", () => {
   });
 
   test("control session_config replaces editable providerOptions in workspace defaults", async () => {
+    primeWorkspaceConnection();
     useAppStore.setState((state) => ({
       ...state,
       workspaces: state.workspaces.map((workspace) =>
         workspace.id === workspaceId
           ? {
               ...workspace,
-              defaultChildModelRoutingMode: "cross-provider-allowlist",
-              defaultPreferredChildModelRef: "opencode-zen:glm-5",
-              defaultAllowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
-              userName: "Alex",
-              userProfile: {
-                instructions: "Keep answers terse.",
-                work: "Platform engineer",
-                details: "Prefers Bun",
-              },
               providerOptions: {
                 openai: {
                   reasoningEffort: "high",
                   reasoningSummary: "detailed",
-                },
-                "codex-cli": {
-                  reasoningEffort: "low",
-                  reasoningSummary: "auto",
-                  webSearchBackend: "exa",
-                  webSearchMode: "disabled",
                 },
               },
             }
@@ -889,42 +911,34 @@ describe("workspace settings sync", () => {
       ),
     }));
 
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    controlSocket.emit({
-      type: "session_config",
-      sessionId: "control-session",
-      config: {
-        yolo: false,
-        observabilityEnabled: true,
-        backupsEnabled: true,
-        defaultBackupsEnabled: true,
-        toolOutputOverflowChars: 25000,
-        preferredChildModel: "gpt-5-mini",
-        providerOptions: {
-          openai: {
-            reasoningSummary: "concise",
-            textVerbosity: "high",
-          },
-          "codex-cli": {
-            reasoningEffort: "xhigh",
-            reasoningSummary: "auto",
-            webSearchBackend: "native",
-            webSearchMode: "live",
-            webSearch: {
-              contextSize: "medium",
-              allowedDomains: ["openai.com"],
-              location: {
-                country: "US",
-                timezone: "America/New_York",
-              },
-            },
-          },
+    setControlSessionConfigResponse({
+      yolo: false,
+      observabilityEnabled: true,
+      backupsEnabled: true,
+      defaultBackupsEnabled: true,
+      toolOutputOverflowChars: 25000,
+      preferredChildModel: "gpt-5-mini",
+      providerOptions: {
+        openai: {
+          reasoningSummary: "concise",
+          textVerbosity: "high",
+        },
+        "codex-cli": {
+          reasoningEffort: "xhigh",
+          reasoningSummary: "auto",
+          webSearchBackend: "native",
+          webSearchMode: "live",
         },
       },
     });
+
+    await requestJsonRpcControlEvent(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      workspaceId,
+      "cowork/session/defaults/apply",
+      { cwd: "/tmp/workspace" },
+    );
 
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
@@ -938,14 +952,6 @@ describe("workspace settings sync", () => {
         reasoningSummary: "auto",
         webSearchBackend: "native",
         webSearchMode: "live",
-        webSearch: {
-          contextSize: "medium",
-          allowedDomains: ["openai.com"],
-          location: {
-            country: "US",
-            timezone: "America/New_York",
-          },
-        },
       },
     });
     expect((runtime?.controlSessionConfig as any)?.providerOptions).toEqual({
@@ -958,31 +964,18 @@ describe("workspace settings sync", () => {
         reasoningSummary: "auto",
         webSearchBackend: "native",
         webSearchMode: "live",
-        webSearch: {
-          contextSize: "medium",
-          allowedDomains: ["openai.com"],
-          location: {
-            country: "US",
-            timezone: "America/New_York",
-          },
-        },
       },
     });
   });
 
   test("control session_config clears stale editable providerOptions when snapshot omits them", async () => {
+    primeWorkspaceConnection();
     useAppStore.setState((state) => ({
       ...state,
       workspaces: state.workspaces.map((workspace) =>
         workspace.id === workspaceId
           ? {
               ...workspace,
-              userName: "Alex",
-              userProfile: {
-                instructions: "Keep answers terse.",
-                work: "Platform engineer",
-                details: "Prefers Bun",
-              },
               providerOptions: {
                 openai: {
                   reasoningEffort: "high",
@@ -995,25 +988,23 @@ describe("workspace settings sync", () => {
       ),
     }));
 
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    controlSocket.emit({
-      type: "session_config",
-      sessionId: "control-session",
-      config: {
-        yolo: false,
-        observabilityEnabled: true,
-        backupsEnabled: true,
-        defaultBackupsEnabled: true,
-        toolOutputOverflowChars: 25000,
-        preferredChildModel: "gpt-5-mini",
-        maxSteps: 75,
-        userName: "Alex",
-        userProfile: { instructions: "", work: "", details: "" },
-      },
+    setControlSessionConfigResponse({
+      yolo: false,
+      observabilityEnabled: true,
+      backupsEnabled: true,
+      defaultBackupsEnabled: true,
+      toolOutputOverflowChars: 25000,
+      preferredChildModel: "gpt-5-mini",
+      maxSteps: 75,
     });
+
+    await requestJsonRpcControlEvent(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      workspaceId,
+      "cowork/session/defaults/apply",
+      { cwd: "/tmp/workspace" },
+    );
 
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
@@ -1021,8 +1012,27 @@ describe("workspace settings sync", () => {
     expect((runtime?.controlSessionConfig as any)?.providerOptions).toBeUndefined();
   });
 
-  test("updateWorkspaceDefaults waits for the initial control hello before warning about partial apply", async () => {
-    const updatePromise = useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+  test("updateWorkspaceDefaults syncs control defaults over the shared JsonRpcSocket", async () => {
+    jsonRpcRequests.length = 0;
+    setControlSessionConfigResponse({
+      yolo: false,
+      observabilityEnabled: false,
+      backupsEnabled: true,
+      defaultBackupsEnabled: true,
+      enableMemory: true,
+      memoryRequireApproval: false,
+      preferredChildModel: "gpt-5.2",
+      childModelRoutingMode: "same-provider",
+      preferredChildModelRef: "openai:gpt-5.2",
+      allowedChildModelRefs: [],
+      maxSteps: 100,
+      toolOutputOverflowChars: 25000,
+      userName: "Taylor",
+      userProfile: {
+        instructions: "Keep answers terse.",
+        work: "Platform engineer",
+        details: "Prefers Bun and TypeScript",
+      },
       providerOptions: {
         "codex-cli": {
           reasoningEffort: "xhigh",
@@ -1031,23 +1041,42 @@ describe("workspace settings sync", () => {
       },
     });
 
-    await flushAsyncWork();
-    const controlSocket = socketByClient("desktop-control");
+    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      userName: "Taylor",
+      userProfile: {
+        instructions: "Keep answers terse.",
+        work: "Platform engineer",
+        details: "Prefers Bun and TypeScript",
+      },
+      providerOptions: {
+        "codex-cli": {
+          reasoningEffort: "xhigh",
+          reasoningSummary: "detailed",
+        },
+      },
+    });
 
-    expect(controlSocket.sent.filter((msg) => msg?.type === "apply_session_defaults")).toHaveLength(0);
-    expect(useAppStore.getState().notifications).toHaveLength(0);
+    const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
+    expect(workspace?.userName).toBe("Taylor");
+    expect(workspace?.userProfile).toEqual({
+      instructions: "Keep answers terse.",
+      work: "Platform engineer",
+      details: "Prefers Bun and TypeScript",
+    });
 
-    emitServerHello(controlSocket, "control-session");
-    await updatePromise;
-
-    const applyDefaultsMessages = controlSocket.sent.filter((msg) => msg?.type === "apply_session_defaults");
-    expect(applyDefaultsMessages).toHaveLength(1);
-    expect(applyDefaultsMessages[0]).toMatchObject({
-      type: "apply_session_defaults",
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      cwd: "/tmp/workspace",
       enableMcp: true,
       config: {
         backupsEnabled: true,
+        toolOutputOverflowChars: 25000,
         preferredChildModel: "gpt-5.2",
+        userName: "Taylor",
+        userProfile: {
+          instructions: "Keep answers terse.",
+          work: "Platform engineer",
+          details: "Prefers Bun and TypeScript",
+        },
         providerOptions: {
           "codex-cli": {
             reasoningEffort: "xhigh",
@@ -1059,8 +1088,12 @@ describe("workspace settings sync", () => {
     expect(useAppStore.getState().notifications).toHaveLength(0);
   });
 
-  test("updateWorkspaceDefaults reports partial apply when the initial control connection closes before hello", async () => {
-    const updatePromise = useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+  test("updateWorkspaceDefaults reports partial apply when the control request fails", async () => {
+    jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async () => {
+      throw new Error("boom");
+    });
+
+    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
       providerOptions: {
         "codex-cli": {
           reasoningEffort: "xhigh",
@@ -1068,17 +1101,13 @@ describe("workspace settings sync", () => {
       },
     });
 
-    await flushAsyncWork();
-    const controlSocket = socketByClient("desktop-control");
-    controlSocket.close();
-    await updatePromise;
-
     const notification = useAppStore.getState().notifications.at(-1);
     expect(notification?.title).toBe("Workspace settings partially applied");
     expect(notification?.detail).toBe("Control session is not fully connected yet. Reopen the workspace settings to retry.");
   });
 
-  test("applyWorkspaceDefaultsToThread sends model, session config, and mcp toggle", async () => {
+  test("applyWorkspaceDefaultsToThread routes thread defaults over the shared JsonRpcSocket", async () => {
+    primeWorkspaceConnection();
     useAppStore.setState((state) => ({
       ...state,
       workspaces: state.workspaces.map((workspace) =>
@@ -1100,32 +1129,18 @@ describe("workspace settings sync", () => {
                   reasoningSummary: "detailed",
                   textVerbosity: "medium",
                 },
-                "codex-cli": {
-                  reasoningEffort: "medium",
-                  reasoningSummary: "auto",
-                },
               },
             }
           : workspace,
       ),
     }));
+    const { threadId } = seedConnectedThread();
+    jsonRpcRequests.length = 0;
 
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(threadSocket, "thread-session");
-    emitThreadSessionDefaults(threadSocket, "thread-session");
-    threadSocket.sent = [];
-
-    const threadId = useAppStore.getState().threads[0]?.id;
-    if (!threadId) throw new Error("expected thread");
     await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
 
-    expect(threadSocket.sent).toHaveLength(1);
-    expect(threadSocket.sent[0]).toMatchObject({
-      type: "apply_session_defaults",
-      sessionId: "thread-session",
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      cwd: "/tmp/workspace",
       config: {
         toolOutputOverflowChars: 25000,
         childModelRoutingMode: "cross-provider-allowlist",
@@ -1143,17 +1158,13 @@ describe("workspace settings sync", () => {
             reasoningSummary: "detailed",
             textVerbosity: "medium",
           },
-          "codex-cli": {
-            reasoningEffort: "medium",
-            reasoningSummary: "auto",
-          },
         },
       },
     });
-    expect((threadSocket.sent[0] as any).config?.preferredChildModel).toBeUndefined();
   });
 
-  test("applyWorkspaceDefaultsToThread preserves an existing baseten workspace provider", async () => {
+  test("applyWorkspaceDefaultsToThread preserves a baseten workspace provider", async () => {
+    primeWorkspaceConnection();
     useAppStore.setState((state) => ({
       ...state,
       workspaces: state.workspaces.map((workspace) =>
@@ -1167,239 +1178,20 @@ describe("workspace settings sync", () => {
           : workspace,
       ),
     }));
+    const { threadId } = seedConnectedThread();
+    jsonRpcRequests.length = 0;
 
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(threadSocket, "thread-session");
-    emitThreadSessionDefaults(threadSocket, "thread-session");
-    threadSocket.sent = [];
-
-    const threadId = useAppStore.getState().threads[0]?.id;
-    if (!threadId) throw new Error("expected thread");
     await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
 
-    expect(threadSocket.sent[0]).toMatchObject({
-      type: "apply_session_defaults",
-      sessionId: "thread-session",
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      cwd: "/tmp/workspace",
       provider: "baseten",
       model: "moonshotai/Kimi-K2.5",
     });
   });
 
-  test("updateWorkspaceDefaults syncs baseten control-session defaults without rewriting the provider", async () => {
-    useAppStore.setState((state) => ({
-      ...state,
-      workspaces: state.workspaces.map((workspace) =>
-        workspace.id === workspaceId
-          ? {
-              ...workspace,
-              defaultProvider: "baseten",
-              defaultModel: "moonshotai/Kimi-K2.5",
-              defaultPreferredChildModel: "moonshotai/Kimi-K2.5",
-            }
-          : workspace,
-      ),
-    }));
-
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(threadSocket, "thread-session");
-
-    controlSocket.sent = [];
-    threadSocket.sent = [];
-
-    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
-      defaultModel: "moonshotai/Kimi-K2.5",
-    });
-
-    expect(controlSocket.sent[0]).toMatchObject({
-      type: "apply_session_defaults",
-      sessionId: "control-session",
-      provider: "baseten",
-      model: "moonshotai/Kimi-K2.5",
-    });
-  });
-
-  test("thread connect does not replay a stale local backup default before the harness sync arrives", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    const threadSocket = socketByClient("desktop");
-
-    threadSocket.sent = [];
-    emitServerHello(threadSocket, "thread-session");
-
-    expect(
-      threadSocket.sent.some((message) => message?.type === "set_config" && "backupsEnabled" in (message?.config ?? {})),
-    ).toBe(false);
-  });
-
-  test("thread connect only replays explicit harness overflow defaults after control-session hydration", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "session_config",
-      sessionId: "control-session",
-      config: {
-        yolo: false,
-        observabilityEnabled: true,
-        backupsEnabled: false,
-        defaultBackupsEnabled: false,
-        toolOutputOverflowChars: 25000,
-        preferredChildModel: "gpt-5.2",
-        maxSteps: 75,
-        userName: "Alex",
-        userProfile: { instructions: "", work: "", details: "" },
-      },
-    });
-
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(threadSocket, "thread-session");
-    threadSocket.sent = [];
-    emitThreadSessionDefaults(threadSocket, "thread-session", {
-      config: {
-        backupsEnabled: false,
-        defaultBackupsEnabled: true,
-      },
-    });
-
-    expect(threadSocket.sent[0]).toMatchObject({
-      type: "apply_session_defaults",
-      sessionId: "thread-session",
-      config: {
-        backupsEnabled: false,
-      },
-    });
-    expect(threadSocket.sent[0]?.config?.toolOutputOverflowChars).toBeUndefined();
-  });
-
-  test("thread connect replays the explicit harness overflow default when one is configured", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "session_config",
-      sessionId: "control-session",
-      config: {
-        yolo: false,
-        observabilityEnabled: true,
-        backupsEnabled: false,
-        defaultBackupsEnabled: false,
-        toolOutputOverflowChars: 12000,
-        defaultToolOutputOverflowChars: 12000,
-        preferredChildModel: "gpt-5.2",
-        maxSteps: 75,
-        userName: "Alex",
-        userProfile: { instructions: "", work: "", details: "" },
-      },
-    });
-
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(threadSocket, "thread-session");
-    threadSocket.sent = [];
-    emitThreadSessionDefaults(threadSocket, "thread-session", {
-      config: {
-        backupsEnabled: false,
-        defaultBackupsEnabled: true,
-      },
-    });
-
-    expect(threadSocket.sent[0]).toMatchObject({
-      type: "apply_session_defaults",
-      sessionId: "thread-session",
-      config: {
-        backupsEnabled: false,
-        toolOutputOverflowChars: 12000,
-      },
-    });
-  });
-
-  test("updateWorkspaceDefaults merges user profile fields and syncs control plus live threads", async () => {
-    useAppStore.setState((state) => ({
-      ...state,
-      workspaces: state.workspaces.map((workspace) =>
-        workspace.id === workspaceId
-          ? {
-              ...workspace,
-              userName: "Alex",
-              userProfile: {
-                instructions: "Keep answers terse.",
-                work: "Platform engineer",
-                details: "Prefers Bun",
-              },
-            }
-          : workspace,
-      ),
-    }));
-
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(threadSocket, "thread-session");
-
-    controlSocket.sent = [];
-    threadSocket.sent = [];
-
-    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
-      userName: "Taylor",
-      userProfile: {
-        details: "Prefers Bun and TypeScript",
-      },
-    });
-
-    const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
-    expect(workspace?.userName).toBe("Taylor");
-    expect(workspace?.userProfile).toEqual({
-      instructions: "Keep answers terse.",
-      work: "Platform engineer",
-      details: "Prefers Bun and TypeScript",
-    });
-
-    expect(controlSocket.sent[0]).toMatchObject({
-      type: "apply_session_defaults",
-      sessionId: "control-session",
-      enableMcp: true,
-      config: {
-        backupsEnabled: true,
-        toolOutputOverflowChars: 25000,
-        preferredChildModel: "gpt-5.2",
-        userName: "Taylor",
-        userProfile: {
-          instructions: "Keep answers terse.",
-          work: "Platform engineer",
-          details: "Prefers Bun and TypeScript",
-        },
-      },
-    });
-
-    expect(threadSocket.sent).toHaveLength(1);
-    expect(threadSocket.sent[0]).toMatchObject({
-      type: "apply_session_defaults",
-      sessionId: "thread-session",
-      enableMcp: true,
-      config: {
-        backupsEnabled: true,
-        toolOutputOverflowChars: 25000,
-        preferredChildModel: "gpt-5.2",
-        childModelRoutingMode: "same-provider",
-        preferredChildModelRef: "openai:gpt-5.2",
-        userName: "Taylor",
-        userProfile: {
-          instructions: "Keep answers terse.",
-          work: "Platform engineer",
-          details: "Prefers Bun and TypeScript",
-        },
-      },
-    });
-  });
-
-  test("updateWorkspaceDefaults clears the persisted overflow override and tells live threads to inherit again", async () => {
+  test("updateWorkspaceDefaults clears the persisted overflow override on the control session", async () => {
+    primeWorkspaceConnection();
     useAppStore.setState((state) => ({
       ...state,
       workspaces: state.workspaces.map((workspace) =>
@@ -1410,209 +1202,51 @@ describe("workspace settings sync", () => {
             }
           : workspace,
       ),
+      workspaceRuntimeById: {
+        ...state.workspaceRuntimeById,
+        [workspaceId]: {
+          ...state.workspaceRuntimeById[workspaceId],
+          controlSessionId: `jsonrpc:${workspaceId}`,
+          controlSessionConfig: {
+            defaultToolOutputOverflowChars: 12000,
+          },
+          controlEnableMcp: true,
+        },
+      },
     }));
-
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "session_config",
-      sessionId: "control-session",
-      config: {
-        yolo: false,
-        observabilityEnabled: true,
-        backupsEnabled: true,
-        defaultBackupsEnabled: true,
-        toolOutputOverflowChars: 12000,
+    seedConnectedThread({
+      sessionConfig: {
         defaultToolOutputOverflowChars: 12000,
-        preferredChildModel: "gpt-5.2",
-        maxSteps: 75,
-        userName: "Alex",
-        userProfile: { instructions: "", work: "", details: "" },
       },
     });
-
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(threadSocket, "thread-session");
-    threadSocket.emit({
-      type: "session_config",
-      sessionId: "thread-session",
-      config: {
-        yolo: false,
-        observabilityEnabled: true,
-        backupsEnabled: true,
-        defaultBackupsEnabled: true,
-        toolOutputOverflowChars: 12000,
-        defaultToolOutputOverflowChars: 12000,
-        preferredChildModel: "gpt-5.2",
-        maxSteps: 75,
-        userName: "Alex",
-        userProfile: { instructions: "", work: "", details: "" },
-      },
+    setControlSessionConfigResponse({
+      yolo: false,
+      observabilityEnabled: false,
+      backupsEnabled: true,
+      defaultBackupsEnabled: true,
+      enableMemory: true,
+      memoryRequireApproval: false,
+      preferredChildModel: "gpt-5.2",
+      childModelRoutingMode: "same-provider",
+      preferredChildModelRef: "openai:gpt-5.2",
+      allowedChildModelRefs: [],
+      maxSteps: 100,
+      clearToolOutputOverflowChars: true,
     });
-
-    controlSocket.sent = [];
-    threadSocket.sent = [];
+    jsonRpcRequests.length = 0;
 
     await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
       clearDefaultToolOutputOverflowChars: true,
     });
+    await flushAsyncWork();
 
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     expect(workspace?.defaultToolOutputOverflowChars).toBeUndefined();
-
-    expect(controlSocket.sent[0]).toMatchObject({
-      type: "apply_session_defaults",
-      sessionId: "control-session",
-      enableMcp: true,
+    expect(requestsFor("cowork/session/defaults/apply")).toHaveLength(1);
+    expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
+      cwd: "/tmp/workspace",
       config: {
         clearToolOutputOverflowChars: true,
-      },
-    });
-    expect(controlSocket.sent[0]?.config?.toolOutputOverflowChars).toBeUndefined();
-
-    expect(threadSocket.sent).toHaveLength(1);
-    expect(threadSocket.sent[0]).toMatchObject({
-      type: "apply_session_defaults",
-      sessionId: "thread-session",
-      enableMcp: true,
-      config: {
-        clearToolOutputOverflowChars: true,
-      },
-    });
-    expect(threadSocket.sent[0]?.config?.toolOutputOverflowChars).toBeUndefined();
-  });
-
-  test("updateWorkspaceDefaults applies to all live threads and retries queued busy thread", async () => {
-    useAppStore.setState((state) => ({
-      ...state,
-      workspaces: state.workspaces.map((workspace) =>
-        workspace.id === workspaceId
-          ? {
-              ...workspace,
-              providerOptions: {
-                openai: {
-                  reasoningEffort: "high",
-                  reasoningSummary: "detailed",
-                },
-              },
-            }
-          : workspace,
-      ),
-    }));
-
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    const [busyThreadSocket, idleThreadSocket] = socketsByClient("desktop");
-    emitServerHello(busyThreadSocket, "thread-busy");
-    emitServerHello(idleThreadSocket, "thread-idle");
-
-    busyThreadSocket.emit({
-      type: "session_busy",
-      sessionId: "thread-busy",
-      busy: true,
-    });
-
-    controlSocket.sent = [];
-    busyThreadSocket.sent = [];
-    idleThreadSocket.sent = [];
-
-    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.2",
-      defaultPreferredChildModel: "gpt-5.2-mini",
-      defaultToolOutputOverflowChars: 12000,
-      defaultEnableMcp: false,
-      defaultBackupsEnabled: false,
-      providerOptions: {
-        openai: {
-          reasoningSummary: "concise",
-          textVerbosity: "high",
-        },
-        "codex-cli": {
-          reasoningEffort: "low",
-          reasoningSummary: "auto",
-        },
-      },
-    });
-
-    expect(controlSocket.sent).toHaveLength(1);
-    expect(controlSocket.sent[0]).toMatchObject({
-      type: "apply_session_defaults",
-      sessionId: "control-session",
-      enableMcp: false,
-      config: {
-        backupsEnabled: false,
-        preferredChildModel: "gpt-5.2-mini",
-        toolOutputOverflowChars: 12000,
-        providerOptions: {
-          openai: {
-            reasoningEffort: "high",
-            reasoningSummary: "concise",
-            textVerbosity: "high",
-          },
-          "codex-cli": {
-            reasoningEffort: "low",
-            reasoningSummary: "auto",
-          },
-        },
-      },
-    });
-
-    expect(idleThreadSocket.sent).toHaveLength(1);
-    expect(idleThreadSocket.sent[0]).toMatchObject({
-      type: "apply_session_defaults",
-      sessionId: "thread-idle",
-      enableMcp: false,
-      config: {
-        backupsEnabled: false,
-        preferredChildModel: "gpt-5.2-mini",
-        toolOutputOverflowChars: 12000,
-        providerOptions: {
-          openai: {
-            reasoningEffort: "high",
-            reasoningSummary: "concise",
-            textVerbosity: "high",
-          },
-          "codex-cli": {
-            reasoningEffort: "low",
-            reasoningSummary: "auto",
-          },
-        },
-      },
-    });
-    expect(busyThreadSocket.sent).toHaveLength(0);
-
-    busyThreadSocket.sent = [];
-    busyThreadSocket.emit({
-      type: "session_busy",
-      sessionId: "thread-busy",
-      busy: false,
-    });
-
-    expect(busyThreadSocket.sent).toHaveLength(1);
-    expect(busyThreadSocket.sent[0]).toMatchObject({
-      type: "apply_session_defaults",
-      sessionId: "thread-busy",
-      enableMcp: false,
-      config: {
-        backupsEnabled: false,
-        preferredChildModel: "gpt-5.2-mini",
-        toolOutputOverflowChars: 12000,
-        providerOptions: {
-          openai: {
-            reasoningEffort: "high",
-            reasoningSummary: "concise",
-            textVerbosity: "high",
-          },
-          "codex-cli": {
-            reasoningEffort: "low",
-            reasoningSummary: "auto",
-          },
-        },
       },
     });
   });

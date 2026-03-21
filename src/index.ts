@@ -20,7 +20,9 @@ globalSettings.AI_SDK_LOG_WARNINGS = false;
 function printUsage() {
   console.log("Usage: cowork [--dir <directory_path>] [--cli] [--yolo] [--no-mouse]");
   console.log("");
-  console.log("By default, cowork launches the TUI (and starts the agent server in the background).");
+  console.log("This runs the archived TUI (run with 'bun run tui'). For the desktop app,");
+  console.log("use 'bun run start' or 'bun run desktop:dev'. For CLI REPL, use 'bun run cli'");
+  console.log("or 'bun src/index.ts --cli'.");
   console.log("");
   console.log("Options:");
   console.log("  --dir, -d   Run the agent in the specified directory");

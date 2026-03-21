@@ -20,19 +20,20 @@ git clone <repo-url> && cd agent-coworker
 bun install                     # installs root + apps/desktop deps
 
 # Run in different modes:
-bun run start                   # TUI (default) -- starts server automatically
+bun run start                   # Desktop app (default) -- starts server automatically
 bun run cli                     # CLI REPL -- connects to server via WebSocket
 bun run serve                   # Standalone WebSocket server
-bun run tui                     # TUI standalone -- connect to existing server
+bun run desktop:dev             # Desktop development mode
 bun run dev                     # Watch mode (rebuilds on src/ changes)
+bun run tui                     # Archived TUI -- no longer maintained
 ```
 
 ## Architecture Overview
 
-The project follows a **WebSocket-first** pattern. The server manages sessions and agent turns; clients (TUI, CLI REPL, desktop app, or custom clients) are thin consumers of WebSocket events.
+The project follows a **WebSocket-first** pattern. The server manages sessions and agent turns; clients (desktop app, CLI REPL, or custom clients) are thin consumers of WebSocket events.
 
 ```
-Client (TUI / CLI / Desktop / Portal)
+Client (Desktop / CLI / Custom)
   |  WebSocket
   v
 Server (src/server/)  -->  AgentSession  -->  runTurn()  -->  AI SDK + Tools
@@ -49,8 +50,8 @@ Key modules:
 | `src/config.ts` | Config loading with three-tier merge and env var overrides. |
 | `src/mcp/` | MCP server config registry, OAuth provider, auth store. |
 | `src/skills/` | Skill discovery and trigger extraction. |
-| `apps/TUI/` | Default TUI built with OpenTUI + Solid.js (not React). |
-| `apps/desktop/` | Electron desktop app wrapper. |
+| `apps/TUI/` | Archived TUI built with OpenTUI + Solid.js. No longer maintained. |
+| `apps/desktop/` | Electron desktop app. |
 | `src/cli/` | CLI REPL client. |
 
 ## Directory Structure
@@ -60,7 +61,7 @@ src/
   agent.ts              # Agent turn logic (createRunTurn factory)
   config.ts             # Config loading + deep merge
   connect.ts            # Path resolution for .agent / .cowork directories
-  index.ts              # Main entry point (routes to TUI or CLI)
+  index.ts              # Main entry point (routes to CLI or archived TUI)
   prompt.ts             # System prompt construction
   types.ts              # Shared TypeScript types
   server/               # WebSocket server, sessions, protocol
@@ -74,7 +75,7 @@ src/
   observability/        # OpenTelemetry + Langfuse integration
   utils/                # Shared utilities
 apps/
-  TUI/                  # OpenTUI + Solid.js terminal UI
+  TUI/                  # Archived: OpenTUI + Solid.js terminal UI
   desktop/              # Electron desktop app
 config/
   defaults.json         # Built-in default configuration
@@ -237,4 +238,3 @@ Key testing patterns:
 - [`docs/harness/index.md`](docs/harness/index.md) -- Harness docs map
 - [`docs/session-storage-architecture.md`](docs/session-storage-architecture.md) -- Session persistence design
 - [`CLAUDE.md`](CLAUDE.md) -- Repository assistant notes and architecture context
-- [`apps/TUI/docs/opentui.md`](apps/TUI/docs/opentui.md) -- OpenTUI framework documentation

@@ -406,6 +406,67 @@ export async function startAgentServer(
     });
   };
 
+  const captureSessionMutationOutcome = async <T extends ServerEvent>(
+    binding: SessionBinding,
+    action: () => Promise<void> | void,
+    predicate: (event: ServerEvent) => event is T,
+    timeoutMs = 5_000,
+    idleMs = 25,
+  ): Promise<T | null> => {
+    const sinkId = `capture:${crypto.randomUUID()}`;
+    return await new Promise<T | null>((resolve, reject) => {
+      let actionResolved = false;
+      let settled = false;
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const settle = (value: T | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+        }
+        removeBindingSink(binding, sinkId);
+        resolve(value);
+      };
+
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+        }
+        removeBindingSink(binding, sinkId);
+        reject(new Error("Timed out waiting for control event"));
+      }, timeoutMs);
+
+      addBindingSink(binding, sinkId, (event) => {
+        if (!predicate(event)) return;
+        settle(event);
+      });
+
+      void Promise.resolve(action())
+        .then(() => {
+          actionResolved = true;
+          idleTimer = setTimeout(() => {
+            if (actionResolved) {
+              settle(null);
+            }
+          }, idleMs);
+        })
+        .catch((error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          if (idleTimer) {
+            clearTimeout(idleTimer);
+          }
+          removeBindingSink(binding, sinkId);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        });
+    });
+  };
+
   const shouldIncludeJsonRpcThreadSummary = (summary: {
     titleSource?: string | null;
     messageCount?: number | null;
@@ -1515,22 +1576,36 @@ export async function startAgentServer(
       }
       case "cowork/session/defaults/apply": {
         const cwd = requireWorkspacePath(params, message.method);
-        const binding = getOrCreateWorkspaceControlBinding(cwd);
-        const session = binding.session!;
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const binding = threadId ? loadThreadBinding(threadId) : getOrCreateWorkspaceControlBinding(cwd);
+        const session = binding?.session;
+        if (!binding || !session) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires a live workspace control session or threadId`,
+          }));
+          return;
+        }
         const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
         const model = typeof params.model === "string" ? params.model : undefined;
         const enableMcp = typeof params.enableMcp === "boolean" ? params.enableMcp : undefined;
         const configPatch = params.config as any;
-        const event = await captureSessionEvent(
+        const outcome = await captureSessionMutationOutcome(
           binding,
           async () => await session.applySessionDefaults({
             ...(provider !== undefined && model !== undefined ? { provider, model } : {}),
             ...(enableMcp !== undefined ? { enableMcp } : {}),
             ...(configPatch && typeof configPatch === "object" ? { config: configPatch } : {}),
           }),
-          (event): event is Extract<ServerEvent, { type: "session_config" }> => event.type === "session_config",
+          (event): event is Extract<ServerEvent, { type: "session_config" | "config_updated" | "session_settings" | "session_info" | "error" }> => (
+            event.type === "session_config"
+            || event.type === "config_updated"
+            || event.type === "session_settings"
+            || event.type === "session_info"
+            || event.type === "error"
+          ),
         );
-        emitControlResult(ws, message.id, event);
+        emitControlResult(ws, message.id, outcome?.type === "error" ? outcome : session.getSessionConfigEvent());
         return;
       }
       case "cowork/session/delete": {

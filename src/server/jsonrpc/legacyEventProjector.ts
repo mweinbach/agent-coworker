@@ -222,6 +222,21 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
             });
           }
           return;
+        case "session_settings":
+          sendNotification("cowork/session/settings", event);
+          return;
+        case "session_info":
+          sendNotification("cowork/session/info", event);
+          return;
+        case "config_updated":
+          sendNotification("cowork/session/configUpdated", event);
+          return;
+        case "session_config":
+          sendNotification("cowork/session/config", event);
+          return;
+        case "session_usage":
+          sendNotification("cowork/session/usage", event);
+          return;
         case "ask":
           handleAsk(event);
           return;

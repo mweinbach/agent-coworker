@@ -93,8 +93,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   const jsonRpcReconnectThreadsByWorkspace = new Map<string, Set<string>>();
   const jsonRpcThreadConnectPromises = new Map<string, Promise<void>>();
 
-  function hasPendingDraftModelSelection(threadId: string): boolean {
-    return Boolean(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId)?.draftModelSelection);
+  function hasPendingWorkspaceDefaultApply(threadId: string): boolean {
+    return Boolean(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId));
   }
 
   function workspaceIdForThread(get: StoreGet, threadId: string): string | null {
@@ -161,7 +161,11 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       }
 
       const params = message.params ?? {};
-      const mappedThreadId = findThreadIdForJsonRpcNotification(get, workspaceId, params.threadId ?? params.thread_id ?? params.thread?.id ?? null);
+      const mappedThreadId = findThreadIdForJsonRpcNotification(
+        get,
+        workspaceId,
+        params.threadId ?? params.thread_id ?? params.thread?.id ?? params.sessionId ?? null,
+      );
       if (!mappedThreadId) return;
       const mappedSessionId =
         get().threadRuntimeById[mappedThreadId]?.sessionId
@@ -169,7 +173,33 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         ?? params.threadId
         ?? params.thread_id
         ?? params.thread?.id
+        ?? params.sessionId
         ?? mappedThreadId;
+
+      if (message.method === "cowork/session/settings") {
+        handleThreadEvent(get, set, mappedThreadId, params as ServerEvent);
+        return;
+      }
+
+      if (message.method === "cowork/session/info") {
+        handleThreadEvent(get, set, mappedThreadId, params as ServerEvent);
+        return;
+      }
+
+      if (message.method === "cowork/session/configUpdated") {
+        handleThreadEvent(get, set, mappedThreadId, params as ServerEvent);
+        return;
+      }
+
+      if (message.method === "cowork/session/config") {
+        handleThreadEvent(get, set, mappedThreadId, params as ServerEvent);
+        return;
+      }
+
+      if (message.method === "cowork/session/usage") {
+        handleThreadEvent(get, set, mappedThreadId, params as ServerEvent);
+        return;
+      }
 
       if (message.method === "turn/started") {
         handleThreadEvent(get, set, mappedThreadId, {
@@ -516,6 +546,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     }
     if (message.type === "apply_session_defaults") {
       void requestJsonRpc(get, undefined, workspaceId, "cowork/session/defaults/apply", {
+        threadId: sessionId,
         cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         ...(message.provider !== undefined ? { provider: message.provider } : {}),
         ...(message.model !== undefined ? { model: message.model } : {}),
@@ -673,7 +704,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   }
 
   function flushOneQueuedThreadMessage(get: StoreGet, set: StoreSet, threadId: string) {
-    if (hasPendingDraftModelSelection(threadId)) {
+    if (hasPendingWorkspaceDefaultApply(threadId)) {
       return false;
     }
     const next = shiftPendingThreadMessage(threadId);
@@ -689,7 +720,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   }
 
   function flushOneQueuedThreadMessageIfReady(get: StoreGet, set: StoreSet, threadId: string) {
-    if (get().threadRuntimeById[threadId]?.busy || hasPendingDraftModelSelection(threadId)) {
+    if (get().threadRuntimeById[threadId]?.busy || hasPendingWorkspaceDefaultApply(threadId)) {
       return false;
     }
     return flushOneQueuedThreadMessage(get, set, threadId);
@@ -865,7 +896,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
               ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
             ]);
           }
-        } else if (hasPendingDraftModelSelection(threadId)) {
+        } else if (hasPendingWorkspaceDefaultApply(threadId)) {
           if (!pendingFirstMessageQueued) {
             RUNTIME.pendingThreadMessages.set(threadId, [
               pendingFirstMessage.trim(),
@@ -907,7 +938,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         };
       });
       const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
-      if (pendingApply) {
+      if (pendingApply && !pendingApply.inFlight) {
         void get().applyWorkspaceDefaultsToThread(
           threadId,
           pendingApply.mode,
@@ -938,7 +969,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       });
       if (!evt.busy) {
         const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
-        if (pendingApply) {
+        if (pendingApply && !pendingApply.inFlight) {
           void get().applyWorkspaceDefaultsToThread(
             threadId,
             pendingApply.mode,
@@ -993,6 +1024,14 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           },
         };
       });
+      const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+      if (pendingApply && !pendingApply.inFlight) {
+        void get().applyWorkspaceDefaultsToThread(
+          threadId,
+          pendingApply.mode,
+          pendingApply.draftModelSelection,
+        );
+      }
       return;
     }
 
@@ -1008,7 +1047,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         };
       });
       const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
-      if (pendingApply) {
+      if (pendingApply && !pendingApply.inFlight) {
         void get().applyWorkspaceDefaultsToThread(
           threadId,
           pendingApply.mode,

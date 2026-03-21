@@ -83,6 +83,12 @@ const sessionConfigEventSchema = z.object({
   type: z.literal("session_config"),
   config: anyObjectSchema,
 }).passthrough();
+const sessionSettingsEventSchema = z.object({
+  type: z.literal("session_settings"),
+  enableMcp: z.boolean(),
+  enableMemory: z.boolean(),
+  memoryRequireApproval: z.boolean(),
+}).passthrough();
 const sessionUsageEventSchema = z.object({
   type: z.literal("session_usage"),
 }).passthrough();
@@ -164,6 +170,7 @@ export const jsonRpcRequestSchemas = {
   }).strict(),
   "cowork/session/defaults/apply": z.object({
     cwd: nonEmptyTrimmedStringSchema,
+    threadId: optionalNonEmptyTrimmedStringSchema,
     provider: optionalNonEmptyTrimmedStringSchema,
     model: optionalNonEmptyTrimmedStringSchema,
     enableMcp: z.boolean().optional(),
@@ -397,6 +404,11 @@ export const jsonRpcNotificationSchemas = {
     threadId: nonEmptyTrimmedStringSchema,
     requestId: nonEmptyTrimmedStringSchema,
   }).strict(),
+  "cowork/session/settings": sessionSettingsEventSchema,
+  "cowork/session/info": sessionInfoEventSchema,
+  "cowork/session/configUpdated": configUpdatedEventSchema,
+  "cowork/session/config": sessionConfigEventSchema,
+  "cowork/session/usage": sessionUsageEventSchema,
 } as const;
 
 export const jsonRpcServerRequestSchemas = {

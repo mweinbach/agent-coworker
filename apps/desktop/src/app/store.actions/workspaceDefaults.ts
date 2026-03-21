@@ -45,6 +45,7 @@ import {
   truncateTitle,
   waitForControlSession,
 } from "../store.helpers";
+import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { mergeWorkspaceProviderOptions, normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import type { DraftModelSelection } from "../store.helpers/runtimeState";
 import { normalizeWorkspaceUserProfile } from "../types";
@@ -261,6 +262,39 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     };
   };
 
+  const hasPendingWorkspaceDefaultApply = (threadId: string): boolean =>
+    Boolean(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId));
+
+  const flushQueuedThreadMessageIfReady = (threadId: string): boolean => {
+    if (hasPendingWorkspaceDefaultApply(threadId) || get().threadRuntimeById[threadId]?.busy) {
+      return false;
+    }
+
+    const queued = RUNTIME.pendingThreadMessages.get(threadId);
+    const next = queued?.shift()?.trim();
+    if (!next) {
+      if (queued && queued.length === 0) {
+        RUNTIME.pendingThreadMessages.delete(threadId);
+      }
+      return false;
+    }
+
+    if (!queued || queued.length === 0) {
+      RUNTIME.pendingThreadMessages.delete(threadId);
+    } else {
+      RUNTIME.pendingThreadMessages.set(threadId, queued);
+    }
+
+    const ok = sendUserMessageToThread(get, set, threadId, next);
+    if (!ok) {
+      RUNTIME.pendingThreadMessages.set(threadId, [
+        next,
+        ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
+      ]);
+    }
+    return ok;
+  };
+
   return {
     applyWorkspaceDefaultsToThread: async (
       threadId: string,
@@ -279,17 +313,13 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       if (!rt?.sessionId) return;
       const workspaceRuntime = get().workspaceRuntimeById[thread.workspaceId];
       const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId) ?? null;
+      if (pendingApply?.inFlight) {
+        return;
+      }
       const effectiveDraftModelSelection: DraftModelSelection | null =
         mode === "auto-resume"
           ? null
           : draftModelSelection ?? pendingApply?.draftModelSelection ?? null;
-      if (mode !== "explicit" && (!rt.sessionConfig || rt.enableMcp === null)) {
-        RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
-          mode,
-          draftModelSelection: effectiveDraftModelSelection,
-        });
-        return;
-      }
       const harnessBackupsDefault = workspaceRuntime?.controlSessionConfig?.defaultBackupsEnabled;
       const harnessToolOutputOverflowChars = workspaceRuntime?.controlSessionConfig?.defaultToolOutputOverflowChars;
 
@@ -299,10 +329,10 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
           mode,
           draftModelSelection: effectiveDraftModelSelection,
+          inFlight: false,
         });
         return;
       }
-      RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
 
       const preserveSessionModel = mode === "auto-resume";
 
@@ -386,13 +416,43 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           ...(userProfile !== undefined ? { userProfile } : {}),
         },
       });
-      if (!message) {
+      if (!message || message.type !== "apply_session_defaults") {
+        RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
+        flushQueuedThreadMessageIfReady(threadId);
         return;
       }
 
-      const ok = sendThread(get, threadId, () => message);
-      if (ok) {
-        appendThreadTranscript(threadId, "client", message);
+      RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
+        mode,
+        draftModelSelection: effectiveDraftModelSelection,
+        inFlight: true,
+      });
+      appendThreadTranscript(threadId, "client", message);
+      try {
+        await requestJsonRpc(get, set, thread.workspaceId, "cowork/session/defaults/apply", {
+          threadId: rt.sessionId,
+          cwd: ws.path,
+          ...(message.provider !== undefined ? { provider: message.provider } : {}),
+          ...(message.model !== undefined ? { model: message.model } : {}),
+          ...(message.enableMcp !== undefined ? { enableMcp: message.enableMcp } : {}),
+          ...(message.config !== undefined ? { config: message.config } : {}),
+        });
+      } catch {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to apply workspace defaults to the active thread.",
+          }),
+        }));
+      } finally {
+        const currentPending = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+        if (currentPending?.inFlight) {
+          RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
+        }
+        flushQueuedThreadMessageIfReady(threadId);
       }
     },
   

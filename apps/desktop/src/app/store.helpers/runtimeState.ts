@@ -1,4 +1,5 @@
 import { AgentSocket } from "../../lib/agentSocket";
+import type { ProviderName } from "../../lib/wsProtocol";
 import {
   clearThreadModelStreamRuntime,
   createThreadModelStreamRuntime,
@@ -16,6 +17,16 @@ export type PendingThreadSteer = {
 
 export type WorkspaceDefaultApplyMode = "auto" | "auto-resume" | "explicit";
 
+export type DraftModelSelection = {
+  provider: ProviderName;
+  model: string;
+};
+
+export type PendingWorkspaceDefaultApply = {
+  mode: WorkspaceDefaultApplyMode;
+  draftModelSelection: DraftModelSelection | null;
+};
+
 export type SkillInstallWaiter = {
   pendingKey: string;
   resolve: () => void;
@@ -32,8 +43,7 @@ export type RuntimeMaps = {
   pendingThreadSteers: Map<string, Map<string, PendingThreadSteer>>;
   threadSelectionRequests: Map<string, number>;
   nextThreadSelectionRequestId: number;
-  pendingWorkspaceDefaultApplyThreadIds: Set<string>;
-  pendingWorkspaceDefaultApplyModeByThread: Map<string, WorkspaceDefaultApplyMode>;
+  pendingWorkspaceDefaultApplyByThread: Map<string, PendingWorkspaceDefaultApply>;
   workspaceStartPromises: Map<string, { generation: number; promise: Promise<void> }>;
   workspaceStartGenerations: Map<string, number>;
   modelStreamByThread: Map<string, ThreadModelStreamRuntime>;
@@ -50,8 +60,7 @@ export const RUNTIME: RuntimeMaps = {
   pendingThreadSteers: new Map(),
   threadSelectionRequests: new Map(),
   nextThreadSelectionRequestId: 0,
-  pendingWorkspaceDefaultApplyThreadIds: new Set(),
-  pendingWorkspaceDefaultApplyModeByThread: new Map(),
+  pendingWorkspaceDefaultApplyByThread: new Map(),
   workspaceStartPromises: new Map(),
   workspaceStartGenerations: new Map(),
   modelStreamByThread: new Map(),
@@ -155,13 +164,8 @@ export function rekeyThreadRuntimeMaps(fromThreadId: string, toThreadId: string)
   moveMapEntry(RUNTIME.optimisticUserMessageIds, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingThreadMessages, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingThreadSteers, fromThreadId, toThreadId);
-  moveMapEntry(RUNTIME.pendingWorkspaceDefaultApplyModeByThread, fromThreadId, toThreadId);
+  moveMapEntry(RUNTIME.pendingWorkspaceDefaultApplyByThread, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.modelStreamByThread, fromThreadId, toThreadId);
-
-  if (RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(fromThreadId)) {
-    RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(fromThreadId);
-    RUNTIME.pendingWorkspaceDefaultApplyThreadIds.add(toThreadId);
-  }
 }
 
 export function beginThreadSelectionRequest(threadId: string): number {

@@ -46,6 +46,7 @@ import {
   waitForControlSession,
 } from "../store.helpers";
 import { mergeWorkspaceProviderOptions, normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
+import type { DraftModelSelection } from "../store.helpers/runtimeState";
 import { normalizeWorkspaceUserProfile } from "../types";
 import type { ThreadRecord, WorkspaceDefaultsPatch, WorkspaceRecord } from "../types";
 
@@ -276,9 +277,16 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const rt = get().threadRuntimeById[threadId];
       if (!rt?.sessionId) return;
       const workspaceRuntime = get().workspaceRuntimeById[thread.workspaceId];
+      const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId) ?? null;
+      const effectiveDraftModelSelection: DraftModelSelection | null =
+        mode === "auto-resume"
+          ? null
+          : draftModelSelection ?? pendingApply?.draftModelSelection ?? null;
       if (mode !== "explicit" && (!rt.sessionConfig || rt.enableMcp === null)) {
-        RUNTIME.pendingWorkspaceDefaultApplyThreadIds.add(threadId);
-        RUNTIME.pendingWorkspaceDefaultApplyModeByThread.set(threadId, mode);
+        RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
+          mode,
+          draftModelSelection: effectiveDraftModelSelection,
+        });
         return;
       }
       const harnessBackupsDefault = workspaceRuntime?.controlSessionConfig?.defaultBackupsEnabled;
@@ -287,12 +295,13 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       // Defer model / provider / other config changes when the session is
       // busy — changing the model mid-turn is not safe.
       if (rt.busy) {
-        RUNTIME.pendingWorkspaceDefaultApplyThreadIds.add(threadId);
-        RUNTIME.pendingWorkspaceDefaultApplyModeByThread.set(threadId, mode);
+        RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
+          mode,
+          draftModelSelection: effectiveDraftModelSelection,
+        });
         return;
       }
-      RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(threadId);
-      RUNTIME.pendingWorkspaceDefaultApplyModeByThread.delete(threadId);
+      RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
 
       const preserveSessionModel = mode === "auto-resume";
 
@@ -311,9 +320,9 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           : ws.defaultModel?.trim() || liveDefaultModel || rt.config?.model?.trim() || ""
       ) || undefined;
 
-      if (!preserveSessionModel && draftModelSelection) {
-        const p = draftModelSelection.provider;
-        const m = draftModelSelection.model.trim();
+      if (!preserveSessionModel && effectiveDraftModelSelection) {
+        const p = effectiveDraftModelSelection.provider;
+        const m = effectiveDraftModelSelection.model.trim();
         if (isProviderName(p) && m) {
           provider = p;
           model = m;

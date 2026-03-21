@@ -527,9 +527,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           },
         };
       });
-      if (RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)) {
-        const pendingMode = RUNTIME.pendingWorkspaceDefaultApplyModeByThread.get(threadId) ?? "auto";
-        void get().applyWorkspaceDefaultsToThread(threadId, pendingMode);
+      const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+      if (pendingApply) {
+        void get().applyWorkspaceDefaultsToThread(
+          threadId,
+          pendingApply.mode,
+          pendingApply.draftModelSelection,
+        );
       }
       return;
     }
@@ -552,9 +556,15 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           },
         };
       });
-      if (!evt.busy && RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)) {
-        const pendingMode = RUNTIME.pendingWorkspaceDefaultApplyModeByThread.get(threadId) ?? "auto";
-        void get().applyWorkspaceDefaultsToThread(threadId, pendingMode);
+      if (!evt.busy) {
+        const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+        if (pendingApply) {
+          void get().applyWorkspaceDefaultsToThread(
+            threadId,
+            pendingApply.mode,
+            pendingApply.draftModelSelection,
+          );
+        }
       }
       if (!evt.busy) {
         clearPendingThreadSteers(threadId);
@@ -617,9 +627,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           },
         };
       });
-      if (RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)) {
-        const pendingMode = RUNTIME.pendingWorkspaceDefaultApplyModeByThread.get(threadId) ?? "auto";
-        void get().applyWorkspaceDefaultsToThread(threadId, pendingMode);
+      const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+      if (pendingApply) {
+        void get().applyWorkspaceDefaultsToThread(
+          threadId,
+          pendingApply.mode,
+          pendingApply.draftModelSelection,
+        );
       }
       return;
     }
@@ -1021,8 +1035,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       onClose: () => {
         RUNTIME.threadSockets.delete(activeThreadId);
         RUNTIME.modelStreamByThread.delete(activeThreadId);
-        RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(activeThreadId);
-        RUNTIME.pendingWorkspaceDefaultApplyModeByThread.delete(activeThreadId);
+        RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(activeThreadId);
         set((s) => {
           const rt = s.threadRuntimeById[activeThreadId];
           if (!rt) return {};

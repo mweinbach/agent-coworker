@@ -274,8 +274,7 @@ describe("thread reconnect", () => {
     RUNTIME.pendingThreadMessages.clear();
     RUNTIME.pendingThreadSteers.clear();
     RUNTIME.threadSelectionRequests.clear();
-    RUNTIME.pendingWorkspaceDefaultApplyThreadIds.clear();
-    RUNTIME.pendingWorkspaceDefaultApplyModeByThread.clear();
+    RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.workspaceStartPromises.clear();
     RUNTIME.workspaceStartGenerations.clear();
     RUNTIME.modelStreamByThread.clear();
@@ -905,6 +904,132 @@ describe("thread reconnect", () => {
     expect(threadSocket.sent.some((message) => message?.type === "apply_session_defaults")).toBe(false);
   });
 
+  test("deferred auto defaults preserve the draft model selection until session defaults arrive", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.2",
+            }
+          : workspace,
+      ),
+      threads: state.threads.map((thread) =>
+        thread.id === threadId
+          ? {
+              ...thread,
+              draft: true,
+              status: "active",
+            }
+          : thread,
+      ),
+    }));
+
+    await useAppStore.getState().selectThread(threadId);
+    useAppStore.getState().setThreadModel(threadId, "codex-cli", "gpt-5.4");
+    await useAppStore.getState().reconnectThread(threadId, "Hello from draft");
+
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session", {
+      config: {
+        provider: "openai",
+        model: "gpt-5.2",
+        workingDirectory: "/tmp/workspace",
+        outputDirectory: "/tmp/workspace/output",
+      },
+    });
+    const activeThreadId = canonicalThreadId("thread-session", threadId);
+
+    expect(useAppStore.getState().threadRuntimeById[activeThreadId]?.draftComposerProvider).toBeNull();
+    expect(useAppStore.getState().threadRuntimeById[activeThreadId]?.draftComposerModel).toBeNull();
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(activeThreadId)).toEqual({
+      mode: "auto",
+      draftModelSelection: {
+        provider: "codex-cli",
+        model: "gpt-5.4",
+      },
+    });
+
+    threadSocket.sent = [];
+    threadSocket.emit({
+      type: "session_settings",
+      sessionId: "thread-session",
+      enableMcp: true,
+      enableMemory: true,
+      memoryRequireApproval: false,
+    });
+
+    expect(threadSocket.sent).toEqual([]);
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(activeThreadId)).toEqual({
+      mode: "auto",
+      draftModelSelection: {
+        provider: "codex-cli",
+        model: "gpt-5.4",
+      },
+    });
+
+    emitThreadSessionDefaults(threadSocket, "thread-session");
+
+    expect(threadSocket.sent).toContainEqual(
+      expect.objectContaining({
+        type: "apply_session_defaults",
+        sessionId: "thread-session",
+        provider: "codex-cli",
+        model: "gpt-5.4",
+      }),
+    );
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.has(activeThreadId)).toBe(false);
+  });
+
+  test("live setThreadModel clears a deferred draft model override after connect", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.2",
+            }
+          : workspace,
+      ),
+      threads: state.threads.map((thread) =>
+        thread.id === threadId
+          ? {
+              ...thread,
+              draft: true,
+              status: "active",
+            }
+          : thread,
+      ),
+    }));
+
+    await useAppStore.getState().selectThread(threadId);
+    useAppStore.getState().setThreadModel(threadId, "codex-cli", "gpt-5.4");
+    await useAppStore.getState().reconnectThread(threadId, "Hello from draft");
+
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+    const activeThreadId = canonicalThreadId("thread-session", threadId);
+
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(activeThreadId)).toEqual({
+      mode: "auto",
+      draftModelSelection: {
+        provider: "codex-cli",
+        model: "gpt-5.4",
+      },
+    });
+
+    useAppStore.getState().setThreadModel(activeThreadId, "anthropic", "claude-3-7-sonnet");
+
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(activeThreadId)).toEqual({
+      mode: "auto",
+      draftModelSelection: null,
+    });
+  });
+
   test("deferred auto-resume defaults preserve the resumed session model when the thread becomes idle", async () => {
     useAppStore.setState((state) => ({
       ...state,
@@ -944,8 +1069,10 @@ describe("thread reconnect", () => {
     });
     const activeThreadId = canonicalThreadId("persisted-thread-session", threadId);
 
-    expect(RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(activeThreadId)).toBe(true);
-    expect(RUNTIME.pendingWorkspaceDefaultApplyModeByThread.get(activeThreadId)).toBe("auto-resume");
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(activeThreadId)).toEqual({
+      mode: "auto-resume",
+      draftModelSelection: null,
+    });
 
     threadSocket.sent = [];
     emitThreadSessionDefaults(threadSocket, "persisted-thread-session");
@@ -959,8 +1086,7 @@ describe("thread reconnect", () => {
 
     expect(threadSocket.sent.some((message) => message?.type === "set_model")).toBe(false);
     expect(threadSocket.sent.some((message) => message?.type === "apply_session_defaults")).toBe(false);
-    expect(RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(activeThreadId)).toBe(false);
-    expect(RUNTIME.pendingWorkspaceDefaultApplyModeByThread.has(activeThreadId)).toBe(false);
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.has(activeThreadId)).toBe(false);
   });
 
   test("hydrates usage from transcript replay before reconnect", async () => {

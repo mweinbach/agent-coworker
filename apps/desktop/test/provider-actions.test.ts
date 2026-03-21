@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
+const startWorkspaceServerMock = mock(async () => ({ url: "ws://mock" }));
+
 mock.module("../src/lib/desktopCommands", () => ({
   appendTranscriptBatch: async () => {},
   appendTranscriptEvent: async () => {},
@@ -11,7 +13,7 @@ mock.module("../src/lib/desktopCommands", () => ({
   saveState: async () => {
     throw new Error("disk full");
   },
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
+  startWorkspaceServer: startWorkspaceServerMock,
   stopWorkspaceServer: async () => {},
   showContextMenu: async () => null,
   windowMinimize: async () => {},
@@ -89,6 +91,8 @@ type TestState = {
     };
   };
   notifications: Array<{ detail?: string }>;
+  userConfigLastResult: Record<string, unknown> | null;
+  pendingUserConfigSave: boolean;
   threads: Array<{ draft?: boolean }>;
   developerMode: boolean;
   showHiddenFiles: boolean;
@@ -121,6 +125,8 @@ function createState(): TestState {
       },
     },
     notifications: [],
+    userConfigLastResult: null,
+    pendingUserConfigSave: false,
     threads: [],
     developerMode: false,
     showHiddenFiles: false,
@@ -153,6 +159,8 @@ describe("provider store actions", () => {
     RUNTIME.controlSockets.clear();
     RUNTIME.threadSockets.clear();
     RUNTIME.sessionSnapshots.clear();
+    startWorkspaceServerMock.mockReset();
+    startWorkspaceServerMock.mockImplementation(async () => ({ url: "ws://mock" }));
   });
 
   test("refreshProviderStatus notifies when control session cannot be prepared", async () => {
@@ -165,6 +173,24 @@ describe("provider store actions", () => {
     expect(state.providerStatusRefreshing).toBe(false);
     expect(state.notifications).toHaveLength(1);
     expect(state.notifications[0]?.detail).toBe("Unable to refresh provider status.");
+  });
+
+  test("setGlobalOpenAiProxyBaseUrl publishes a failed result when control session cannot be prepared", async () => {
+    const state = createState();
+    const { get, set } = createStoreHarness(state);
+    const actions = createProviderActions(set as any, get as any);
+
+    await actions.setGlobalOpenAiProxyBaseUrl("https://proxy.example.com/v1");
+
+    expect(state.pendingUserConfigSave).toBe(false);
+    expect(state.userConfigLastResult).toEqual({
+      type: "user_config_result",
+      sessionId: "",
+      ok: false,
+      message: "Unable to update global user config.",
+    });
+    expect(state.notifications).toHaveLength(1);
+    expect(state.notifications[0]?.detail).toBe("Unable to update global user config.");
   });
 
   test("setLmStudioEnabled rolls back local state and skips refresh when persist fails", async () => {

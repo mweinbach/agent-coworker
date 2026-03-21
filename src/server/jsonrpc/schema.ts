@@ -134,6 +134,7 @@ export const jsonRpcRequestSchemas = {
   }).strict(),
   "turn/start": z.object({
     threadId: nonEmptyTrimmedStringSchema,
+    clientMessageId: nonEmptyTrimmedStringSchema.optional(),
     input: z.array(z.object({
       type: z.literal("text"),
       text: z.string(),
@@ -142,6 +143,7 @@ export const jsonRpcRequestSchemas = {
   "turn/steer": z.object({
     threadId: nonEmptyTrimmedStringSchema,
     turnId: nonEmptyTrimmedStringSchema,
+    clientMessageId: nonEmptyTrimmedStringSchema.optional(),
     input: z.array(z.object({
       type: z.literal("text"),
       text: z.string(),

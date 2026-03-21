@@ -24,6 +24,7 @@ function makeItemId(prefix: string, seed: string): string {
 export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEventProjectorOptions) {
   let activeTurnId: string | null = null;
   let lastUserMessageText: string | null = null;
+  let lastUserMessageClientMessageId: string | null = null;
   const userItemIdByTurn = new Map<string, string>();
   const agentItemIdByTurn = new Map<string, string>();
   const agentTextByTurn = new Map<string, string>();
@@ -93,6 +94,7 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
       switch (event.type) {
         case "user_message":
           lastUserMessageText = event.text;
+          lastUserMessageClientMessageId = typeof event.clientMessageId === "string" ? event.clientMessageId : null;
           return;
         case "session_busy":
           if (event.busy) {
@@ -116,6 +118,7 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
                   id: itemId,
                   type: "userMessage",
                   content: [{ type: "text", text: lastUserMessageText }],
+                  ...(lastUserMessageClientMessageId ? { clientMessageId: lastUserMessageClientMessageId } : {}),
                 },
               });
               sendNotification("item/completed", {
@@ -125,9 +128,11 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
                   id: itemId,
                   type: "userMessage",
                   content: [{ type: "text", text: lastUserMessageText }],
+                  ...(lastUserMessageClientMessageId ? { clientMessageId: lastUserMessageClientMessageId } : {}),
                 },
               });
               lastUserMessageText = null;
+              lastUserMessageClientMessageId = null;
             }
             return;
           }

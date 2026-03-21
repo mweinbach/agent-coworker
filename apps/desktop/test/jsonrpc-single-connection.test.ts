@@ -421,6 +421,11 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(state.threads[0]?.id).toBe("jsonrpc-thread-1");
     expect(state.threadRuntimeById["jsonrpc-thread-1"]?.sessionId).toBe("jsonrpc-thread-1");
     expect(state.threadRuntimeById["jsonrpc-thread-1"]?.connected).toBe(true);
+    expect(jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+      threadId: "jsonrpc-thread-1",
+      input: [{ type: "text", text: "hello over jsonrpc" }],
+      clientMessageId: expect.any(String),
+    });
   });
 
   test("routes provider, memory, and backup control requests over the shared JsonRpcSocket", async () => {

@@ -105,6 +105,8 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 - `turn/steer`
 - `turn/interrupt`
 
+`turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream.
+
 ### Cowork JSON-RPC control namespace
 
 Cowork also exposes a workspace-scoped control namespace over the same JSON-RPC connection. These methods return a legacy-compatible event payload inside `{ "event": ... }` so existing UI reducers can adapt incrementally while the transport modernizes.

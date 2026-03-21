@@ -236,6 +236,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           type: "user_message",
           sessionId: mappedSessionId,
           text,
+          ...(typeof params.item?.clientMessageId === "string"
+            ? { clientMessageId: params.item.clientMessageId }
+            : {}),
         });
         return;
       }
@@ -631,7 +634,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           clientMessageId,
         });
 
-        void steerJsonRpcTurn(get, set, workspaceId, rt.sessionId, rt.activeTurnId, trimmed);
+        void steerJsonRpcTurn(get, set, workspaceId, rt.sessionId, rt.activeTurnId, trimmed, clientMessageId);
         const ok = true;
 
         if (!ok) {
@@ -685,7 +688,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       clientMessageId,
     });
 
-    void startJsonRpcTurn(get, set, workspaceId, rt.sessionId, trimmed);
+    void startJsonRpcTurn(get, set, workspaceId, rt.sessionId, trimmed, clientMessageId);
     const ok = true;
 
     if (!ok) {

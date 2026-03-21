@@ -212,10 +212,12 @@ export async function startJsonRpcTurn(
   workspaceId: string,
   threadId: string,
   text: string,
+  clientMessageId?: string,
 ): Promise<any> {
   return await requestJsonRpc(get, set, workspaceId, "turn/start", {
     threadId,
     input: [{ type: "text", text }],
+    ...(clientMessageId ? { clientMessageId } : {}),
   });
 }
 
@@ -226,11 +228,13 @@ export async function steerJsonRpcTurn(
   threadId: string,
   turnId: string,
   text: string,
+  clientMessageId?: string,
 ): Promise<any> {
   return await requestJsonRpc(get, set, workspaceId, "turn/steer", {
     threadId,
     turnId,
     input: [{ type: "text", text }],
+    ...(clientMessageId ? { clientMessageId } : {}),
   });
 }
 

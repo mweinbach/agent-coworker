@@ -233,6 +233,7 @@ describe("desktop JSON-RPC event mapping", () => {
     RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.threadSelectionRequests.clear();
     RUNTIME.modelStreamByThread.clear();
+    RUNTIME.optimisticUserMessageIds.clear();
     setDefaultHandlers(sessionId);
 
     useAppStore.setState({
@@ -501,5 +502,46 @@ describe("desktop JSON-RPC event mapping", () => {
 
     expect(socket.responses).toEqual([{ id: "approval-1", result: { decision: "accept" } }]);
     expect(useAppStore.getState().promptModal).toBeNull();
+  });
+
+  test("shared JSON-RPC user message notifications reconcile optimistic sends", async () => {
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    await useAppStore.getState().sendMessage("hello once");
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances[0];
+    expect(socket).toBeDefined();
+
+    const turnStartParams = jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params as
+      | { clientMessageId?: string }
+      | undefined;
+    expect(turnStartParams?.clientMessageId).toEqual(expect.any(String));
+
+    socket.notify("turn/started", {
+      threadId: sessionId,
+      turn: { id: "turn-1", status: "inProgress", items: [] },
+    });
+    socket.notify("item/started", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      item: {
+        id: "user-item-1",
+        type: "userMessage",
+        clientMessageId: turnStartParams?.clientMessageId,
+        content: [{ type: "text", text: "hello once" }],
+      },
+    });
+    await flushAsyncWork();
+
+    const runtime = useAppStore.getState().threadRuntimeById[threadId];
+    const userMessages = runtime?.feed.filter((item) => item.kind === "message" && item.role === "user") ?? [];
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]).toMatchObject({
+      id: turnStartParams?.clientMessageId,
+      text: "hello once",
+    });
   });
 });

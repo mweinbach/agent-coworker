@@ -1432,6 +1432,10 @@ export async function startAgentServer(
       case "turn/start": {
         const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
         const text = extractJsonRpcTextInput(params.input);
+        const clientMessageId =
+          typeof params.clientMessageId === "string" && params.clientMessageId.trim()
+            ? params.clientMessageId.trim()
+            : undefined;
         if (!threadId || !text) {
           sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
             code: JSONRPC_ERROR_CODES.invalidParams,
@@ -1447,7 +1451,7 @@ export async function startAgentServer(
           }));
           return;
         }
-        void binding.session.sendUserMessage(text);
+        void binding.session.sendUserMessage(text, clientMessageId);
         sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, {
           turn: {
             id: binding.session.activeTurnId,
@@ -1461,6 +1465,10 @@ export async function startAgentServer(
       case "turn/steer": {
         const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
         const text = extractJsonRpcTextInput(params.input);
+        const clientMessageId =
+          typeof params.clientMessageId === "string" && params.clientMessageId.trim()
+            ? params.clientMessageId.trim()
+            : undefined;
         const expectedTurnId = typeof params.turnId === "string" && params.turnId.trim()
           ? params.turnId.trim()
           : sessionBindings.get(threadId)?.session?.activeTurnId ?? "";
@@ -1472,7 +1480,7 @@ export async function startAgentServer(
           }));
           return;
         }
-        void session.sendSteerMessage(text, expectedTurnId);
+        void session.sendSteerMessage(text, expectedTurnId, clientMessageId);
         sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, {
           turnId: expectedTurnId,
         }));

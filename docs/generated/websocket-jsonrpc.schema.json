@@ -135,6 +135,10 @@
               "type": "string",
               "minLength": 1
             },
+            "clientMessageId": {
+              "type": "string",
+              "minLength": 1
+            },
             "input": {
               "type": "array",
               "items": {
@@ -170,6 +174,10 @@
               "minLength": 1
             },
             "turnId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "clientMessageId": {
               "type": "string",
               "minLength": 1
             },

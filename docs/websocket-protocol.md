@@ -2,11 +2,141 @@
 
 Canonical protocol contract for `agent-coworker` WebSocket clients.
 
+Cowork now supports **two WebSocket protocols** on the same `/ws` endpoint:
+
+- **Legacy Cowork event protocol** — default today; fully backward compatible with existing desktop / CLI / TUI clients.
+- **Codex-style JSON-RPC-lite protocol** — additive protocol for multiplexed thread control, thread replay, and server-initiated requests.
+
 ## Connection
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
 - Current protocol version: `7.28`
+- Legacy protocol version: `7.28`
+- Default WebSocket protocol mode: `legacy` unless overridden by `COWORK_WS_DEFAULT_PROTOCOL` or `--ws-protocol-default`
+
+## Protocol negotiation
+
+Cowork chooses the WebSocket protocol mode in this order:
+
+1. WebSocket subprotocol
+2. `?protocol=` query param
+3. Server default (`legacy` today)
+
+### Supported WebSocket subprotocols
+
+- `cowork.legacy.v1`
+- `cowork.jsonrpc.v1`
+
+### Supported query params
+
+- `?protocol=legacy`
+- `?protocol=jsonrpc`
+
+### Server-side default selection
+
+- env: `COWORK_WS_DEFAULT_PROTOCOL=legacy|jsonrpc`
+- server CLI: `--ws-protocol-default legacy|jsonrpc`
+
+### Example: legacy mode
+
+```ts
+const ws = new WebSocket("ws://127.0.0.1:7337/ws");
+```
+
+### Example: JSON-RPC mode via subprotocol
+
+```ts
+const ws = new WebSocket("ws://127.0.0.1:7337/ws", "cowork.jsonrpc.v1");
+```
+
+### Example: JSON-RPC mode via query param
+
+```ts
+const ws = new WebSocket("ws://127.0.0.1:7337/ws?protocol=jsonrpc");
+```
+
+## JSON-RPC-lite overview
+
+The JSON-RPC mode follows the Codex-style wire shape:
+
+- request: `{ "id": 1, "method": "thread/start", "params": { ... } }`
+- response: `{ "id": 1, "result": { ... } }`
+- error: `{ "id": 1, "error": { "code": -32601, "message": "..." } }`
+- notification: `{ "method": "turn/started", "params": { ... } }`
+- server request: `{ "id": "req-123", "method": "item/commandExecution/requestApproval", "params": { ... } }`
+
+`"jsonrpc": "2.0"` is intentionally omitted on the wire. Each WebSocket text frame carries exactly one JSON-RPC-lite message.
+
+### JSON-RPC handshake
+
+JSON-RPC connections do **not** receive an immediate `server_hello`.
+
+Clients must:
+
+1. send `initialize`
+2. wait for the `initialize` result
+3. send the `initialized` notification
+4. only then call `thread/*`, `turn/*`, or `cowork/*` methods
+
+Any request before the handshake completes is rejected with a JSON-RPC error:
+
+```json
+{ "id": 1, "error": { "code": -32002, "message": "Not initialized" } }
+```
+
+### JSON-RPC capabilities
+
+`initialize.params.capabilities` currently supports:
+
+- `experimentalApi: boolean`
+- `optOutNotificationMethods: string[]`
+
+### Core JSON-RPC methods currently available
+
+- `thread/start`
+- `thread/resume`
+- `thread/list`
+- `thread/read`
+- `thread/unsubscribe`
+- `turn/start`
+- `turn/steer`
+- `turn/interrupt`
+
+### Core JSON-RPC notifications currently available
+
+- `thread/started`
+- `turn/started`
+- `item/started`
+- `item/agentMessage/delta`
+- `item/completed`
+- `turn/completed`
+- `serverRequest/resolved`
+
+### Server-initiated JSON-RPC requests currently available
+
+- `item/tool/requestUserInput`
+- `item/commandExecution/requestApproval`
+
+### JSON-RPC replay and read model
+
+- `thread/read` can return a journal-projected `turns` array when `includeTurns: true`
+- `thread/resume` accepts `afterSeq` to replay journaled notifications after a known cursor
+- Cowork persists canonical thread journal events in sqlite so reconnect / restart replay is no longer limited to an in-memory socket buffer
+
+### JSON-RPC overload behavior
+
+Cowork reserves JSON-RPC error code `-32001` for bounded-queue overload handling:
+
+```json
+{ "id": 42, "error": { "code": -32001, "message": "Server overloaded; retry later." } }
+```
+
+Clients should treat this as retryable and use backoff with jitter.
+
+## Legacy protocol reference
+
+The remainder of this document describes the **legacy Cowork protocol**, which remains the default transport for existing clients.
 
 ## Table of Contents
 

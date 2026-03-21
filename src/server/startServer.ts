@@ -308,6 +308,7 @@ export async function startAgentServer(
     },
   });
   const sessionBindings = new Map<string, SessionBinding>();
+  const workspaceControlBindings = new Map<string, SessionBinding>();
   const workspaceBackupService = new WorkspaceBackupService({
     homedir: opts.homedir,
     sessionDb,
@@ -345,6 +346,79 @@ export async function startAgentServer(
 
   const countLiveConnectionSinks = (binding: SessionBinding) => (
     [...binding.sinks.keys()].filter((sinkId) => !sinkId.startsWith("journal:")).length
+  );
+
+  const requireWorkspacePath = (params: Record<string, unknown>, method: string): string => {
+    const cwd = typeof params.cwd === "string" ? params.cwd.trim() : "";
+    if (!cwd) {
+      throw new Error(`${method} requires cwd`);
+    }
+    return cwd;
+  };
+
+  const getOrCreateWorkspaceControlBinding = (cwd: string): SessionBinding => {
+    const existing = workspaceControlBindings.get(cwd);
+    if (existing?.session) {
+      return existing;
+    }
+    const binding: SessionBinding = {
+      session: null,
+      socket: null,
+      sinks: new Map(),
+    };
+    const controlConfig: AgentConfig = {
+      ...config,
+      workingDirectory: cwd,
+    };
+    const built = buildSession(binding, undefined, {
+      config: controlConfig,
+    });
+    binding.session = built.session;
+    workspaceControlBindings.set(cwd, binding);
+    return binding;
+  };
+
+  const captureSessionEvent = async <T extends ServerEvent>(
+    binding: SessionBinding,
+    action: () => Promise<void> | void,
+    predicate: (event: ServerEvent) => event is T,
+    timeoutMs = 5_000,
+  ): Promise<T> => {
+    const sinkId = `capture:${crypto.randomUUID()}`;
+    return await new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        removeBindingSink(binding, sinkId);
+        reject(new Error("Timed out waiting for control event"));
+      }, timeoutMs);
+
+      addBindingSink(binding, sinkId, (event) => {
+        if (!predicate(event)) return;
+        clearTimeout(timeout);
+        removeBindingSink(binding, sinkId);
+        resolve(event);
+      });
+
+      void Promise.resolve(action()).catch((error) => {
+        clearTimeout(timeout);
+        removeBindingSink(binding, sinkId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  };
+
+  const shouldIncludeJsonRpcThreadSummary = (summary: {
+    titleSource?: string | null;
+    messageCount?: number | null;
+    hasPendingAsk?: boolean | null;
+    hasPendingApproval?: boolean | null;
+    executionState?: string | null;
+  }) => (
+    summary.executionState === "running"
+    || summary.executionState === "pending_init"
+    || (summary.messageCount ?? 0) > 0
+    || summary.titleSource !== "default"
+    || summary.hasPendingAsk === true
+    || summary.hasPendingApproval === true
   );
 
   const buildSessionCommon = (binding: SessionBinding, sessionKind: SessionKind = "root") => {
@@ -1052,6 +1126,21 @@ export async function startAgentServer(
     }
   };
 
+  const withWorkspaceControlSession = async <T>(
+    cwd: string,
+    runner: (binding: SessionBinding, session: AgentSession) => Promise<T>,
+  ): Promise<T> => {
+    const binding = getOrCreateWorkspaceControlBinding(cwd);
+    if (!binding.session) {
+      throw new Error(`Unable to create workspace control session for ${cwd}`);
+    }
+    return await runner(binding, binding.session);
+  };
+
+  const emitControlResult = (ws: Bun.ServerWebSocket<StartServerSocketData>, id: string | number, event: ServerEvent) => {
+    sendJsonRpc(ws, buildJsonRpcResultResponse(id, { event }));
+  };
+
   const routeJsonRpcResponse = (
     ws: Bun.ServerWebSocket<StartServerSocketData>,
     message: { id: string | number; result?: unknown; error?: { code: number; message: string } },
@@ -1201,12 +1290,24 @@ export async function startAgentServer(
         for (const record of sessionDb.listSessions({ ...(cwd ? { workingDirectory: cwd } : {}) })) {
           const persisted = sessionDb.getSessionRecord(record.sessionId);
           if (!persisted) continue;
+          if (!shouldIncludeJsonRpcThreadSummary({
+            titleSource: persisted.titleSource,
+            messageCount: persisted.messageCount,
+            hasPendingAsk: persisted.hasPendingAsk,
+            hasPendingApproval: persisted.hasPendingApproval,
+            executionState: persisted.executionState ?? null,
+          })) {
+            continue;
+          }
           threads.set(record.sessionId, buildJsonRpcThreadFromRecord(persisted));
         }
         for (const binding of sessionBindings.values()) {
           const session = binding.session;
           if (!session || session.sessionKind !== "root") continue;
           if (cwd && session.getWorkingDirectory() !== cwd) continue;
+          if (!shouldIncludeJsonRpcThreadSummary(session.buildSessionSnapshot())) {
+            continue;
+          }
           threads.set(session.id, buildJsonRpcThreadFromSession(session));
         }
         sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, {
@@ -1331,6 +1432,533 @@ export async function startAgentServer(
         }
         session.cancel();
         sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, {}));
+        return;
+      }
+      case "cowork/provider/catalog/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.emitProviderCatalog(),
+            (event): event is Extract<ServerEvent, { type: "provider_catalog" }> => event.type === "provider_catalog",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/authMethods/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            () => session.emitProviderAuthMethods(),
+            (event): event is Extract<ServerEvent, { type: "provider_auth_methods" }> => event.type === "provider_auth_methods",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/status/refresh": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.refreshProviderStatus(),
+            (event): event is Extract<ServerEvent, { type: "provider_status" }> => event.type === "provider_status",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/auth/authorize": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        const methodId = typeof params.methodId === "string" ? params.methodId.trim() : "";
+        if (!provider || !methodId) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires provider and methodId`,
+          }));
+          return;
+        }
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.authorizeProviderAuth(provider, methodId),
+            (event): event is Extract<ServerEvent, { type: "provider_auth_challenge" | "provider_auth_result" }> =>
+              event.type === "provider_auth_challenge" || event.type === "provider_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/auth/logout": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        if (!provider) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires provider`,
+          }));
+          return;
+        }
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.logoutProviderAuth(provider),
+            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => event.type === "provider_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/auth/callback": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        const methodId = typeof params.methodId === "string" ? params.methodId.trim() : "";
+        const code = typeof params.code === "string" && params.code.trim() ? params.code.trim() : undefined;
+        if (!provider || !methodId) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires provider and methodId`,
+          }));
+          return;
+        }
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.callbackProviderAuth(provider, methodId, code),
+            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => event.type === "provider_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/auth/setApiKey": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        const methodId = typeof params.methodId === "string" ? params.methodId.trim() : "";
+        const apiKey = typeof params.apiKey === "string" ? params.apiKey : "";
+        if (!provider || !methodId || !apiKey) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires provider, methodId, and apiKey`,
+          }));
+          return;
+        }
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.setProviderApiKey(provider, methodId, apiKey),
+            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => event.type === "provider_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/auth/copyApiKey": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        const sourceProvider = typeof params.sourceProvider === "string" ? params.sourceProvider as AgentConfig["provider"] : undefined;
+        if (!provider || !sourceProvider) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires provider and sourceProvider`,
+          }));
+          return;
+        }
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.copyProviderApiKey(provider, sourceProvider),
+            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => event.type === "provider_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/servers/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.emitMcpServers(),
+            (event): event is Extract<ServerEvent, { type: "mcp_servers" }> => event.type === "mcp_servers",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/server/upsert": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const server = params.server as any;
+        const previousName = typeof params.previousName === "string" ? params.previousName : undefined;
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              await session.upsertMcpServer(server, previousName);
+              await session.emitMcpServers();
+            },
+            (event): event is Extract<ServerEvent, { type: "mcp_servers" }> => event.type === "mcp_servers",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/server/delete": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const name = typeof params.name === "string" ? params.name.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              await session.deleteMcpServer(name);
+              await session.emitMcpServers();
+            },
+            (event): event is Extract<ServerEvent, { type: "mcp_servers" }> => event.type === "mcp_servers",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/server/validate": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const name = typeof params.name === "string" ? params.name.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.validateMcpServer(name),
+            (event): event is Extract<ServerEvent, { type: "mcp_server_validation" }> => event.type === "mcp_server_validation",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/server/auth/authorize": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const name = typeof params.name === "string" ? params.name.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.authorizeMcpServerAuth(name),
+            (event): event is Extract<ServerEvent, { type: "mcp_server_auth_challenge" | "mcp_server_auth_result" }> =>
+              event.type === "mcp_server_auth_challenge" || event.type === "mcp_server_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/server/auth/callback": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const name = typeof params.name === "string" ? params.name.trim() : "";
+        const code = typeof params.code === "string" && params.code.trim() ? params.code.trim() : undefined;
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.callbackMcpServerAuth(name, code),
+            (event): event is Extract<ServerEvent, { type: "mcp_server_auth_result" }> => event.type === "mcp_server_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/server/auth/setApiKey": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const name = typeof params.name === "string" ? params.name.trim() : "";
+        const apiKey = typeof params.apiKey === "string" ? params.apiKey : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.setMcpServerApiKey(name, apiKey),
+            (event): event is Extract<ServerEvent, { type: "mcp_server_auth_result" }> => event.type === "mcp_server_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/legacy/migrate": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const scope = params.scope === "user" ? "user" : "workspace";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              await session.migrateLegacyMcpServers(scope);
+              await session.emitMcpServers();
+            },
+            (event): event is Extract<ServerEvent, { type: "mcp_servers" }> => event.type === "mcp_servers",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/catalog/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.getSkillsCatalog(),
+            (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/list": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.listSkills(),
+            (event): event is Extract<ServerEvent, { type: "skills_list" }> => event.type === "skills_list",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const skillName = typeof params.skillName === "string" ? params.skillName.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.readSkill(skillName),
+            (event): event is Extract<ServerEvent, { type: "skill_content" }> => event.type === "skill_content",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/disable": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const skillName = typeof params.skillName === "string" ? params.skillName.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              await session.disableSkill(skillName);
+              await session.listSkills();
+            },
+            (event): event is Extract<ServerEvent, { type: "skills_list" }> => event.type === "skills_list",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/enable": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const skillName = typeof params.skillName === "string" ? params.skillName.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              await session.enableSkill(skillName);
+              await session.listSkills();
+            },
+            (event): event is Extract<ServerEvent, { type: "skills_list" }> => event.type === "skills_list",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/delete": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const skillName = typeof params.skillName === "string" ? params.skillName.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              await session.deleteSkill(skillName);
+              await session.listSkills();
+            },
+            (event): event is Extract<ServerEvent, { type: "skills_list" }> => event.type === "skills_list",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/installation/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.getSkillInstallation(installationId),
+            (event): event is Extract<ServerEvent, { type: "skill_installation" }> => event.type === "skill_installation",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/install/preview": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const sourceInput = typeof params.sourceInput === "string" ? params.sourceInput : "";
+        const targetScope = params.targetScope === "global" ? "global" : "project";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.previewSkillInstall(sourceInput, targetScope),
+            (event): event is Extract<ServerEvent, { type: "skill_install_preview" }> => event.type === "skill_install_preview",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/install": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const sourceInput = typeof params.sourceInput === "string" ? params.sourceInput : "";
+        const targetScope = params.targetScope === "global" ? "global" : "project";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.installSkills(sourceInput, targetScope),
+            (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/installation/enable":
+      case "cowork/skills/installation/disable":
+      case "cowork/skills/installation/delete":
+      case "cowork/skills/installation/update": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              if (message.method === "cowork/skills/installation/enable") await session.enableSkillInstallation(installationId);
+              if (message.method === "cowork/skills/installation/disable") await session.disableSkillInstallation(installationId);
+              if (message.method === "cowork/skills/installation/delete") await session.deleteSkillInstallation(installationId);
+              if (message.method === "cowork/skills/installation/update") await session.updateSkillInstallation(installationId);
+            },
+            (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/installation/copy": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+        const targetScope = params.targetScope === "global" ? "global" : "project";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.copySkillInstallation(installationId, targetScope),
+            (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/installation/checkUpdate": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.checkSkillInstallationUpdate(installationId),
+            (event): event is Extract<ServerEvent, { type: "skill_installation_update_check" }> => event.type === "skill_installation_update_check",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/memory/list": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const scope = params.scope === "user" ? "user" : params.scope === "workspace" ? "workspace" : undefined;
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.emitMemories(scope),
+            (event): event is Extract<ServerEvent, { type: "memory_list" }> => event.type === "memory_list",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/memory/upsert": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const scope = params.scope === "user" ? "user" : "workspace";
+        const id = typeof params.id === "string" && params.id.trim() ? params.id.trim() : undefined;
+        const content = typeof params.content === "string" ? params.content : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.upsertMemory(scope, id, content),
+            (event): event is Extract<ServerEvent, { type: "memory_list" }> => event.type === "memory_list",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/memory/delete": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const scope = params.scope === "user" ? "user" : "workspace";
+        const id = typeof params.id === "string" ? params.id.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.deleteMemory(scope, id),
+            (event): event is Extract<ServerEvent, { type: "memory_list" }> => event.type === "memory_list",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/backups/workspace/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.listWorkspaceBackups(),
+            (event): event is Extract<ServerEvent, { type: "workspace_backups" }> => event.type === "workspace_backups",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/backups/workspace/delta/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
+        const checkpointId = typeof params.checkpointId === "string" ? params.checkpointId.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.getWorkspaceBackupDelta(targetSessionId, checkpointId),
+            (event): event is Extract<ServerEvent, { type: "workspace_backup_delta" }> => event.type === "workspace_backup_delta",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/backups/workspace/checkpoint":
+      case "cowork/backups/workspace/restore":
+      case "cowork/backups/workspace/deleteCheckpoint":
+      case "cowork/backups/workspace/deleteEntry": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
+        const checkpointId = typeof params.checkpointId === "string" && params.checkpointId.trim()
+          ? params.checkpointId.trim()
+          : undefined;
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              if (message.method === "cowork/backups/workspace/checkpoint") await session.createWorkspaceBackupCheckpoint(targetSessionId);
+              if (message.method === "cowork/backups/workspace/restore") await session.restoreWorkspaceBackup(targetSessionId, checkpointId);
+              if (message.method === "cowork/backups/workspace/deleteCheckpoint" && checkpointId) {
+                await session.deleteWorkspaceBackupCheckpoint(targetSessionId, checkpointId);
+              }
+              if (message.method === "cowork/backups/workspace/deleteEntry") await session.deleteWorkspaceBackupEntry(targetSessionId);
+            },
+            (event): event is Extract<ServerEvent, { type: "workspace_backups" }> => event.type === "workspace_backups",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
         return;
       }
       default:

@@ -8,11 +8,23 @@ const defaultReactGrabDevLoaders: ReactGrabDevLoaders = {
   loadReactGrabMcpClient: async () => await import("@react-grab/mcp/client"),
 };
 
+export function shouldLoadReactGrabDevTools(
+  isDev = import.meta.env.DEV,
+  userAgent = typeof navigator === "object" ? navigator.userAgent : "",
+): boolean {
+  if (!isDev) {
+    return false;
+  }
+
+  return !(userAgent.includes("Electron") && userAgent.includes("Linux"));
+}
+
 export async function maybeLoadReactGrabDevTools(
   isDev = import.meta.env.DEV,
   loaders: ReactGrabDevLoaders = defaultReactGrabDevLoaders,
+  userAgent = typeof navigator === "object" ? navigator.userAgent : "",
 ): Promise<void> {
-  if (!isDev) return;
+  if (!shouldLoadReactGrabDevTools(isDev, userAgent)) return;
 
   await Promise.all([
     loaders.loadReactGrab(),

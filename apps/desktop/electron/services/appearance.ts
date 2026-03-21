@@ -113,7 +113,9 @@ export function syncWindowAppearance(
     platform,
   });
 
-  win.setBackgroundColor(backgroundColor);
+  if (platform !== "linux") {
+    win.setBackgroundColor(backgroundColor);
+  }
 
   if (backgroundMaterial) {
     setWindowBackgroundMaterial(win, backgroundMaterial, platform);

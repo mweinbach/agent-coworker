@@ -239,6 +239,40 @@ describe("desktop protocol v2 mapping", () => {
     expect(sentTypes).toContain("mcp_servers_get");
   });
 
+  test("setGlobalOpenAiProxyBaseUrl publishes a failed user config result when sendControl fails", async () => {
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.sent = [];
+    controlSocket.send = (message?: any) => {
+      controlSocket.sent.push(message);
+      if (message?.type === "user_config_set") return false;
+      return true;
+    };
+
+    await useAppStore.getState().setGlobalOpenAiProxyBaseUrl("https://proxy.example.com/v1");
+
+    const state = useAppStore.getState();
+    expect(state.pendingUserConfigSave).toBe(false);
+    expect(state.userConfigLastResult).toEqual({
+      type: "user_config_result",
+      sessionId: "control-session",
+      ok: false,
+      message: "Unable to update global user config.",
+    });
+
+    const sentMessage = controlSocket.sent.find((msg) => msg?.type === "user_config_set");
+    expect(sentMessage).toEqual({
+      type: "user_config_set",
+      sessionId: "control-session",
+      config: { awsBedrockProxyBaseUrl: "https://proxy.example.com/v1" },
+    });
+
+    const notification = state.notifications.at(-1);
+    expect(notification?.title).toBe("Not connected");
+    expect(notification?.detail).toBe("Unable to update global user config.");
+  });
+
   test("requestWorkspaceMemories waits for the initial control hello before surfacing not connected", async () => {
     const requestPromise = useAppStore.getState().requestWorkspaceMemories(workspaceId);
     await flushAsyncWork();

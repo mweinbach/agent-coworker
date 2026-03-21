@@ -1,5 +1,6 @@
 import { SpanStatusCode, trace, type AttributeValue, type Span } from "@opentelemetry/api";
 import { stream as piStream } from "@mariozechner/pi-ai";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   asFiniteNumber,
   asNonEmptyString,
@@ -426,7 +427,8 @@ async function maybeRewriteNvidiaFetchRequest(
   return [input, { ...(init ?? {}), body: rewrittenBody }];
 }
 
-const FETCH_REWRITE_STACK = Symbol.for("cowork.fetchRewriteStack");
+const FETCH_REWRITE_STATE = Symbol.for("cowork.fetchRewriteState");
+const FETCH_REWRITE_CONTEXT = new AsyncLocalStorage<FetchRewriteEntry[]>();
 
 type FetchRewriteEntry = {
   rewrite: (input: RequestInfo | URL, init?: RequestInit) => Promise<[RequestInfo | URL, RequestInit | undefined]>;
@@ -434,7 +436,7 @@ type FetchRewriteEntry = {
 
 type FetchPatchState = {
   originalFetch: typeof fetch;
-  entries: FetchRewriteEntry[];
+  activeInvocationCount: number;
 };
 
 type OpenAiProxyPromptCachingTtl = "5m" | "1h";
@@ -623,52 +625,52 @@ async function withPatchedFetch<T>(
   rewrite: FetchRewriteEntry["rewrite"],
   run: () => Promise<T>,
 ): Promise<T> {
-  const g = globalThis as typeof globalThis & { [FETCH_REWRITE_STACK]?: FetchPatchState };
-  const existing = g[FETCH_REWRITE_STACK];
+  const g = globalThis as typeof globalThis & { [FETCH_REWRITE_STATE]?: FetchPatchState };
   const entry: FetchRewriteEntry = { rewrite };
+  let state = g[FETCH_REWRITE_STATE];
 
-  if (existing) {
-    existing.entries.push(entry);
+  if (!state) {
+    const originalFetch = globalThis.fetch;
+    state = {
+      originalFetch,
+      activeInvocationCount: 0,
+    };
+
+    const wrappedFetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        let currentInput = input;
+        let currentInit = init;
+        const activeEntries = FETCH_REWRITE_CONTEXT.getStore() ?? [];
+        // Apply the innermost invocation rewrite first so parent rewrites don't
+        // mutate nested invocation payloads before the nested context runs.
+        for (let index = activeEntries.length - 1; index >= 0; index -= 1) {
+          const activeEntry = activeEntries[index];
+          [currentInput, currentInit] = await activeEntry.rewrite(currentInput, currentInit);
+        }
+        return originalFetch.call(globalThis, currentInput as any, currentInit as any);
+      },
+      originalFetch,
+    );
+
+    globalThis.fetch = wrappedFetch as typeof fetch;
+    g[FETCH_REWRITE_STATE] = state;
+  }
+
+  const inheritedEntries = FETCH_REWRITE_CONTEXT.getStore() ?? [];
+  const activeEntries = [...inheritedEntries, entry];
+  state.activeInvocationCount += 1;
+
+  return await FETCH_REWRITE_CONTEXT.run(activeEntries, async () => {
     try {
       return await run();
     } finally {
-      const idx = existing.entries.indexOf(entry);
-      if (idx >= 0) existing.entries.splice(idx, 1);
-      if (existing.entries.length === 0) {
-        globalThis.fetch = existing.originalFetch;
-        delete g[FETCH_REWRITE_STACK];
+      state.activeInvocationCount -= 1;
+      if (state.activeInvocationCount === 0) {
+        globalThis.fetch = state.originalFetch;
+        delete g[FETCH_REWRITE_STATE];
       }
     }
-  }
-
-  const originalFetch = globalThis.fetch;
-  const state: FetchPatchState = { originalFetch, entries: [entry] };
-
-  const wrappedFetch = Object.assign(
-    async (input: RequestInfo | URL, init?: RequestInit) => {
-      let currentInput = input;
-      let currentInit = init;
-      for (const e of state.entries) {
-        [currentInput, currentInit] = await e.rewrite(currentInput, currentInit);
-      }
-      return originalFetch.call(globalThis, currentInput as any, currentInit as any);
-    },
-    originalFetch,
-  );
-
-  globalThis.fetch = wrappedFetch as typeof fetch;
-  g[FETCH_REWRITE_STACK] = state;
-
-  try {
-    return await run();
-  } finally {
-    const idx = state.entries.indexOf(entry);
-    if (idx >= 0) state.entries.splice(idx, 1);
-    if (state.entries.length === 0) {
-      globalThis.fetch = state.originalFetch;
-      delete g[FETCH_REWRITE_STACK];
-    }
-  }
+  });
 }
 
 async function withPatchedNvidiaFetch<T>(run: () => Promise<T>): Promise<T> {

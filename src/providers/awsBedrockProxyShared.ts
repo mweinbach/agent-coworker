@@ -43,7 +43,7 @@ function normalizeBaseUrl(raw: string): string | null {
   if (!trimmed) return null;
   try {
     const url = new URL(trimmed);
-    if (!url.protocol.startsWith("http")) return null;
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
     return url.toString().replace(/\/+$/, "");
   } catch {
     return null;

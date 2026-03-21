@@ -306,6 +306,8 @@ jobs:
           $workspace = Join-Path $env:RUNNER_TEMP "desktop-smoke-workspace"
           $outputDir = Join-Path $env:RUNNER_TEMP "desktop-smoke-output"
           $outputPath = Join-Path $outputDir "result.json"
+          $startupTimeout = [TimeSpan]::FromMinutes(2)
+          $shutdownWaitMs = 15000
 
           New-Item -ItemType Directory -Force -Path $workspace | Out-Null
           New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
@@ -321,21 +323,44 @@ jobs:
           $env:COWORK_DESKTOP_SMOKE_WORKSPACE = $workspace
           $env:COWORK_DESKTOP_SMOKE_OUTPUT = $outputPath
 
-          & $appExe.FullName
+          $process = Start-Process -FilePath $appExe.FullName -WorkingDirectory $appExe.DirectoryName -PassThru
+          $deadline = (Get-Date).Add($startupTimeout)
 
-          if ($LASTEXITCODE -ne 0) {
+          while ((Get-Date) -lt $deadline) {
             if (Test-Path $outputPath) {
-              Get-Content $outputPath -Raw | Write-Host
+              break
             }
-            throw "Packaged ARM64 desktop smoke run failed with exit code $LASTEXITCODE"
+
+            $process.Refresh()
+            if ($process.HasExited) {
+              break
+            }
+
+            Start-Sleep -Milliseconds 500
           }
 
           if (-not (Test-Path $outputPath)) {
-            throw "Desktop smoke output was not written"
+            $process.Refresh()
+
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              throw "Desktop smoke output was not written within $($startupTimeout.TotalSeconds) seconds"
+            }
+
+            throw "Packaged ARM64 desktop smoke run exited before writing output (exit code $($process.ExitCode))"
+          }
+
+          if (-not $process.WaitForExit($shutdownWaitMs)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw "Packaged ARM64 desktop smoke run wrote output but did not exit within $shutdownWaitMs ms"
           }
 
           $result = Get-Content $outputPath -Raw | ConvertFrom-Json
           $result | ConvertTo-Json -Depth 5 | Write-Host
+
+          if ($process.ExitCode -ne 0) {
+            throw "Packaged ARM64 desktop smoke run failed with exit code $($process.ExitCode)"
+          }
 
           if (-not $result.ok) {
             throw "Desktop smoke output reported failure"

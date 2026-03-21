@@ -51,6 +51,9 @@ describe("desktop release workflow", () => {
     expect(workflow).toContain("name: Smoke Windows ARM64 Desktop");
     expect(workflow).toContain("COWORK_DESKTOP_SMOKE_WORKSPACE");
     expect(workflow).toContain("COWORK_DESKTOP_SMOKE_OUTPUT");
+    expect(workflow).toContain("Start-Process -FilePath $appExe.FullName -WorkingDirectory $appExe.DirectoryName -PassThru");
+    expect(workflow).toContain("Desktop smoke output was not written within");
+    expect(workflow).toContain("Packaged ARM64 desktop smoke run exited before writing output");
     expect(workflow).toContain("Expected desktop smoke output type=server_listening");
   });
 

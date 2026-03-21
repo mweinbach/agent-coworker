@@ -16,7 +16,6 @@ import { ContextSidebar } from "./ui/ContextSidebar";
 import { PromptModal } from "./ui/PromptModal";
 import { Sidebar } from "./ui/Sidebar";
 import { AppTopBar } from "./ui/layout/AppTopBar";
-import { SidebarCollapseControl } from "./ui/layout/SidebarCollapseControl";
 import { ContextSidebarResizer } from "./ui/layout/ContextSidebarResizer";
 import { PrimaryContent } from "./ui/layout/PrimaryContent";
 import { SettingsContent } from "./ui/layout/SettingsContent";
@@ -69,6 +68,8 @@ const ChatShell = memo(function ChatShell({
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
+  const sidebarWidth = useAppStore((s) => s.sidebarWidth);
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
   const toggleContextSidebar = useAppStore((s) => s.toggleContextSidebar);
   const hasAnimatedSidebarsRef = useRef(false);
@@ -97,30 +98,30 @@ const ChatShell = memo(function ChatShell({
   }, [sidebarCollapsed, contextSidebarCollapsed]);
 
   return (
-    <div className="app-shell app-shell--chat relative flex h-full min-h-0 flex-row text-foreground">
-      {/* Title drag is handled by .app-titlebar-backdrop; avoid a high-z drag strip that eats clicks on the collapse control */}
-      <div className="app-titlebar-backdrop" aria-hidden="true" />
-      <div className="app-titlebar-title">Cowork</div>
-      <SidebarCollapseControl />
-      <LeftSidebarPane collapsed={sidebarCollapsed} />
-      <div className="app-chat-main-column relative flex min-h-0 min-w-0 flex-1 flex-col">
-        <AppTopBar
-          busy={busy}
-          contextSidebarCollapsed={contextSidebarCollapsed}
-          onToggleContextSidebar={toggleContextSidebar}
-        />
+    <div className="app-shell app-shell--chat flex h-full min-h-0 flex-col text-foreground">
+      <div className="app-window-drag-strip" aria-hidden="true" />
+      <AppTopBar
+        busy={busy}
+        onToggleSidebar={toggleSidebar}
+        sidebarCollapsed={sidebarCollapsed}
+        sidebarWidth={sidebarWidth}
+        contextSidebarCollapsed={contextSidebarCollapsed}
+        onToggleContextSidebar={toggleContextSidebar}
+      />
+      <div className="app-chat-body flex min-h-0 min-w-0 flex-1 flex-row">
+        <LeftSidebarPane collapsed={sidebarCollapsed} />
         <main className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col">
-            <div className="flex min-h-0 flex-1 overflow-hidden">
-              <div className="relative min-w-0 min-h-0 flex-1 overflow-hidden">
-                <PrimaryContent
-                  init={init}
-                  ready={ready}
-                  startupError={startupError}
-                  view={view === "skills" ? "skills" : "chat"}
-                />
-              </div>
-              {showContextSidebar ? <RightSidebarPane collapsed={contextSidebarCollapsed} /> : null}
+          <div className="flex min-h-0 flex-1 overflow-hidden">
+            <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+              <PrimaryContent
+                init={init}
+                ready={ready}
+                startupError={startupError}
+                view={view === "skills" ? "skills" : "chat"}
+              />
             </div>
+            {showContextSidebar ? <RightSidebarPane collapsed={contextSidebarCollapsed} /> : null}
+          </div>
         </main>
       </div>
     </div>

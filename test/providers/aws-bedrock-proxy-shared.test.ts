@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 
 import {
+  discoverAwsBedrockProxyModels,
   discoverAwsBedrockProxyModelsDetailed,
   resolveAwsBedrockProxyApiKey,
   resolveAwsBedrockProxyBaseUrl,
@@ -108,6 +109,28 @@ describe("aws-bedrock-proxy discovery", () => {
       code: "timeout",
       message: "The /models request timed out.",
     });
+  });
+
+  test("discoverAwsBedrockProxyModels warns before flattening detailed failures", async () => {
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map((arg) => String(arg)).join(" "));
+    };
+
+    try {
+      const result = await discoverAwsBedrockProxyModels({
+        baseUrl: "https://proxy.example.com",
+        fetchImpl: (async () => new Response("forbidden", { status: 403 })) as unknown as typeof fetch,
+      });
+
+      expect(result).toEqual([]);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("discoverAwsBedrockProxyModels returning [] after unauthorized");
+      expect(warnings[0]).toContain("forbidden");
+    } finally {
+      console.warn = realWarn;
+    }
   });
 });
 

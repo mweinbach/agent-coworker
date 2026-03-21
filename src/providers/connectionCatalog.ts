@@ -1,5 +1,5 @@
 import { getAiCoworkerPaths, readConnectionStore, type AiCoworkerPaths } from "../connect";
-import { PROVIDER_NAMES, type ProviderName } from "../types";
+import { PROVIDER_NAMES, type AgentConfig, type ProviderName } from "../types";
 import { defaultSupportedModel, listSupportedModels, type SupportedModel } from "../models/registry";
 import { readCodexAuthMaterial } from "./codex-auth";
 import {
@@ -154,12 +154,12 @@ export async function getProviderCatalog(opts: {
   paths?: AiCoworkerPaths;
   readStore?: typeof readConnectionStore;
   readCodexAuthMaterialImpl?: typeof readCodexAuthMaterial;
+  config?: AgentConfig;
   providerOptions?: unknown;
   env?: NodeJS.ProcessEnv;
   lmstudioFetchImpl?: typeof fetch;
   activeProvider?: ProviderName;
   activeModel?: string;
-  awsBedrockProxyBaseUrl?: string;
   fetchImpl?: typeof fetch;
 } = {}): Promise<ProviderCatalogPayload> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
@@ -184,8 +184,8 @@ export async function getProviderCatalog(opts: {
       ? store.services["aws-bedrock-proxy"].apiKey
       : undefined;
     const baseUrl = resolveAwsBedrockProxyBaseUrl({
-      baseUrl: opts.awsBedrockProxyBaseUrl,
-      providerOptions: opts.providerOptions,
+      config: opts.config,
+      providerOptions: opts.providerOptions ?? opts.config?.providerOptions,
       env: opts.env,
     });
     const discovery = await discoverAwsBedrockProxyModelsDetailed({
@@ -194,7 +194,9 @@ export async function getProviderCatalog(opts: {
       fetchImpl: opts.fetchImpl,
     });
     const discoveredModels = discovery.ok ? discovery.models : [];
-    const activeProxyModel = opts.activeProvider === "aws-bedrock-proxy" ? opts.activeModel?.trim() : undefined;
+    const activeProvider = opts.activeProvider ?? opts.config?.provider;
+    const activeModel = opts.activeModel ?? opts.config?.model;
+    const activeProxyModel = activeProvider === "aws-bedrock-proxy" ? activeModel?.trim() : undefined;
     const hasActiveModel = Boolean(activeProxyModel && discoveredModels.some((model) => model.id === activeProxyModel));
     const models = activeProxyModel && !hasActiveModel
       ? [

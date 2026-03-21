@@ -32,10 +32,10 @@ export class ProviderCatalogManager {
       const cfg = this.opts.getConfig();
       const payload = await this.opts.getProviderCatalog({
         paths: this.opts.getGlobalAuthPaths(),
+        config: cfg,
         providerOptions: cfg.providerOptions,
         activeProvider: cfg.provider,
         activeModel: cfg.model,
-        awsBedrockProxyBaseUrl: cfg.awsBedrockProxyBaseUrl,
         env: process.env,
         fetchImpl: fetch,
       });

@@ -269,6 +269,11 @@ export async function discoverAwsBedrockProxyModels(opts: {
   timeoutMs?: number;
 } = {}): Promise<AwsBedrockProxyDiscoveredModel[]> {
   const result = await discoverAwsBedrockProxyModelsDetailed(opts);
+  if (!result.ok) {
+    console.warn(
+      `[aws-bedrock-proxy] discoverAwsBedrockProxyModels returning [] after ${result.code}: ${result.message}`,
+    );
+  }
   return result.ok ? result.models : [];
 }
 

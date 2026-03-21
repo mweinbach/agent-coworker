@@ -983,6 +983,71 @@ describe("thread reconnect", () => {
     expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.has(activeThreadId)).toBe(false);
   });
 
+  test("draft first message waits for the selected model defaults before sending", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              defaultProvider: "codex-cli",
+              defaultModel: "gpt-5.4",
+            }
+          : workspace,
+      ),
+      threads: state.threads.map((thread) =>
+        thread.id === threadId
+          ? {
+              ...thread,
+              draft: true,
+              status: "active",
+            }
+          : thread,
+      ),
+    }));
+
+    await useAppStore.getState().selectThread(threadId);
+    useAppStore.getState().setThreadModel(threadId, "google", "gemini-3.1-pro-preview-customtools");
+    await useAppStore.getState().reconnectThread(threadId, "Hello from draft");
+
+    const threadSocket = socketByClient("desktop");
+    threadSocket.sent = [];
+    emitServerHello(threadSocket, "thread-session", {
+      config: {
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        workingDirectory: "/tmp/workspace",
+        outputDirectory: "/tmp/workspace/output",
+      },
+    });
+    const activeThreadId = canonicalThreadId("thread-session", threadId);
+
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(activeThreadId)).toEqual({
+      mode: "auto",
+      draftModelSelection: {
+        provider: "google",
+        model: "gemini-3.1-pro-preview-customtools",
+      },
+    });
+    expect(threadSocket.sent.some((message) => message?.type === "user_message")).toBe(false);
+
+    threadSocket.sent = [];
+    emitThreadSessionDefaults(threadSocket, "thread-session");
+
+    expect(threadSocket.sent[0]).toMatchObject({
+      type: "apply_session_defaults",
+      sessionId: "thread-session",
+      provider: "google",
+      model: "gemini-3.1-pro-preview-customtools",
+    });
+    expect(threadSocket.sent[1]).toMatchObject({
+      type: "user_message",
+      sessionId: "thread-session",
+      text: "Hello from draft",
+    });
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.has(activeThreadId)).toBe(false);
+  });
+
   test("live setThreadModel clears a deferred draft model override after connect", async () => {
     useAppStore.setState((state) => ({
       ...state,

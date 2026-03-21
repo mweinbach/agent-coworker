@@ -26,6 +26,7 @@ import {
   PromptInputTools,
 } from "../components/ai-elements/prompt-input";
 import { MessageBarResizer } from "./layout/MessageBarResizer";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import {
@@ -431,11 +432,11 @@ function isChatProviderName(value: unknown): value is ProviderName {
   return typeof value === "string" && (PROVIDER_NAMES as readonly string[]).includes(value);
 }
 
-function ThreadModelSelector({
+function DraftThreadModelSelector({
   threadId,
   provider,
   model,
-  disabled
+  disabled,
 }: {
   threadId: string;
   provider: ProviderName;
@@ -481,16 +482,16 @@ function ThreadModelSelector({
         <span className="truncate"><SelectValue placeholder="Model" /></span>
       </SelectTrigger>
       <SelectContent>
-        {providers.map(p => (
+        {providers.map((p) => (
           <SelectGroup key={p}>
-            <SelectLabel className="text-xs font-semibold px-2 py-1.5">{PROVIDER_LABELS[p] ?? p}</SelectLabel>
-            {(choices[p] ?? []).map(m => (
-              <SelectItem key={`${p}:${m}`} value={`${p}:${m}`} className="text-xs pl-6">
+            <SelectLabel className="px-2 py-1.5 text-xs font-semibold">{PROVIDER_LABELS[p] ?? p}</SelectLabel>
+            {(choices[p] ?? []).map((m) => (
+              <SelectItem key={`${p}:${m}`} value={`${p}:${m}`} className="pl-6 text-xs">
                 {m}
               </SelectItem>
             ))}
             {p === provider && model && !(choices[p] ?? []).includes(model) ? (
-              <SelectItem key={`${p}:${model}`} value={`${p}:${model}`} className="text-xs pl-6">
+              <SelectItem key={`${p}:${model}`} value={`${p}:${model}`} className="pl-6 text-xs">
                 {model} (custom)
               </SelectItem>
             ) : null}
@@ -498,6 +499,29 @@ function ThreadModelSelector({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+function ThreadModelIndicator({
+  provider,
+  model,
+}: {
+  provider: ProviderName;
+  model: string;
+}) {
+  const label = model.trim();
+  if (!label) return null;
+  const title = `${PROVIDER_LABELS[provider] ?? provider} / ${label}`;
+
+  return (
+    <Badge
+      variant="outline"
+      title={title}
+      aria-label={`Session model ${title}`}
+      className="h-7 max-w-[220px] rounded-full border-border/60 bg-muted/30 px-2.5 font-normal text-muted-foreground shadow-none"
+    >
+      <span className="truncate">{label}</span>
+    </Badge>
   );
 }
 
@@ -582,7 +606,7 @@ export function ChatView() {
     return s.workspaces.find((w) => w.id === th.workspaceId) ?? null;
   });
 
-  const modelSelectorConfig = useMemo(() => {
+  const threadModelConfig = useMemo(() => {
     if (!selectedThreadId || !thread) return null;
     if (!rt || rt.sessionKind === "agent") return null;
     if (rt.transcriptOnly === true) return null;
@@ -857,13 +881,20 @@ export function ChatView() {
               </PromptInputBody>
               <PromptInputFooter>
                 <PromptInputTools>
-                  {modelSelectorConfig ? (
-                    <ThreadModelSelector
-                      threadId={selectedThreadId}
-                      provider={modelSelectorConfig.provider}
-                      model={modelSelectorConfig.model}
-                      disabled={busy}
-                    />
+                  {threadModelConfig ? (
+                    thread.draft ? (
+                      <DraftThreadModelSelector
+                        threadId={selectedThreadId}
+                        provider={threadModelConfig.provider}
+                        model={threadModelConfig.model}
+                        disabled={disabled}
+                      />
+                    ) : (
+                      <ThreadModelIndicator
+                        provider={threadModelConfig.provider}
+                        model={threadModelConfig.model}
+                      />
+                    )
                   ) : null}
                 </PromptInputTools>
                 <div className={cn("flex shrink-0 items-center gap-2", busy ? "opacity-100" : "opacity-70")}>

@@ -72,6 +72,10 @@ type ThreadEventReducerDeps = {
 };
 
 export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
+  function hasPendingDraftModelSelection(threadId: string): boolean {
+    return Boolean(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId)?.draftModelSelection);
+  }
+
   function migrateThreadIdentity(get: StoreGet, set: StoreSet, fromThreadId: string, toThreadId: string): string {
     if (!fromThreadId || !toThreadId || fromThreadId === toThreadId) {
       return toThreadId;
@@ -355,6 +359,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   }
 
   function flushOneQueuedThreadMessage(get: StoreGet, set: StoreSet, threadId: string) {
+    if (hasPendingDraftModelSelection(threadId)) {
+      return false;
+    }
     const next = shiftPendingThreadMessage(threadId);
     if (!next) return false;
     const ok = sendUserMessageToThread(get, set, threadId, next);
@@ -493,6 +500,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
               ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
             ]);
           }
+        } else if (hasPendingDraftModelSelection(threadId)) {
+          if (!pendingFirstMessageQueued) {
+            RUNTIME.pendingThreadMessages.set(threadId, [
+              pendingFirstMessage.trim(),
+              ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
+            ]);
+          }
         } else {
           sentPendingFirstMessage = pendingFirstMessageQueued
             ? flushOneQueuedThreadMessage(get, set, threadId)
@@ -534,6 +548,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           pendingApply.mode,
           pendingApply.draftModelSelection,
         );
+        if (!hasPendingDraftModelSelection(threadId) && !get().threadRuntimeById[threadId]?.busy) {
+          flushOneQueuedThreadMessage(get, set, threadId);
+        }
       }
       return;
     }
@@ -634,6 +651,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           pendingApply.mode,
           pendingApply.draftModelSelection,
         );
+        if (!hasPendingDraftModelSelection(threadId) && !get().threadRuntimeById[threadId]?.busy) {
+          flushOneQueuedThreadMessage(get, set, threadId);
+        }
       }
       return;
     }

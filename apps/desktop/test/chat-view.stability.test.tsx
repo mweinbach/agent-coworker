@@ -180,6 +180,173 @@ describe("desktop chat view stability", () => {
     }
   });
 
+  test("shows the active session model as a read-only footer indicator even after messages exist", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Thread 1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:30.000Z",
+          status: "active",
+          sessionId: "session-1",
+          lastEventSeq: 1,
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          wsUrl: null,
+          connected: true,
+          sessionId: "session-1",
+          config: {
+            provider: "openai",
+            model: "gpt-5.4-session-lock",
+          },
+          sessionConfig: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: false,
+          busySince: null,
+          feed: [
+            {
+              id: "msg-1",
+              kind: "message",
+              role: "assistant",
+              ts: "2026-03-12T00:00:30.000Z",
+              text: "Existing reply",
+            },
+          ],
+          pendingSteer: null,
+          transcriptOnly: false,
+        },
+      },
+      composerText: "",
+    });
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      expect(container.textContent).toContain("Existing reply");
+      const modelIndicator = container.querySelector('[title="OpenAI / gpt-5.4-session-lock"]');
+      expect(modelIndicator?.textContent).toContain("gpt-5.4-session-lock");
+      expect(container.querySelector('[data-slot="select-trigger"]')).toBeNull();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("shows the pending draft model in an editable footer selector before the first message", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.2-draft-default",
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "New thread",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:00.000Z",
+          status: "active",
+          sessionId: null,
+          lastEventSeq: 0,
+          draft: true,
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          wsUrl: null,
+          connected: false,
+          sessionId: null,
+          config: null,
+          sessionConfig: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: false,
+          busySince: null,
+          feed: [],
+          pendingSteer: null,
+          transcriptOnly: false,
+          draftComposerProvider: null,
+          draftComposerModel: null,
+        },
+      },
+      composerText: "",
+    });
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      expect(container.textContent).toContain("Send a message to start.");
+      const modelSelector = container.querySelector('[data-slot="select-trigger"]');
+      expect(modelSelector).not.toBeNull();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("shows a loading state while the selected startup thread is still hydrating", async () => {
     useAppStore.setState({
       ready: true,

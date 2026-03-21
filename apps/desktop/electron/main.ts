@@ -1,4 +1,3 @@
-import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,23 +27,6 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PACKAGED_RENDERER_DIR = path.resolve(path.join(__dirname, "../renderer"));
-const DEBUG_LOG_PATH = "/opt/cursor/logs/debug.log";
-
-function writeDebugLog(
-  hypothesisId: string,
-  location: string,
-  message: string,
-  data: Record<string, unknown> = {},
-): void {
-  try {
-    appendFileSync(
-      DEBUG_LOG_PATH,
-      `${JSON.stringify({ hypothesisId, location, message, data, timestamp: Date.now() })}\n`,
-    );
-  } catch {
-    // Ignore debug log write failures.
-  }
-}
 
 const serverManager = new ServerManager();
 const persistence = new PersistenceService();
@@ -212,15 +194,6 @@ async function createWindow(): Promise<void> {
   });
   const useDarkColors = getSystemAppearanceSnapshot().shouldUseDarkColors;
 
-  // #region agent log
-  writeDebugLog("A", "apps/desktop/electron/main.ts:createWindow", "createWindow start", {
-    platform: process.platform,
-    isPackaged: app.isPackaged,
-    useDarkColors,
-    useMacosNativeGlass,
-  });
-  // #endregion
-
   const win = new BrowserWindow({
     title: "Cowork",
     width: 1240,
@@ -295,42 +268,7 @@ async function createWindow(): Promise<void> {
   });
 
   win.webContents.once("did-finish-load", () => {
-    // #region agent log
-    writeDebugLog("A", "apps/desktop/electron/main.ts:did-finish-load", "renderer did finish load", {
-      url: win.webContents.getURL(),
-    });
-    // #endregion
     emitSystemAppearance();
-  });
-
-  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-    // #region agent log
-    writeDebugLog("B", "apps/desktop/electron/main.ts:did-fail-load", "renderer did fail load", {
-      errorCode,
-      errorDescription,
-      validatedURL,
-      isMainFrame,
-    });
-    // #endregion
-  });
-
-  win.webContents.on("preload-error", (_event, preloadPath, error) => {
-    // #region agent log
-    writeDebugLog("C", "apps/desktop/electron/main.ts:preload-error", "preload error", {
-      preloadPath,
-      message: error.message,
-      name: error.name,
-    });
-    // #endregion
-  });
-
-  win.webContents.on("render-process-gone", (_event, details) => {
-    // #region agent log
-    writeDebugLog("D", "apps/desktop/electron/main.ts:render-process-gone", "renderer process gone", {
-      reason: details.reason,
-      exitCode: details.exitCode,
-    });
-    // #endregion
   });
 
   if (!app.isPackaged) {
@@ -341,16 +279,8 @@ async function createWindow(): Promise<void> {
     if (warning) {
       console.warn(`[desktop] ${warning}`);
     }
-    // #region agent log
-    writeDebugLog("B", "apps/desktop/electron/main.ts:loadURL", "loading renderer url", { url });
-    // #endregion
     await win.loadURL(url);
   } else {
-    // #region agent log
-    writeDebugLog("B", "apps/desktop/electron/main.ts:loadFile", "loading packaged renderer file", {
-      path: path.join(__dirname, "../renderer/index.html"),
-    });
-    // #endregion
     await win.loadFile(path.join(__dirname, "../renderer/index.html"));
   }
 }

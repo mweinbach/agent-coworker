@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { getModel as realGetModel } from "./config";
+import { buildTurnSystemPrompt } from "./harness/buildTurnSystemPrompt";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
@@ -8,14 +9,13 @@ import type { RuntimeModelRawEvent, RuntimePrepareStep, RuntimeStepOverride } fr
 import type { AgentRole } from "./shared/agents";
 import type { ProviderContinuationState } from "./shared/providerContinuation";
 import type { AgentControl } from "./tools";
-import type { AgentConfig, ModelMessage, TodoItem } from "./types";
+import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "./types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTracker";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { createTools } from "./tools";
 import { getAgentRoleDefinition } from "./server/agents/roles";
 import { filterToolsForRole } from "./server/agents/toolPolicy";
 
-const MCP_NAMESPACING_TOKEN = "`mcp__{serverName}__{toolName}`";
 const MAX_STREAM_SETTLE_TICKS = 64;
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const messageRecordSchema = z.object({
@@ -54,6 +54,7 @@ export interface RunTurnParams {
   messages: ModelMessage[];
   allMessages?: ModelMessage[];
   providerState?: ProviderContinuationState | null;
+  harnessContext?: HarnessContextState | null;
   agentControl?: AgentControl;
   prepareStep?: RuntimePrepareStep;
 
@@ -87,26 +88,6 @@ export interface RunTurnParams {
 
   /** Persist/emit session usage when a tool mutates budget thresholds mid-turn. */
   onSessionUsageBudgetUpdated?: (snapshot: SessionUsageSnapshot) => void;
-}
-
-function stripStaticMcpNamespacingGuidance(system: string): string {
-  return system
-    .split("\n")
-    .filter((line) => !line.includes(MCP_NAMESPACING_TOKEN))
-    .join("\n");
-}
-
-function buildTurnSystemPrompt(system: string, mcpToolNames: string[]): string {
-  const base = stripStaticMcpNamespacingGuidance(system);
-  if (mcpToolNames.length === 0) return base;
-
-  return [
-    base,
-    "",
-    "## Active MCP Tools",
-    "MCP tools are active in this turn. Their names follow `mcp__{serverName}__{toolName}`.",
-    "Only call MCP tools that are present in the current tool list.",
-  ].join("\n");
 }
 
 function mergeToolSets(
@@ -295,6 +276,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       availableSkills: discoveredSkills,
       turnUserPrompt: extractTurnUserPrompt(messages),
       getTurnUserPrompt: () => extractTurnUserPrompt(latestTurnMessages),
+      harnessContext: params.harnessContext,
       agentRole: params.agentRole,
       agentControl: params.agentControl,
       costTracker: params.costTracker,
@@ -319,7 +301,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       ? filterToolsForRole(mergedTools, getAgentRoleDefinition(params.agentRole))
       : mergedTools;
     const mcpToolNames = Object.keys(tools).filter((name) => name.startsWith("mcp__")).sort();
-    const turnSystem = buildTurnSystemPrompt(system, mcpToolNames);
+    const turnSystem = buildTurnSystemPrompt(system, mcpToolNames, params.harnessContext);
     const turnProviderOptions = config.providerOptions;
     const googlePrepareStep =
       config.provider === "google" && Object.keys(tools).length > 0

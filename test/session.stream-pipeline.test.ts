@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AgentConfig } from "../src/types";
 import type { ServerEvent } from "../src/server/protocol";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
+import * as REAL_AGENT from "../src/agent";
 
 const mockRunTurn = mock(async () => ({
   text: "",
@@ -11,6 +12,7 @@ const mockRunTurn = mock(async () => ({
 }));
 
 mock.module("../src/agent", () => ({
+  ...REAL_AGENT,
   runTurn: mockRunTurn,
 }));
 

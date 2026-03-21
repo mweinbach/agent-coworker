@@ -74,7 +74,15 @@ See [`observability.md`](./observability.md) for runtime behavior and health rep
 - `AGENT_HARNESS_REPORT_ONLY` or `harness.reportOnly`
 - `AGENT_HARNESS_STRICT_MODE` or `harness.strictMode`
 
-These values are parsed into `config.harness` and are primarily used by raw-loop workflows. `strictMode` is currently reserved and is not consumed by the general runtime path.
+These values are parsed into `config.harness` and are primarily used by raw-loop workflows.
+
+- `reportOnly` marks the run as harness/report mode in emitted metadata and artifacts.
+- `strictMode` enables strict raw-loop outcome validation:
+  - the final response must satisfy the scenario contract
+  - required artifacts must validate
+  - missing/malformed final contracts fail without a repair pass
+
+The session runtime path does not currently enforce raw-loop strict validation semantics directly, but raw-loop runs now respect the resolved config/env value unless a CLI override is supplied.
 
 ## Built-In Resource Resolution
 

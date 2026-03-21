@@ -235,7 +235,11 @@ export type AppStoreState = {
   checkSkillInstallationUpdate: (installationId: string) => Promise<void>;
   updateSkillInstallation: (installationId: string) => Promise<void>;
 
-  applyWorkspaceDefaultsToThread: (threadId: string, mode?: "auto" | "auto-resume" | "explicit") => Promise<void>;
+  applyWorkspaceDefaultsToThread: (
+    threadId: string,
+    mode?: "auto" | "auto-resume" | "explicit",
+    draftModelSelection?: { provider: ProviderName; model: string } | null,
+  ) => Promise<void>;
   updateWorkspaceDefaults: (workspaceId: string, patch: WorkspaceDefaultsPatch) => Promise<void>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
   requestWorkspaceMcpServers: (workspaceId: string) => Promise<void>;

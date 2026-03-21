@@ -417,13 +417,15 @@ export class TurnExecutionManager {
     const invokeRunTurn = async (
       maxSteps: number,
       providerStateOverride = this.context.state.providerState,
-    ) =>
-      await this.context.deps.runTurnImpl({
+    ) => {
+      const harnessContext = this.context.deps.harnessContextStore.get(this.context.id);
+      return await this.context.deps.runTurnImpl({
         config: this.context.state.config,
         system: this.context.state.system,
         messages: this.context.state.messages,
         allMessages: this.context.state.allMessages,
         providerState: providerStateOverride,
+        harnessContext,
         prepareStep: async ({ messages }) => this.drainPendingSteers(messages),
         agentControl:
           this.context.state.sessionInfo.sessionKind === "agent" || !this.context.deps.createAgentSessionImpl
@@ -581,6 +583,7 @@ export class TurnExecutionManager {
           });
         },
       });
+    };
     try {
       this.context.emit({ type: "user_message", sessionId: this.context.id, text: displayText ?? text, clientMessageId });
       this.context.emit({ type: "session_busy", sessionId: this.context.id, busy: true, turnId, cause });

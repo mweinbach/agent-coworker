@@ -107,4 +107,44 @@ describe("DelegateRunner", () => {
       }),
     );
   });
+
+  test("injects harness context into delegated child system prompts", async () => {
+    const runTurn = mock(async () => ({
+      text: "ok",
+      reasoningText: undefined as string | undefined,
+      responseMessages: [],
+    }));
+    const createRuntime = mock(() => ({ runTurn }));
+    const runner = new DelegateRunner({
+      loadAgentPrompt: async () => "delegate system prompt",
+      buildRuntimeTelemetrySettings: async () => null,
+      buildGooglePrepareStep: () => undefined,
+      createRuntime,
+      createTools: () => ({}),
+    });
+
+    await runner.run({
+      config: makeConfig(),
+      role: "worker",
+      message: "Run with explicit harness context",
+      askUser: async () => "",
+      approveCommand: async () => true,
+      log: () => {},
+      harnessContext: {
+        runId: "run-delegate",
+        objective: "Verify delegated prompt injection",
+        acceptanceCriteria: ["Child prompt contains harness context"],
+        constraints: ["Do not override safety policy"],
+        updatedAt: "2026-03-20T12:00:00.000Z",
+      },
+    });
+
+    expect(runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        system: expect.stringContaining("## Active Harness Context"),
+      }),
+    );
+    expect(runTurn.mock.calls[0]?.[0]?.system).toContain("- Run ID: run-delegate");
+    expect(runTurn.mock.calls[0]?.[0]?.system).toContain("- Objective: Verify delegated prompt injection");
+  });
 });

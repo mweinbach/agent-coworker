@@ -4,7 +4,7 @@ This file provides repository context for coding agents working with this reposi
 
 ## What This Is
 
-`agent-coworker` is a terminal-first AI coworker agent built on Bun + Vercel AI SDK. It provides three interfaces: a TUI (OpenTUI + Solid.js, default), a plain CLI REPL, and a headless WebSocket server. It ships a built-in toolbelt (file ops, shell, web, code exploration) with a command approval system for risky operations.
+`agent-coworker` is a terminal-first AI coworker agent built on Bun + TypeScript with pluggable runtime adapters. It provides three interfaces: a TUI (OpenTUI + Solid.js, default), a plain CLI REPL, and a headless WebSocket server. It ships a built-in toolbelt (file ops, shell, web, code exploration) with a command approval system for risky operations.
 
 ## Commands
 
@@ -32,15 +32,15 @@ There is no linter or formatter configured. TypeScript strict mode is the primar
 
 ### Core Loop
 
-`src/agent.ts` contains the agent turn logic. `createRunTurn()` is a factory that accepts injectable dependencies (for testing) and returns `runTurn()`. Each turn calls `generateText()` from the Vercel AI SDK with the model, system prompt, message history, and tools.
+`src/agent.ts` contains the agent turn logic. `createRunTurn()` is a factory that accepts injectable dependencies (for testing) and returns `runTurn()`. Each turn assembles the effective tool set, injects turn-scoped context (including harness context), and delegates model execution to the configured runtime.
 
 ### Server & Protocol
 
-`src/server/session.ts` — `AgentSession` manages per-session state: message history, turn execution, and pending ask/approval requests via deferred promises. The WebSocket protocol is defined in `src/server/protocol.ts` with typed `ClientMessage` and `ServerEvent` unions.
+`src/server/session/AgentSession.ts` — `AgentSession` manages per-session state: message history, turn execution, backups, harness context, and pending ask/approval requests via deferred promises. The WebSocket protocol is defined in `src/server/protocol.ts` with typed `ClientMessage` and `ServerEvent` unions.
 
 ### Provider System
 
-`src/providers/index.ts` — Registry of `ProviderDefinition` objects. Each provider (`google`, `openai`, `anthropic`, `codex-cli`) exports `defaultModel`, `keyCandidates`, and `createModel()`. Provider selection flows through config with env var override (`AGENT_PROVIDER`).
+`src/providers/` — Provider/runtime integrations plus provider catalog/auth helpers. Provider selection flows through config with env var override (`AGENT_PROVIDER`).
 
 ### Tool System
 
@@ -84,10 +84,11 @@ When adding a new WebSocket message type or event:
 
 1. Add the type to `ClientMessage` or `ServerEvent` in `src/server/protocol.ts`.
 2. Add validation in `safeParseClientMessage()` if it's a client message.
-3. Add the handler in `src/server/startServer.ts` (message routing) and/or `src/server/session.ts` (session logic).
+3. Add the handler in `src/server/startServer/dispatchClientMessage.ts` (message routing) and/or the appropriate manager under `src/server/session/` (session logic).
 4. **Update `docs/websocket-protocol.md`** with the new message format, fields, example JSON, and where it fits in the flow.
 
 The protocol doc (`docs/websocket-protocol.md`) is the source of truth for anyone building an alternative UI. Keep it accurate and complete.
+The harness docs index (`docs/harness/index.md`) is the system-of-record map for harness behavior, context, and runbook guidance.
 
 ## Testing
 

@@ -176,8 +176,7 @@ describe("desktop protocol v2 mapping", () => {
     RUNTIME.pendingThreadMessages.clear();
     RUNTIME.pendingThreadSteers.clear();
     RUNTIME.threadSelectionRequests.clear();
-    RUNTIME.pendingWorkspaceDefaultApplyThreadIds.clear();
-    RUNTIME.pendingWorkspaceDefaultApplyModeByThread.clear();
+    RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.workspaceStartPromises.clear();
     RUNTIME.workspaceStartGenerations.clear();
     RUNTIME.modelStreamByThread.clear();

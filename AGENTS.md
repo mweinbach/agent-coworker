@@ -18,7 +18,6 @@ All logic for the application should be done in the harness itself, consider the
 - `apps/desktop/`: Electron desktop application
 - `test/`: Bun tests (`*.test.ts`)
 - `config/`: built-in defaults and MCP server defaults
-- `config/observability/`: local observability stack definitions (Vector + Victoria)
 - `prompts/`: system + sub-agent prompts
 - `skills/`: bundled skill docs/assets used by the agent
 - `docs/harness/index.md`: harness context/observability/SLO system-of-record map
@@ -59,7 +58,7 @@ All new features MUST be built on top of the CLI/core logic and exposed via WebS
 When adding a new WebSocket message or event:
 1. Define the type in `src/server/protocol.ts` (`ClientMessage` / `ServerEvent` unions).
 2. Add validation in `safeParseClientMessage()` for client messages.
-3. Wire the handler in `src/server/startServer.ts` and/or `src/server/session.ts`.
+3. Wire the handler in `src/server/startServer/dispatchClientMessage.ts` and/or the appropriate manager under `src/server/session/`.
 4. **Document it in `docs/websocket-protocol.md`** — this is the source of truth for alternative UI builders.
 
 ## Security & Configuration Tips

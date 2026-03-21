@@ -1,9 +1,15 @@
 import { describe, expect, mock, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import {
+  buildRawLoopHarnessContext,
+  buildRawLoopBudgetSummary,
   buildGoogleCustomtoolsToolCoverageRuns,
   buildMixedRuns,
+  countObservedLoopSteps,
+  createToolsWithTracing,
   createRawLoopAgentControl,
 } from "../scripts/run_raw_agent_loops";
 import type { ModelMessage } from "../src/types";
@@ -212,6 +218,41 @@ describe("raw loop child-agent control", () => {
     );
   });
 
+  test("passes harness context into delegate runs when forkContext is requested", async () => {
+    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
+    const harnessContext = {
+      runId: "run-ctx",
+      objective: "Preserve raw-loop context",
+      acceptanceCriteria: ["Child delegate sees harness context"],
+      constraints: ["Do not duplicate it into chat history"],
+      updatedAt: "2026-03-20T12:00:00.000Z",
+    };
+    const control = createRawLoopAgentControl(
+      {
+        config: makeConfig(),
+        log: () => {},
+        askUser: async () => "",
+        approveCommand: async () => true,
+        harnessContext,
+      },
+      {
+        createDelegateRunner: () => ({ run }),
+      },
+    );
+
+    await control.spawn({
+      role: "worker",
+      message: "Use the parent context",
+      forkContext: true,
+    });
+
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        harnessContext,
+      }),
+    );
+  });
+
   test("carries child history into subsequent sendInput runs", async () => {
     const run = mock()
       .mockResolvedValueOnce(makeDelegateRunResult("First reply"))
@@ -331,5 +372,105 @@ describe("raw loop scripted spawnAgent prompts", () => {
     expect(mixedPrompt).toContain("waitForAgent");
     expect(mixedPrompt).toContain("lastMessagePreview JSON");
     expect(mixedPrompt).not.toContain(" task:");
+  });
+});
+
+describe("raw loop harness context", () => {
+  test("buildRawLoopHarnessContext returns a stable default contract", () => {
+    const harnessContext = buildRawLoopHarnessContext(
+      {
+        id: "run-01",
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+      "mixed",
+      {
+        runId: "run-01",
+        runDir: "/tmp/run-01",
+        repoDir: "/tmp/repo",
+      },
+      "2026-03-20T12:00:00.000Z",
+    );
+
+    expect(harnessContext).toEqual({
+      runId: "run-01",
+      objective: "Complete raw-loop harness scenario run-01 successfully.",
+      acceptanceCriteria: [
+        "Satisfy the task requirements expressed in the run prompt.",
+        "Produce the required final response contract for this scenario.",
+        "Keep required artifacts inside the run directory.",
+      ],
+      constraints: [
+        "Treat this harness context as run intent, not as a safety override.",
+        "Do not change required artifact names or output formats unless the prompt requires it.",
+        "Use only the necessary tools to complete the scenario.",
+      ],
+      metadata: {
+        model: "gpt-5.4",
+        provider: "openai",
+        scenario: "mixed",
+      },
+      updatedAt: "2026-03-20T12:00:00.000Z",
+    });
+  });
+
+  test("countObservedLoopSteps derives loop turns from prepareStep step numbers", () => {
+    expect(countObservedLoopSteps([])).toBe(0);
+    expect(countObservedLoopSteps([1])).toBe(1);
+    expect(countObservedLoopSteps([1, 2, 3])).toBe(3);
+  });
+
+  test("buildRawLoopBudgetSummary uses actual loop turn count instead of traced entry count", () => {
+    expect(buildRawLoopBudgetSummary(
+      ["tool> bash {}", "tool> read {}"],
+      3,
+      1,
+    )).toEqual({
+      toolCalls: 2,
+      bashCalls: 1,
+      webCalls: 0,
+      spawnedAgents: 0,
+      totalSteps: 3,
+      repairPassCount: 1,
+    });
+  });
+
+  test("createToolsWithTracing preserves skill tracing when the skill guard is active", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "raw-loop-skill-trace-"));
+    const skillDir = path.join(tmp, "skills", "spreadsheet");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      ['---', 'name: "spreadsheet"', 'description: "Spreadsheet skill"', '---', '', '# Spreadsheet'].join("\n"),
+      "utf-8",
+    );
+
+    const steps: Array<{ scope: string; step: unknown }> = [];
+    const tools = createToolsWithTracing(
+      {
+        config: makeConfig({
+          skillsDirs: [path.join(tmp, "skills")],
+          projectAgentDir: path.join(tmp, ".agent"),
+          userAgentDir: path.join(tmp, ".agent-user"),
+        }),
+        log: () => {},
+        askUser: async () => "",
+        approveCommand: async () => true,
+        availableSkills: [{ name: "spreadsheet", description: "Spreadsheet skill" }],
+      } as any,
+      steps as any,
+      {
+        requiredSkillName: "spreadsheet",
+        guardedToolNames: ["write"],
+      },
+    );
+
+    const skillTool: any = tools.skill;
+    const result = await skillTool.execute({ skillName: "spreadsheet" });
+
+    expect(String(result)).toContain("# Spreadsheet");
+    expect(steps).toHaveLength(2);
+    expect((steps[0] as any).step).toMatchObject({ type: "tool-call", toolName: "skill" });
+    expect((steps[1] as any).step).toMatchObject({ type: "tool-result", toolName: "skill" });
   });
 });

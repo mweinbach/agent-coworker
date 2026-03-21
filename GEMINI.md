@@ -7,7 +7,7 @@
 *   **Purpose:** A local-first AI assistant with deep system access (files, shell, web) and a tool-driven workflow.
 *   **Main Technologies:**
     *   **Runtime:** Bun (high-performance JavaScript/TypeScript runtime).
-    *   **Agent Framework:** Vercel AI SDK (`ai` package).
+    *   **Agent runtime:** repo-owned runtime adapters selected by provider/runtime config.
     *   **UI/UX:** OpenTUI + Solid.js for the terminal interface; Electron for the desktop application.
     *   **Communication:** Custom WebSocket protocol for decoupled client-server interaction.
 *   **Core Architecture:**
@@ -63,5 +63,6 @@
 *   `src/agent.ts`: The core agent loop and LLM logic.
 *   `src/server/protocol.ts`: Source of truth for the WebSocket protocol.
 *   `docs/websocket-protocol.md`: Detailed documentation for building alternative clients.
+*   `docs/harness/index.md`: Harness docs map for context, config, observability, and the runbook.
 *   `skills/`: Directory for domain-specific best practice guides (e.g., `pdf`, `slides`) loaded by the agent.
 *   `prompts/`: System and sub-agent prompts.

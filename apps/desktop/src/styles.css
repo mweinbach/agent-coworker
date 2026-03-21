@@ -99,6 +99,10 @@ body {
   -webkit-app-region: drag;
 }
 
+.app-topbar--frame {
+  height: 3rem;
+}
+
 .app-topbar__controls {
   -webkit-app-region: no-drag;
 }
@@ -108,8 +112,9 @@ body {
   z-index: 1;
 }
 
-.app-topbar__inline-sidebar-toggle {
-  z-index: 2;
+.app-topbar__title {
+  z-index: 1;
+  line-height: 1;
 }
 
 .app-topbar__toolbar-button {
@@ -120,17 +125,18 @@ body {
   color: var(--text);
 }
 
-.app-topbar__sidebar-toggle-button {
-  border: 1px solid color-mix(in srgb, var(--glass-border) 88%, transparent);
-  background: color-mix(in srgb, var(--sidebar-surface) 78%, transparent);
-  box-shadow:
-    0 1px 2px color-mix(in srgb, var(--text) 10%, transparent),
-    inset 0 1px 0 color-mix(in srgb, white 35%, transparent);
-  backdrop-filter: blur(calc(var(--titlebar-blur) + 2px));
+.app-topbar__inline-sidebar-toggle {
+  z-index: 2;
 }
 
-.app-topbar__sidebar-toggle-button:hover {
-  background: color-mix(in srgb, var(--sidebar-surface) 90%, transparent);
+.app-sidebar-collapse-control {
+  display: none;
+}
+
+.app-topbar__sidebar-toggle-button {
+  background: transparent;
+  box-shadow: none;
+  border: 0;
 }
 
 .app-topbar__sidebar-fill {
@@ -140,7 +146,7 @@ body {
   left: 0;
   pointer-events: none;
   z-index: 0;
-  background: var(--sidebar-surface);
+  background: var(--sidebar-pane-surface);
   border-right-style: solid;
   border-right-color: var(--glass-border);
   backdrop-filter: blur(var(--sidebar-titlebar-blur));
@@ -158,12 +164,30 @@ body {
   backdrop-filter: blur(var(--titlebar-blur));
 }
 
-:root[data-platform="darwin"] .app-topbar__inline-sidebar-toggle {
-  left: 5.4rem;
+:root[data-platform="darwin"]:not([data-reduced-transparency="true"]) .app-topbar__sidebar-fill {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
-:root[data-platform="darwin"] .app-topbar__toolbar--right {
-  padding-right: 0.125rem;
+:root[data-platform="darwin"] .app-topbar--frame {
+  height: 2.375rem;
+}
+
+:root[data-platform="darwin"] .app-topbar__inline-sidebar-toggle {
+  display: none;
+}
+
+:root[data-platform="darwin"] .app-sidebar-collapse-control {
+  position: absolute;
+  top: 50%;
+  left: 5.4rem;
+  z-index: 70;
+  display: flex;
+  height: 2.375rem;
+  align-items: center;
+  transform: translateY(-50%);
+  -webkit-app-region: no-drag;
+  pointer-events: auto;
 }
 
 :root[data-platform="darwin"] .app-topbar__toolbar--right .app-topbar__toolbar-button {
@@ -177,7 +201,7 @@ body {
 }
 
 :root[data-platform="win32"] .app-topbar {
-  padding-right: 12rem; /* Prevent overlap with the sidebar toggle and native Windows controls */
+  padding-right: 12rem; /* Native caption buttons */
 }
 
 .app-shell {
@@ -187,6 +211,16 @@ body {
 
 .app-shell--settings {
   background: var(--shell-bg);
+}
+
+.app-shell--chat {
+  min-height: 0;
+}
+
+.app-chat-main-column {
+  position: relative;
+  min-height: 0;
+  min-width: 0;
 }
 
 .app-main-content {
@@ -228,8 +262,14 @@ body {
 
 .app-left-sidebar-pane {
   border-right-color: var(--glass-border);
-  background: var(--sidebar-surface);
+  background: var(--sidebar-pane-surface);
   backdrop-filter: blur(var(--sidebar-blur));
+}
+
+/* Native vibrancy already blurs; CSS backdrop-filter composites an opaque-ish layer on macOS glass */
+:root[data-platform="darwin"]:not([data-reduced-transparency="true"]) .app-left-sidebar-pane {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .app-right-sidebar-pane {
@@ -410,12 +450,16 @@ body.app-resizing-sidebars .app-right-sidebar-pane {
   transition: none;
 }
 
+body.app-resizing-sidebars .app-left-sidebar-pane {
+  backdrop-filter: none;
+}
+
 body.app-resizing-sidebars .app-topbar__sidebar-fill,
 body.app-resizing-sidebars .app-topbar__content-fill {
   transition: none;
 }
 
-body.app-resizing-sidebars .app-left-sidebar-pane {
+body.app-resizing-sidebars .app-topbar__sidebar-fill {
   backdrop-filter: none;
 }
 

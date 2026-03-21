@@ -12,6 +12,34 @@ function cloneContext(context: HarnessContextState): HarnessContextState {
   };
 }
 
+function normalizeMetadata(
+  metadata: HarnessContextPayload["metadata"],
+): HarnessContextState["metadata"] {
+  if (!metadata) return undefined;
+
+  const entries = Object.entries(metadata)
+    .map(([key, value]) => [key.trim(), value.trim()] as const)
+    .filter(([key, value]) => key.length > 0 && value.length > 0);
+
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(entries);
+}
+
+export function normalizeHarnessContextPayload(
+  context: HarnessContextPayload,
+  updatedAt = new Date().toISOString(),
+): HarnessContextState {
+  return {
+    runId: context.runId.trim(),
+    taskId: context.taskId?.trim() || undefined,
+    objective: context.objective.trim(),
+    acceptanceCriteria: context.acceptanceCriteria.map((item) => item.trim()).filter(Boolean),
+    constraints: context.constraints.map((item) => item.trim()).filter(Boolean),
+    metadata: normalizeMetadata(context.metadata),
+    updatedAt,
+  };
+}
+
 export class HarnessContextStore {
   private readonly bySessionId = new Map<string, HarnessContextState>();
 
@@ -21,15 +49,7 @@ export class HarnessContextStore {
   }
 
   set(sessionId: string, context: HarnessContextPayload): HarnessContextState {
-    const next: HarnessContextState = {
-      runId: context.runId.trim(),
-      taskId: context.taskId?.trim() || undefined,
-      objective: context.objective.trim(),
-      acceptanceCriteria: context.acceptanceCriteria.map((item) => item.trim()).filter(Boolean),
-      constraints: context.constraints.map((item) => item.trim()).filter(Boolean),
-      metadata: context.metadata ? { ...context.metadata } : undefined,
-      updatedAt: new Date().toISOString(),
-    };
+    const next = normalizeHarnessContextPayload(context);
 
     this.bySessionId.set(sessionId, next);
     return cloneContext(next);

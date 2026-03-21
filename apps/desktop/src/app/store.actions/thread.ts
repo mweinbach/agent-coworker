@@ -259,8 +259,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       RUNTIME.threadSockets.delete(threadId);
       RUNTIME.optimisticUserMessageIds.delete(threadId);
       RUNTIME.pendingThreadMessages.delete(threadId);
-      RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(threadId);
-      RUNTIME.pendingWorkspaceDefaultApplyModeByThread.delete(threadId);
+      RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
       RUNTIME.modelStreamByThread.delete(threadId);
       RUNTIME.threadSelectionRequests.delete(threadId);
       clearPendingThreadSteers(threadId);
@@ -757,8 +756,32 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
   
 
     setThreadModel: (threadId, provider, model) => {
+      const thread = get().threads.find((t) => t.id === threadId);
+      if (!thread) return;
+
+      if (thread.draft) {
+        set((s) => ({
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: {
+              ...s.threadRuntimeById[threadId],
+              draftComposerProvider: provider,
+              draftComposerModel: model,
+            },
+          },
+        }));
+        return;
+      }
+
       const rt = get().threadRuntimeById[threadId];
       if (!rt?.sessionId) return;
+      const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+      if (pendingApply?.draftModelSelection) {
+        RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
+          ...pendingApply,
+          draftModelSelection: null,
+        });
+      }
       const ok = sendThread(get, threadId, (sessionId) => ({
         type: "set_model",
         sessionId,

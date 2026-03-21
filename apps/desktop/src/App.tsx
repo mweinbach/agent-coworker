@@ -27,7 +27,7 @@ const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed
 
   return (
     <div
-      className="app-left-sidebar-pane relative shrink-0 overflow-hidden border-r border-border/70"
+      className="app-left-sidebar-pane relative h-full min-h-0 shrink-0 overflow-hidden border-r border-border/70"
       style={{ width: collapsed ? 0 : sidebarWidth, borderRightWidth: collapsed ? 0 : 1 }}
     >
       <div className="absolute top-0 bottom-0 right-0 flex" style={{ width: sidebarWidth }}>
@@ -98,7 +98,7 @@ const ChatShell = memo(function ChatShell({
   }, [sidebarCollapsed, contextSidebarCollapsed]);
 
   return (
-    <div className="app-shell h-full flex flex-col text-foreground">
+    <div className="app-shell app-shell--chat flex h-full min-h-0 flex-col text-foreground">
       <div className="app-window-drag-strip" aria-hidden="true" />
       <AppTopBar
         busy={busy}
@@ -108,12 +108,11 @@ const ChatShell = memo(function ChatShell({
         contextSidebarCollapsed={contextSidebarCollapsed}
         onToggleContextSidebar={toggleContextSidebar}
       />
-      <div className="flex min-h-0 flex-1">
+      <div className="app-chat-body flex min-h-0 min-w-0 flex-1 flex-row">
         <LeftSidebarPane collapsed={sidebarCollapsed} />
-
-        <main className="app-main-content flex min-w-0 min-h-0 flex-1 flex-col">
+        <main className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1 overflow-hidden">
-            <div className="relative min-w-0 min-h-0 flex-1 overflow-hidden">
+            <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
               <PrimaryContent
                 init={init}
                 ready={ready}

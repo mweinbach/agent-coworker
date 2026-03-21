@@ -14,7 +14,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "../../../components/ui/dialog";
 import { cn } from "../../../lib/utils";
 import { formatCost, formatTokenCount } from "../../../../../../src/session/pricing";
@@ -214,38 +213,44 @@ export function UsagePage(props: UsagePageProps = {}) {
           </p>
         </div>
 
-        <Dialog open={estimateNoticeOpen} onOpenChange={handleEstimateNoticeOpenChange}>
-          <DialogTrigger asChild>
-            <Button type="button" variant="outline" className="gap-2">
-              <AlertTriangleIcon className="h-4 w-4" />
-              How estimates work
-            </Button>
-          </DialogTrigger>
-          <DialogContent showClose className="max-w-lg">
-            <DialogHeader>
-              <DialogTitle>Usage estimates</DialogTitle>
-              <DialogDescription>
-                These numbers are estimates based on provider-reported token usage and Cowork&apos;s local pricing
-                catalog.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3 text-sm text-muted-foreground">
-              <p>
-                Billing may vary. Providers can round differently, apply cached-token discounts differently, or
-                change prices independently of what is bundled in the app.
-              </p>
-              <p>
-                Be careful while using these estimates for spend decisions. Treat totals as protective
-                guidance, not exact invoices.
-              </p>
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="secondary" onClick={() => handleEstimateNoticeOpenChange?.(false)}>
-                Got it
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <div className="shrink-0">
+          <Button
+            type="button"
+            variant="outline"
+            className="gap-2"
+            onClick={() => handleEstimateNoticeOpenChange?.(true)}
+          >
+            <AlertTriangleIcon className="h-4 w-4" />
+            How estimates work
+          </Button>
+
+          <Dialog open={estimateNoticeOpen} onOpenChange={handleEstimateNoticeOpenChange}>
+            <DialogContent showClose className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Usage estimates</DialogTitle>
+                <DialogDescription>
+                  These numbers are estimates based on provider-reported token usage and Cowork&apos;s local pricing
+                  catalog.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  Billing may vary. Providers can round differently, apply cached-token discounts differently, or
+                  change prices independently of what is bundled in the app.
+                </p>
+                <p>
+                  Be careful while using these estimates for spend decisions. Treat totals as protective
+                  guidance, not exact invoices.
+                </p>
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="secondary" onClick={() => handleEstimateNoticeOpenChange?.(false)}>
+                  Got it
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       {/* ── Overview stats ──────────────────────────────────────────── */}

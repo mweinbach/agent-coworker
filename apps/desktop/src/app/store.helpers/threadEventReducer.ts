@@ -72,6 +72,10 @@ type ThreadEventReducerDeps = {
 };
 
 export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
+  function hasPendingDraftModelSelection(threadId: string): boolean {
+    return Boolean(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId)?.draftModelSelection);
+  }
+
   function migrateThreadIdentity(get: StoreGet, set: StoreSet, fromThreadId: string, toThreadId: string): string {
     if (!fromThreadId || !toThreadId || fromThreadId === toThreadId) {
       return toThreadId;
@@ -355,6 +359,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   }
 
   function flushOneQueuedThreadMessage(get: StoreGet, set: StoreSet, threadId: string) {
+    if (hasPendingDraftModelSelection(threadId)) {
+      return false;
+    }
     const next = shiftPendingThreadMessage(threadId);
     if (!next) return false;
     const ok = sendUserMessageToThread(get, set, threadId, next);
@@ -365,6 +372,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       ]);
     }
     return ok;
+  }
+
+  function flushOneQueuedThreadMessageIfReady(get: StoreGet, set: StoreSet, threadId: string) {
+    if (get().threadRuntimeById[threadId]?.busy || hasPendingDraftModelSelection(threadId)) {
+      return false;
+    }
+    return flushOneQueuedThreadMessage(get, set, threadId);
   }
 
   function applyModelStreamUpdateToThreadFeed(
@@ -421,6 +435,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     if (evt.type === "server_hello") {
       resetModelStreamRuntime(threadId);
       const resumedBusy = evt.isResume ? Boolean(evt.busy) : false;
+      const prevRt = get().threadRuntimeById[threadId];
+      const draftModelSelection =
+        prevRt?.draftComposerProvider != null
+        && typeof prevRt.draftComposerModel === "string"
+        && prevRt.draftComposerModel.trim()
+          ? { provider: prevRt.draftComposerProvider, model: prevRt.draftComposerModel.trim() }
+          : null;
       set((s) => {
         const rt = s.threadRuntimeById[threadId];
         if (!rt) return {};
@@ -451,6 +472,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
               activeTurnId: resumedBusy ? (evt.turnId ?? null) : null,
               pendingSteer: resumedBusy ? rt.pendingSteer : null,
               transcriptOnly: false,
+              draftComposerProvider: null,
+              draftComposerModel: null,
             },
           },
           threads: s.threads.map((t) =>
@@ -463,7 +486,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         clearPendingThreadSteers(threadId);
       }
 
-      void get().applyWorkspaceDefaultsToThread(threadId, evt.isResume ? "auto-resume" : "auto");
+      void get().applyWorkspaceDefaultsToThread(threadId, evt.isResume ? "auto-resume" : "auto", draftModelSelection);
       RUNTIME.threadSockets.get(threadId)?.send({
         type: "get_session_usage",
         sessionId: evt.sessionId,
@@ -484,15 +507,22 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
               ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
             ]);
           }
+        } else if (hasPendingDraftModelSelection(threadId)) {
+          if (!pendingFirstMessageQueued) {
+            RUNTIME.pendingThreadMessages.set(threadId, [
+              pendingFirstMessage.trim(),
+              ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
+            ]);
+          }
         } else {
           sentPendingFirstMessage = pendingFirstMessageQueued
-            ? flushOneQueuedThreadMessage(get, set, threadId)
+            ? flushOneQueuedThreadMessageIfReady(get, set, threadId)
             : sendUserMessageToThread(get, set, threadId, pendingFirstMessage);
         }
       }
 
       if (!resumedBusy && !sentPendingFirstMessage) {
-        flushOneQueuedThreadMessage(get, set, threadId);
+        flushOneQueuedThreadMessageIfReady(get, set, threadId);
       }
       return;
     }
@@ -518,9 +548,14 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           },
         };
       });
-      if (RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)) {
-        const pendingMode = RUNTIME.pendingWorkspaceDefaultApplyModeByThread.get(threadId) ?? "auto";
-        void get().applyWorkspaceDefaultsToThread(threadId, pendingMode);
+      const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+      if (pendingApply) {
+        void get().applyWorkspaceDefaultsToThread(
+          threadId,
+          pendingApply.mode,
+          pendingApply.draftModelSelection,
+        );
+        flushOneQueuedThreadMessageIfReady(get, set, threadId);
       }
       return;
     }
@@ -543,13 +578,19 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           },
         };
       });
-      if (!evt.busy && RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)) {
-        const pendingMode = RUNTIME.pendingWorkspaceDefaultApplyModeByThread.get(threadId) ?? "auto";
-        void get().applyWorkspaceDefaultsToThread(threadId, pendingMode);
+      if (!evt.busy) {
+        const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+        if (pendingApply) {
+          void get().applyWorkspaceDefaultsToThread(
+            threadId,
+            pendingApply.mode,
+            pendingApply.draftModelSelection,
+          );
+        }
       }
       if (!evt.busy) {
         clearPendingThreadSteers(threadId);
-        flushOneQueuedThreadMessage(get, set, threadId);
+        flushOneQueuedThreadMessageIfReady(get, set, threadId);
       }
       return;
     }
@@ -608,9 +649,14 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           },
         };
       });
-      if (RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)) {
-        const pendingMode = RUNTIME.pendingWorkspaceDefaultApplyModeByThread.get(threadId) ?? "auto";
-        void get().applyWorkspaceDefaultsToThread(threadId, pendingMode);
+      const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+      if (pendingApply) {
+        void get().applyWorkspaceDefaultsToThread(
+          threadId,
+          pendingApply.mode,
+          pendingApply.draftModelSelection,
+        );
+        flushOneQueuedThreadMessageIfReady(get, set, threadId);
       }
       return;
     }
@@ -1012,8 +1058,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       onClose: () => {
         RUNTIME.threadSockets.delete(activeThreadId);
         RUNTIME.modelStreamByThread.delete(activeThreadId);
-        RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(activeThreadId);
-        RUNTIME.pendingWorkspaceDefaultApplyModeByThread.delete(activeThreadId);
+        RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(activeThreadId);
         set((s) => {
           const rt = s.threadRuntimeById[activeThreadId];
           if (!rt) return {};

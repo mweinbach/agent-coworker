@@ -26,6 +26,7 @@ import {
   PromptInputTools,
 } from "../components/ai-elements/prompt-input";
 import { MessageBarResizer } from "./layout/MessageBarResizer";
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import {
@@ -44,8 +45,9 @@ import {
   type CatalogVisibilityOptions,
 } from "../lib/modelChoices";
 import { readFile } from "../lib/desktopCommands";
-import type { ProviderName } from "../lib/wsProtocol";
+import { PROVIDER_NAMES, type ProviderName } from "../lib/wsProtocol";
 import { cn } from "../lib/utils";
+import { defaultModelForProvider } from "@cowork/providers/catalog";
 import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
 import {
   buildCitationOverflowFilePathsByMessageId,
@@ -426,11 +428,15 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   "codex-cli": "ChatGPT Subscription",
 };
 
-function ThreadModelSelector({
+function isChatProviderName(value: unknown): value is ProviderName {
+  return typeof value === "string" && (PROVIDER_NAMES as readonly string[]).includes(value);
+}
+
+function DraftThreadModelSelector({
   threadId,
   provider,
   model,
-  disabled
+  disabled,
 }: {
   threadId: string;
   provider: ProviderName;
@@ -476,16 +482,16 @@ function ThreadModelSelector({
         <span className="truncate"><SelectValue placeholder="Model" /></span>
       </SelectTrigger>
       <SelectContent>
-        {providers.map(p => (
+        {providers.map((p) => (
           <SelectGroup key={p}>
-            <SelectLabel className="text-xs font-semibold px-2 py-1.5">{PROVIDER_LABELS[p] ?? p}</SelectLabel>
-            {(choices[p] ?? []).map(m => (
-              <SelectItem key={`${p}:${m}`} value={`${p}:${m}`} className="text-xs pl-6">
+            <SelectLabel className="px-2 py-1.5 text-xs font-semibold">{PROVIDER_LABELS[p] ?? p}</SelectLabel>
+            {(choices[p] ?? []).map((m) => (
+              <SelectItem key={`${p}:${m}`} value={`${p}:${m}`} className="pl-6 text-xs">
                 {m}
               </SelectItem>
             ))}
             {p === provider && model && !(choices[p] ?? []).includes(model) ? (
-              <SelectItem key={`${p}:${model}`} value={`${p}:${model}`} className="text-xs pl-6">
+              <SelectItem key={`${p}:${model}`} value={`${p}:${model}`} className="pl-6 text-xs">
                 {model} (custom)
               </SelectItem>
             ) : null}
@@ -493,6 +499,29 @@ function ThreadModelSelector({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+function ThreadModelIndicator({
+  provider,
+  model,
+}: {
+  provider: ProviderName;
+  model: string;
+}) {
+  const label = model.trim();
+  if (!label) return null;
+  const title = `${PROVIDER_LABELS[provider] ?? provider} / ${label}`;
+
+  return (
+    <Badge
+      variant="outline"
+      title={title}
+      aria-label={`Session model ${title}`}
+      className="h-7 max-w-[220px] rounded-full border-border/60 bg-muted/30 px-2.5 font-normal text-muted-foreground shadow-none"
+    >
+      <span className="truncate">{label}</span>
+    </Badge>
   );
 }
 
@@ -569,6 +598,42 @@ export function ChatView() {
     }),
     [developerMode],
   );
+
+  const workspace = useAppStore((s) => {
+    if (!s.selectedThreadId) return null;
+    const th = s.threads.find((t) => t.id === s.selectedThreadId);
+    if (!th) return null;
+    return s.workspaces.find((w) => w.id === th.workspaceId) ?? null;
+  });
+
+  const threadModelConfig = useMemo(() => {
+    if (!selectedThreadId || !thread) return null;
+    if (!rt || rt.sessionKind === "agent") return null;
+    if (rt.transcriptOnly === true) return null;
+
+    if (thread.draft) {
+      if (!workspace) return null;
+      const baseProvider =
+        workspace.defaultProvider && isChatProviderName(workspace.defaultProvider)
+          ? workspace.defaultProvider
+          : "google";
+      const provider =
+        rt.draftComposerProvider != null && isChatProviderName(rt.draftComposerProvider)
+          ? rt.draftComposerProvider
+          : baseProvider;
+      const modelRaw =
+        typeof rt.draftComposerModel === "string" && rt.draftComposerModel.trim()
+          ? rt.draftComposerModel.trim()
+          : workspace.defaultModel?.trim() || defaultModelForProvider(provider) || "";
+      if (!modelRaw) return null;
+      return { provider, model: modelRaw };
+    }
+
+    if (rt.config?.provider && rt.config.model) {
+      return { provider: rt.config.provider as ProviderName, model: rt.config.model };
+    }
+    return null;
+  }, [selectedThreadId, thread, rt, workspace]);
 
   const handleStop = useCallback(() => {
     if (!selectedThreadId) return;
@@ -693,7 +758,6 @@ export function ChatView() {
   const transcriptOnly = rt?.transcriptOnly === true;
   const hydrating = rt?.hydrating === true || (bootstrapPending && Boolean(selectedThreadId) && Boolean(thread) && rt === null);
   const disconnected = !hydrating && !transcriptOnly && thread.status !== "active";
-  const modelSelectorConfig = visibleFeed.length === 0 && rt?.config?.provider && rt?.config?.model ? rt.config : null;
   const usageHeadline = formatSessionUsageHeadline(rt?.sessionUsage ?? null, rt?.lastTurnUsage ?? null, {
     showTokens: developerMode,
   });
@@ -817,13 +881,20 @@ export function ChatView() {
               </PromptInputBody>
               <PromptInputFooter>
                 <PromptInputTools>
-                  {modelSelectorConfig ? (
-                    <ThreadModelSelector
-                      threadId={selectedThreadId}
-                      provider={modelSelectorConfig.provider}
-                      model={modelSelectorConfig.model}
-                      disabled={busy}
-                    />
+                  {threadModelConfig ? (
+                    thread.draft ? (
+                      <DraftThreadModelSelector
+                        threadId={selectedThreadId}
+                        provider={threadModelConfig.provider}
+                        model={threadModelConfig.model}
+                        disabled={disabled}
+                      />
+                    ) : (
+                      <ThreadModelIndicator
+                        provider={threadModelConfig.provider}
+                        model={threadModelConfig.model}
+                      />
+                    )
                   ) : null}
                 </PromptInputTools>
                 <div className={cn("flex shrink-0 items-center gap-2", busy ? "opacity-100" : "opacity-70")}>

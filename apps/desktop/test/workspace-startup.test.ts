@@ -129,8 +129,7 @@ describe("workspace startup flow", () => {
     RUNTIME.optimisticUserMessageIds.clear();
     RUNTIME.pendingThreadMessages.clear();
     RUNTIME.threadSelectionRequests.clear();
-    RUNTIME.pendingWorkspaceDefaultApplyThreadIds.clear();
-    RUNTIME.pendingWorkspaceDefaultApplyModeByThread.clear();
+    RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.workspaceStartPromises.clear();
     RUNTIME.workspaceStartGenerations.clear();
     RUNTIME.modelStreamByThread.clear();

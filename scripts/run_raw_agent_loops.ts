@@ -4,8 +4,17 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { z } from "zod";
+
 import { loadConfig } from "../src/config";
 import { runTurnWithDeps } from "../src/agent";
+import { normalizeHarnessContextPayload } from "../src/harness/contextStore";
+import {
+  buildPathArtifactAssertions,
+  type FinalContract,
+  type ValidationIssue,
+  validateWithOptionalRepair,
+} from "../src/harness/rawLoopValidation";
 import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
 import { getProviderCatalog } from "../src/providers/connectionCatalog";
 import { getAiCoworkerPaths } from "../src/connect";
@@ -16,7 +25,13 @@ import { routeAgentConfig } from "../src/server/agents/modelRouter";
 import { getAgentRoleDefinition } from "../src/server/agents/roles";
 import type { AgentReasoningEffort, AgentRole, PersistentAgentSummary } from "../src/shared/agents";
 import { ensureDefaultGlobalSkillsReady } from "../src/skills/defaultGlobalSkills";
-import type { AgentConfig, ModelMessage, ProviderName, TodoItem } from "../src/types";
+import type {
+  AgentConfig,
+  HarnessContextPayload,
+  ModelMessage,
+  ProviderName,
+  TodoItem,
+} from "../src/types";
 import type { ToolContext } from "../src/tools";
 import { createAskTool } from "../src/tools/ask";
 import { createBashTool } from "../src/tools/bash";
@@ -66,6 +81,15 @@ type TracedStep = {
   step: unknown;
 };
 
+type ValidationSummary = {
+  schemaOk: boolean;
+  artifactOk: boolean;
+  semanticOk: boolean;
+  issues: ValidationIssue[];
+  warnings: ValidationIssue[];
+  parsed?: unknown;
+};
+
 type ArtifactEntry = {
   path: string; // path relative to run dir
   bytes: number;
@@ -84,6 +108,7 @@ type AttemptMeta = {
 
 type RawLoopArgs = {
   reportOnly: boolean;
+  strictModeOverride: boolean | null;
   scenario:
     | "mixed"
     | "dcf-model-matrix"
@@ -97,6 +122,7 @@ type RawLoopArgs = {
 function parseArgs(argv: string[]): RawLoopArgs {
   const args: RawLoopArgs = {
     reportOnly: true,
+    strictModeOverride: null,
     scenario: "mixed",
     onlyRunIds: [],
     onlyModels: [],
@@ -106,6 +132,14 @@ function parseArgs(argv: string[]): RawLoopArgs {
     const a = argv[i];
     if (a === "--report-only") {
       args.reportOnly = true;
+      continue;
+    }
+    if (a === "--strict-mode") {
+      args.strictModeOverride = true;
+      continue;
+    }
+    if (a === "--no-strict-mode") {
+      args.strictModeOverride = false;
       continue;
     }
     if (a === "--scenario") {
@@ -140,7 +174,7 @@ function parseArgs(argv: string[]): RawLoopArgs {
     }
     if (a === "--help" || a === "-h") {
       console.log(
-        "Usage: bun scripts/run_raw_agent_loops.ts [--report-only] [--scenario mixed|dcf-model-matrix|gpt-skill-reliability|google-customtools-tool-coverage|codex-gpt-5.4-smoke] [--only-run <run-id>] [--only-model <model>]"
+        "Usage: bun scripts/run_raw_agent_loops.ts [--report-only] [--strict-mode|--no-strict-mode] [--scenario mixed|dcf-model-matrix|gpt-skill-reliability|google-customtools-tool-coverage|codex-gpt-5.4-smoke] [--only-run <run-id>] [--only-model <model>]"
       );
       process.exit(0);
     }
@@ -148,6 +182,16 @@ function parseArgs(argv: string[]): RawLoopArgs {
   }
 
   return args;
+}
+
+export function resolveRawLoopHarnessConfig(
+  baseHarness: AgentConfig["harness"] | undefined,
+  cliArgs: Pick<RawLoopArgs, "reportOnly" | "strictModeOverride">,
+): NonNullable<AgentConfig["harness"]> {
+  return {
+    reportOnly: cliArgs.reportOnly,
+    strictMode: cliArgs.strictModeOverride ?? baseHarness?.strictMode ?? false,
+  };
 }
 
 type RunTrace = {
@@ -159,6 +203,7 @@ type RunTrace = {
   system: string;
   userPrompt: string;
   inputMessages: ModelMessage[];
+  harnessContext: HarnessContextState | null;
 
   toolLogLines: string[];
   askEvents: AskEvent[];
@@ -195,6 +240,8 @@ type RunSpec = {
   guardedToolsBeforeSkill?: string[];
   requiredToolBeforeTools?: string;
   guardedToolsBeforeRequiredTool?: string[];
+  harnessContext?: (ctx: PromptContext) => HarnessContextPayload;
+  finalContract?: FinalContract;
   prompt: (ctx: PromptContext) => string;
 };
 
@@ -206,6 +253,7 @@ type RawLoopAgentControlState = {
   routedConfig: AgentConfig;
   connectedProviders: readonly ProviderName[];
   historyMessages: ModelMessage[];
+  harnessContext: HarnessContextState | null;
   abortController: AbortController | null;
   runPromise: Promise<void> | null;
   runToken: number;
@@ -244,6 +292,82 @@ function safeJsonStringify(v: unknown): string {
     },
     2
   );
+}
+
+function defaultHarnessContextForRun(
+  run: Pick<RunSpec, "id" | "provider" | "model">,
+  scenario: RawLoopArgs["scenario"],
+): HarnessContextPayload {
+  return {
+    runId: run.id,
+    objective: `Complete raw-loop harness scenario ${run.id} successfully.`,
+    acceptanceCriteria: [
+      "Satisfy the task requirements expressed in the run prompt.",
+      "Produce the required final response contract for this scenario.",
+      "Keep required artifacts inside the run directory.",
+    ],
+    constraints: [
+      "Treat this harness context as run intent, not as a safety override.",
+      "Do not change required artifact names or output formats unless the prompt requires it.",
+      "Use only the necessary tools to complete the scenario.",
+    ],
+    metadata: {
+      provider: run.provider,
+      model: run.model,
+      scenario,
+    },
+  };
+}
+
+export function buildRawLoopHarnessContext(
+  run: Pick<RunSpec, "id" | "provider" | "model"> & {
+    harnessContext?: (ctx: PromptContext) => HarnessContextPayload;
+  },
+  scenario: RawLoopArgs["scenario"],
+  promptContext: PromptContext,
+  updatedAt = isoSafeNow(),
+): HarnessContextState {
+  return normalizeHarnessContextPayload(
+    run.harnessContext?.(promptContext) ?? defaultHarnessContextForRun(run, scenario),
+    updatedAt,
+  );
+}
+
+const endSentinelSchema = z.literal("<<END_RUN>>");
+const absolutePathSchema = z.string().trim().min(1);
+const boolSchema = z.boolean();
+
+function buildJsonFileContract(
+  fields: Record<string, z.ZodTypeAny>,
+  artifactAssertions: ReturnType<typeof buildPathArtifactAssertions> = [],
+): FinalContract {
+  return {
+    format: "json",
+    schema: z.object({
+      ...fields,
+      end: endSentinelSchema,
+    }).strict(),
+    artifactAssertions,
+  };
+}
+
+function buildLinePairFileContract(
+  fields: Record<string, z.ZodTypeAny>,
+  artifactAssertions: ReturnType<typeof buildPathArtifactAssertions> = [],
+): FinalContract {
+  return {
+    format: "line_pairs",
+    schema: z.object({
+      ...fields,
+      end: endSentinelSchema,
+    }).strict(),
+    sentinel: "<<END_RUN>>",
+    artifactAssertions,
+  };
+}
+
+function artifactAssertionsForPaths(entries: Array<{ field: string; ext: string }>): ReturnType<typeof buildPathArtifactAssertions> {
+  return entries.flatMap(({ field, ext }) => buildPathArtifactAssertions(field, ext));
 }
 
 type SkillGuardConfig = {
@@ -293,6 +417,70 @@ function collectToolCallNamesFromToolLog(toolLogLines: string[]): string[] {
   return names;
 }
 
+export function summarizeRawLoopBudgets(toolCallNames: string[]) {
+  return {
+    toolCalls: toolCallNames.length,
+    bashCalls: toolCallNames.filter((name) => name === "bash").length,
+    webCalls: toolCallNames.filter((name) => name === "webSearch" || name === "webFetch").length,
+    spawnedAgents: toolCallNames.filter((name) => name === "spawnAgent").length,
+  };
+}
+
+export function countObservedLoopSteps(stepNumbers: number[]) {
+  if (stepNumbers.length === 0) return 0;
+  return Math.max(...stepNumbers);
+}
+
+export function buildRawLoopBudgetSummary(
+  toolLogLines: string[],
+  totalSteps: number,
+  repairPassCount: number,
+) {
+  const toolCallNames = collectToolCallNamesFromToolLog(toolLogLines);
+  return {
+    ...summarizeRawLoopBudgets(toolCallNames),
+    totalSteps,
+    repairPassCount,
+  };
+}
+
+function summarizeValidationResult(validationResult: {
+  schemaOk: boolean;
+  artifactOk: boolean;
+  semanticOk: boolean;
+  issues: ValidationIssue[];
+  warnings: ValidationIssue[];
+  parsed?: unknown;
+}): ValidationSummary {
+  return {
+    schemaOk: validationResult.schemaOk,
+    artifactOk: validationResult.artifactOk,
+    semanticOk: validationResult.semanticOk,
+    issues: validationResult.issues,
+    warnings: validationResult.warnings,
+    parsed: validationResult.parsed,
+  };
+}
+
+function traceToolExecution(steps: TracedStep[], toolName: string, input: unknown, output: unknown) {
+  steps.push({
+    scope: "tool-call",
+    step: {
+      type: "tool-call",
+      toolName,
+      input,
+    },
+  });
+  steps.push({
+    scope: "tool-result",
+    step: {
+      type: "tool-result",
+      toolName,
+      output,
+    },
+  });
+}
+
 function withExecuteGuard(
   original: any,
   shouldBlock: () => boolean,
@@ -316,7 +504,7 @@ function withExecuteGuard(
 
 export function createRawLoopAgentControl(
   opts: Pick<ToolContext, "config" | "log" | "askUser" | "approveCommand" | "availableSkills" | "spawnDepth" | "abortSignal">
-    & { parentMessages?: ModelMessage[] },
+    & { parentMessages?: ModelMessage[]; harnessContext?: HarnessContextState | null },
   deps: RawLoopAgentControlDeps = {},
 ): NonNullable<ToolContext["agentControl"]> {
   const statusBus = new StatusBus();
@@ -371,6 +559,7 @@ export function createRawLoopAgentControl(
       abortSignal: controller.signal,
       discoveredSkills: opts.availableSkills,
       ...(priorMessages.length > 0 ? { seedMessages: priorMessages } : {}),
+      ...(state.harnessContext ? { harnessContext: state.harnessContext } : {}),
       ...(state.requestedModel ? { model: state.requestedModel } : {}),
       ...(state.requestedReasoningEffort ? { reasoningEffort: state.requestedReasoningEffort } : {}),
       ...(state.connectedProviders.length > 0 ? { connectedProviders: state.connectedProviders } : {}),
@@ -454,6 +643,10 @@ export function createRawLoopAgentControl(
           forkContext && opts.parentMessages
             ? structuredClone(opts.parentMessages)
             : [],
+        harnessContext:
+          forkContext && opts.harnessContext
+            ? structuredClone(opts.harnessContext)
+            : null,
         abortController: null,
         runPromise: null,
         runToken: 0,
@@ -502,14 +695,12 @@ export function createRawLoopAgentControl(
   };
 }
 
-function createToolsWithTracing(
+export function createToolsWithTracing(
   ctx: ToolContext,
   steps: TracedStep[],
   skillGuard?: SkillGuardConfig,
   prerequisiteToolGuard?: PrerequisiteToolGuardConfig
 ): Record<string, any> {
-  void steps;
-
   const baseTools = {
     bash: createBashTool(ctx),
     read: createReadTool(ctx),
@@ -538,13 +729,24 @@ function createToolsWithTracing(
 
   const wrapped: Record<string, any> = { ...baseTools };
 
+  for (const [toolName, toolDef] of Object.entries(wrapped)) {
+    wrapped[toolName] = withExecuteGuard(
+      toolDef,
+      () => false,
+      "",
+      (input, output) => {
+        traceToolExecution(steps, toolName, input, output);
+      },
+    );
+  }
+
   if (skillGuard?.requiredSkillName && skillGuard.guardedToolNames && skillGuard.guardedToolNames.length > 0) {
     let requiredSkillLoaded = false;
     const required = skillGuard.requiredSkillName;
     const guarded = new Set(skillGuard.guardedToolNames);
 
     wrapped.skill = withExecuteGuard(
-      baseTools.skill,
+      wrapped.skill,
       () => false,
       "",
       (input) => {
@@ -938,6 +1140,17 @@ function buildDcfModelMatrixRuns(): RunSpec[] {
     requiredToolCalls: ["skill"],
     requiredSkillBeforeTools: "spreadsheet",
     guardedToolsBeforeSkill: ["write", "edit", "bash", "glob", "read"],
+    finalContract: buildJsonFileContract(
+      {
+        xlsx: absolutePathSchema,
+        validation: absolutePathSchema,
+        skillToolCalled: boolSchema,
+      },
+      artifactAssertionsForPaths([
+        { field: "xlsx", ext: ".xlsx" },
+        { field: "validation", ext: ".json" },
+      ]),
+    ),
     prompt: ({ runDir }) => buildNvidiaDcfPrompt(runDir, profile.model, profile.modelGuidance),
   }));
 }
@@ -965,6 +1178,18 @@ function buildGptSkillReliabilityRuns(): RunSpec[] {
       requiredFirstNonTodoToolCall: "skill",
       requiredSkillBeforeTools: "spreadsheet",
       guardedToolsBeforeSkill: sharedGuardedTools,
+      finalContract: buildJsonFileContract(
+        {
+          primary: absolutePathSchema,
+          check: absolutePathSchema,
+          skillName: z.literal("spreadsheet"),
+          skillToolCalled: boolSchema,
+        },
+        artifactAssertionsForPaths([
+          { field: "primary", ext: ".md" },
+          { field: "check", ext: ".json" },
+        ]),
+      ),
       prompt: ({ runDir }) =>
         buildSkillReliabilityPrompt(
           runDir,
@@ -990,6 +1215,18 @@ function buildGptSkillReliabilityRuns(): RunSpec[] {
       requiredFirstNonTodoToolCall: "skill",
       requiredSkillBeforeTools: "doc",
       guardedToolsBeforeSkill: sharedGuardedTools,
+      finalContract: buildJsonFileContract(
+        {
+          primary: absolutePathSchema,
+          check: absolutePathSchema,
+          skillName: z.literal("doc"),
+          skillToolCalled: boolSchema,
+        },
+        artifactAssertionsForPaths([
+          { field: "primary", ext: ".txt" },
+          { field: "check", ext: ".json" },
+        ]),
+      ),
       prompt: ({ runDir }) =>
         buildSkillReliabilityPrompt(
           runDir,
@@ -1015,6 +1252,18 @@ function buildGptSkillReliabilityRuns(): RunSpec[] {
       requiredFirstNonTodoToolCall: "skill",
       requiredSkillBeforeTools: "slides",
       guardedToolsBeforeSkill: sharedGuardedTools,
+      finalContract: buildJsonFileContract(
+        {
+          primary: absolutePathSchema,
+          check: absolutePathSchema,
+          skillName: z.literal("slides"),
+          skillToolCalled: boolSchema,
+        },
+        artifactAssertionsForPaths([
+          { field: "primary", ext: ".md" },
+          { field: "check", ext: ".json" },
+        ]),
+      ),
       prompt: ({ runDir }) =>
         buildSkillReliabilityPrompt(
           runDir,
@@ -1040,6 +1289,18 @@ function buildGptSkillReliabilityRuns(): RunSpec[] {
       requiredFirstNonTodoToolCall: "skill",
       requiredSkillBeforeTools: "pdf",
       guardedToolsBeforeSkill: sharedGuardedTools,
+      finalContract: buildJsonFileContract(
+        {
+          primary: absolutePathSchema,
+          check: absolutePathSchema,
+          skillName: z.literal("pdf"),
+          skillToolCalled: boolSchema,
+        },
+        artifactAssertionsForPaths([
+          { field: "primary", ext: ".md" },
+          { field: "check", ext: ".json" },
+        ]),
+      ),
       prompt: ({ runDir }) =>
         buildSkillReliabilityPrompt(
           runDir,
@@ -1068,6 +1329,10 @@ export function buildGoogleCustomtoolsToolCoverageRuns(): RunSpec[] {
       maxSteps: 90,
       maxAttempts: 4,
       requiredToolCalls: ["todoWrite", "webSearch", "webFetch", "write", "glob", "read"],
+      finalContract: buildJsonFileContract(
+        { notes: absolutePathSchema },
+        artifactAssertionsForPaths([{ field: "notes", ext: ".md" }]),
+      ),
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Exercise Google custom-tools web + planning flow.
@@ -1094,6 +1359,10 @@ Final response must be raw JSON:
       maxSteps: 90,
       maxAttempts: 4,
       requiredToolCalls: ["skill", "write", "bash", "glob", "read"],
+      finalContract: buildJsonFileContract(
+        { file: absolutePathSchema },
+        artifactAssertionsForPaths([{ field: "file", ext: ".txt" }]),
+      ),
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Exercise skill loading plus shell execution.
@@ -1117,6 +1386,9 @@ Final response must be raw JSON:
       maxSteps: 110,
       maxAttempts: 4,
       requiredToolCalls: ["ask", "write", "notebookEdit", "memory", "read"],
+      finalContract: buildLinePairFileContract({
+        label: z.string().trim().min(1),
+      }),
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Exercise ask, notebookEdit, and memory in one turn.
@@ -1141,6 +1413,10 @@ label: <selected label>
       maxSteps: 110,
       maxAttempts: 4,
       requiredToolCalls: ["spawnAgent", "waitForAgent", "write", "grep", "edit", "read"],
+      finalContract: buildJsonFileContract(
+        { report: absolutePathSchema },
+        artifactAssertionsForPaths([{ field: "report", ext: ".md" }]),
+      ),
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Exercise spawnAgent + grep + edit deterministically.
@@ -1173,6 +1449,14 @@ export function buildMixedRuns(): RunSpec[] {
       provider: "google",
       model: "gemini-3-flash-preview",
       maxSteps: 60,
+      finalContract: buildJsonFileContract(
+        {
+          run_id: z.string().trim().min(1),
+          memo_file: absolutePathSchema,
+          tool_summary: z.string().trim().min(1),
+        },
+        artifactAssertionsForPaths([{ field: "memo_file", ext: ".md" }]),
+      ),
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Research HTTP 418 ("I'm a teapot") and RFC 2324, then write a short memo.
@@ -1197,6 +1481,10 @@ Final response must be a JSON object:
       provider: "openai",
       model: "gpt-5-mini",
       maxSteps: 80,
+      finalContract: buildLinePairFileContract(
+        { bash_tool_notes: absolutePathSchema },
+        artifactAssertionsForPaths([{ field: "bash_tool_notes", ext: ".md" }]),
+      ),
       prompt: ({ runDir, repoDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Produce an internal note explaining how command approvals and the bash tool work in this repo.
@@ -1222,6 +1510,16 @@ bash_tool_notes: <absolute path>
       provider: "anthropic",
       model: "claude-4-5-haiku",
       maxSteps: 90,
+      finalContract: buildJsonFileContract(
+        {
+          xlsx: absolutePathSchema,
+          verify: absolutePathSchema,
+        },
+        artifactAssertionsForPaths([
+          { field: "xlsx", ext: ".xlsx" },
+          { field: "verify", ext: ".txt" },
+        ]),
+      ),
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Build a real Excel amortization model (XLSX) for a loan and save verification output.
@@ -1249,6 +1547,16 @@ Final response must be a JSON object:
       provider: "google",
       model: "gemini-3-flash-preview",
       maxSteps: 90,
+      finalContract: buildJsonFileContract(
+        {
+          docx: absolutePathSchema,
+          excerpt: absolutePathSchema,
+        },
+        artifactAssertionsForPaths([
+          { field: "docx", ext: ".docx" },
+          { field: "excerpt", ext: ".txt" },
+        ]),
+      ),
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Create a professional DOCX brief and a text extract for quick inspection.
@@ -1273,6 +1581,16 @@ Final response must be a JSON object:
       provider: "openai",
       model: "gpt-5-mini",
       maxSteps: 110,
+      finalContract: buildLinePairFileContract(
+        {
+          deck: absolutePathSchema,
+          outline: absolutePathSchema,
+        },
+        artifactAssertionsForPaths([
+          { field: "deck", ext: ".pptx" },
+          { field: "outline", ext: ".txt" },
+        ]),
+      ),
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Create a PPTX deck and a machine-readable outline of its slides.
@@ -1300,6 +1618,16 @@ outline: <absolute path>
       provider: "anthropic",
       model: "claude-4-5-haiku",
       maxSteps: 110,
+      finalContract: buildJsonFileContract(
+        {
+          pdf: absolutePathSchema,
+          meta: absolutePathSchema,
+        },
+        artifactAssertionsForPaths([
+          { field: "pdf", ext: ".pdf" },
+          { field: "meta", ext: ".json" },
+        ]),
+      ),
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Create a PDF report and write a small verification file describing it.
@@ -1324,6 +1652,9 @@ Final response must be a JSON object:
       provider: "google",
       model: "gemini-3-flash-preview",
       maxSteps: 90,
+      finalContract: buildLinePairFileContract({
+        dataset: z.string().trim().min(1),
+      }),
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Exercise ask + notebookEdit + memory in one run.
@@ -1347,6 +1678,10 @@ dataset: <dataset>
       model: "gpt-5-mini",
       maxSteps: 120,
       requiredToolCalls: ["spawnAgent", "waitForAgent", "webFetch", "write", "edit", "glob", "read"],
+      finalContract: buildLinePairFileContract(
+        { report: absolutePathSchema },
+        artifactAssertionsForPaths([{ field: "report", ext: ".md" }]),
+      ),
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Use a research sub-agent, then write and lightly edit a short report.
@@ -1373,6 +1708,10 @@ report: <absolute path>
       provider: "anthropic",
       model: "claude-4-5-haiku",
       maxSteps: 90,
+      finalContract: buildLinePairFileContract(
+        { ws_quickref: absolutePathSchema },
+        artifactAssertionsForPaths([{ field: "ws_quickref", ext: ".md" }]),
+      ),
       prompt: ({ runDir, repoDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Create a WebSocket protocol quick reference based on the repo docs.
@@ -1394,6 +1733,10 @@ ws_quickref: <absolute path>
       provider: "google",
       model: "gemini-3-flash-preview",
       maxSteps: 140,
+      finalContract: buildJsonFileContract(
+        { manifest: absolutePathSchema },
+        artifactAssertionsForPaths([{ field: "manifest", ext: ".json" }]),
+      ),
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Create a small bundle of artifacts: XLSX + DOCX + PPTX derived from one tiny dataset.
@@ -1424,6 +1767,13 @@ Final response must be a JSON object:
       requiredToolCalls: ["todoWrite", "webSearch", "write", "read"],
       requiredToolBeforeTools: "webSearch",
       guardedToolsBeforeRequiredTool: ["write", "read"],
+      finalContract: buildJsonFileContract(
+        {
+          run_id: z.string().trim().min(1),
+          memo: absolutePathSchema,
+        },
+        artifactAssertionsForPaths([{ field: "memo", ext: ".md" }]),
+      ),
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Demonstrate Claude 4.6 Sonnet tool use with web research.
@@ -1451,6 +1801,10 @@ function buildCodexHarnessSmokeRuns(): RunSpec[] {
       maxSteps: 90,
       maxAttempts: 3,
       requiredToolCalls: ["todoWrite", "bash", "grep", "read", "write", "glob"],
+      finalContract: buildJsonFileContract(
+        { report: absolutePathSchema },
+        artifactAssertionsForPaths([{ field: "report", ext: ".md" }]),
+      ),
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Smoke-test the harness against the current repo using a focused local tool loop.
@@ -1636,7 +1990,7 @@ async function main() {
     config.provider = run.provider;
     config.model = resolved.resolvedModel;
     config.preferredChildModel = resolved.resolvedModel;
-    config.harness = { reportOnly: cliArgs.reportOnly, strictMode: false };
+    config.harness = resolveRawLoopHarnessConfig(config.harness, cliArgs);
 
     // Keep memory local to the run folder so artifacts can be captured per-run.
     const localProjectAgentDir = path.join(runDir, ".agent");
@@ -1677,21 +2031,30 @@ async function main() {
 
     const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
 
-    const userPrompt = run.prompt({ runId: run.id, runDir, repoDir });
+    const promptContext = { runId: run.id, runDir, repoDir };
+    const userPrompt = run.prompt(promptContext);
     const inputMessages: ModelMessage[] = [{ role: "user", content: userPrompt }];
+    const harnessContext = buildRawLoopHarnessContext(run, cliArgs.scenario, promptContext, startedAt);
 
     await fs.writeFile(path.join(runDir, "prompt.txt"), userPrompt, "utf-8");
     await fs.writeFile(path.join(runDir, "system.txt"), system, "utf-8");
     await fs.writeFile(path.join(runDir, "input_messages.json"), safeJsonStringify(inputMessages), "utf-8");
+    await fs.writeFile(path.join(runDir, "harness_context.json"), safeJsonStringify(harnessContext), "utf-8");
 
     const attempts: AttemptMeta[] = [];
     const maxAttempts = run.maxAttempts ?? 5;
+    const strictMode = config.harness.strictMode;
 
     let finalToolLogLines: string[] = [];
     let finalAskEvents: AskEvent[] = [];
     let finalApprovalEvents: ApprovalEvent[] = [];
     let finalTodoEvents: TodoEvent[] = [];
     let finalSteps: TracedStep[] = [];
+    let repairAttempted = false;
+    let repairSucceeded = false;
+    let degraded = false;
+    let finalValidation: ValidationSummary | null = null;
+    let finalBudgets = buildRawLoopBudgetSummary([], 0, 0);
     let finalRes:
       | {
           text: string;
@@ -1703,12 +2066,17 @@ async function main() {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const attemptStartedAt = isoSafeNow();
+      let attemptRepairAttempted = false;
+      let attemptRepairSucceeded = false;
+      let attemptDegraded = false;
 
       const toolLogLines: string[] = [];
       const askEvents: AskEvent[] = [];
       const approvalEvents: ApprovalEvent[] = [];
       const todoEvents: TodoEvent[] = [];
       const steps: TracedStep[] = [];
+      let attemptValidation: ValidationSummary | null = null;
+      let attemptTotalSteps = 0;
 
       const log = (line: string) => {
         toolLogLines.push(line);
@@ -1751,37 +2119,50 @@ async function main() {
         approveCommand,
         availableSkills: discoveredSkills,
         parentMessages: inputMessages,
+        harnessContext,
       }, {
         getConnectedProviders: async () => connectedProviders,
       });
 
       try {
-        const res = await runTurnWithDeps(
-          {
-            config,
-            system,
-            messages: inputMessages,
-            log,
-            askUser,
-            approveCommand,
-            updateTodos,
-            discoveredSkills,
-            agentControl,
-            maxSteps: run.maxSteps ?? 100,
-            enableMcp: false,
-            telemetryContext: {
-              functionId: "harness.runTurn",
-              metadata: {
-                runId: run.id,
-                scenario: cliArgs.scenario,
-                attempt,
+        const mainStepNumbers: number[] = [];
+        const res = await (async () => {
+          try {
+            return await runTurnWithDeps(
+              {
+                config,
+                system,
+                messages: inputMessages,
+                harnessContext,
+                log,
+                askUser,
+                approveCommand,
+                updateTodos,
+                discoveredSkills,
+                agentControl,
+                prepareStep: async ({ stepNumber }) => {
+                  mainStepNumbers.push(stepNumber);
+                  return undefined;
+                },
+                maxSteps: run.maxSteps ?? 100,
+                enableMcp: false,
+                telemetryContext: {
+                  functionId: "harness.runTurn",
+                  metadata: {
+                    runId: run.id,
+                    scenario: cliArgs.scenario,
+                    attempt,
+                  },
+                },
               },
-            },
-          },
-          {
-            createTools: createToolsOverride as any,
+              {
+                createTools: createToolsOverride as any,
+              }
+            );
+          } finally {
+            attemptTotalSteps += countObservedLoopSteps(mainStepNumbers);
           }
-        );
+        })();
 
         if (Array.isArray(run.requiredToolCalls) && run.requiredToolCalls.length > 0) {
           const tracedToolCalls = collectTracedToolCallNames(steps);
@@ -1811,42 +2192,101 @@ async function main() {
         let finalText = String(res?.text ?? "");
         let finalReasoningText = res?.reasoningText;
         let finalResponseMessages = (res?.responseMessages ?? []) as ModelMessage[];
+        let budgetSummary = buildRawLoopBudgetSummary(toolLogLines, attemptTotalSteps, 0);
+        const validationOutcome = await validateWithOptionalRepair({
+          finalText,
+          runDir,
+          trace: {
+            toolLogLines,
+            askEvents,
+            approvalEvents,
+            todoEvents,
+            steps,
+          },
+          contract: run.finalContract,
+          strictMode,
+          repairFinalOutput: async () => {
+            const finalizeMessages: ModelMessage[] = [
+              ...inputMessages,
+              ...finalResponseMessages,
+              {
+                role: "user",
+                content:
+                  "You did not provide a valid final response contract. Provide the final response now, do NOT call tools, and end with <<END_RUN>>.",
+              },
+            ];
 
-        // Ensure we always end with a final response (some runs may stop mid-tool-loop).
-        if (!finalText.includes("<<END_RUN>>")) {
-          const finalizeMessages: ModelMessage[] = [
-            ...inputMessages,
-            ...finalResponseMessages,
-            {
-              role: "user",
-              content:
-                "You did not provide the required final response. Provide the final response now, do NOT call tools, and end with <<END_RUN>>.",
-            },
-          ];
+            const repairStepNumbers: number[] = [];
+            const finalized = await (async () => {
+              try {
+                return await runTurnWithDeps(
+                  {
+                    config,
+                    system,
+                    messages: finalizeMessages,
+                    harnessContext,
+                    log,
+                    askUser,
+                    approveCommand,
+                    updateTodos,
+                    discoveredSkills,
+                    prepareStep: async ({ stepNumber }) => {
+                      repairStepNumbers.push(stepNumber);
+                      return undefined;
+                    },
+                    maxSteps: 1,
+                    enableMcp: false,
+                  },
+                  {
+                    createTools: (() => ({})) as any,
+                  }
+                );
+              } finally {
+                attemptTotalSteps += countObservedLoopSteps(repairStepNumbers);
+              }
+            })();
 
-          const finalized = await runTurnWithDeps(
-            {
-              config,
-              system,
-              messages: finalizeMessages,
-              log,
-              askUser,
-              approveCommand,
-              updateTodos,
-              discoveredSkills,
-              maxSteps: 1,
-              enableMcp: false,
-            },
-            {
-              createTools: (() => ({})) as any,
-            }
+            return {
+              finalText: String(finalized.text ?? "").trim() || finalText,
+              data: {
+                reasoningText: typeof finalized.reasoningText === "string"
+                  ? finalized.reasoningText
+                  : finalReasoningText,
+                responseMessages: (finalized.responseMessages || []) as ModelMessage[],
+              },
+            };
+          },
+        });
+        const validationResult = validationOutcome.validationResult;
+        attemptRepairAttempted = validationOutcome.repairAttempted;
+        attemptRepairSucceeded = validationOutcome.repairSucceeded;
+        attemptDegraded = validationOutcome.degraded;
+        finalText = validationOutcome.finalText;
+        if (validationOutcome.repairData) {
+          finalReasoningText = validationOutcome.repairData.reasoningText;
+          if (validationOutcome.repairData.responseMessages.length > 0) {
+            finalResponseMessages = [
+              ...finalResponseMessages,
+              ...validationOutcome.repairData.responseMessages,
+            ];
+          }
+        }
+        budgetSummary = buildRawLoopBudgetSummary(
+          toolLogLines,
+          attemptTotalSteps,
+          attemptRepairAttempted ? 1 : 0,
+        );
+        attemptValidation = summarizeValidationResult(validationResult);
+
+        if (!validationResult.ok) {
+          finalValidation = attemptValidation;
+          repairAttempted = attemptRepairAttempted;
+          repairSucceeded = attemptRepairSucceeded;
+          degraded = attemptDegraded;
+          finalBudgets = budgetSummary;
+          throw new Error(
+            `Final contract validation failed: ${validationResult.issues.map((entry) => entry.message).join("; ")}`
           );
-
-          const finalizedText = String(finalized.text ?? "");
-          if (finalizedText.trim()) finalText = finalizedText;
-          if (typeof finalized.reasoningText === "string") finalReasoningText = finalized.reasoningText;
-          const moreMsgs = (finalized.responseMessages || []) as ModelMessage[];
-          if (moreMsgs.length > 0) finalResponseMessages = [...finalResponseMessages, ...moreMsgs];
         }
 
         finalRes = {
@@ -1855,6 +2295,11 @@ async function main() {
           responseMessages: finalResponseMessages,
         };
         finalError = null;
+        finalValidation = attemptValidation;
+        repairAttempted = attemptRepairAttempted;
+        repairSucceeded = attemptRepairSucceeded;
+        degraded = attemptDegraded;
+        finalBudgets = budgetSummary;
 
         finalToolLogLines = toolLogLines;
         finalAskEvents = askEvents;
@@ -1878,6 +2323,7 @@ async function main() {
           system,
           userPrompt,
           inputMessages,
+          harnessContext,
           toolLogLines,
           askEvents,
           approvalEvents,
@@ -1895,6 +2341,20 @@ async function main() {
       } catch (err) {
         finalRes = null;
         finalError = err;
+        repairAttempted = attemptRepairAttempted;
+        repairSucceeded = attemptRepairSucceeded;
+        degraded = attemptDegraded;
+        finalValidation = attemptValidation;
+        finalToolLogLines = toolLogLines;
+        finalAskEvents = askEvents;
+        finalApprovalEvents = approvalEvents;
+        finalTodoEvents = todoEvents;
+        finalSteps = steps;
+        finalBudgets = buildRawLoopBudgetSummary(
+          toolLogLines,
+          attemptTotalSteps,
+          attemptRepairAttempted ? 1 : 0,
+        );
 
         const delayMs = computeRetryDelayMs(err, attempt);
         attempts.push({
@@ -1914,6 +2374,7 @@ async function main() {
           system,
           userPrompt,
           inputMessages,
+          harnessContext,
           toolLogLines,
           askEvents,
           approvalEvents,
@@ -1942,6 +2403,7 @@ async function main() {
       system,
       userPrompt,
       inputMessages,
+      harnessContext,
       toolLogLines: finalToolLogLines,
       askEvents: finalAskEvents,
       approvalEvents: finalApprovalEvents,
@@ -2014,6 +2476,24 @@ async function main() {
       runDir,
       startedAt,
       finishedAt,
+      harnessContext,
+      strictMode,
+      repairAttempted,
+      repairSucceeded,
+      degraded,
+      validation: finalValidation ?? {
+        schemaOk: false,
+        artifactOk: false,
+        semanticOk: false,
+        issues: [
+          {
+            code: "run_failed",
+            message: runFailureError?.message ?? "Run did not produce a valid final contract",
+          },
+        ],
+        warnings: [],
+      },
+      budgets: finalBudgets,
       observabilityEnabled: config.observabilityEnabled ?? false,
       observability: {
         provider: "langfuse",
@@ -2037,6 +2517,7 @@ async function main() {
     harness: {
       scenario: cliArgs.scenario,
       reportOnly: cliArgs.reportOnly,
+      strictModeOverride: cliArgs.strictModeOverride,
       onlyRunIds: cliArgs.onlyRunIds,
       onlyModels: cliArgs.onlyModels,
     },

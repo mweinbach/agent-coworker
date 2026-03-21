@@ -269,13 +269,13 @@ Configuration merges across three tiers (each overrides the previous):
 1. Create `src/tools/myTool.ts`
 2. Export factory function accepting `ToolContext`
 3. Register in `src/tools/index.ts`
-4. Add tests in `test/tools/`
+4. Add targeted tests under `test/`
 
 ### Adding a WebSocket Message
 
 1. Add type to `ClientMessage` or `ServerEvent` in `src/server/protocol.ts`
 2. Add validation in `safeParseClientMessage()` (for client messages)
-3. Add handler in `src/server/startServer.ts` or `src/server/session.ts`
+3. Add handler in `src/server/startServer/dispatchClientMessage.ts` or the appropriate manager under `src/server/session/`
 4. Document in `docs/websocket-protocol.md`
 
 ### Adding a Provider
@@ -339,5 +339,5 @@ Write operations are restricted to:
 
 - [WebSocket Protocol Reference](websocket-protocol.md) — Full message contract
 - [Session Storage Architecture](session-storage-architecture.md) — Persistence details
-- [Configuration Guide](configuration.md) — All config options
-- [Tools Reference](tools-reference.md) — Tool documentation
+- [Harness Config Guide](harness/config.md) — Config precedence and harness/runtime flags
+- [Custom Tools Guide](custom-tools.md) — Tool extension and customization reference

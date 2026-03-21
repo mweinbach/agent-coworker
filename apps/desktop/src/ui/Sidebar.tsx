@@ -226,7 +226,7 @@ export const Sidebar = memo(function Sidebar() {
   };
 
   return (
-    <aside className="app-sidebar sidebar-rail-enter flex h-full w-full flex-col gap-4 px-2.5 py-3.5">
+    <aside className="app-sidebar sidebar-rail-enter flex h-full w-full flex-col gap-2 px-2.5 pt-1.5 pb-3.5">
       <nav className="grid gap-1">
         <Button
           variant="ghost"

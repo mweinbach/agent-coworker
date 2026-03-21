@@ -33,11 +33,12 @@ describe("desktop app top bar", () => {
       const sidebarToggle = container.querySelector('button[aria-label="Hide sidebar"]');
 
       expect(rightToolbar).not.toBeNull();
-      expect(rightToolbar?.className).toContain("app-topbar__controls");
       expect(rightToolbar?.className).not.toContain("rounded");
       expect(contextToggle).not.toBeNull();
       expect(sidebarToggle).not.toBeNull();
+      expect(sidebarToggle?.className).toContain("app-topbar__controls");
       expect(sidebarToggle?.className).toContain("app-topbar__sidebar-toggle-button");
+      expect(contextToggle?.className).toContain("app-topbar__controls");
       expect(contextToggle?.className).toContain("app-topbar__toolbar-button");
       expect(container.textContent).toContain("Busy");
 

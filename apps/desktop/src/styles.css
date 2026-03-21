@@ -99,6 +99,11 @@ body {
   -webkit-app-region: drag;
 }
 
+/* Fills the title bar above flex children; must be drag so empty space moves the window */
+.app-topbar__controls-row {
+  -webkit-app-region: drag;
+}
+
 .app-topbar__controls {
   -webkit-app-region: no-drag;
 }
@@ -108,8 +113,9 @@ body {
   z-index: 1;
 }
 
-.app-topbar__inline-sidebar-toggle {
+.app-topbar__sidebar-toggle-slot {
   z-index: 2;
+  padding-left: 1rem;
 }
 
 .app-topbar__toolbar-button {
@@ -118,19 +124,6 @@ body {
 
 .app-topbar__toolbar-button:hover {
   color: var(--text);
-}
-
-.app-topbar__sidebar-toggle-button {
-  border: 1px solid color-mix(in srgb, var(--glass-border) 88%, transparent);
-  background: color-mix(in srgb, var(--sidebar-surface) 78%, transparent);
-  box-shadow:
-    0 1px 2px color-mix(in srgb, var(--text) 10%, transparent),
-    inset 0 1px 0 color-mix(in srgb, white 35%, transparent);
-  backdrop-filter: blur(calc(var(--titlebar-blur) + 2px));
-}
-
-.app-topbar__sidebar-toggle-button:hover {
-  background: color-mix(in srgb, var(--sidebar-surface) 90%, transparent);
 }
 
 .app-topbar__sidebar-fill {
@@ -158,8 +151,8 @@ body {
   backdrop-filter: blur(var(--titlebar-blur));
 }
 
-:root[data-platform="darwin"] .app-topbar__inline-sidebar-toggle {
-  left: 5.4rem;
+:root[data-platform="darwin"] .app-topbar__sidebar-toggle-slot {
+  padding-left: 5.4rem;
 }
 
 :root[data-platform="darwin"] .app-topbar__toolbar--right {
@@ -171,9 +164,16 @@ body {
   filter: drop-shadow(0 1px 0.75px color-mix(in srgb, var(--panel-bg) 72%, transparent));
 }
 
-:root[data-platform="win32"] .app-topbar__inline-sidebar-toggle {
-  left: auto;
+:root[data-platform="win32"] .app-topbar__sidebar-toggle-slot {
+  position: absolute;
+  top: 50%;
   right: 8.75rem;
+  left: auto;
+  transform: translateY(-50%);
+  flex: none;
+  width: auto;
+  max-width: none;
+  padding-left: 0;
 }
 
 :root[data-platform="win32"] .app-topbar {

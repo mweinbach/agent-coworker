@@ -263,6 +263,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     applyWorkspaceDefaultsToThread: async (
       threadId: string,
       mode: "auto" | "auto-resume" | "explicit" = "explicit",
+      draftModelSelection: { provider: ProviderName; model: string } | null = null,
     ) => {
       const thread = get().threads.find((t) => t.id === threadId);
       if (!thread) return;
@@ -302,13 +303,22 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
             ? ((rt.config as any).provider as ProviderName)
             : "google";
 
-      const provider = inferredProvider;
+      let provider = inferredProvider;
       const liveDefaultModel = get().providerDefaultModelByProvider[provider]?.trim() || "";
-      const model = (
+      let model = (
         preserveSessionModel
           ? rt.config?.model?.trim()
           : ws.defaultModel?.trim() || liveDefaultModel || rt.config?.model?.trim() || ""
       ) || undefined;
+
+      if (!preserveSessionModel && draftModelSelection) {
+        const p = draftModelSelection.provider;
+        const m = draftModelSelection.model.trim();
+        if (isProviderName(p) && m) {
+          provider = p;
+          model = m;
+        }
+      }
       const preferredChildModel = (
         preserveSessionModel
           ? rt.sessionConfig?.preferredChildModel?.trim() || rt.config?.model?.trim() || ""

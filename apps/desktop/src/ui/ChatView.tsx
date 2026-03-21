@@ -44,8 +44,9 @@ import {
   type CatalogVisibilityOptions,
 } from "../lib/modelChoices";
 import { readFile } from "../lib/desktopCommands";
-import type { ProviderName } from "../lib/wsProtocol";
+import { PROVIDER_NAMES, type ProviderName } from "../lib/wsProtocol";
 import { cn } from "../lib/utils";
+import { defaultModelForProvider } from "@cowork/providers/catalog";
 import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
 import {
   buildCitationOverflowFilePathsByMessageId,
@@ -426,6 +427,10 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   "codex-cli": "ChatGPT Subscription",
 };
 
+function isChatProviderName(value: unknown): value is ProviderName {
+  return typeof value === "string" && (PROVIDER_NAMES as readonly string[]).includes(value);
+}
+
 function ThreadModelSelector({
   threadId,
   provider,
@@ -570,6 +575,42 @@ export function ChatView() {
     [developerMode],
   );
 
+  const workspace = useAppStore((s) => {
+    if (!s.selectedThreadId) return null;
+    const th = s.threads.find((t) => t.id === s.selectedThreadId);
+    if (!th) return null;
+    return s.workspaces.find((w) => w.id === th.workspaceId) ?? null;
+  });
+
+  const modelSelectorConfig = useMemo(() => {
+    if (!selectedThreadId || !thread) return null;
+    if (!rt || rt.sessionKind === "agent") return null;
+    if (rt.transcriptOnly === true) return null;
+
+    if (thread.draft) {
+      if (!workspace) return null;
+      const baseProvider =
+        workspace.defaultProvider && isChatProviderName(workspace.defaultProvider)
+          ? workspace.defaultProvider
+          : "google";
+      const provider =
+        rt.draftComposerProvider != null && isChatProviderName(rt.draftComposerProvider)
+          ? rt.draftComposerProvider
+          : baseProvider;
+      const modelRaw =
+        typeof rt.draftComposerModel === "string" && rt.draftComposerModel.trim()
+          ? rt.draftComposerModel.trim()
+          : workspace.defaultModel?.trim() || defaultModelForProvider(provider) || "";
+      if (!modelRaw) return null;
+      return { provider, model: modelRaw };
+    }
+
+    if (rt.config?.provider && rt.config.model) {
+      return { provider: rt.config.provider as ProviderName, model: rt.config.model };
+    }
+    return null;
+  }, [selectedThreadId, thread, rt, workspace]);
+
   const handleStop = useCallback(() => {
     if (!selectedThreadId) return;
     if (activeChildAgentCount > 0) {
@@ -693,7 +734,6 @@ export function ChatView() {
   const transcriptOnly = rt?.transcriptOnly === true;
   const hydrating = rt?.hydrating === true || (bootstrapPending && Boolean(selectedThreadId) && Boolean(thread) && rt === null);
   const disconnected = !hydrating && !transcriptOnly && thread.status !== "active";
-  const modelSelectorConfig = visibleFeed.length === 0 && rt?.config?.provider && rt?.config?.model ? rt.config : null;
   const usageHeadline = formatSessionUsageHeadline(rt?.sessionUsage ?? null, rt?.lastTurnUsage ?? null, {
     showTokens: developerMode,
   });

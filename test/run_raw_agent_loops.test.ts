@@ -416,8 +416,8 @@ describe("raw loop harness context", () => {
 
   test("countObservedLoopSteps derives loop turns from prepareStep step numbers", () => {
     expect(countObservedLoopSteps([])).toBe(0);
-    expect(countObservedLoopSteps([0])).toBe(1);
-    expect(countObservedLoopSteps([0, 1, 2])).toBe(3);
+    expect(countObservedLoopSteps([1])).toBe(1);
+    expect(countObservedLoopSteps([1, 2, 3])).toBe(3);
   });
 
   test("buildRawLoopBudgetSummary uses actual loop turn count instead of traced entry count", () => {

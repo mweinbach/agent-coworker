@@ -757,6 +757,23 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
   
 
     setThreadModel: (threadId, provider, model) => {
+      const thread = get().threads.find((t) => t.id === threadId);
+      if (!thread) return;
+
+      if (thread.draft) {
+        set((s) => ({
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: {
+              ...s.threadRuntimeById[threadId],
+              draftComposerProvider: provider,
+              draftComposerModel: model,
+            },
+          },
+        }));
+        return;
+      }
+
       const rt = get().threadRuntimeById[threadId];
       if (!rt?.sessionId) return;
       const ok = sendThread(get, threadId, (sessionId) => ({

@@ -421,6 +421,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     if (evt.type === "server_hello") {
       resetModelStreamRuntime(threadId);
       const resumedBusy = evt.isResume ? Boolean(evt.busy) : false;
+      const prevRt = get().threadRuntimeById[threadId];
+      const draftModelSelection =
+        prevRt?.draftComposerProvider != null
+        && typeof prevRt.draftComposerModel === "string"
+        && prevRt.draftComposerModel.trim()
+          ? { provider: prevRt.draftComposerProvider, model: prevRt.draftComposerModel.trim() }
+          : null;
       set((s) => {
         const rt = s.threadRuntimeById[threadId];
         if (!rt) return {};
@@ -451,6 +458,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
               activeTurnId: resumedBusy ? (evt.turnId ?? null) : null,
               pendingSteer: resumedBusy ? rt.pendingSteer : null,
               transcriptOnly: false,
+              draftComposerProvider: null,
+              draftComposerModel: null,
             },
           },
           threads: s.threads.map((t) =>
@@ -463,7 +472,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         clearPendingThreadSteers(threadId);
       }
 
-      void get().applyWorkspaceDefaultsToThread(threadId, evt.isResume ? "auto-resume" : "auto");
+      void get().applyWorkspaceDefaultsToThread(threadId, evt.isResume ? "auto-resume" : "auto", draftModelSelection);
       RUNTIME.threadSockets.get(threadId)?.send({
         type: "get_session_usage",
         sessionId: evt.sessionId,

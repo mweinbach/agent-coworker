@@ -428,7 +428,7 @@ export function summarizeRawLoopBudgets(toolCallNames: string[]) {
 
 export function countObservedLoopSteps(stepNumbers: number[]) {
   if (stepNumbers.length === 0) return 0;
-  return Math.max(...stepNumbers) + 1;
+  return Math.max(...stepNumbers);
 }
 
 export function buildRawLoopBudgetSummary(

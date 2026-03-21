@@ -31,13 +31,11 @@ import {
   queuePendingThreadMessage,
   requestJsonRpcControlEvent,
   requestSessionSnapshot,
-  sendControl,
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,
   syncDesktopStateCache,
   truncateTitle,
-  workspaceUsesJsonRpc,
 } from "../store.helpers";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
 import type {
@@ -256,20 +254,13 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
           : runtimeSessionId
             ? [runtimeSessionId]
             : [];
-      const sock = RUNTIME.threadSockets.get(threadId);
       closeThreadSession(threadId);
-      RUNTIME.threadSockets.delete(threadId);
       RUNTIME.optimisticUserMessageIds.delete(threadId);
       RUNTIME.pendingThreadMessages.delete(threadId);
       RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
       RUNTIME.modelStreamByThread.delete(threadId);
       RUNTIME.threadSelectionRequests.delete(threadId);
       clearPendingThreadSteers(threadId);
-      try {
-        sock?.close();
-      } catch {
-        // ignore
-      }
 
       for (const sessionId of sessionSnapshotIds) {
         RUNTIME.sessionSnapshots.delete(sessionId);
@@ -316,16 +307,10 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
 
       await ensureServerRunning(get, set, thread.workspaceId);
       ensureControlSocket(get, set, thread.workspaceId);
-      const ok = workspaceUsesJsonRpc(get, thread.workspaceId)
-        ? await requestJsonRpcControlEvent(get, set, thread.workspaceId, "cowork/session/delete", {
-            cwd: get().workspaces.find((workspace) => workspace.id === thread.workspaceId)?.path,
-            targetSessionId,
-          })
-        : sendControl(get, thread.workspaceId, (sessionId) => ({
-            type: "delete_session",
-            sessionId,
-            targetSessionId,
-          }));
+      const ok = await requestJsonRpcControlEvent(get, set, thread.workspaceId, "cowork/session/delete", {
+        cwd: get().workspaces.find((workspace) => workspace.id === thread.workspaceId)?.path,
+        targetSessionId,
+      });
 
       if (ok) {
         set((s) => ({
@@ -483,7 +468,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         return;
       }
       const rt = get().threadRuntimeById[threadId];
-      if (get().selectedThreadId === threadId && (RUNTIME.threadSelectionRequests.has(threadId) || RUNTIME.threadSockets.has(threadId))) {
+      if (get().selectedThreadId === threadId && (RUNTIME.threadSelectionRequests.has(threadId) || rt?.connected)) {
         return;
       }
 

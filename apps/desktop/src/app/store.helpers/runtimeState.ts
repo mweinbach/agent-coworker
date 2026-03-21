@@ -1,4 +1,3 @@
-import { AgentSocket } from "../../lib/agentSocket";
 import type { JsonRpcSocket } from "../../lib/agentSocket";
 import type { ProviderName } from "../../lib/wsProtocol";
 import {
@@ -35,11 +34,9 @@ export type SkillInstallWaiter = {
 };
 
 export type RuntimeMaps = {
-  controlSockets: Map<string, AgentSocket>;
   jsonRpcSockets: Map<string, JsonRpcSocket>;
   /** Latest in-flight skill install per workspace; resolved when `skills_catalog` completes the matching pending key. */
   skillInstallWaiters: Map<string, SkillInstallWaiter>;
-  threadSockets: Map<string, AgentSocket>;
   optimisticUserMessageIds: Map<string, Set<string>>;
   pendingThreadMessages: Map<string, string[]>;
   pendingThreadSteers: Map<string, Map<string, PendingThreadSteer>>;
@@ -54,10 +51,8 @@ export type RuntimeMaps = {
 };
 
 export const RUNTIME: RuntimeMaps = {
-  controlSockets: new Map(),
   jsonRpcSockets: new Map(),
   skillInstallWaiters: new Map(),
-  threadSockets: new Map(),
   optimisticUserMessageIds: new Map(),
   pendingThreadMessages: new Map(),
   pendingThreadSteers: new Map(),
@@ -163,7 +158,6 @@ export function rekeyThreadRuntimeMaps(fromThreadId: string, toThreadId: string)
     return;
   }
 
-  moveMapEntry(RUNTIME.threadSockets, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.optimisticUserMessageIds, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingThreadMessages, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingThreadSteers, fromThreadId, toThreadId);

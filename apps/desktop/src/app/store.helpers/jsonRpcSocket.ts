@@ -1,4 +1,4 @@
-import * as AgentSocketModule from "../../lib/agentSocket";
+import { JsonRpcSocket } from "../../lib/agentSocket";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import type { ThreadRuntime, WorkspaceRecord } from "../types";
 import { RUNTIME } from "./runtimeState";
@@ -8,9 +8,14 @@ type JsonRpcNotification =
   | { kind: "request"; id: string | number; method: string; params?: any };
 
 type WorkspaceNotificationRouter = (message: JsonRpcNotification) => void;
+type WorkspaceLifecycleListener = {
+  onOpen?: () => void;
+  onClose?: () => void;
+};
 
 const workspaceRouters = new Map<string, Set<WorkspaceNotificationRouter>>();
-const JsonRpcSocketImpl = ((AgentSocketModule as any).JsonRpcSocket ?? AgentSocketModule.AgentSocket) as new (...args: any[]) => any;
+const workspaceLifecycleListeners = new Map<string, Set<WorkspaceLifecycleListener>>();
+const JsonRpcSocketImpl = JsonRpcSocket as new (...args: any[]) => any;
 const noopSet: StoreSet = () => {};
 
 function getWorkspaceById(get: StoreGet, workspaceId: string): WorkspaceRecord | undefined {
@@ -31,6 +36,18 @@ function emitToWorkspaceRouters(workspaceId: string, message: JsonRpcNotificatio
   }
 }
 
+function emitWorkspaceLifecycle(workspaceId: string, event: "open" | "close") {
+  const listeners = workspaceLifecycleListeners.get(workspaceId);
+  if (!listeners) return;
+  for (const listener of listeners) {
+    if (event === "open") {
+      listener.onOpen?.();
+      continue;
+    }
+    listener.onClose?.();
+  }
+}
+
 export function registerWorkspaceJsonRpcRouter(workspaceId: string, router: WorkspaceNotificationRouter): () => void {
   const routers = workspaceRouters.get(workspaceId) ?? new Set<WorkspaceNotificationRouter>();
   routers.add(router);
@@ -45,8 +62,18 @@ export function registerWorkspaceJsonRpcRouter(workspaceId: string, router: Work
   };
 }
 
-export function workspaceUsesJsonRpc(get: StoreGet, workspaceId: string): boolean {
-  return getWorkspaceById(get, workspaceId)?.wsProtocol === "jsonrpc";
+export function registerWorkspaceJsonRpcLifecycle(workspaceId: string, listener: WorkspaceLifecycleListener): () => void {
+  const listeners = workspaceLifecycleListeners.get(workspaceId) ?? new Set<WorkspaceLifecycleListener>();
+  listeners.add(listener);
+  workspaceLifecycleListeners.set(workspaceId, listeners);
+  return () => {
+    const current = workspaceLifecycleListeners.get(workspaceId);
+    if (!current) return;
+    current.delete(listener);
+    if (current.size === 0) {
+      workspaceLifecycleListeners.delete(workspaceId);
+    }
+  };
 }
 
 export function ensureWorkspaceJsonRpcSocket(
@@ -92,6 +119,7 @@ export function ensureWorkspaceJsonRpcSocket(
           },
         },
       }));
+      emitWorkspaceLifecycle(workspaceId, "open");
     },
     onClose: () => {
       effectiveSet((s) => ({
@@ -103,6 +131,7 @@ export function ensureWorkspaceJsonRpcSocket(
           },
         },
       }));
+      emitWorkspaceLifecycle(workspaceId, "close");
     },
   });
 
@@ -116,8 +145,8 @@ export function ensureWorkspaceJsonRpcSocket(
     (socket as any).respond = () => true;
   }
 
-  socket.connect();
   RUNTIME.jsonRpcSockets.set(workspaceId, socket);
+  socket.connect();
   return socket;
 }
 

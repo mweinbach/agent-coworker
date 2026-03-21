@@ -50,7 +50,6 @@ import {
 } from "./store.helpers/runtimeState";
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
 import { createTranscriptBuffer } from "./store.helpers/transcriptBuffer";
-import { workspaceUsesJsonRpc } from "./store.helpers/jsonRpcSocket";
 
 function nowIso() {
   return new Date().toISOString();
@@ -472,7 +471,6 @@ export {
   requestWorkspaceSessions,
   requestSessionSnapshot,
   requestJsonRpcControlEvent,
-  workspaceUsesJsonRpc,
   ensureThreadSocket,
   sendControl,
   sendThread,

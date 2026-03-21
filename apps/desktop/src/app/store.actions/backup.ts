@@ -10,9 +10,7 @@ import {
   nowIso,
   pushNotification,
   requestJsonRpcControlEvent,
-  sendControl,
   sendThread,
-  workspaceUsesJsonRpc,
 } from "../store.helpers";
 import { workspaceBackupActionKey } from "../store.helpers/backupActionKey";
 
@@ -103,21 +101,9 @@ export function createWorkspaceBackupActions(
       await ensureWorkspaceControl(workspaceId);
       setWorkspaceBackupsLoading(set, workspaceId, true, null);
 
-      if (workspaceUsesJsonRpc(get, workspaceId)) {
-        const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/read", {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-        });
-        if (ok) return;
-
-        setWorkspaceBackupsLoading(set, workspaceId, false, "Unable to request workspace backups.");
-        notifyNotConnected("Unable to request workspace backups.");
-        return;
-      }
-
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "workspace_backups_get",
-        sessionId,
-      }));
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/read", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+      });
       if (ok) return;
 
       setWorkspaceBackupsLoading(set, workspaceId, false, "Unable to request workspace backups.");
@@ -137,34 +123,11 @@ export function createWorkspaceBackupActions(
         },
       }));
 
-      if (workspaceUsesJsonRpc(get, workspaceId)) {
-        const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/delta/read", {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          targetSessionId,
-          checkpointId,
-        });
-        if (ok) return;
-
-        set((s) => ({
-          workspaceRuntimeById: {
-            ...s.workspaceRuntimeById,
-            [workspaceId]: {
-              ...s.workspaceRuntimeById[workspaceId],
-              workspaceBackupDeltaLoading: false,
-              workspaceBackupDeltaError: "Unable to inspect workspace backup delta.",
-            },
-          },
-        }));
-        notifyNotConnected("Unable to inspect the selected workspace checkpoint.");
-        return;
-      }
-
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "workspace_backup_delta_get",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/delta/read", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         targetSessionId,
         checkpointId,
-      }));
+      });
       if (ok) return;
 
       set((s) => ({
@@ -185,22 +148,10 @@ export function createWorkspaceBackupActions(
       const actionKey = workspaceBackupActionKey("checkpoint", targetSessionId);
       addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
 
-      if (workspaceUsesJsonRpc(get, workspaceId)) {
-        const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/checkpoint", {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          targetSessionId,
-        });
-        if (ok) return;
-        clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-        notifyNotConnected("Unable to create a workspace checkpoint.");
-        return;
-      }
-
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "workspace_backup_checkpoint",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/checkpoint", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         targetSessionId,
-      }));
+      });
       if (ok) return;
 
       clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
@@ -212,22 +163,10 @@ export function createWorkspaceBackupActions(
       const actionKey = workspaceBackupActionKey("restore-original", targetSessionId);
       addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
 
-      if (workspaceUsesJsonRpc(get, workspaceId)) {
-        const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/restore", {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          targetSessionId,
-        });
-        if (ok) return;
-        clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-        notifyNotConnected("Unable to restore the original workspace snapshot.");
-        return;
-      }
-
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "workspace_backup_restore",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/restore", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         targetSessionId,
-      }));
+      });
       if (ok) return;
 
       clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
@@ -239,24 +178,11 @@ export function createWorkspaceBackupActions(
       const actionKey = workspaceBackupActionKey("restore-checkpoint", targetSessionId, checkpointId);
       addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
 
-      if (workspaceUsesJsonRpc(get, workspaceId)) {
-        const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/restore", {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          targetSessionId,
-          checkpointId,
-        });
-        if (ok) return;
-        clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-        notifyNotConnected("Unable to restore the selected checkpoint.");
-        return;
-      }
-
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "workspace_backup_restore",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/restore", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         targetSessionId,
         checkpointId,
-      }));
+      });
       if (ok) return;
 
       clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
@@ -268,24 +194,11 @@ export function createWorkspaceBackupActions(
       const actionKey = workspaceBackupActionKey("delete-checkpoint", targetSessionId, checkpointId);
       addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
 
-      if (workspaceUsesJsonRpc(get, workspaceId)) {
-        const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/deleteCheckpoint", {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          targetSessionId,
-          checkpointId,
-        });
-        if (ok) return;
-        clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-        notifyNotConnected("Unable to delete the selected checkpoint.");
-        return;
-      }
-
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "workspace_backup_delete_checkpoint",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/deleteCheckpoint", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         targetSessionId,
         checkpointId,
-      }));
+      });
       if (ok) return;
 
       clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
@@ -297,22 +210,10 @@ export function createWorkspaceBackupActions(
       const actionKey = workspaceBackupActionKey("delete-entry", targetSessionId);
       addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
 
-      if (workspaceUsesJsonRpc(get, workspaceId)) {
-        const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/deleteEntry", {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          targetSessionId,
-        });
-        if (ok) return;
-        clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
-        notifyNotConnected("Unable to delete the selected backup entry.");
-        return;
-      }
-
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "workspace_backup_delete_entry",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/deleteEntry", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         targetSessionId,
-      }));
+      });
       if (ok) return;
 
       clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);

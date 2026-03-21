@@ -1,5 +1,3 @@
-import { AgentSocket } from "../../lib/agentSocket";
-import { VERSION } from "../../lib/version";
 import type { ClientMessage, ServerEvent } from "../../lib/wsProtocol";
 import {
   mapModelStreamChunk,
@@ -47,6 +45,7 @@ import {
   ensureWorkspaceJsonRpcSocket,
   findThreadIdForJsonRpcNotification,
   requestJsonRpc,
+  registerWorkspaceJsonRpcLifecycle,
   registerWorkspaceJsonRpcRouter,
   respondToJsonRpcRequest,
   requestJsonRpcThreadRead,
@@ -56,7 +55,6 @@ import {
   steerJsonRpcTurn,
   interruptJsonRpcTurn,
   unsubscribeJsonRpcThread,
-  workspaceUsesJsonRpc,
 } from "./jsonRpcSocket";
 
 const MAX_FEED_ITEMS = 2000;
@@ -91,6 +89,9 @@ type ThreadEventReducerDeps = {
 
 export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   const jsonRpcRouterCleanupByWorkspace = new Map<string, () => void>();
+  const jsonRpcLifecycleCleanupByWorkspace = new Map<string, () => void>();
+  const jsonRpcReconnectThreadsByWorkspace = new Map<string, Set<string>>();
+  const jsonRpcThreadConnectPromises = new Map<string, Promise<void>>();
 
   function hasPendingDraftModelSelection(threadId: string): boolean {
     return Boolean(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId)?.draftModelSelection);
@@ -98,6 +99,28 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
 
   function workspaceIdForThread(get: StoreGet, threadId: string): string | null {
     return get().threads.find((thread) => thread.id === threadId)?.workspaceId ?? null;
+  }
+
+  function rememberThreadForReconnect(workspaceId: string, threadId: string) {
+    const threadIds = jsonRpcReconnectThreadsByWorkspace.get(workspaceId) ?? new Set<string>();
+    threadIds.add(threadId);
+    jsonRpcReconnectThreadsByWorkspace.set(workspaceId, threadIds);
+  }
+
+  function forgetThreadForReconnect(workspaceId: string, threadId: string) {
+    const threadIds = jsonRpcReconnectThreadsByWorkspace.get(workspaceId);
+    if (!threadIds) return;
+    threadIds.delete(threadId);
+    if (threadIds.size === 0) {
+      jsonRpcReconnectThreadsByWorkspace.delete(workspaceId);
+    }
+  }
+
+  function connectedThreadIdsForWorkspace(get: StoreGet, workspaceId: string): string[] {
+    return get().threads
+      .filter((thread) => thread.workspaceId === workspaceId)
+      .map((thread) => thread.id)
+      .filter((threadId) => get().threadRuntimeById[threadId]?.connected);
   }
 
   function ensureWorkspaceJsonRpcRouter(get: StoreGet, set: StoreSet, workspaceId: string) {
@@ -108,10 +131,16 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       if (message.kind === "request") {
         const threadId = findThreadIdForJsonRpcNotification(get, workspaceId, message.params?.threadId ?? message.params?.thread_id ?? null);
         if (!threadId) return;
+        const sessionId =
+          get().threadRuntimeById[threadId]?.sessionId
+          ?? get().threads.find((thread) => thread.id === threadId)?.sessionId
+          ?? message.params?.threadId
+          ?? message.params?.thread_id
+          ?? threadId;
         if (message.method === "item/tool/requestUserInput") {
           handleThreadEvent(get, set, threadId, {
             type: "ask",
-            sessionId: threadId,
+            sessionId,
             requestId: String(message.id),
             question: String(message.params?.question ?? ""),
             options: Array.isArray(message.params?.options) ? message.params.options : undefined,
@@ -121,7 +150,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         if (message.method === "item/commandExecution/requestApproval") {
           handleThreadEvent(get, set, threadId, {
             type: "approval",
-            sessionId: threadId,
+            sessionId,
             requestId: String(message.id),
             command: String(message.params?.command ?? ""),
             dangerous: message.params?.dangerous === true,
@@ -134,11 +163,18 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       const params = message.params ?? {};
       const mappedThreadId = findThreadIdForJsonRpcNotification(get, workspaceId, params.threadId ?? params.thread_id ?? params.thread?.id ?? null);
       if (!mappedThreadId) return;
+      const mappedSessionId =
+        get().threadRuntimeById[mappedThreadId]?.sessionId
+        ?? get().threads.find((thread) => thread.id === mappedThreadId)?.sessionId
+        ?? params.threadId
+        ?? params.thread_id
+        ?? params.thread?.id
+        ?? mappedThreadId;
 
       if (message.method === "turn/started") {
         handleThreadEvent(get, set, mappedThreadId, {
           type: "session_busy",
-          sessionId: mappedThreadId,
+          sessionId: mappedSessionId,
           busy: true,
           turnId: params.turn?.id,
           cause: "user_message",
@@ -149,7 +185,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       if (message.method === "turn/completed") {
         handleThreadEvent(get, set, mappedThreadId, {
           type: "session_busy",
-          sessionId: mappedThreadId,
+          sessionId: mappedSessionId,
           busy: false,
           turnId: params.turn?.id,
           outcome:
@@ -168,7 +204,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           : "";
         handleThreadEvent(get, set, mappedThreadId, {
           type: "user_message",
-          sessionId: mappedThreadId,
+          sessionId: mappedSessionId,
           text,
         });
         return;
@@ -177,7 +213,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       if (message.method === "item/started" && params.item?.type === "reasoning") {
         handleThreadEvent(get, set, mappedThreadId, {
           type: "reasoning",
-          sessionId: mappedThreadId,
+          sessionId: mappedSessionId,
           kind: params.item.mode === "summary" ? "summary" : "reasoning",
           text: String(params.item.text ?? ""),
         });
@@ -187,7 +223,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       if (message.method === "item/agentMessage/delta") {
         handleThreadEvent(get, set, mappedThreadId, {
           type: "model_stream_chunk",
-          sessionId: mappedThreadId,
+          sessionId: mappedSessionId,
           turnId: String(params.turnId ?? "jsonrpc-turn"),
           index: 0,
           provider: (get().threadRuntimeById[mappedThreadId]?.config?.provider ?? "google") as any,
@@ -201,7 +237,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       if (message.method === "item/completed" && params.item?.type === "agentMessage") {
         handleThreadEvent(get, set, mappedThreadId, {
           type: "assistant_message",
-          sessionId: mappedThreadId,
+          sessionId: mappedSessionId,
           text: String(params.item.text ?? ""),
         });
         return;
@@ -210,12 +246,104 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     jsonRpcRouterCleanupByWorkspace.set(workspaceId, cleanup);
   }
 
+  function markWorkspaceThreadsDisconnected(get: StoreGet, set: StoreSet, workspaceId: string) {
+    const reconnectIds = new Set<string>([
+      ...(jsonRpcReconnectThreadsByWorkspace.get(workspaceId) ?? []),
+      ...connectedThreadIdsForWorkspace(get, workspaceId),
+    ]);
+    if (reconnectIds.size === 0) {
+      return;
+    }
+
+    jsonRpcReconnectThreadsByWorkspace.set(workspaceId, reconnectIds);
+    RUNTIME.modelStreamByThread.forEach((_, threadId) => {
+      if (reconnectIds.has(threadId)) {
+        RUNTIME.modelStreamByThread.delete(threadId);
+      }
+    });
+    for (const threadId of reconnectIds) {
+      RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
+    }
+
+    set((s) => {
+      let threadsChanged = false;
+      let runtimeChanged = false;
+      const nextThreads = s.threads.map((thread) => {
+        if (thread.workspaceId !== workspaceId || !reconnectIds.has(thread.id)) {
+          return thread;
+        }
+        if (thread.status !== "disconnected") {
+          threadsChanged = true;
+        }
+        return { ...thread, status: "disconnected" as const };
+      });
+      const nextThreadRuntimeById = { ...s.threadRuntimeById };
+      for (const threadId of reconnectIds) {
+        const runtime = nextThreadRuntimeById[threadId];
+        if (!runtime) continue;
+        runtimeChanged = true;
+        nextThreadRuntimeById[threadId] = {
+          ...runtime,
+          connected: false,
+          busy: false,
+          busySince: null,
+          activeTurnId: null,
+          pendingSteer: null,
+        };
+      }
+      if (!threadsChanged && !runtimeChanged) {
+        return {};
+      }
+      return {
+        threads: nextThreads,
+        threadRuntimeById: nextThreadRuntimeById,
+      };
+    });
+    void deps.persist(get);
+  }
+
+  function reconnectWorkspaceThreads(get: StoreGet, set: StoreSet, workspaceId: string) {
+    const reconnectIds = [...(jsonRpcReconnectThreadsByWorkspace.get(workspaceId) ?? [])];
+    if (reconnectIds.length === 0) {
+      return;
+    }
+    for (const threadId of reconnectIds) {
+      const thread = get().threads.find((entry) => entry.id === threadId && entry.workspaceId === workspaceId);
+      const url = get().workspaceRuntimeById[workspaceId]?.serverUrl;
+      if (!thread || !url || !thread.sessionId) {
+        forgetThreadForReconnect(workspaceId, threadId);
+        continue;
+      }
+      ensureThreadSocket(get, set, threadId, url);
+    }
+  }
+
+  function ensureWorkspaceJsonRpcLifecycle(get: StoreGet, set: StoreSet, workspaceId: string) {
+    if (jsonRpcLifecycleCleanupByWorkspace.has(workspaceId)) {
+      return;
+    }
+    const cleanup = registerWorkspaceJsonRpcLifecycle(workspaceId, {
+      onOpen: () => {
+        reconnectWorkspaceThreads(get, set, workspaceId);
+      },
+      onClose: () => {
+        markWorkspaceThreadsDisconnected(get, set, workspaceId);
+      },
+    });
+    jsonRpcLifecycleCleanupByWorkspace.set(workspaceId, cleanup);
+  }
+
   function migrateThreadIdentity(get: StoreGet, set: StoreSet, fromThreadId: string, toThreadId: string): string {
     if (!fromThreadId || !toThreadId || fromThreadId === toThreadId) {
       return toThreadId;
     }
 
+    const workspaceId = workspaceIdForThread(get, fromThreadId) ?? workspaceIdForThread(get, toThreadId);
     rekeyThreadRuntimeMaps(fromThreadId, toThreadId);
+    if (workspaceId) {
+      forgetThreadForReconnect(workspaceId, fromThreadId);
+      rememberThreadForReconnect(workspaceId, toThreadId);
+    }
     set((s) => {
       const existingThread = s.threads.find((thread) => thread.id === fromThreadId);
       const existingRuntime = s.threadRuntimeById[fromThreadId];
@@ -342,69 +470,69 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
 
   function sendThread(get: StoreGet, threadId: string, build: (sessionId: string) => ClientMessage): boolean {
     const workspaceId = workspaceIdForThread(get, threadId);
-    if (workspaceId && workspaceUsesJsonRpc(get, workspaceId)) {
-      const sessionId = get().threadRuntimeById[threadId]?.sessionId ?? threadId;
-      const message = build(sessionId);
-      if (message.type === "cancel") {
-        void interruptJsonRpcTurn(get, undefined, workspaceId, sessionId);
-        return true;
-      }
-      if (message.type === "session_close") {
-        void unsubscribeJsonRpcThread(get, undefined, workspaceId, sessionId);
-        return true;
-      }
-      if (message.type === "set_session_title") {
-        void requestJsonRpc(get, undefined, workspaceId, "cowork/session/title/set", {
-          threadId: sessionId,
-          title: message.title,
-        });
-        return true;
-      }
-      if (message.type === "set_model") {
-        void requestJsonRpc(get, undefined, workspaceId, "cowork/session/model/set", {
-          threadId: sessionId,
-          provider: message.provider,
-          model: message.model,
-        });
-        return true;
-      }
-      if (message.type === "set_session_usage_budget") {
-        void requestJsonRpc(get, undefined, workspaceId, "cowork/session/usageBudget/set", {
-          threadId: sessionId,
-          ...(message.warnAtUsd !== undefined ? { warnAtUsd: message.warnAtUsd } : {}),
-          ...(message.stopAtUsd !== undefined ? { stopAtUsd: message.stopAtUsd } : {}),
-        });
-        return true;
-      }
-      if (message.type === "set_config") {
-        void requestJsonRpc(get, undefined, workspaceId, "cowork/session/config/set", {
-          threadId: sessionId,
-          config: message.config,
-        });
-        return true;
-      }
-      if (message.type === "apply_session_defaults") {
-        void requestJsonRpc(get, undefined, workspaceId, "cowork/session/defaults/apply", {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          ...(message.provider !== undefined ? { provider: message.provider } : {}),
-          ...(message.model !== undefined ? { model: message.model } : {}),
-          ...(message.enableMcp !== undefined ? { enableMcp: message.enableMcp } : {}),
-          ...(message.config !== undefined ? { config: message.config } : {}),
-        });
-        return true;
-      }
-      if (message.type === "ask_response") {
-        return respondToJsonRpcRequest(workspaceId, message.requestId, { answer: message.answer });
-      }
-      if (message.type === "approval_response") {
-        return respondToJsonRpcRequest(workspaceId, message.requestId, { decision: message.approved ? "accept" : "decline" });
-      }
+    if (!workspaceId) {
       return false;
     }
-    const sock = RUNTIME.threadSockets.get(threadId);
-    const sessionId = get().threadRuntimeById[threadId]?.sessionId;
-    if (!sock || !sessionId) return false;
-    return sock.send(build(sessionId));
+    const sessionId = get().threadRuntimeById[threadId]?.sessionId ?? threadId;
+    const message = build(sessionId);
+    if (message.type === "cancel") {
+      void interruptJsonRpcTurn(get, undefined, workspaceId, sessionId);
+      return true;
+    }
+    if (message.type === "session_close") {
+      forgetThreadForReconnect(workspaceId, threadId);
+      void unsubscribeJsonRpcThread(get, undefined, workspaceId, sessionId);
+      return true;
+    }
+    if (message.type === "set_session_title") {
+      void requestJsonRpc(get, undefined, workspaceId, "cowork/session/title/set", {
+        threadId: sessionId,
+        title: message.title,
+      });
+      return true;
+    }
+    if (message.type === "set_model") {
+      void requestJsonRpc(get, undefined, workspaceId, "cowork/session/model/set", {
+        threadId: sessionId,
+        provider: message.provider,
+        model: message.model,
+      });
+      return true;
+    }
+    if (message.type === "set_session_usage_budget") {
+      void requestJsonRpc(get, undefined, workspaceId, "cowork/session/usageBudget/set", {
+        threadId: sessionId,
+        ...(message.warnAtUsd !== undefined ? { warnAtUsd: message.warnAtUsd } : {}),
+        ...(message.stopAtUsd !== undefined ? { stopAtUsd: message.stopAtUsd } : {}),
+      });
+      return true;
+    }
+    if (message.type === "set_config") {
+      void requestJsonRpc(get, undefined, workspaceId, "cowork/session/config/set", {
+        threadId: sessionId,
+        config: message.config,
+      });
+      return true;
+    }
+    if (message.type === "apply_session_defaults") {
+      void requestJsonRpc(get, undefined, workspaceId, "cowork/session/defaults/apply", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+        ...(message.provider !== undefined ? { provider: message.provider } : {}),
+        ...(message.model !== undefined ? { model: message.model } : {}),
+        ...(message.enableMcp !== undefined ? { enableMcp: message.enableMcp } : {}),
+        ...(message.config !== undefined ? { config: message.config } : {}),
+      });
+      return true;
+    }
+    if (message.type === "ask_response") {
+      return respondToJsonRpcRequest(workspaceId, message.requestId, { answer: message.answer });
+    }
+    if (message.type === "approval_response") {
+      return respondToJsonRpcRequest(workspaceId, message.requestId, {
+        decision: message.approved ? "accept" : "decline",
+      });
+    }
+    return false;
   }
 
   function sendUserMessageToThread(
@@ -420,7 +548,6 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     const thread = get().threads.find((t) => t.id === threadId);
     if (!thread) return false;
     const workspaceId = thread.workspaceId;
-    const useJsonRpc = workspaceUsesJsonRpc(get, workspaceId);
 
     const rt = get().threadRuntimeById[threadId];
     if (!rt?.sessionId) return false;
@@ -473,18 +600,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           clientMessageId,
         });
 
-        const ok = useJsonRpc
-          ? (() => {
-              void steerJsonRpcTurn(get, set, workspaceId, rt.sessionId!, rt.activeTurnId!, trimmed);
-              return true;
-            })()
-          : sendThread(get, threadId, (sessionId) => ({
-              type: "steer_message",
-              sessionId,
-              expectedTurnId: rt.activeTurnId!,
-              text: trimmed,
-              clientMessageId,
-            }));
+        void steerJsonRpcTurn(get, set, workspaceId, rt.sessionId, rt.activeTurnId, trimmed);
+        const ok = true;
 
         if (!ok) {
           clearPendingThreadSteer(threadId, clientMessageId);
@@ -537,17 +654,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       clientMessageId,
     });
 
-    const ok = useJsonRpc
-      ? (() => {
-          void startJsonRpcTurn(get, set, workspaceId, rt.sessionId!, trimmed);
-          return true;
-        })()
-      : sendThread(get, threadId, (sessionId) => ({
-          type: "user_message",
-          sessionId,
-          text: trimmed,
-          clientMessageId,
-        }));
+    void startJsonRpcTurn(get, set, workspaceId, rt.sessionId, trimmed);
+    const ok = true;
 
     if (!ok) {
       pushFeedItem(set, threadId, {
@@ -1287,22 +1395,46 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     pendingFirstMessageQueued = false,
   ) {
     const workspaceId = workspaceIdForThread(get, threadId);
-    if (workspaceId && workspaceUsesJsonRpc(get, workspaceId)) {
-      ensureThreadRuntime(get, set, threadId);
-      ensureWorkspaceJsonRpcRouter(get, set, workspaceId);
-      const workspaceSocket = ensureWorkspaceJsonRpcSocket(get, set, workspaceId);
-      if (!workspaceSocket) return;
-      const existingSessionId = get().threadRuntimeById[threadId]?.sessionId ?? get().threads.find((thread) => thread.id === threadId)?.sessionId ?? null;
-      const connect = async () => {
+    if (!workspaceId) {
+      return;
+    }
+
+    const existingConnect = jsonRpcThreadConnectPromises.get(threadId);
+    if (existingConnect) {
+      return;
+    }
+
+    ensureThreadRuntime(get, set, threadId);
+    ensureWorkspaceJsonRpcRouter(get, set, workspaceId);
+    ensureWorkspaceJsonRpcLifecycle(get, set, workspaceId);
+    if (!ensureWorkspaceJsonRpcSocket(get, set, workspaceId)) return;
+
+    const existingSessionId =
+      get().threadRuntimeById[threadId]?.sessionId
+      ?? get().threads.find((thread) => thread.id === threadId)?.sessionId
+      ?? null;
+
+    set((s) => ({
+      threadRuntimeById: {
+        ...s.threadRuntimeById,
+        [threadId]: { ...s.threadRuntimeById[threadId], wsUrl: url },
+      },
+    }));
+
+    const connectPromise = (async () => {
+      let activeThreadId = threadId;
+      try {
         const result = existingSessionId
           ? await resumeJsonRpcThread(get, set, workspaceId, existingSessionId)
           : await startJsonRpcThread(get, set, workspaceId);
         const thread = (result as any)?.thread;
         if (!thread) return;
-        let activeThreadId = threadId;
+
         if (!existingSessionId && activeThreadId !== thread.id) {
           activeThreadId = migrateThreadIdentity(get, set, activeThreadId, thread.id);
         }
+
+        rememberThreadForReconnect(workspaceId, activeThreadId);
         handleThreadEvent(
           get,
           set,
@@ -1316,7 +1448,10 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           get,
           set,
           activeThreadId,
-          { ...buildSyntheticSessionSettings(runtime, get().workspaces.find((workspace) => workspace.id === workspaceId)), sessionId: thread.id } as any,
+          {
+            ...buildSyntheticSessionSettings(runtime, get().workspaces.find((workspace) => workspace.id === workspaceId)),
+            sessionId: thread.id,
+          } as any,
         );
         handleThreadEvent(
           get,
@@ -1328,71 +1463,36 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         if (snapshot) {
           applyJsonRpcThreadSnapshot(get, set, activeThreadId, snapshot);
         }
-      };
-      void connect();
-      set((s) => ({
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: { ...s.threadRuntimeById[threadId], wsUrl: url, connected: true },
-        },
-      }));
-      return;
-    }
-
-    if (RUNTIME.threadSockets.has(threadId)) return;
-
-    ensureThreadRuntime(get, set, threadId);
-    const persistedThreadSessionId = get().threads.find((thread) => thread.id === threadId)?.sessionId ?? undefined;
-    const resumeSessionId = get().threadRuntimeById[threadId]?.sessionId ?? persistedThreadSessionId ?? undefined;
-    let activeThreadId = threadId;
-
-    const socket = new AgentSocket({
-      url,
-      resumeSessionId,
-      client: "desktop",
-      version: VERSION,
-      autoReconnect: true,
-      onEvent: (evt) => {
-        if (evt.type === "server_hello" && activeThreadId !== evt.sessionId) {
-          activeThreadId = migrateThreadIdentity(get, set, activeThreadId, evt.sessionId);
-        }
-        handleThreadEvent(get, set, activeThreadId, evt, pendingFirstMessage, pendingFirstMessageQueued);
-      },
-      onClose: () => {
-        RUNTIME.threadSockets.delete(activeThreadId);
-        RUNTIME.modelStreamByThread.delete(activeThreadId);
-        RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(activeThreadId);
+      } catch {
+        forgetThreadForReconnect(workspaceId, activeThreadId);
         set((s) => {
-          const rt = s.threadRuntimeById[activeThreadId];
-          if (!rt) return {};
+          const runtime = s.threadRuntimeById[activeThreadId];
+          if (!runtime) {
+            return {};
+          }
           return {
             threadRuntimeById: {
               ...s.threadRuntimeById,
               [activeThreadId]: {
-                ...rt,
+                ...runtime,
                 connected: false,
                 busy: false,
                 busySince: null,
                 activeTurnId: null,
-                pendingSteer: rt.pendingSteer,
+                pendingSteer: null,
               },
             },
-            threads: s.threads.map((t) => (t.id === activeThreadId ? { ...t, status: "disconnected" } : t)),
+            threads: s.threads.map((thread) =>
+              thread.id === activeThreadId ? { ...thread, status: "disconnected" } : thread,
+            ),
           };
         });
-        void deps.persist(get);
-      },
+      }
+    })().finally(() => {
+      jsonRpcThreadConnectPromises.delete(threadId);
     });
 
-    RUNTIME.threadSockets.set(threadId, socket);
-    socket.connect();
-
-    set((s) => ({
-      threadRuntimeById: {
-        ...s.threadRuntimeById,
-        [threadId]: { ...s.threadRuntimeById[threadId], wsUrl: url },
-      },
-    }));
+    jsonRpcThreadConnectPromises.set(threadId, connectPromise);
   }
 
   return {

@@ -10,8 +10,6 @@ import {
   nowIso,
   pushNotification,
   requestJsonRpcControlEvent,
-  sendControl,
-  workspaceUsesJsonRpc,
 } from "../store.helpers";
 
 export function createWorkspaceMemoryActions(
@@ -33,43 +31,17 @@ export function createWorkspaceMemoryActions(
         },
       }));
 
-      if (workspaceUsesJsonRpc(get, workspaceId)) {
-        const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/list", {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-        });
-        if (!ok) {
-          set((s) => ({
-            workspaceRuntimeById: {
-              ...s.workspaceRuntimeById,
-              [workspaceId]: {
-                ...s.workspaceRuntimeById[workspaceId],
-                memoriesLoading: false,
-              },
-            },
-            notifications: pushNotification(s.notifications, {
-              id: makeId(),
-              ts: nowIso(),
-              kind: "error",
-              title: "Not connected",
-              detail: "Unable to request memories.",
-            }),
-          }));
-        }
+      const waitingForInitialControlSession =
+        Boolean(socket)
+        && !get().workspaceRuntimeById[workspaceId]?.controlSessionId;
+      if (waitingForInitialControlSession) {
         return;
       }
 
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "memory_list",
-        sessionId,
-      }));
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/list", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+      });
       if (!ok) {
-        const waitingForInitialControlSession =
-          Boolean(socket)
-          && !get().workspaceRuntimeById[workspaceId]?.controlSessionId;
-        if (waitingForInitialControlSession) {
-          return;
-        }
-
         set((s) => ({
           workspaceRuntimeById: {
             ...s.workspaceRuntimeById,
@@ -93,34 +65,12 @@ export function createWorkspaceMemoryActions(
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
 
-      if (workspaceUsesJsonRpc(get, workspaceId)) {
-        const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/upsert", {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          scope,
-          ...(id ? { id } : {}),
-          content,
-        });
-        if (ok) return;
-
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to save memory.",
-          }),
-        }));
-        return;
-      }
-
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "memory_upsert",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/upsert", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         scope,
         ...(id ? { id } : {}),
         content,
-      }));
+      });
       if (ok) return;
 
       set((s) => ({
@@ -138,32 +88,11 @@ export function createWorkspaceMemoryActions(
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
 
-      if (workspaceUsesJsonRpc(get, workspaceId)) {
-        const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/delete", {
-          cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
-          scope,
-          id,
-        });
-        if (ok) return;
-
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to delete memory.",
-          }),
-        }));
-        return;
-      }
-
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "memory_delete",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/delete", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         scope,
         id,
-      }));
+      });
       if (ok) return;
 
       set((s) => ({

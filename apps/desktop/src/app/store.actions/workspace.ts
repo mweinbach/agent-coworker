@@ -113,16 +113,9 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
 
     removeWorkspace: async (workspaceId: string) => {
       bumpWorkspaceStartGeneration(workspaceId);
-      const control = RUNTIME.controlSockets.get(workspaceId);
       const jsonRpcSocket = RUNTIME.jsonRpcSockets.get(workspaceId);
       closeControlSession(workspaceId);
-      RUNTIME.controlSockets.delete(workspaceId);
       RUNTIME.jsonRpcSockets.delete(workspaceId);
-      try {
-        control?.close();
-      } catch {
-        // ignore
-      }
       try {
         jsonRpcSocket?.close();
       } catch {
@@ -131,20 +124,13 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
   
       for (const thread of get().threads) {
         if (thread.workspaceId !== workspaceId) continue;
-        const sock = RUNTIME.threadSockets.get(thread.id);
         closeThreadSession(thread.id);
-        RUNTIME.threadSockets.delete(thread.id);
         RUNTIME.optimisticUserMessageIds.delete(thread.id);
         RUNTIME.pendingThreadMessages.delete(thread.id);
         RUNTIME.threadSelectionRequests.delete(thread.id);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(thread.id);
         RUNTIME.modelStreamByThread.delete(thread.id);
         clearPendingThreadSteers(thread.id);
-        try {
-          sock?.close();
-        } catch {
-          // ignore
-        }
       }
   
       try {
@@ -212,11 +198,8 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
 
     restartWorkspaceServer: async (workspaceId) => {
       bumpWorkspaceStartGeneration(workspaceId);
-      const control = RUNTIME.controlSockets.get(workspaceId);
       const jsonRpcSocket = RUNTIME.jsonRpcSockets.get(workspaceId);
       closeControlSession(workspaceId);
-      control?.close();
-      RUNTIME.controlSockets.delete(workspaceId);
       try {
         jsonRpcSocket?.close();
       } catch {
@@ -226,10 +209,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
 
       for (const thread of get().threads) {
         if (thread.workspaceId !== workspaceId) continue;
-        const sock = RUNTIME.threadSockets.get(thread.id);
         closeThreadSession(thread.id);
-        sock?.close();
-        RUNTIME.threadSockets.delete(thread.id);
         RUNTIME.threadSelectionRequests.delete(thread.id);
         RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(thread.id);
       }

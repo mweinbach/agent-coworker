@@ -15,7 +15,7 @@ import {
   getSourceStartupAttemptCount,
 } from "./serverPlatform";
 import { assertSafeId, assertWorkspaceDirectory } from "./validation";
-import { findPackagedSidecarBinary } from "./sidecar";
+import { findPackagedSidecarLaunchCommand } from "./sidecar";
 
 const SERVER_STARTUP_TIMEOUT_MS = 15_000;
 const STDERR_TAIL_LIMIT = 16_384;
@@ -84,8 +84,8 @@ function getSidecarSearchDirs(): string[] {
   return [path.join(appRoot, "resources", "binaries")];
 }
 
-function findSidecarBinary(): string {
-  return findPackagedSidecarBinary(getSidecarSearchDirs(), {
+function findSidecarLaunchCommand() {
+  return findPackagedSidecarLaunchCommand(getSidecarSearchDirs(), {
     explicitPath: process.env.COWORK_DESKTOP_SIDECAR_PATH,
   });
 }
@@ -325,7 +325,7 @@ export class ServerManager {
     const spawnArgs = buildSpawnArgs(workspacePath, yolo);
     const { repoRoot, sourceEntry } = resolveSourceStartup(useSource);
 
-    const sidecar = !useSource ? findSidecarBinary() : null;
+    const sidecar = !useSource ? findSidecarLaunchCommand() : null;
     const builtInDir = !useSource ? resolvePackagedBuiltinDistDir() : null;
     if (!useSource && !builtInDir) {
       throw new Error(`Bundled dist directory not found: ${path.join(process.resourcesPath, "dist")}`);
@@ -349,7 +349,7 @@ export class ServerManager {
             stdio: ["ignore", "pipe", "pipe"],
             env: sourceEnvForAttempt!.env,
           })
-        : spawn(sidecar!, spawnArgs, {
+        : spawn(sidecar!.command, [...sidecar!.args, ...spawnArgs], {
             cwd: process.resourcesPath,
             stdio: ["ignore", "pipe", "pipe"],
             env: {
@@ -360,7 +360,7 @@ export class ServerManager {
           });
 
       logServerManagerEvent(
-        `workspace=${workspaceId} attempt=${attempt}/${attemptCount} spawn=${useSource ? "bun" : sidecar!}`
+        `workspace=${workspaceId} attempt=${attempt}/${attemptCount} spawn=${useSource ? "bun" : `${sidecar!.command} ${sidecar!.args.join(" ")}`.trim()}`
       );
 
       let cleaned = false;
@@ -502,7 +502,7 @@ export class ServerManager {
 export const __internal = {
   buildServerEnv,
   buildSourceEnvForAttempt,
-  findSidecarBinary,
+  findSidecarLaunchCommand,
   getServerTerminationSignal,
   getServerLogPath,
   getSourceStartupAttemptCount,

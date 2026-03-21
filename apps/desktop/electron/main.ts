@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +28,8 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PACKAGED_RENDERER_DIR = path.resolve(path.join(__dirname, "../renderer"));
+const DESKTOP_SMOKE_WORKSPACE_ENV = "COWORK_DESKTOP_SMOKE_WORKSPACE";
+const DESKTOP_SMOKE_OUTPUT_ENV = "COWORK_DESKTOP_SMOKE_OUTPUT";
 
 const serverManager = new ServerManager();
 const persistence = new PersistenceService();
@@ -188,6 +191,67 @@ function applyWindowSecurity(win: BrowserWindow): void {
   });
 }
 
+function resolveDesktopSmokeConfig(): { workspacePath: string; outputPath: string } | null {
+  const workspacePath = process.env[DESKTOP_SMOKE_WORKSPACE_ENV]?.trim();
+  const outputPath = process.env[DESKTOP_SMOKE_OUTPUT_ENV]?.trim();
+  if (!workspacePath || !outputPath) {
+    return null;
+  }
+  return { workspacePath, outputPath };
+}
+
+async function maybeRunPackagedSmoke(): Promise<boolean> {
+  const smokeConfig = resolveDesktopSmokeConfig();
+  if (!smokeConfig) {
+    return false;
+  }
+
+  const workspaceId = "__desktop_smoke__";
+
+  try {
+    const listening = await serverManager.startWorkspaceServer({
+      workspaceId,
+      workspacePath: smokeConfig.workspacePath,
+      yolo: true,
+    });
+
+    await fs.mkdir(path.dirname(smokeConfig.outputPath), { recursive: true });
+    await fs.writeFile(
+      smokeConfig.outputPath,
+      `${JSON.stringify({
+        ok: true,
+        type: "server_listening",
+        url: listening.url,
+        platform: process.platform,
+        arch: process.arch,
+      }, null, 2)}\n`,
+      "utf8"
+    );
+    await serverManager.stopWorkspaceServer(workspaceId);
+    app.exit(0);
+    return true;
+  } catch (error) {
+    await fs.mkdir(path.dirname(smokeConfig.outputPath), { recursive: true });
+    await fs.writeFile(
+      smokeConfig.outputPath,
+      `${JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        platform: process.platform,
+        arch: process.arch,
+      }, null, 2)}\n`,
+      "utf8"
+    );
+    try {
+      await serverManager.stopWorkspaceServer(workspaceId);
+    } catch {
+      // Ignore cleanup failures in smoke mode.
+    }
+    app.exit(1);
+    return true;
+  }
+}
+
 async function createWindow(): Promise<void> {
   const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
     prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
@@ -300,7 +364,11 @@ if (!gotSingleInstanceLock) {
     mainWindow.focus();
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    if (await maybeRunPackagedSmoke()) {
+      return;
+    }
+
     unregisterIpc = registerDesktopIpc({
       persistence,
       serverManager,

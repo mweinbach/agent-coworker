@@ -34,6 +34,9 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Docs consistency check
+        run: bun run docs:check
+
   build:
     name: Build cowork-server (${{ matrix.label }})
     needs: validate
@@ -46,11 +49,22 @@ jobs:
           - os: macos-latest
             label: macOS
             artifact_name: cowork-server-macos
-            output_name: cowork-server-macos
+            launcher_path: dist/cowork-server-macos/cowork-server
+            zip_path: dist/cowork-server-macos.zip
           - os: windows-latest
-            label: Windows
-            artifact_name: cowork-server-windows
-            output_name: cowork-server-windows.exe
+            label: Windows x64
+            artifact_name: cowork-server-windows-x64
+            launcher_path: dist/cowork-server-windows-x64/cowork-server.exe
+            zip_path: dist/cowork-server-windows-x64.zip
+            target_platform: win32
+            target_arch: x64
+          - os: windows-latest
+            label: Windows ARM64
+            artifact_name: cowork-server-windows-arm64
+            launcher_path: dist/cowork-server-windows-arm64/cowork-server.cmd
+            zip_path: dist/cowork-server-windows-arm64.zip
+            target_platform: win32
+            target_arch: arm64
 
     steps:
       - name: Checkout
@@ -63,33 +77,129 @@ jobs:
         run: bun install
 
       - name: Build cowork-server binary
-        run: bun run build:server-binary -- --outfile dist/${{ matrix.output_name }}
+        env:
+          COWORK_BUILD_PLATFORM: ${{ matrix.target_platform }}
+          COWORK_BUILD_ARCH: ${{ matrix.target_arch }}
+        run: bun run build:server-binary -- --outfile ${{ matrix.launcher_path }}
 
-      - name: Package macOS binary
+      - name: Package macOS bundle
         if: runner.os == 'macOS'
         run: |
           cd dist
-          chmod +x ${{ matrix.output_name }}
-          zip -j ${{ matrix.output_name }}.zip ${{ matrix.output_name }}
+          chmod +x cowork-server-macos/cowork-server
+          zip -r $(basename ${{ matrix.zip_path }}) cowork-server-macos
 
-      - name: Package Windows binary
+      - name: Package Windows bundle
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "dist\${{ matrix.output_name }}" -DestinationPath "dist\${{ matrix.output_name }}.zip" -Force
+          $bundleDir = Split-Path -Parent "${{ matrix.launcher_path }}"
+          Compress-Archive -Path $bundleDir -DestinationPath "${{ matrix.zip_path }}" -Force
 
       - name: Upload cowork-server artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: dist/${{ matrix.output_name }}.zip
+          path: ${{ matrix.zip_path }}
           if-no-files-found: error
           retention-days: 14
+
+  smoke-windows-arm64:
+    name: Smoke cowork-server Windows ARM64
+    needs: build
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - name: Download ARM64 cowork-server artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cowork-server-windows-arm64
+          path: release-assets
+
+      - name: Verify ARM64 cowork-server launcher
+        shell: pwsh
+        run: |
+          $zipPath = Get-ChildItem "release-assets" -Recurse -Filter "*.zip" | Select-Object -First 1
+          if (-not $zipPath) {
+            throw "Unable to find the Windows ARM64 cowork-server bundle zip"
+          }
+
+          $extractDir = Join-Path $env:RUNNER_TEMP "cowork-server-arm64"
+          $workspace = Join-Path $env:RUNNER_TEMP "cowork-server-arm64-workspace"
+          $stdoutPath = Join-Path $env:RUNNER_TEMP "cowork-server-arm64.stdout"
+          $stderrPath = Join-Path $env:RUNNER_TEMP "cowork-server-arm64.stderr"
+
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $workspace | Out-Null
+
+          Expand-Archive -Path $zipPath.FullName -DestinationPath $extractDir -Force
+
+          $launcher = Get-ChildItem $extractDir -Recurse -Filter "cowork-server.cmd" | Select-Object -First 1
+          if (-not $launcher) {
+            throw "Unable to locate cowork-server.cmd in the extracted ARM64 bundle"
+          }
+
+          $process = Start-Process -FilePath "cmd.exe" `
+            -ArgumentList "/c", $launcher.FullName, "--json", "--dir", $workspace, "--port", "0" `
+            -PassThru `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
+
+          $deadline = (Get-Date).AddSeconds(30)
+          $listening = $null
+
+          while ((Get-Date) -lt $deadline) {
+            if (Test-Path $stdoutPath) {
+              foreach ($line in Get-Content $stdoutPath) {
+                if ([string]::IsNullOrWhiteSpace($line)) {
+                  continue
+                }
+                try {
+                  $parsed = $line | ConvertFrom-Json
+                } catch {
+                  continue
+                }
+                if ($parsed.type -eq "server_listening") {
+                  $listening = $parsed
+                  break
+                }
+              }
+            }
+
+            if ($listening) {
+              break
+            }
+
+            if ($process.HasExited) {
+              break
+            }
+
+            Start-Sleep -Seconds 1
+          }
+
+          if (-not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force
+            $process.WaitForExit()
+          }
+
+          if (-not $listening) {
+            if (Test-Path $stdoutPath) {
+              Get-Content $stdoutPath -Raw | Write-Host
+            }
+            if (Test-Path $stderrPath) {
+              Get-Content $stderrPath -Raw | Write-Host
+            }
+            throw "ARM64 cowork-server bundle did not emit server_listening within 30 seconds"
+          }
+
+          $listening | ConvertTo-Json -Depth 5 | Write-Host
 
   publish:
     name: Publish cowork-server prerelease
     if: ${{ startsWith(github.ref, 'refs/tags/cowork-server-v') }}
-    needs: build
+    needs:
+      - build
+      - smoke-windows-arm64
     runs-on: ubuntu-latest
     permissions:
       contents: write

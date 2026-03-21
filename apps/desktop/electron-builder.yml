@@ -32,6 +32,7 @@ mac:
     - zip
 win:
   icon: build/icon.ico
+  artifactName: ${productName}-${version}-${os}-${arch}.${ext}
   verifyUpdateCodeSignature: false
   target:
     - nsis

@@ -1,59 +1,117 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const root = path.resolve(import.meta.dirname, "..");
-const defaultName = process.platform === "win32" ? "cowork-server.exe" : "cowork-server";
+import {
+  SIDECAR_BUN_ENTRYPOINT_PATH,
+  SIDECAR_BUN_EXECUTABLE_NAME,
+  shouldUseBundledBunRuntime,
+} from "../apps/desktop/electron/services/sidecar";
+import {
+  copyDir,
+  ensureBundledBunRuntime,
+  resolveBuildTarget,
+  rmrf,
+  runCommand,
+} from "./releaseBuildUtils";
 
-function parseOutfile(argv: string[]): string {
+const root = path.resolve(import.meta.dirname, "..");
+
+function parseOutfile(argv: string[], target: { platform: NodeJS.Platform; arch: string }): string {
+  const defaultName =
+    target.platform === "win32"
+      ? shouldUseBundledBunRuntime(target.platform, target.arch)
+        ? "cowork-server.cmd"
+        : "cowork-server.exe"
+      : "cowork-server";
+
   const outIndex = argv.findIndex((arg) => arg === "--outfile" || arg === "-o");
-  if (outIndex === -1) return path.join(root, "dist", defaultName);
+  if (outIndex === -1) {
+    return path.join(root, "dist", defaultName);
+  }
 
   const value = argv[outIndex + 1];
-  if (!value) throw new Error("Missing value for --outfile");
+  if (!value) {
+    throw new Error("Missing value for --outfile");
+  }
   return path.isAbsolute(value) ? value : path.join(root, value);
 }
 
-async function rmrf(target: string) {
-  await fs.rm(target, { recursive: true, force: true });
+function resolveBundleLauncherPath(outfile: string, target: { platform: NodeJS.Platform; arch: string }): string {
+  if (!shouldUseBundledBunRuntime(target.platform, target.arch)) {
+    return outfile;
+  }
+
+  const parsed = path.parse(outfile);
+  const launcherBaseName = parsed.ext ? parsed.name : parsed.base;
+  return path.join(path.dirname(outfile), `${launcherBaseName}.cmd`);
 }
 
-async function copyDir(src: string, dest: string) {
-  const anyFs = fs as any;
-  if (typeof anyFs.cp === "function") {
-    await anyFs.cp(src, dest, { recursive: true });
-    return;
-  }
-
-  await fs.mkdir(dest, { recursive: true });
-  const entries = await fs.readdir(src, { withFileTypes: true });
-  for (const entry of entries) {
-    const from = path.join(src, entry.name);
-    const to = path.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      await copyDir(from, to);
-      continue;
-    }
-    if (entry.isFile()) await fs.copyFile(from, to);
-  }
+function buildWindowsBundleLauncher(): string {
+  return [
+    "@echo off",
+    "setlocal",
+    "set \"SCRIPT_DIR=%~dp0\"",
+    "\"%SCRIPT_DIR%bun.exe\" \"%SCRIPT_DIR%server\\index.js\" %*",
+    "",
+  ].join("\r\n");
 }
 
 async function main() {
-  const outfile = parseOutfile(process.argv.slice(2));
-  const outDir = path.dirname(outfile);
+  const argv = process.argv.slice(2);
+  const target = resolveBuildTarget(argv);
+  const outfile = parseOutfile(argv, target);
+  const useBundledRuntime = shouldUseBundledBunRuntime(target.platform, target.arch);
+  const resolvedOutfile = resolveBundleLauncherPath(outfile, target);
+  const outDir = path.dirname(resolvedOutfile);
   await fs.mkdir(outDir, { recursive: true });
 
   const entry = path.join(root, "src", "server", "index.ts");
-  const args = ["bun", "build", entry, "--compile", "--target", "bun", "--outfile", outfile];
 
-  const proc = Bun.spawn(args, {
-    cwd: root,
-    stdout: "inherit",
-    stderr: "inherit",
-    env: process.env,
-  });
+  if (useBundledRuntime) {
+    const serverEntrypointPath = path.join(outDir, SIDECAR_BUN_ENTRYPOINT_PATH);
+    const serverEntrypointDir = path.dirname(serverEntrypointPath);
 
-  const code = await proc.exited;
-  if (code !== 0) process.exit(code);
+    await rmrf(outDir);
+    await fs.mkdir(serverEntrypointDir, { recursive: true });
+
+    await runCommand(
+      ["bun", "build", entry, "--outfile", serverEntrypointPath, "--target", "bun"],
+      {
+        cwd: root,
+        env: process.env,
+      }
+    );
+
+    const { executablePath, version } = await ensureBundledBunRuntime(root, target);
+    await fs.copyFile(executablePath, path.join(outDir, SIDECAR_BUN_EXECUTABLE_NAME));
+    await fs.writeFile(resolvedOutfile, buildWindowsBundleLauncher(), "utf8");
+
+    for (const dir of ["prompts", "config", "docs"] as const) {
+      const dest = path.join(outDir, dir);
+      await rmrf(dest);
+      await copyDir(path.join(root, dir), dest);
+    }
+
+    console.log(`[build] cowork-server launcher: ${path.relative(root, resolvedOutfile)}`);
+    console.log(`[build] cowork-server Bun runtime: ${path.relative(root, path.join(outDir, SIDECAR_BUN_EXECUTABLE_NAME))} (v${version})`);
+    console.log(`[build] cowork-server entrypoint: ${path.relative(root, serverEntrypointPath)}`);
+    console.log(`[build] cowork-server resources: ${path.relative(root, outDir)}/{prompts,config,docs}`);
+    return;
+  }
+
+  if (target.platform !== process.platform || target.arch !== process.arch) {
+    throw new Error(
+      `Cross-compiling cowork-server is unsupported for ${target.platform}/${target.arch} on ${process.platform}/${process.arch}`
+    );
+  }
+
+  await runCommand(
+    ["bun", "build", entry, "--compile", "--target", "bun", "--outfile", resolvedOutfile],
+    {
+      cwd: root,
+      env: process.env,
+    }
+  );
 
   for (const dir of ["prompts", "config", "docs"] as const) {
     const dest = path.join(outDir, dir);
@@ -61,7 +119,7 @@ async function main() {
     await copyDir(path.join(root, dir), dest);
   }
 
-  console.log(`[build] cowork-server binary: ${path.relative(root, outfile)}`);
+  console.log(`[build] cowork-server binary: ${path.relative(root, resolvedOutfile)}`);
   console.log(`[build] cowork-server resources: ${path.relative(root, outDir)}/{prompts,config,docs}`);
 }
 

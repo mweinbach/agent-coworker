@@ -59,8 +59,16 @@ jobs:
             label: macOS
             artifact_name: desktop-release-macos
           - os: windows-latest
-            label: Windows
-            artifact_name: desktop-release-windows
+            label: Windows x64
+            artifact_name: desktop-release-windows-x64
+            build_arch: x64
+            updater_metadata_name: latest.yml
+          - os: windows-latest
+            label: Windows ARM64
+            artifact_name: desktop-release-windows-arm64
+            build_arch: arm64
+            updater_metadata_name: latest-arm64.yml
+            unpacked_artifact_name: desktop-release-windows-arm64-unpacked
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -148,6 +156,9 @@ jobs:
       - name: Build Windows desktop artifacts
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
+        env:
+          COWORK_BUILD_PLATFORM: win32
+          COWORK_BUILD_ARCH: ${{ matrix.build_arch }}
         run: |
           if ($env:WIN_CSC_LINK -and $env:WIN_CSC_KEY_PASSWORD) {
             $env:CSC_LINK = $env:WIN_CSC_LINK
@@ -159,7 +170,7 @@ jobs:
             Remove-Item Env:CSC_KEY_PASSWORD -ErrorAction SilentlyContinue
           }
 
-          bun run desktop:build -- --publish never
+          bun run desktop:build -- --publish never --${{ matrix.build_arch }}
 
       - name: Verify macOS signing and notarization
         if: ${{ runner.os == 'macOS' }}
@@ -189,11 +200,10 @@ jobs:
         if: ${{ runner.os == 'Windows' && env.WIN_CSC_LINK != '' && env.WIN_CSC_KEY_PASSWORD != '' }}
         shell: pwsh
         run: |
-          $version = (Get-Content apps/desktop/package.json -Raw | ConvertFrom-Json).version
-          $installer = Get-ChildItem "apps/desktop/release/*Setup $version.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $installer = Get-ChildItem "apps/desktop/release/*-win-${{ matrix.build_arch }}.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
           if (-not $installer) {
-            throw "No packaged .exe installer found for version $version under apps/desktop/release"
+            throw "No packaged .exe installer found for arch ${{ matrix.build_arch }} under apps/desktop/release"
           }
 
           $signature = Get-AuthenticodeSignature $installer.FullName
@@ -208,14 +218,13 @@ jobs:
         shell: pwsh
         run: |
           $stagingDir = "apps/desktop/release-upload"
-          $version = (Get-Content apps/desktop/package.json -Raw | ConvertFrom-Json).version
           New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
           Remove-Item "$stagingDir/*" -Force -ErrorAction SilentlyContinue
 
-          $installer = Get-ChildItem "apps/desktop/release/*Setup $version.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $installer = Get-ChildItem "apps/desktop/release/*-win-${{ matrix.build_arch }}.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
           if (-not $installer) {
-            throw "No packaged .exe installer found for version $version under apps/desktop/release"
+            throw "No packaged .exe installer found for arch ${{ matrix.build_arch }} under apps/desktop/release"
           }
 
           Copy-Item $installer.FullName -Destination $stagingDir
@@ -231,13 +240,22 @@ jobs:
             throw "Expected latest.yml for the Windows release"
           }
 
-          Copy-Item "apps/desktop/release/latest.yml" -Destination $stagingDir
+          Copy-Item "apps/desktop/release/latest.yml" -Destination (Join-Path $stagingDir "${{ matrix.updater_metadata_name }}")
 
           if ($env:WIN_CSC_LINK -and $env:WIN_CSC_KEY_PASSWORD) {
             Write-Host "Windows signing secrets configured; publishing signed installer plus updater metadata."
           } else {
             Write-Host "WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD not configured; publishing unsigned installer plus updater metadata."
           }
+
+      - name: Build Windows ARM64 unpacked desktop directory
+        if: ${{ runner.os == 'Windows' && matrix.build_arch == 'arm64' }}
+        shell: pwsh
+        env:
+          COWORK_BUILD_PLATFORM: win32
+          COWORK_BUILD_ARCH: arm64
+        run: |
+          bun run --cwd apps/desktop build:dir -- --arm64
 
       - name: Upload macOS desktop artifacts
         if: ${{ runner.os == 'macOS' }}
@@ -261,10 +279,78 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload Windows ARM64 unpacked desktop artifact
+        if: ${{ runner.os == 'Windows' && matrix.build_arch == 'arm64' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.unpacked_artifact_name }}
+          path: apps/desktop/release/*unpacked/**
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke-windows-arm64:
+    name: Smoke Windows ARM64 Desktop
+    needs: package
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - name: Download unpacked ARM64 desktop artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-release-windows-arm64-unpacked
+          path: release-assets
+
+      - name: Verify packaged sidecar starts on Windows ARM64
+        shell: pwsh
+        run: |
+          $workspace = Join-Path $env:RUNNER_TEMP "desktop-smoke-workspace"
+          $outputDir = Join-Path $env:RUNNER_TEMP "desktop-smoke-output"
+          $outputPath = Join-Path $outputDir "result.json"
+
+          New-Item -ItemType Directory -Force -Path $workspace | Out-Null
+          New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+
+          $appExe = Get-ChildItem "release-assets" -Recurse -Filter "Cowork.exe" |
+            Where-Object { $_.FullName -match "unpacked" -and $_.FullName -notmatch "\\resources\\" } |
+            Select-Object -First 1
+
+          if (-not $appExe) {
+            throw "Unable to locate Cowork.exe inside the ARM64 unpacked desktop artifact"
+          }
+
+          $env:COWORK_DESKTOP_SMOKE_WORKSPACE = $workspace
+          $env:COWORK_DESKTOP_SMOKE_OUTPUT = $outputPath
+
+          & $appExe.FullName
+
+          if ($LASTEXITCODE -ne 0) {
+            if (Test-Path $outputPath) {
+              Get-Content $outputPath -Raw | Write-Host
+            }
+            throw "Packaged ARM64 desktop smoke run failed with exit code $LASTEXITCODE"
+          }
+
+          if (-not (Test-Path $outputPath)) {
+            throw "Desktop smoke output was not written"
+          }
+
+          $result = Get-Content $outputPath -Raw | ConvertFrom-Json
+          $result | ConvertTo-Json -Depth 5 | Write-Host
+
+          if (-not $result.ok) {
+            throw "Desktop smoke output reported failure"
+          }
+
+          if ($result.type -ne "server_listening") {
+            throw "Expected desktop smoke output type=server_listening but saw '$($result.type)'"
+          }
+
   publish:
     name: Publish GitHub Release
     if: ${{ startsWith(github.ref, 'refs/tags/') }}
-    needs: package
+    needs:
+      - package
+      - smoke-windows-arm64
     runs-on: ubuntu-latest
     permissions:
       contents: write

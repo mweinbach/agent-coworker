@@ -104,6 +104,7 @@ bun run build:server-binary
 ./dist/cowork-server --host 0.0.0.0 --port 7337```
 
 On startup, `cowork-server` logs the bound WebSocket URL and, when using `--host 0.0.0.0`, prints reachable LAN IPv4 addresses for easy embedding/debugging.
+Windows ARM64 release builds are staged as runnable bundles instead of single compiled executables. Those bundles include `bun.exe`, a Bun-targeted server bundle, the launcher script, and the built-in `prompts/`, `config/`, and `docs/` assets.
 
 ## Clients
 
@@ -117,6 +118,7 @@ The Electron app is the primary workstation client with:
 - chat transcript rendering
 - thread history
 - native menus, dialogs, notifications, and updater plumbing
+- Windows x64 and Windows ARM64 packaged releases
 
 Run it in development with:
 

@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import type { ProgressInfo, UpdateDownloadedEvent, UpdateInfo } from "electron-updater";
 
 import { createDefaultUpdaterState, type UpdaterReleaseInfo, type UpdaterState } from "../../src/lib/desktopApi";
+import { applyUpdaterPlatformDefaults } from "./updaterPlatform";
 
 const AUTOMATIC_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const STARTUP_CHECK_DELAY_MS = 10 * 1000;
@@ -184,11 +185,7 @@ export class DesktopUpdaterService {
       this.updater.autoDownload = true;
       this.updater.autoInstallOnAppQuit = false;
       this.updater.allowPrerelease = false;
-      if (this.platform === "darwin") {
-        // ShipIt can reject a differential-patched app even when the published zip
-        // is validly signed and notarized. Prefer the known-good full zip path.
-        this.updater.disableDifferentialDownload = true;
-      }
+      applyUpdaterPlatformDefaults(this.updater, this.platform);
       this.registerListeners();
     }
   }

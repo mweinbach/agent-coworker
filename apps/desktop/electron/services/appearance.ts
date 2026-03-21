@@ -41,11 +41,24 @@ export function defaultWindowsBackgroundMaterial(
   return "mica";
 }
 
-export function getInitialWindowAppearanceOptions(options: {
+type ResolvedWindowAppearance = {
+  backgroundColor: string;
+  backgroundMaterial?: WindowsBackgroundMaterial;
+};
+
+type SyncWindowAppearanceOptions = {
   platform?: NodeJS.Platform;
   useMacosNativeGlass?: boolean;
   useDarkColors?: boolean;
-} = {}): Pick<BrowserWindowConstructorOptions, "show" | "backgroundColor" | "backgroundMaterial"> {
+  backgroundMaterial?: WindowsBackgroundMaterial;
+};
+
+function resolveWindowAppearance(options: {
+  platform?: NodeJS.Platform;
+  useMacosNativeGlass?: boolean;
+  useDarkColors?: boolean;
+  backgroundMaterial?: WindowsBackgroundMaterial;
+} = {}): ResolvedWindowAppearance {
   const platform = options.platform ?? process.platform;
   const useDarkColors = options.useDarkColors ?? nativeTheme.shouldUseDarkColors;
   const useMacosNativeGlass =
@@ -54,12 +67,21 @@ export function getInitialWindowAppearanceOptions(options: {
       prefersReducedTransparency: nativeTheme.prefersReducedTransparency,
     });
 
-  const backgroundColor =
-    platform === "darwin" && useMacosNativeGlass
-      ? "#00000000"
-      : defaultDesktopShellBackgroundColor(useDarkColors);
+  return {
+    backgroundColor:
+      platform === "darwin" && useMacosNativeGlass
+        ? "#00000000"
+        : defaultDesktopShellBackgroundColor(useDarkColors),
+    backgroundMaterial: options.backgroundMaterial ?? defaultWindowsBackgroundMaterial(platform),
+  };
+}
 
-  const backgroundMaterial = defaultWindowsBackgroundMaterial(platform);
+export function getInitialWindowAppearanceOptions(options: {
+  platform?: NodeJS.Platform;
+  useMacosNativeGlass?: boolean;
+  useDarkColors?: boolean;
+} = {}): Pick<BrowserWindowConstructorOptions, "show" | "backgroundColor" | "backgroundMaterial"> {
+  const { backgroundColor, backgroundMaterial } = resolveWindowAppearance(options);
 
   return {
     show: false,
@@ -68,8 +90,12 @@ export function getInitialWindowAppearanceOptions(options: {
   };
 }
 
-function setWindowBackgroundMaterial(win: BrowserWindow, material: WindowsBackgroundMaterial): void {
-  if (process.platform !== "win32") {
+function setWindowBackgroundMaterial(
+  win: BrowserWindow,
+  material: WindowsBackgroundMaterial,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform !== "win32") {
     return;
   }
   try {
@@ -79,14 +105,49 @@ function setWindowBackgroundMaterial(win: BrowserWindow, material: WindowsBackgr
   }
 }
 
+export function syncWindowAppearance(
+  win: BrowserWindow,
+  options: SyncWindowAppearanceOptions = {},
+): void {
+  const platform = options.platform ?? process.platform;
+  const { backgroundColor, backgroundMaterial } = resolveWindowAppearance({
+    ...options,
+    platform,
+  });
+
+  win.setBackgroundColor(backgroundColor);
+
+  if (backgroundMaterial) {
+    setWindowBackgroundMaterial(win, backgroundMaterial, platform);
+  }
+
+  syncWindowChromeAppearance(win, {
+    platform,
+    useDarkColors: options.useDarkColors,
+    useMacosNativeGlass: options.useMacosNativeGlass,
+  });
+}
+
+export function applySystemAppearanceToWindow(
+  win: BrowserWindow,
+  appearance: SystemAppearance,
+): void {
+  const platform = appearance.platform as NodeJS.Platform;
+  syncWindowAppearance(win, {
+    platform,
+    useDarkColors: appearance.shouldUseDarkColors,
+    useMacosNativeGlass: shouldUseMacosNativeGlass(platform, process.env, {
+      prefersReducedTransparency: appearance.prefersReducedTransparency,
+    }),
+  });
+}
+
 export function applyWindowAppearance(win: BrowserWindow, opts: SetWindowAppearanceInput): SystemAppearance {
   if (opts.themeSource) {
     nativeTheme.themeSource = opts.themeSource;
   }
-  if (opts.backgroundMaterial) {
-    setWindowBackgroundMaterial(win, opts.backgroundMaterial);
-  }
-  syncWindowChromeAppearance(win, {
+  syncWindowAppearance(win, {
+    backgroundMaterial: opts.backgroundMaterial,
     useDarkColors: nativeTheme.shouldUseDarkColors,
     useMacosNativeGlass: shouldUseMacosNativeGlass(process.platform, process.env, {
       prefersReducedTransparency: nativeTheme.prefersReducedTransparency,

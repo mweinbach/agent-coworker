@@ -30,3 +30,11 @@
 - Focused stress verification passed with `bun test apps/desktop/test/skill-detail-dialog.test.ts --rerun-each 25`.
 - Regression guard verification passed with `bun test apps/desktop/test/skill-detail-dialog.test.ts apps/desktop/test/message-links.test.ts apps/desktop/test/updates-page.test.ts`.
 - CI-shaped verification passed with `RUN_REMOTE_MCP_TESTS=1 bun test` showing `2763 pass`, `1 skip`, `0 fail`.
+
+## Desktop App Platform-Specific Isolation
+
+- [ ] Audit all Electron desktop platform branches across window chrome, updater, menus/dialogs, server startup, and renderer chrome styling.
+- [ ] Extract platform-specific window and server lifecycle behavior behind explicit helpers/modules so macOS, Windows, and Linux tweaks stay isolated.
+- [ ] Keep the desktop app’s overall design and behavior intact while making Linux/native-frame behavior intentional instead of implicit.
+- [ ] Add or update focused desktop tests that lock down platform-specific behavior for each extracted branch.
+- [ ] Run focused desktop verification plus desktop typecheck/manual validation and capture the results.

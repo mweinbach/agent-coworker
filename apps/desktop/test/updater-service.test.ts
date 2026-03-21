@@ -136,6 +136,19 @@ describe("desktop updater service", () => {
     expect(updater.disableDifferentialDownload).toBe(false);
   });
 
+  test("keeps Linux updater defaults isolated from macOS settings", () => {
+    const updater = new FakeUpdater();
+
+    new DesktopUpdaterService({
+      currentVersion: "0.1.20",
+      isPackaged: true,
+      updater,
+      platform: "linux",
+    });
+
+    expect(updater.disableDifferentialDownload).toBe(false);
+  });
+
   test("records updater errors without throwing", async () => {
     const updater = new FakeUpdater();
     updater.checkForUpdates = async () => {

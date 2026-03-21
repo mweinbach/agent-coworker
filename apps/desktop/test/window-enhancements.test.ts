@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { BrowserWindow } from "electron";
 
 import {
+  applyPlatformWindowCreated,
   macosBrowserWindowOptions,
   shouldUseMacosNativeGlass,
   syncWindowChromeAppearance,
@@ -11,11 +12,19 @@ function createWindowStub() {
   return {
     setTitleBarOverlayCalls: [] as unknown[],
     setVibrancyCalls: [] as unknown[],
+    setWindowButtonVisibilityCalls: [] as unknown[],
+    setMenuCalls: [] as unknown[],
     setTitleBarOverlay(overlay: unknown) {
       this.setTitleBarOverlayCalls.push(overlay);
     },
     setVibrancy(value: unknown) {
       this.setVibrancyCalls.push(value);
+    },
+    setWindowButtonVisibility(value: unknown) {
+      this.setWindowButtonVisibilityCalls.push(value);
+    },
+    setMenu(value: unknown) {
+      this.setMenuCalls.push(value);
     },
   };
 }
@@ -115,5 +124,22 @@ describe("syncWindowChromeAppearance", () => {
       useMacosNativeGlass: false,
     });
     expect(win.setVibrancyCalls).toEqual([null]);
+  });
+
+  test("applies post-create window tweaks per platform", () => {
+    const macWindow = createWindowStub();
+    applyPlatformWindowCreated(macWindow as unknown as BrowserWindow, "darwin");
+    expect(macWindow.setWindowButtonVisibilityCalls).toEqual([true]);
+    expect(macWindow.setMenuCalls).toEqual([]);
+
+    const windowsWindow = createWindowStub();
+    applyPlatformWindowCreated(windowsWindow as unknown as BrowserWindow, "win32");
+    expect(windowsWindow.setWindowButtonVisibilityCalls).toEqual([]);
+    expect(windowsWindow.setMenuCalls).toEqual([null]);
+
+    const linuxWindow = createWindowStub();
+    applyPlatformWindowCreated(linuxWindow as unknown as BrowserWindow, "linux");
+    expect(linuxWindow.setWindowButtonVisibilityCalls).toEqual([]);
+    expect(linuxWindow.setMenuCalls).toEqual([]);
   });
 });

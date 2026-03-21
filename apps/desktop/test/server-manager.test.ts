@@ -108,6 +108,27 @@ describe("desktop server manager startup mode", () => {
     expect(env).not.toBe(process.env);
     expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe(process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1");
   });
+
+  test("only retries source startup automatically on Windows", () => {
+    expect(__internal.getSourceStartupAttemptCount(true)).toBe(process.platform === "win32" ? 2 : 1);
+    expect(__internal.getSourceStartupAttemptCount(true, "win32")).toBe(2);
+    expect(__internal.getSourceStartupAttemptCount(true, "darwin")).toBe(1);
+    expect(__internal.getSourceStartupAttemptCount(false, "win32")).toBe(1);
+  });
+
+  test("only injects Bun transpiler cache env for Windows source attempts", () => {
+    const windowsAttempt = __internal.buildSourceEnvForAttempt({ PATH: process.env.PATH }, 2, "win32");
+    const linuxAttempt = __internal.buildSourceEnvForAttempt({ PATH: process.env.PATH }, 2, "linux");
+
+    try {
+      expect(typeof windowsAttempt.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH).toBe("string");
+      expect(windowsAttempt.env.BUN_FEATURE_FLAG_DISABLE_ASYNC_TRANSPILER).toBe("1");
+      expect(linuxAttempt.env).toEqual({ PATH: process.env.PATH });
+    } finally {
+      windowsAttempt.cleanup();
+      linuxAttempt.cleanup();
+    }
+  });
 });
 
 describe("desktop server manager bun crash detection", () => {

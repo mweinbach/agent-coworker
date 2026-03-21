@@ -6,10 +6,11 @@ import { app, BrowserWindow, Menu, Notification, shell } from "electron";
 import { DESKTOP_EVENT_CHANNELS, type DesktopMenuCommand, type UpdaterState } from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
 import {
-  defaultDesktopShellBackgroundColor,
+  applySystemAppearanceToWindow,
   getInitialWindowAppearanceOptions,
   getSystemAppearanceSnapshot,
   registerSystemAppearanceListener,
+  syncWindowAppearance,
 } from "./services/appearance";
 import { installDesktopApplicationMenu } from "./services/menu";
 import { PersistenceService } from "./services/persistence";
@@ -18,9 +19,9 @@ import { ServerManager } from "./services/serverManager";
 import { createBeforeQuitHandler } from "./services/shutdown";
 import { DesktopUpdaterService } from "./services/updater";
 import {
+  applyPlatformWindowCreated,
   macosBrowserWindowOptions,
   shouldUseMacosNativeGlass,
-  syncWindowChromeAppearance,
 } from "./services/windowEnhancements";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -212,13 +213,10 @@ async function createWindow(): Promise<void> {
     },
   });
   mainWindow = win;
-  if (process.platform === "darwin") {
-    win.setWindowButtonVisibility(true);
-  } else if (process.platform === "win32") {
-    win.setMenu(null);
-  }
+  applyPlatformWindowCreated(win, process.platform);
   applyWindowSecurity(win);
-  syncWindowChromeAppearance(win, {
+  syncWindowAppearance(win, {
+    platform: process.platform,
     useDarkColors,
     useMacosNativeGlass,
   });
@@ -313,27 +311,7 @@ if (!gotSingleInstanceLock) {
         if (win.isDestroyed()) {
           continue;
         }
-        syncWindowChromeAppearance(win, {
-          platform: appearance.platform as NodeJS.Platform,
-          useDarkColors: appearance.shouldUseDarkColors,
-          useMacosNativeGlass: shouldUseMacosNativeGlass(
-            appearance.platform as NodeJS.Platform,
-            process.env,
-            { prefersReducedTransparency: appearance.prefersReducedTransparency },
-          ),
-        });
-        if (appearance.platform === "darwin") {
-          const useMacosNativeGlass = shouldUseMacosNativeGlass(
-            "darwin",
-            process.env,
-            { prefersReducedTransparency: appearance.prefersReducedTransparency },
-          );
-          win.setBackgroundColor(
-            useMacosNativeGlass
-              ? "#00000000"
-              : defaultDesktopShellBackgroundColor(appearance.shouldUseDarkColors),
-          );
-        }
+        applySystemAppearanceToWindow(win, appearance);
       }
       emitDesktopEvent(DESKTOP_EVENT_CHANNELS.systemAppearanceChanged, appearance);
     });

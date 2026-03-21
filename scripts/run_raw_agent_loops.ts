@@ -81,6 +81,15 @@ type TracedStep = {
   step: unknown;
 };
 
+type ValidationSummary = {
+  schemaOk: boolean;
+  artifactOk: boolean;
+  semanticOk: boolean;
+  issues: ValidationIssue[];
+  warnings: ValidationIssue[];
+  parsed?: unknown;
+};
+
 type ArtifactEntry = {
   path: string; // path relative to run dir
   bytes: number;
@@ -417,16 +426,39 @@ export function summarizeRawLoopBudgets(toolCallNames: string[]) {
   };
 }
 
+export function countObservedLoopSteps(stepNumbers: number[]) {
+  if (stepNumbers.length === 0) return 0;
+  return Math.max(...stepNumbers) + 1;
+}
+
 export function buildRawLoopBudgetSummary(
   toolLogLines: string[],
-  steps: TracedStep[],
+  totalSteps: number,
   repairPassCount: number,
 ) {
   const toolCallNames = collectToolCallNamesFromToolLog(toolLogLines);
   return {
     ...summarizeRawLoopBudgets(toolCallNames),
-    totalSteps: steps.length,
+    totalSteps,
     repairPassCount,
+  };
+}
+
+function summarizeValidationResult(validationResult: {
+  schemaOk: boolean;
+  artifactOk: boolean;
+  semanticOk: boolean;
+  issues: ValidationIssue[];
+  warnings: ValidationIssue[];
+  parsed?: unknown;
+}): ValidationSummary {
+  return {
+    schemaOk: validationResult.schemaOk,
+    artifactOk: validationResult.artifactOk,
+    semanticOk: validationResult.semanticOk,
+    issues: validationResult.issues,
+    warnings: validationResult.warnings,
+    parsed: validationResult.parsed,
   };
 }
 
@@ -2021,17 +2053,8 @@ async function main() {
     let repairAttempted = false;
     let repairSucceeded = false;
     let degraded = false;
-    let finalValidation:
-      | {
-          schemaOk: boolean;
-          artifactOk: boolean;
-          semanticOk: boolean;
-          issues: ValidationIssue[];
-          warnings: ValidationIssue[];
-          parsed?: unknown;
-        }
-      | null = null;
-    let finalBudgets = buildRawLoopBudgetSummary([], [], 0);
+    let finalValidation: ValidationSummary | null = null;
+    let finalBudgets = buildRawLoopBudgetSummary([], 0, 0);
     let finalRes:
       | {
           text: string;
@@ -2052,6 +2075,8 @@ async function main() {
       const approvalEvents: ApprovalEvent[] = [];
       const todoEvents: TodoEvent[] = [];
       const steps: TracedStep[] = [];
+      let attemptValidation: ValidationSummary | null = null;
+      let attemptTotalSteps = 0;
 
       const log = (line: string) => {
         toolLogLines.push(line);
@@ -2100,33 +2125,44 @@ async function main() {
       });
 
       try {
-        const res = await runTurnWithDeps(
-          {
-            config,
-            system,
-            messages: inputMessages,
-            harnessContext,
-            log,
-            askUser,
-            approveCommand,
-            updateTodos,
-            discoveredSkills,
-            agentControl,
-            maxSteps: run.maxSteps ?? 100,
-            enableMcp: false,
-            telemetryContext: {
-              functionId: "harness.runTurn",
-              metadata: {
-                runId: run.id,
-                scenario: cliArgs.scenario,
-                attempt,
+        const mainStepNumbers: number[] = [];
+        const res = await (async () => {
+          try {
+            return await runTurnWithDeps(
+              {
+                config,
+                system,
+                messages: inputMessages,
+                harnessContext,
+                log,
+                askUser,
+                approveCommand,
+                updateTodos,
+                discoveredSkills,
+                agentControl,
+                prepareStep: async ({ stepNumber }) => {
+                  mainStepNumbers.push(stepNumber);
+                  return undefined;
+                },
+                maxSteps: run.maxSteps ?? 100,
+                enableMcp: false,
+                telemetryContext: {
+                  functionId: "harness.runTurn",
+                  metadata: {
+                    runId: run.id,
+                    scenario: cliArgs.scenario,
+                    attempt,
+                  },
+                },
               },
-            },
-          },
-          {
-            createTools: createToolsOverride as any,
+              {
+                createTools: createToolsOverride as any,
+              }
+            );
+          } finally {
+            attemptTotalSteps += countObservedLoopSteps(mainStepNumbers);
           }
-        );
+        })();
 
         if (Array.isArray(run.requiredToolCalls) && run.requiredToolCalls.length > 0) {
           const tracedToolCalls = collectTracedToolCallNames(steps);
@@ -2156,7 +2192,7 @@ async function main() {
         let finalText = String(res?.text ?? "");
         let finalReasoningText = res?.reasoningText;
         let finalResponseMessages = (res?.responseMessages ?? []) as ModelMessage[];
-        let budgetSummary = buildRawLoopBudgetSummary(toolLogLines, steps, 0);
+        let budgetSummary = buildRawLoopBudgetSummary(toolLogLines, attemptTotalSteps, 0);
         const validationOutcome = await validateWithOptionalRepair({
           finalText,
           runDir,
@@ -2180,24 +2216,35 @@ async function main() {
               },
             ];
 
-            const finalized = await runTurnWithDeps(
-              {
-                config,
-                system,
-                messages: finalizeMessages,
-                harnessContext,
-                log,
-                askUser,
-                approveCommand,
-                updateTodos,
-                discoveredSkills,
-                maxSteps: 1,
-                enableMcp: false,
-              },
-              {
-                createTools: (() => ({})) as any,
+            const repairStepNumbers: number[] = [];
+            const finalized = await (async () => {
+              try {
+                return await runTurnWithDeps(
+                  {
+                    config,
+                    system,
+                    messages: finalizeMessages,
+                    harnessContext,
+                    log,
+                    askUser,
+                    approveCommand,
+                    updateTodos,
+                    discoveredSkills,
+                    prepareStep: async ({ stepNumber }) => {
+                      repairStepNumbers.push(stepNumber);
+                      return undefined;
+                    },
+                    maxSteps: 1,
+                    enableMcp: false,
+                  },
+                  {
+                    createTools: (() => ({})) as any,
+                  }
+                );
+              } finally {
+                attemptTotalSteps += countObservedLoopSteps(repairStepNumbers);
               }
-            );
+            })();
 
             return {
               finalText: String(finalized.text ?? "").trim() || finalText,
@@ -2226,19 +2273,13 @@ async function main() {
         }
         budgetSummary = buildRawLoopBudgetSummary(
           toolLogLines,
-          steps,
+          attemptTotalSteps,
           attemptRepairAttempted ? 1 : 0,
         );
+        attemptValidation = summarizeValidationResult(validationResult);
 
         if (!validationResult.ok) {
-          finalValidation = {
-            schemaOk: validationResult.schemaOk,
-            artifactOk: validationResult.artifactOk,
-            semanticOk: validationResult.semanticOk,
-            issues: validationResult.issues,
-            warnings: validationResult.warnings,
-            parsed: validationResult.parsed,
-          };
+          finalValidation = attemptValidation;
           repairAttempted = attemptRepairAttempted;
           repairSucceeded = attemptRepairSucceeded;
           degraded = attemptDegraded;
@@ -2254,14 +2295,7 @@ async function main() {
           responseMessages: finalResponseMessages,
         };
         finalError = null;
-        finalValidation = {
-          schemaOk: validationResult.schemaOk,
-          artifactOk: validationResult.artifactOk,
-          semanticOk: validationResult.semanticOk,
-          issues: validationResult.issues,
-          warnings: validationResult.warnings,
-          parsed: validationResult.parsed,
-        };
+        finalValidation = attemptValidation;
         repairAttempted = attemptRepairAttempted;
         repairSucceeded = attemptRepairSucceeded;
         degraded = attemptDegraded;
@@ -2310,7 +2344,7 @@ async function main() {
         repairAttempted = attemptRepairAttempted;
         repairSucceeded = attemptRepairSucceeded;
         degraded = attemptDegraded;
-        finalValidation = null;
+        finalValidation = attemptValidation;
         finalToolLogLines = toolLogLines;
         finalAskEvents = askEvents;
         finalApprovalEvents = approvalEvents;
@@ -2318,7 +2352,7 @@ async function main() {
         finalSteps = steps;
         finalBudgets = buildRawLoopBudgetSummary(
           toolLogLines,
-          steps,
+          attemptTotalSteps,
           attemptRepairAttempted ? 1 : 0,
         );
 

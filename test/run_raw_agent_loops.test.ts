@@ -8,6 +8,7 @@ import {
   buildRawLoopBudgetSummary,
   buildGoogleCustomtoolsToolCoverageRuns,
   buildMixedRuns,
+  countObservedLoopSteps,
   createToolsWithTracing,
   createRawLoopAgentControl,
 } from "../scripts/run_raw_agent_loops";
@@ -413,22 +414,23 @@ describe("raw loop harness context", () => {
     });
   });
 
-  test("buildRawLoopBudgetSummary uses traced step count instead of tool-call count", () => {
+  test("countObservedLoopSteps derives loop turns from prepareStep step numbers", () => {
+    expect(countObservedLoopSteps([])).toBe(0);
+    expect(countObservedLoopSteps([0])).toBe(1);
+    expect(countObservedLoopSteps([0, 1, 2])).toBe(3);
+  });
+
+  test("buildRawLoopBudgetSummary uses actual loop turn count instead of traced entry count", () => {
     expect(buildRawLoopBudgetSummary(
       ["tool> bash {}", "tool> read {}"],
-      [
-        { scope: "tool-call", step: { type: "tool-call", toolName: "bash" } },
-        { scope: "tool-result", step: { type: "tool-result", toolName: "bash" } },
-        { scope: "tool-call", step: { type: "tool-call", toolName: "read" } },
-        { scope: "assistant", step: { type: "final-answer" } },
-      ] as any,
+      3,
       1,
     )).toEqual({
       toolCalls: 2,
       bashCalls: 1,
       webCalls: 0,
       spawnedAgents: 0,
-      totalSteps: 4,
+      totalSteps: 3,
       repairPassCount: 1,
     });
   });

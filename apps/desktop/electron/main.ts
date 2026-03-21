@@ -20,7 +20,7 @@ import { createBeforeQuitHandler } from "./services/shutdown";
 import { DesktopUpdaterService } from "./services/updater";
 import {
   applyPlatformWindowCreated,
-  macosBrowserWindowOptions,
+  getPlatformBrowserWindowOptions,
   shouldUseMacosNativeGlass,
 } from "./services/windowEnhancements";
 
@@ -199,7 +199,7 @@ async function createWindow(): Promise<void> {
     width: 1240,
     height: 820,
     ...getInitialWindowAppearanceOptions({ useDarkColors, useMacosNativeGlass }),
-    ...macosBrowserWindowOptions(process.platform, { useDarkColors, useMacosNativeGlass }),
+    ...getPlatformBrowserWindowOptions(process.platform, { useDarkColors, useMacosNativeGlass }),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,

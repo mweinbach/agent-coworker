@@ -3,6 +3,7 @@ import type { BrowserWindow } from "electron";
 
 import {
   applyPlatformWindowCreated,
+  getPlatformBrowserWindowOptions,
   macosBrowserWindowOptions,
   shouldUseMacosNativeGlass,
   syncWindowChromeAppearance,
@@ -29,9 +30,9 @@ function createWindowStub() {
   };
 }
 
-describe("macosBrowserWindowOptions", () => {
+describe("getPlatformBrowserWindowOptions", () => {
   test("returns title bar overlay options on Windows", () => {
-    expect(macosBrowserWindowOptions("win32")).toEqual({
+    expect(getPlatformBrowserWindowOptions("win32")).toEqual({
       titleBarStyle: "hidden",
       titleBarOverlay: {
         color: "#00000000",
@@ -42,7 +43,7 @@ describe("macosBrowserWindowOptions", () => {
   });
 
   test("uses a light symbol color for dark Windows themes", () => {
-    expect(macosBrowserWindowOptions("win32", { useDarkColors: true })).toEqual({
+    expect(getPlatformBrowserWindowOptions("win32", { useDarkColors: true })).toEqual({
       titleBarStyle: "hidden",
       titleBarOverlay: {
         color: "#00000000",
@@ -52,12 +53,30 @@ describe("macosBrowserWindowOptions", () => {
     });
   });
 
-  test("returns an empty object on Linux", () => {
-    expect(macosBrowserWindowOptions("linux")).toEqual({});
+  test("returns title bar overlay options on Linux", () => {
+    expect(getPlatformBrowserWindowOptions("linux")).toEqual({
+      titleBarStyle: "hidden",
+      titleBarOverlay: {
+        color: "#00000000",
+        symbolColor: "#5a4736",
+        height: 48,
+      },
+    });
+  });
+
+  test("uses a light symbol color for dark Linux themes", () => {
+    expect(getPlatformBrowserWindowOptions("linux", { useDarkColors: true })).toEqual({
+      titleBarStyle: "hidden",
+      titleBarOverlay: {
+        color: "#00000000",
+        symbolColor: "#f6ece0",
+        height: 48,
+      },
+    });
   });
 
   test("adds native vibrancy options on macOS when glass is enabled", () => {
-    const options = macosBrowserWindowOptions("darwin");
+    const options = getPlatformBrowserWindowOptions("darwin");
     expect(options.titleBarStyle).toBe("hiddenInset");
     expect(options.trafficLightPosition).toEqual({ x: 14, y: 14 });
     expect(options.transparent).toBe(true);
@@ -66,10 +85,16 @@ describe("macosBrowserWindowOptions", () => {
   });
 
   test("can disable native glass on macOS", () => {
-    const options = macosBrowserWindowOptions("darwin", { useMacosNativeGlass: false });
+    const options = getPlatformBrowserWindowOptions("darwin", { useMacosNativeGlass: false });
     expect(options.transparent).toBe(false);
     expect(options.vibrancy).toBeUndefined();
     expect(options.visualEffectState).toBeUndefined();
+  });
+});
+
+describe("macosBrowserWindowOptions (alias)", () => {
+  test("delegates to getPlatformBrowserWindowOptions", () => {
+    expect(macosBrowserWindowOptions("linux")).toEqual(getPlatformBrowserWindowOptions("linux"));
   });
 });
 
@@ -93,6 +118,21 @@ describe("shouldUseMacosNativeGlass", () => {
 });
 
 describe("syncWindowChromeAppearance", () => {
+  test("updates Linux titlebar overlay colors", () => {
+    const win = createWindowStub();
+    syncWindowChromeAppearance(win as unknown as BrowserWindow, {
+      platform: "linux",
+      useDarkColors: true,
+    });
+    expect(win.setTitleBarOverlayCalls).toEqual([
+      {
+        color: "#00000000",
+        symbolColor: "#f6ece0",
+        height: 48,
+      },
+    ]);
+  });
+
   test("updates Windows titlebar overlay colors", () => {
     const win = createWindowStub();
     syncWindowChromeAppearance(win as unknown as BrowserWindow, {
@@ -140,6 +180,6 @@ describe("syncWindowChromeAppearance", () => {
     const linuxWindow = createWindowStub();
     applyPlatformWindowCreated(linuxWindow as unknown as BrowserWindow, "linux");
     expect(linuxWindow.setWindowButtonVisibilityCalls).toEqual([]);
-    expect(linuxWindow.setMenuCalls).toEqual([]);
+    expect(linuxWindow.setMenuCalls).toEqual([null]);
   });
 });

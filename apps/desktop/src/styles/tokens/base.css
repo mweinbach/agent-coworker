@@ -1,0 +1,87 @@
+/* App palette + surfaces (no platform-specific glass) */
+
+:root {
+  --app-bg: #e7dfd4;
+  --window-bg: var(--app-bg);
+  --shell-bg: var(--app-bg);
+  --sidebar-bg: #eee3d4;
+  --panel-bg: #fcf8f2;
+  --sidebar-surface: color-mix(in srgb, var(--sidebar-bg) 92%, white 8%);
+  /* Left rail fill; defaults to titlebar strip until glass platforms override */
+  --sidebar-pane-surface: var(--sidebar-surface);
+  --content-surface: color-mix(
+    in srgb,
+    var(--sidebar-bg) 84%,
+    var(--app-bg) 16%
+  );
+  --glass-fill: color-mix(in srgb, var(--panel-bg) 86%, transparent);
+  --glass-border: rgba(94, 67, 41, 0.24);
+  --sidebar-blur: 0px;
+  --sidebar-titlebar-blur: 12px;
+  --titlebar-blur: 10px;
+  --border: rgba(94, 67, 41, 0.14);
+  --text: #2f2318;
+  --muted: #5a4736;
+  --accent: #9a6640;
+  --danger: #bb3e3e;
+  --danger-bg: rgba(187, 62, 62, 0.12);
+  --radius: 0.625rem;
+
+  color-scheme: light;
+}
+
+:root[data-system-theme="dark"] {
+  --app-bg: #1f1913;
+  --window-bg: var(--app-bg);
+  --shell-bg: var(--app-bg);
+  --sidebar-bg: #29221b;
+  --panel-bg: #332a22;
+  --sidebar-surface: color-mix(in srgb, var(--sidebar-bg) 88%, black 12%);
+  --sidebar-pane-surface: var(--sidebar-surface);
+  --content-surface: color-mix(
+    in srgb,
+    var(--sidebar-bg) 74%,
+    var(--app-bg) 26%
+  );
+  --glass-fill: color-mix(in srgb, var(--panel-bg) 80%, transparent);
+  --glass-border: rgba(255, 233, 212, 0.22);
+  --sidebar-titlebar-blur: 12px;
+  --titlebar-blur: 10px;
+  --border: rgba(255, 233, 212, 0.16);
+  --text: #f6ece0;
+  --muted: #d8c7b6;
+  --accent: #e29a62;
+  --danger: #e86060;
+  --danger-bg: rgba(232, 96, 96, 0.14);
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-system-theme]) {
+    --app-bg: #1f1913;
+    --window-bg: var(--app-bg);
+    --shell-bg: var(--app-bg);
+    --sidebar-bg: #29221b;
+    --panel-bg: #332a22;
+    --sidebar-surface: color-mix(in srgb, var(--sidebar-bg) 88%, black 12%);
+    --sidebar-pane-surface: var(--sidebar-surface);
+    --content-surface: color-mix(
+      in srgb,
+      var(--sidebar-bg) 74%,
+      var(--app-bg) 26%
+    );
+    --glass-fill: color-mix(in srgb, var(--panel-bg) 80%, transparent);
+    --glass-border: rgba(255, 233, 212, 0.22);
+    --sidebar-titlebar-blur: 12px;
+    --titlebar-blur: 10px;
+    --border: rgba(255, 233, 212, 0.16);
+    --text: #f6ece0;
+    --muted: #d8c7b6;
+    --accent: #e29a62;
+    --danger: #e86060;
+    --danger-bg: rgba(232, 96, 96, 0.14);
+
+    color-scheme: dark;
+  }
+}

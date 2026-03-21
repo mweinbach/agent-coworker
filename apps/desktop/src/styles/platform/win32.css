@@ -1,0 +1,38 @@
+/* Windows title bar overlay + caption button reserve */
+
+:root[data-platform="win32"] .app-topbar__inline-sidebar-toggle {
+  left: auto;
+  right: 8.75rem;
+}
+
+:root[data-platform="win32"] .app-topbar {
+  padding-right: 12rem; /* Native caption buttons */
+}
+
+:root[data-platform="win32"] .app-window-drag-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 0.625rem;
+  z-index: 60;
+  -webkit-app-region: drag;
+}
+
+:root[data-platform="win32"] .settings-shell__nav {
+  padding-top: 2.75rem;
+}
+
+:root[data-platform="win32"] .settings-shell__back-button {
+  margin-top: 0;
+}
+
+:root[data-platform="win32"] .settings-shell__drag-zone {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2.75rem;
+  z-index: 80;
+  -webkit-app-region: drag;
+}

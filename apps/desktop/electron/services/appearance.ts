@@ -9,14 +9,16 @@ import {
   shouldUseMacosNativeGlass,
   syncWindowChromeAppearance,
 } from "./windowEnhancements";
-
-const LIGHT_SHELL_BACKGROUND = "#e7dfd4";
-const DARK_SHELL_BACKGROUND = "#1f1913";
+import {
+  desktopShellBackgroundColor,
+  resolveWindowChromePaint,
+  windowsBackgroundMaterialForPlatform,
+} from "./windowAppearancePaint";
 
 export function defaultDesktopShellBackgroundColor(
   useDarkColors: boolean = nativeTheme.shouldUseDarkColors,
 ): string {
-  return useDarkColors ? DARK_SHELL_BACKGROUND : LIGHT_SHELL_BACKGROUND;
+  return desktopShellBackgroundColor(useDarkColors);
 }
 
 export function getSystemAppearanceSnapshot(): SystemAppearance {
@@ -35,10 +37,7 @@ export function getSystemAppearanceSnapshot(): SystemAppearance {
 export function defaultWindowsBackgroundMaterial(
   platform: NodeJS.Platform = process.platform,
 ): WindowsBackgroundMaterial | undefined {
-  if (platform !== "win32") {
-    return undefined;
-  }
-  return "mica";
+  return windowsBackgroundMaterialForPlatform(platform);
 }
 
 type ResolvedWindowAppearance = {
@@ -67,13 +66,12 @@ function resolveWindowAppearance(options: {
       prefersReducedTransparency: nativeTheme.prefersReducedTransparency,
     });
 
-  return {
-    backgroundColor:
-      platform === "darwin" && useMacosNativeGlass
-        ? "#00000000"
-        : defaultDesktopShellBackgroundColor(useDarkColors),
-    backgroundMaterial: options.backgroundMaterial ?? defaultWindowsBackgroundMaterial(platform),
-  };
+  return resolveWindowChromePaint({
+    platform,
+    useDarkColors,
+    useMacosNativeGlass,
+    backgroundMaterial: options.backgroundMaterial,
+  });
 }
 
 export function getInitialWindowAppearanceOptions(options: {

@@ -149,4 +149,50 @@ describe("server JSON-RPC websocket mode", () => {
       server.stop();
     }
   });
+
+  test("JSON-RPC returns -32001 when the request queue is overloaded", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      env: {
+        AGENT_WORKING_DIR: tmpDir,
+        AGENT_PROVIDER: "google",
+        COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+        COWORK_WS_JSONRPC_MAX_PENDING_REQUESTS: "0",
+      },
+    }));
+
+    try {
+      const ws = new WebSocket(`${url}?protocol=jsonrpc`);
+      await waitForOpen(ws);
+      ws.send(JSON.stringify({
+        id: 1,
+        method: "initialize",
+        params: {
+          clientInfo: {
+            name: "test-client",
+          },
+        },
+      }));
+      await waitForSingleMessage(ws);
+      ws.send(JSON.stringify({ method: "initialized" }));
+      await expectNoMessage(ws);
+
+      ws.send(JSON.stringify({
+        id: 2,
+        method: "thread/list",
+        params: {},
+      }));
+      const overloaded = await waitForSingleMessage(ws);
+      expect(overloaded).toEqual({
+        id: 2,
+        error: {
+          code: -32001,
+          message: "Server overloaded; retry later.",
+        },
+      });
+      ws.close();
+    } finally {
+      server.stop();
+    }
+  });
 });

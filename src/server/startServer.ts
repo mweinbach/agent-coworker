@@ -255,6 +255,13 @@ export async function startAgentServer(
     COWORK_BUILTIN_DIR?: string;
   } = { ...rawEnv };
   const wsProtocolDefault = opts.wsProtocolDefault ?? parseWsProtocolDefault(env.COWORK_WS_DEFAULT_PROTOCOL);
+  const parsedJsonRpcMaxPendingRequests = Number(env.COWORK_WS_JSONRPC_MAX_PENDING_REQUESTS ?? "128");
+  const jsonRpcMaxPendingRequests = Math.max(
+    0,
+    Number.isFinite(parsedJsonRpcMaxPendingRequests)
+      ? Math.floor(parsedJsonRpcMaxPendingRequests)
+      : 128,
+  );
 
   await ensureDefaultGlobalSkillsReady({
     homedir: opts.homedir,
@@ -617,6 +624,8 @@ export async function startAgentServer(
     ws.data.rpc = {
       initializeRequestReceived: false,
       initializedNotificationReceived: false,
+      pendingRequestCount: 0,
+      maxPendingRequests: jsonRpcMaxPendingRequests,
       capabilities: {
         experimentalApi: false,
         optOutNotificationMethods: [],
@@ -1377,11 +1386,33 @@ export async function startAgentServer(
               ws.send(JSON.stringify(decoded.response));
               return;
             }
+            const rpcState = ws.data.rpc;
+            if (
+              rpcState
+              && "id" in decoded.message
+              && "method" in decoded.message
+              && decoded.message.method !== "initialize"
+              && decoded.message.method !== "initialized"
+              && rpcState.pendingRequestCount >= rpcState.maxPendingRequests
+            ) {
+              ws.send(JSON.stringify(buildJsonRpcErrorResponse(decoded.message.id, {
+                code: JSONRPC_ERROR_CODES.serverOverloaded,
+                message: "Server overloaded; retry later.",
+              })));
+              return;
+            }
             dispatchJsonRpcMessage({
               ws,
               message: decoded.message,
               onRequest: (message) => {
-                void routeJsonRpcRequest(ws, message);
+                if (ws.data.rpc) {
+                  ws.data.rpc.pendingRequestCount += 1;
+                }
+                void routeJsonRpcRequest(ws, message).finally(() => {
+                  if (ws.data.rpc) {
+                    ws.data.rpc.pendingRequestCount = Math.max(0, ws.data.rpc.pendingRequestCount - 1);
+                  }
+                });
               },
               onResponse: (message) => {
                 routeJsonRpcResponse(ws, message);

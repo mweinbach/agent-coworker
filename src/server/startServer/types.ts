@@ -5,6 +5,8 @@ import type { WsProtocolMode } from "../wsProtocol/negotiation";
 export type JsonRpcConnectionState = {
   initializeRequestReceived: boolean;
   initializedNotificationReceived: boolean;
+  pendingRequestCount: number;
+  maxPendingRequests: number;
   clientInfo?: JsonRpcInitializeParams["clientInfo"];
   capabilities: {
     experimentalApi: boolean;

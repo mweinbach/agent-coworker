@@ -1,0 +1,1012 @@
+{
+  "type": "object",
+  "properties": {
+    "requests": {
+      "type": "object",
+      "properties": {
+        "initialize": {
+          "type": "object",
+          "properties": {
+            "clientInfo": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "title": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "capabilities": {
+              "type": "object",
+              "properties": {
+                "experimentalApi": {
+                  "type": "boolean"
+                },
+                "optOutNotificationMethods": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "clientInfo"
+          ],
+          "additionalProperties": false
+        },
+        "initialized": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "thread/start": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "minLength": 1
+            },
+            "provider": {
+              "type": "string",
+              "minLength": 1
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "thread/resume": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "afterSeq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "threadId"
+          ],
+          "additionalProperties": false
+        },
+        "thread/list": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "thread/read": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "includeTurns": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "threadId"
+          ],
+          "additionalProperties": false
+        },
+        "thread/unsubscribe": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "threadId"
+          ],
+          "additionalProperties": false
+        },
+        "turn/start": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "input": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "threadId",
+            "input"
+          ],
+          "additionalProperties": false
+        },
+        "turn/steer": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "turnId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "input": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "threadId",
+            "turnId",
+            "input"
+          ],
+          "additionalProperties": false
+        },
+        "turn/interrupt": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "threadId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "initialize",
+        "initialized",
+        "thread/start",
+        "thread/resume",
+        "thread/list",
+        "thread/read",
+        "thread/unsubscribe",
+        "turn/start",
+        "turn/steer",
+        "turn/interrupt"
+      ],
+      "additionalProperties": false
+    },
+    "results": {
+      "type": "object",
+      "properties": {
+        "initialize": {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "type": "string"
+            },
+            "serverInfo": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "subprotocol": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "capabilities": {
+              "type": "object",
+              "properties": {
+                "experimentalApi": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "experimentalApi"
+              ],
+              "additionalProperties": false
+            },
+            "transport": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "websocket"
+                },
+                "protocolMode": {
+                  "type": "string",
+                  "enum": [
+                    "legacy",
+                    "jsonrpc"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "protocolMode"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "serverInfo",
+            "capabilities",
+            "transport"
+          ],
+          "additionalProperties": false
+        },
+        "thread/start": {
+          "type": "object",
+          "properties": {
+            "thread": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "title": {
+                  "type": "string"
+                },
+                "preview": {
+                  "type": "string"
+                },
+                "modelProvider": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "cwd": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "preview",
+                "modelProvider",
+                "model",
+                "cwd",
+                "createdAt",
+                "updatedAt",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "thread"
+          ],
+          "additionalProperties": false
+        },
+        "thread/resume": {
+          "type": "object",
+          "properties": {
+            "thread": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "title": {
+                  "type": "string"
+                },
+                "preview": {
+                  "type": "string"
+                },
+                "modelProvider": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "cwd": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "preview",
+                "modelProvider",
+                "model",
+                "cwd",
+                "createdAt",
+                "updatedAt",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "thread"
+          ],
+          "additionalProperties": false
+        },
+        "thread/list": {
+          "type": "object",
+          "properties": {
+            "threads": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "preview": {
+                    "type": "string"
+                  },
+                  "modelProvider": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "cwd": {
+                    "type": "string"
+                  },
+                  "createdAt": {
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "id",
+                  "title",
+                  "preview",
+                  "modelProvider",
+                  "model",
+                  "cwd",
+                  "createdAt",
+                  "updatedAt",
+                  "status"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "threads"
+          ],
+          "additionalProperties": false
+        },
+        "thread/read": {
+          "type": "object",
+          "properties": {
+            "thread": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "title": {
+                  "type": "string"
+                },
+                "preview": {
+                  "type": "string"
+                },
+                "modelProvider": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "cwd": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": false
+                },
+                "turns": {
+                  "type": "array",
+                  "items": {}
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "preview",
+                "modelProvider",
+                "model",
+                "cwd",
+                "createdAt",
+                "updatedAt",
+                "status"
+              ],
+              "additionalProperties": false
+            },
+            "coworkSnapshot": {
+              "anyOf": [
+                {},
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "journalTailSeq": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "thread",
+            "coworkSnapshot"
+          ],
+          "additionalProperties": false
+        },
+        "thread/unsubscribe": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "unsubscribed",
+                "notSubscribed",
+                "notLoaded"
+              ]
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        "turn/start": {
+          "type": "object",
+          "properties": {
+            "turn": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "threadId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "status": {
+                  "type": "string"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {}
+                }
+              },
+              "required": [
+                "id",
+                "threadId",
+                "status",
+                "items"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "turn"
+          ],
+          "additionalProperties": false
+        },
+        "turn/steer": {
+          "type": "object",
+          "properties": {
+            "turnId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "turnId"
+          ],
+          "additionalProperties": false
+        },
+        "turn/interrupt": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "initialize",
+        "thread/start",
+        "thread/resume",
+        "thread/list",
+        "thread/read",
+        "thread/unsubscribe",
+        "turn/start",
+        "turn/steer",
+        "turn/interrupt"
+      ],
+      "additionalProperties": false
+    },
+    "notifications": {
+      "type": "object",
+      "properties": {
+        "thread/started": {
+          "type": "object",
+          "properties": {
+            "thread": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "title": {
+                  "type": "string"
+                },
+                "preview": {
+                  "type": "string"
+                },
+                "modelProvider": {
+                  "type": "string"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "cwd": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "string"
+                },
+                "updatedAt": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "preview",
+                "modelProvider",
+                "model",
+                "cwd",
+                "createdAt",
+                "updatedAt",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "thread"
+          ],
+          "additionalProperties": false
+        },
+        "turn/started": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "turn": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "status": {
+                  "type": "string"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {}
+                }
+              },
+              "required": [
+                "id",
+                "status",
+                "items"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "threadId",
+            "turn"
+          ],
+          "additionalProperties": false
+        },
+        "item/started": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "turnId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "item": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "threadId",
+            "turnId",
+            "item"
+          ],
+          "additionalProperties": false
+        },
+        "item/agentMessage/delta": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "turnId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "itemId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "delta": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "threadId",
+            "turnId",
+            "itemId",
+            "delta"
+          ],
+          "additionalProperties": false
+        },
+        "item/completed": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "turnId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "item": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "threadId",
+            "turnId",
+            "item"
+          ],
+          "additionalProperties": false
+        },
+        "turn/completed": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "turn": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "threadId",
+            "turn"
+          ],
+          "additionalProperties": false
+        },
+        "serverRequest/resolved": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "threadId",
+            "requestId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "thread/started",
+        "turn/started",
+        "item/started",
+        "item/agentMessage/delta",
+        "item/completed",
+        "turn/completed",
+        "serverRequest/resolved"
+      ],
+      "additionalProperties": false
+    },
+    "serverRequests": {
+      "type": "object",
+      "properties": {
+        "item/tool/requestUserInput": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "turnId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "itemId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "question": {
+              "type": "string"
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "threadId",
+            "requestId",
+            "itemId",
+            "question"
+          ],
+          "additionalProperties": false
+        },
+        "item/commandExecution/requestApproval": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "turnId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "itemId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "command": {
+              "type": "string"
+            },
+            "dangerous": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "threadId",
+            "requestId",
+            "itemId",
+            "command",
+            "dangerous",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "item/tool/requestUserInput",
+        "item/commandExecution/requestApproval"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "requests",
+    "results",
+    "notifications",
+    "serverRequests"
+  ],
+  "additionalProperties": false
+}

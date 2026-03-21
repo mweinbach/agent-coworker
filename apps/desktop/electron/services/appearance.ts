@@ -9,17 +9,7 @@ import {
   shouldUseMacosNativeGlass,
   syncWindowChromeAppearance,
 } from "./windowEnhancements";
-import {
-  desktopShellBackgroundColor,
-  resolveWindowChromePaint,
-  windowsBackgroundMaterialForPlatform,
-} from "./windowAppearancePaint";
-
-export function defaultDesktopShellBackgroundColor(
-  useDarkColors: boolean = nativeTheme.shouldUseDarkColors,
-): string {
-  return desktopShellBackgroundColor(useDarkColors);
-}
+import { resolveWindowChromePaint } from "./windowAppearancePaint";
 
 export function getSystemAppearanceSnapshot(): SystemAppearance {
   return {
@@ -32,12 +22,6 @@ export function getSystemAppearanceSnapshot(): SystemAppearance {
     prefersReducedTransparency: nativeTheme.prefersReducedTransparency,
     inForcedColorsMode: nativeTheme.inForcedColorsMode,
   };
-}
-
-export function defaultWindowsBackgroundMaterial(
-  platform: NodeJS.Platform = process.platform,
-): WindowsBackgroundMaterial | undefined {
-  return windowsBackgroundMaterialForPlatform(platform);
 }
 
 type ResolvedWindowAppearance = {

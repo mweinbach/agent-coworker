@@ -31,7 +31,7 @@ All logic for the application should be done in the harness itself, consider the
 - `bun run dev`: watch mode for local iteration.
 - `bun test`: run the full test suite.
 
-Example: `bun run start -- --dir /path/to/project`
+Example (CLI with initial workspace): `bun run cli -- --dir /path/to/project`. Desktop `bun run start` does not forward `--dir` (use in-app workspace selection).
 
 Always run tests while doing work, make sure you run these tests.
 

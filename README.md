@@ -78,11 +78,7 @@ Desktop app (default):
 bun run start
 ```
 
-Target a specific workspace:
-
-```bash
-bun run start -- --dir /path/to/project
-```
+This runs the Electron app in dev mode (`electron-vite` under `apps/desktop`). It does not accept `--dir`; add or select a workspace in the UI.
 
 Plain CLI REPL:
 
@@ -90,10 +86,17 @@ Plain CLI REPL:
 bun run cli
 ```
 
+Open the CLI with a specific workspace directory:
+
+```bash
+bun run cli -- --dir /path/to/project
+```
+
 Standalone server for headless use or custom clients:
 
 ```bash
 bun run serve
+bun run serve -- --dir /path/to/project
 bun run serve -- --json
 ```
 

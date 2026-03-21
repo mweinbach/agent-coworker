@@ -35,9 +35,11 @@
 *   **Archived TUI:** `bun run tui` (No longer maintained).
 
 ### Execution Flags
-*   `--dir <path>`: Sets the working directory for the agent.
+These apply to `bun run cli`, `bun run serve`, and `bun src/index.ts` / `cowork`. They are **not** passed through `bun run start` (Electron dev); use workspace selection in the desktop app.
+
+*   `--dir <path>`: Sets the working directory for the agent (CLI, server, or non-desktop `src/index.ts` entry).
 *   `--yolo`: Bypasses command approval for risky operations (use with caution).
-*   `--port <number>`: Specifies the WebSocket server port (default: 7337).
+*   `--port <number>`: Specifies the WebSocket server port (default: 7337; server / relevant entrypoints).
 
 ## Development Conventions
 

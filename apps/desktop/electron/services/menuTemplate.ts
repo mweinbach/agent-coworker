@@ -202,18 +202,6 @@ export function buildDesktopMenuTemplate(
     ];
   }
 
-  if (platform === "win32") {
-    const [fileMenu, editMenu, viewMenu, windowMenu, helpMenu] = buildSharedMenus({
-      file: "&File",
-      edit: "&Edit",
-      view: "&View",
-      window: "&Window",
-      help: "&Help",
-    });
-    (fileMenu.submenu as MenuItemConstructorOptions[]).push({ type: "separator" }, { role: "quit" });
-    return [fileMenu, editMenu, viewMenu, windowMenu, helpMenu];
-  }
-
   const [fileMenu, editMenu, viewMenu, windowMenu, helpMenu] = buildSharedMenus({
     file: "&File",
     edit: "&Edit",

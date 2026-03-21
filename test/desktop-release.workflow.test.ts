@@ -39,9 +39,14 @@ describe("desktop release workflow", () => {
     expect(workflow).toContain("WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD not configured; publishing unsigned installer plus updater metadata.");
   });
 
-  test("publishes an unpacked ARM64 desktop artifact and verifies it on native ARM hardware", () => {
+  test("ARM64 unpacked artifact is for smoke only and excluded from publish download glob", () => {
+    expect(workflow).toContain("pattern: desktop-release-*");
+    expect(workflow).toContain("unpacked_artifact_name: desktop-smoke-windows-arm64-unpacked");
+    expect(workflow).toContain("name: desktop-smoke-windows-arm64-unpacked");
+  });
+
+  test("uploads an unpacked ARM64 desktop artifact and verifies it on native ARM hardware", () => {
     expect(workflow).toContain("- name: Build Windows ARM64 unpacked desktop directory");
-    expect(workflow).toContain("name: desktop-release-windows-arm64-unpacked");
     expect(workflow).toContain("runs-on: windows-11-arm");
     expect(workflow).toContain("name: Smoke Windows ARM64 Desktop");
     expect(workflow).toContain("COWORK_DESKTOP_SMOKE_WORKSPACE");

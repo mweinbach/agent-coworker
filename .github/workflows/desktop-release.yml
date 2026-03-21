@@ -68,7 +68,7 @@ jobs:
             artifact_name: desktop-release-windows-arm64
             build_arch: arm64
             updater_metadata_name: latest-arm64.yml
-            unpacked_artifact_name: desktop-release-windows-arm64-unpacked
+            unpacked_artifact_name: desktop-smoke-windows-arm64-unpacked
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -297,7 +297,7 @@ jobs:
       - name: Download unpacked ARM64 desktop artifact
         uses: actions/download-artifact@v4
         with:
-          name: desktop-release-windows-arm64-unpacked
+          name: desktop-smoke-windows-arm64-unpacked
           path: release-assets
 
       - name: Verify packaged sidecar starts on Windows ARM64

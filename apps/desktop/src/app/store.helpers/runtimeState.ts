@@ -1,4 +1,5 @@
 import { AgentSocket } from "../../lib/agentSocket";
+import type { JsonRpcSocket } from "../../lib/agentSocket";
 import type { ProviderName } from "../../lib/wsProtocol";
 import {
   clearThreadModelStreamRuntime,
@@ -35,6 +36,7 @@ export type SkillInstallWaiter = {
 
 export type RuntimeMaps = {
   controlSockets: Map<string, AgentSocket>;
+  jsonRpcSockets: Map<string, JsonRpcSocket>;
   /** Latest in-flight skill install per workspace; resolved when `skills_catalog` completes the matching pending key. */
   skillInstallWaiters: Map<string, SkillInstallWaiter>;
   threadSockets: Map<string, AgentSocket>;
@@ -53,6 +55,7 @@ export type RuntimeMaps = {
 
 export const RUNTIME: RuntimeMaps = {
   controlSockets: new Map(),
+  jsonRpcSockets: new Map(),
   skillInstallWaiters: new Map(),
   threadSockets: new Map(),
   optimisticUserMessageIds: new Map(),

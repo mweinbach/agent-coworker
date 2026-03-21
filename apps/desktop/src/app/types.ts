@@ -57,6 +57,7 @@ export type WorkspaceRecord = {
   path: string;
   createdAt: string;
   lastOpenedAt: string;
+  wsProtocol?: "legacy" | "jsonrpc";
   defaultProvider?: ProviderName;
   defaultModel?: string;
   defaultPreferredChildModel?: string;

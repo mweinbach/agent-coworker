@@ -86,6 +86,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
         path: dir,
         createdAt: nowIso(),
         lastOpenedAt: nowIso(),
+        wsProtocol: "legacy",
         defaultProvider: "google",
         defaultModel: defaultModelForProvider("google"),
         defaultPreferredChildModel: defaultModelForProvider("google"),
@@ -113,10 +114,17 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
     removeWorkspace: async (workspaceId: string) => {
       bumpWorkspaceStartGeneration(workspaceId);
       const control = RUNTIME.controlSockets.get(workspaceId);
+      const jsonRpcSocket = RUNTIME.jsonRpcSockets.get(workspaceId);
       closeControlSession(workspaceId);
       RUNTIME.controlSockets.delete(workspaceId);
+      RUNTIME.jsonRpcSockets.delete(workspaceId);
       try {
         control?.close();
+      } catch {
+        // ignore
+      }
+      try {
+        jsonRpcSocket?.close();
       } catch {
         // ignore
       }
@@ -205,9 +213,16 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
     restartWorkspaceServer: async (workspaceId) => {
       bumpWorkspaceStartGeneration(workspaceId);
       const control = RUNTIME.controlSockets.get(workspaceId);
+      const jsonRpcSocket = RUNTIME.jsonRpcSockets.get(workspaceId);
       closeControlSession(workspaceId);
       control?.close();
       RUNTIME.controlSockets.delete(workspaceId);
+      try {
+        jsonRpcSocket?.close();
+      } catch {
+        // ignore
+      }
+      RUNTIME.jsonRpcSockets.delete(workspaceId);
 
       for (const thread of get().threads) {
         if (thread.workspaceId !== workspaceId) continue;

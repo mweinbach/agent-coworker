@@ -6,6 +6,12 @@ import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOp
 import { normalizeWorkspaceUserProfile } from "../types";
 import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
 import { RUNTIME } from "./runtimeState";
+import {
+  ensureWorkspaceJsonRpcSocket,
+  requestJsonRpcThreadList,
+  requestJsonRpcThreadRead,
+  workspaceUsesJsonRpc,
+} from "./jsonRpcSocket";
 
 type ProviderStatusEvent = Extract<ServerEvent, { type: "provider_status" }>;
 type ProviderStatus = ProviderStatusEvent["providers"][number];
@@ -278,6 +284,9 @@ export function createControlSocketHelpers(
   }
 
   function ensureControlSocket(get: StoreGet, set: StoreSet, workspaceId: string) {
+    if (workspaceUsesJsonRpc(get, workspaceId)) {
+      return ensureWorkspaceJsonRpcSocket(get, set, workspaceId) as any;
+    }
     const rt = get().workspaceRuntimeById[workspaceId];
     const url = rt?.serverUrl;
     if (!url) return null;
@@ -988,6 +997,9 @@ export function createControlSocketHelpers(
   }
 
   async function waitForControlSession(get: StoreGet, workspaceId: string, timeoutMs = 3_000): Promise<boolean> {
+    if (workspaceUsesJsonRpc(get, workspaceId)) {
+      return RUNTIME.jsonRpcSockets.has(workspaceId);
+    }
     if (get().workspaceRuntimeById[workspaceId]?.controlSessionId) {
       return true;
     }
@@ -1022,6 +1034,9 @@ export function createControlSocketHelpers(
   }
 
   function sendControl(get: StoreGet, workspaceId: string, build: (sessionId: string) => ClientMessage): boolean {
+    if (workspaceUsesJsonRpc(get, workspaceId)) {
+      return false;
+    }
     const sock = RUNTIME.controlSockets.get(workspaceId);
     const sessionId = get().workspaceRuntimeById[workspaceId]?.controlSessionId;
     if (!sock || !sessionId) return false;
@@ -1033,6 +1048,23 @@ export function createControlSocketHelpers(
     set: StoreSet,
     workspaceId: string,
   ): Promise<Extract<ServerEvent, { type: "sessions" }>["sessions"] | null> {
+    if (workspaceUsesJsonRpc(get, workspaceId)) {
+      const threads = await requestJsonRpcThreadList(get, set, workspaceId);
+      return threads.map((thread) => ({
+        sessionId: thread.id,
+        title: thread.title ?? "New session",
+        titleSource: "manual" as const,
+        titleModel: null,
+        provider: thread.modelProvider,
+        model: thread.model,
+        createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
+        messageCount: 0,
+        lastEventSeq: 0,
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+      }));
+    }
     ensureControlSocket(get, set, workspaceId);
     const ready = await waitForControlSession(get, workspaceId);
     const sessionId = get().workspaceRuntimeById[workspaceId]?.controlSessionId;
@@ -1053,6 +1085,9 @@ export function createControlSocketHelpers(
     workspaceId: string,
     targetSessionId: string,
   ): Promise<SessionSnapshot | null> {
+    if (workspaceUsesJsonRpc(get, workspaceId)) {
+      return await requestJsonRpcThreadRead(get, set, workspaceId, targetSessionId);
+    }
     ensureControlSocket(get, set, workspaceId);
     const ready = await waitForControlSession(get, workspaceId);
     const sessionId = get().workspaceRuntimeById[workspaceId]?.controlSessionId;

@@ -22,6 +22,7 @@ describe("desktop persisted-state schema defaults", () => {
 
     expect(parsed.workspaces[0]?.defaultEnableMcp).toBe(true);
     expect(parsed.workspaces[0]?.defaultBackupsEnabled).toBe(true);
+    expect(parsed.workspaces[0]?.wsProtocol).toBeUndefined();
     expect(parsed.workspaces[0]?.defaultToolOutputOverflowChars).toBeUndefined();
     expect(parsed.workspaces[0]?.yolo).toBe(false);
     expect(parsed.developerMode).toBe(false);
@@ -38,6 +39,7 @@ describe("desktop persisted-state schema defaults", () => {
           path: "/tmp/workspace",
           createdAt: TS,
           lastOpenedAt: TS,
+          wsProtocol: "jsonrpc",
           defaultEnableMcp: false,
           defaultBackupsEnabled: false,
           defaultToolOutputOverflowChars: null,
@@ -57,6 +59,7 @@ describe("desktop persisted-state schema defaults", () => {
 
     expect(parsed.workspaces[0]?.defaultEnableMcp).toBe(false);
     expect(parsed.workspaces[0]?.defaultBackupsEnabled).toBe(false);
+    expect(parsed.workspaces[0]?.wsProtocol).toBe("jsonrpc");
     expect(parsed.workspaces[0]?.defaultToolOutputOverflowChars).toBeNull();
     expect(parsed.workspaces[0]?.userName).toBe("Alex");
     expect(parsed.workspaces[0]?.userProfile).toEqual({

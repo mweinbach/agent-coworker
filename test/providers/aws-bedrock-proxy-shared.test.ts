@@ -168,5 +168,44 @@ describe("aws-bedrock-proxy shared option resolution", () => {
       baseUrl: "javascript:alert(1)",
       env: {} as NodeJS.ProcessEnv,
     })).toBeUndefined();
+
+    expect(resolveAwsBedrockProxyBaseUrl({
+      baseUrl: "https://proxy.explicit.example.com/v1?tenant=a",
+      providerOptions: {
+        "aws-bedrock-proxy": { baseUrl: "https://proxy.provider-options.example.com/v1" },
+      },
+      env: {
+        AWS_BEDROCK_PROXY_BASE_URL: "https://proxy.env.example.com/v1",
+      } as NodeJS.ProcessEnv,
+    })).toBe("https://proxy.provider-options.example.com/v1");
+
+    expect(resolveAwsBedrockProxyBaseUrl({
+      providerOptions: {
+        "aws-bedrock-proxy": { baseUrl: "https://proxy.provider-options.example.com/v1#frag" },
+      },
+      env: {
+        AWS_BEDROCK_PROXY_BASE_URL: "https://proxy.env.example.com/v1/",
+      } as NodeJS.ProcessEnv,
+    })).toBe("https://proxy.env.example.com/v1");
+
+    expect(resolveAwsBedrockProxyBaseUrl({
+      config: {
+        provider: "aws-bedrock-proxy",
+        model: "router",
+        providerOptions: {
+          "aws-bedrock-proxy": { baseUrl: "https://proxy.provider-options.example.com/v1" },
+        },
+        awsBedrockProxyBaseUrl: "https://proxy.config.example.com/v1?tenant=a",
+      } as any,
+      env: {
+        AWS_BEDROCK_PROXY_BASE_URL: "https://proxy.env.example.com/v1/",
+      } as NodeJS.ProcessEnv,
+    })).toBe("https://proxy.provider-options.example.com/v1");
+
+    expect(resolveAwsBedrockProxyBaseUrl({
+      env: {
+        AWS_BEDROCK_PROXY_BASE_URL: "https://proxy.env.example.com/v1#frag",
+      } as NodeJS.ProcessEnv,
+    })).toBeUndefined();
   });
 });

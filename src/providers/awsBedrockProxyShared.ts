@@ -44,6 +44,7 @@ function normalizeBaseUrl(raw: string): string | null {
   try {
     const url = new URL(trimmed);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    if (url.search || url.hash) return null;
     return url.toString().replace(/\/+$/, "");
   } catch {
     return null;

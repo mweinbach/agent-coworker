@@ -16,6 +16,7 @@ import { ContextSidebar } from "./ui/ContextSidebar";
 import { PromptModal } from "./ui/PromptModal";
 import { Sidebar } from "./ui/Sidebar";
 import { AppTopBar } from "./ui/layout/AppTopBar";
+import { SidebarCollapseControl } from "./ui/layout/SidebarCollapseControl";
 import { ContextSidebarResizer } from "./ui/layout/ContextSidebarResizer";
 import { PrimaryContent } from "./ui/layout/PrimaryContent";
 import { SettingsContent } from "./ui/layout/SettingsContent";
@@ -27,7 +28,7 @@ const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed
 
   return (
     <div
-      className="app-left-sidebar-pane relative shrink-0 overflow-hidden border-r border-border/70"
+      className="app-left-sidebar-pane relative h-full min-h-0 shrink-0 overflow-hidden border-r border-border/70"
       style={{ width: collapsed ? 0 : sidebarWidth, borderRightWidth: collapsed ? 0 : 1 }}
     >
       <div className="absolute top-0 bottom-0 right-0 flex" style={{ width: sidebarWidth }}>
@@ -68,8 +69,6 @@ const ChatShell = memo(function ChatShell({
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
-  const sidebarWidth = useAppStore((s) => s.sidebarWidth);
-  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
   const toggleContextSidebar = useAppStore((s) => s.toggleContextSidebar);
   const hasAnimatedSidebarsRef = useRef(false);
@@ -98,31 +97,30 @@ const ChatShell = memo(function ChatShell({
   }, [sidebarCollapsed, contextSidebarCollapsed]);
 
   return (
-    <div className="app-shell h-full flex flex-col text-foreground">
+    <div className="app-shell app-shell--chat relative flex h-full min-h-0 flex-row text-foreground">
       <div className="app-window-drag-strip" aria-hidden="true" />
-      <AppTopBar
-        busy={busy}
-        onToggleSidebar={toggleSidebar}
-        sidebarCollapsed={sidebarCollapsed}
-        sidebarWidth={sidebarWidth}
-        contextSidebarCollapsed={contextSidebarCollapsed}
-        onToggleContextSidebar={toggleContextSidebar}
-      />
-      <div className="flex min-h-0 flex-1">
-        <LeftSidebarPane collapsed={sidebarCollapsed} />
-
-        <main className="app-main-content flex min-w-0 min-h-0 flex-1 flex-col">
-          <div className="flex min-h-0 flex-1 overflow-hidden">
-            <div className="relative min-w-0 min-h-0 flex-1 overflow-hidden">
-              <PrimaryContent
-                init={init}
-                ready={ready}
-                startupError={startupError}
-                view={view === "skills" ? "skills" : "chat"}
-              />
+      <div className="app-titlebar-backdrop" aria-hidden="true" />
+      <div className="app-titlebar-title">Cowork</div>
+      <SidebarCollapseControl />
+      <LeftSidebarPane collapsed={sidebarCollapsed} />
+      <div className="app-chat-main-column relative flex min-h-0 min-w-0 flex-1 flex-col">
+        <AppTopBar
+          busy={busy}
+          contextSidebarCollapsed={contextSidebarCollapsed}
+          onToggleContextSidebar={toggleContextSidebar}
+        />
+        <main className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col">
+            <div className="flex min-h-0 flex-1 overflow-hidden">
+              <div className="relative min-w-0 min-h-0 flex-1 overflow-hidden">
+                <PrimaryContent
+                  init={init}
+                  ready={ready}
+                  startupError={startupError}
+                  view={view === "skills" ? "skills" : "chat"}
+                />
+              </div>
+              {showContextSidebar ? <RightSidebarPane collapsed={contextSidebarCollapsed} /> : null}
             </div>
-            {showContextSidebar ? <RightSidebarPane collapsed={contextSidebarCollapsed} /> : null}
-          </div>
         </main>
       </div>
     </div>

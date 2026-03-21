@@ -7,7 +7,7 @@ import { setupJsdom } from "./jsdomHarness";
 const { AppTopBar } = await import("../src/ui/layout/AppTopBar");
 
 describe("desktop app top bar", () => {
-  test("renders the right toolbar as plain top-bar controls", async () => {
+  test("renders busy badge and context sidebar toggle", async () => {
     const harness = setupJsdom();
 
     try {
@@ -19,25 +19,18 @@ describe("desktop app top bar", () => {
         root.render(
           createElement(AppTopBar, {
             busy: true,
-            onToggleSidebar: () => {},
-            sidebarCollapsed: false,
-            sidebarWidth: 280,
             contextSidebarCollapsed: false,
             onToggleContextSidebar: () => {},
           }),
         );
       });
 
-      const rightToolbar = container.querySelector(".app-topbar__toolbar--right");
+      const strip = container.querySelector(".app-topbar--main-strip");
       const contextToggle = container.querySelector('button[aria-label="Hide context"]');
-      const sidebarToggle = container.querySelector('button[aria-label="Hide sidebar"]');
 
-      expect(rightToolbar).not.toBeNull();
-      expect(rightToolbar?.className).not.toContain("rounded");
+      expect(strip).not.toBeNull();
+      expect(strip?.className).not.toContain("rounded");
       expect(contextToggle).not.toBeNull();
-      expect(sidebarToggle).not.toBeNull();
-      expect(sidebarToggle?.className).toContain("app-topbar__controls");
-      expect(sidebarToggle?.className).toContain("app-topbar__sidebar-toggle-button");
       expect(contextToggle?.className).toContain("app-topbar__controls");
       expect(contextToggle?.className).toContain("app-topbar__toolbar-button");
       expect(container.textContent).toContain("Busy");

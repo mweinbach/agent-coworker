@@ -99,8 +99,7 @@ body {
   -webkit-app-region: drag;
 }
 
-/* Fills the title bar above flex children; must be drag so empty space moves the window */
-.app-topbar__controls-row {
+.app-topbar--main-strip {
   -webkit-app-region: drag;
 }
 
@@ -113,11 +112,6 @@ body {
   z-index: 1;
 }
 
-.app-topbar__sidebar-toggle-slot {
-  z-index: 2;
-  padding-left: 1rem;
-}
-
 .app-topbar__toolbar-button {
   color: var(--muted);
 }
@@ -126,58 +120,61 @@ body {
   color: var(--text);
 }
 
-.app-topbar__sidebar-fill {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  pointer-events: none;
-  z-index: 0;
-  background: var(--sidebar-surface);
-  border-right-style: solid;
-  border-right-color: var(--glass-border);
-  backdrop-filter: blur(var(--sidebar-titlebar-blur));
-}
-
-.app-topbar__content-fill {
+/* Full-width title tint behind traffic lights; above left sidebar so top strip stays draggable */
+.app-titlebar-backdrop {
   position: absolute;
   top: 0;
   right: 0;
-  bottom: 0;
-  pointer-events: none;
-  z-index: 0;
-  background: var(--content-surface);
+  left: 0;
+  z-index: 3;
+  height: 3rem;
   border-bottom: 1px solid var(--glass-border);
+  background: var(--content-surface);
   backdrop-filter: blur(var(--titlebar-blur));
+  -webkit-app-region: drag;
+  pointer-events: auto;
 }
 
-:root[data-platform="darwin"] .app-topbar__sidebar-toggle-slot {
+.app-titlebar-title {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 5;
+  display: flex;
+  height: 3rem;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+/* Fixed next to macOS traffic lights; unchanged when sidebar toggles */
+.app-sidebar-collapse-control {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 15;
+  display: flex;
+  height: 3rem;
+  align-items: center;
+  padding-left: 1rem;
+}
+
+:root[data-platform="darwin"] .app-sidebar-collapse-control {
   padding-left: 5.4rem;
 }
 
-:root[data-platform="darwin"] .app-topbar__toolbar--right {
-  padding-right: 0.125rem;
-}
-
-:root[data-platform="darwin"] .app-topbar__toolbar--right .app-topbar__toolbar-button {
+:root[data-platform="darwin"] .app-topbar--main-strip .app-topbar__toolbar-button {
   color: var(--text);
   filter: drop-shadow(0 1px 0.75px color-mix(in srgb, var(--panel-bg) 72%, transparent));
 }
 
-:root[data-platform="win32"] .app-topbar__sidebar-toggle-slot {
-  position: absolute;
-  top: 50%;
-  right: 8.75rem;
-  left: auto;
-  transform: translateY(-50%);
-  flex: none;
-  width: auto;
-  max-width: none;
-  padding-left: 0;
-}
-
-:root[data-platform="win32"] .app-topbar {
-  padding-right: 12rem; /* Prevent overlap with the sidebar toggle and native Windows controls */
+:root[data-platform="win32"] .app-topbar--main-strip {
+  padding-right: 12rem; /* Native caption buttons */
 }
 
 .app-shell {
@@ -187,6 +184,26 @@ body {
 
 .app-shell--settings {
   background: var(--shell-bg);
+}
+
+.app-shell--chat {
+  min-height: 0;
+}
+
+.app-chat-main-column {
+  position: relative;
+  z-index: 4;
+  min-height: 0;
+  min-width: 0;
+}
+
+.app-shell--chat .app-left-sidebar-pane {
+  z-index: 2;
+}
+
+/* Clear macOS traffic lights; glass rail still extends to the window top */
+:root[data-platform="darwin"] .app-shell--chat .app-left-sidebar-pane .app-sidebar {
+  padding-top: 2.75rem;
 }
 
 .app-main-content {
@@ -228,8 +245,14 @@ body {
 
 .app-left-sidebar-pane {
   border-right-color: var(--glass-border);
-  background: var(--sidebar-surface);
+  background: var(--sidebar-pane-surface);
   backdrop-filter: blur(var(--sidebar-blur));
+}
+
+/* Native vibrancy already blurs; CSS backdrop-filter composites an opaque-ish layer on macOS glass */
+:root[data-platform="darwin"]:not([data-reduced-transparency="true"]) .app-left-sidebar-pane {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .app-right-sidebar-pane {
@@ -410,9 +433,9 @@ body.app-resizing-sidebars .app-right-sidebar-pane {
   transition: none;
 }
 
-body.app-resizing-sidebars .app-topbar__sidebar-fill,
-body.app-resizing-sidebars .app-topbar__content-fill {
+body.app-resizing-sidebars .app-titlebar-backdrop {
   transition: none;
+  backdrop-filter: none;
 }
 
 body.app-resizing-sidebars .app-left-sidebar-pane {
@@ -421,8 +444,7 @@ body.app-resizing-sidebars .app-left-sidebar-pane {
 
 body.app-animating-sidebars .app-left-sidebar-pane,
 body.app-animating-sidebars .app-right-sidebar-pane,
-body.app-animating-sidebars .app-topbar__sidebar-fill,
-body.app-animating-sidebars .app-topbar__content-fill {
+body.app-animating-sidebars .app-titlebar-backdrop {
   transition:
     width 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
     left 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -431,8 +453,7 @@ body.app-animating-sidebars .app-topbar__content-fill {
 }
 
 body.app-animating-sidebars .app-left-sidebar-pane,
-body.app-animating-sidebars .app-topbar__sidebar-fill,
-body.app-animating-sidebars .app-topbar__content-fill {
+body.app-animating-sidebars .app-titlebar-backdrop {
   backdrop-filter: none;
 }
 

@@ -31,7 +31,9 @@ import {
 } from "./protocol";
 import { decodeJsonRpcMessage } from "./jsonrpc/decodeJsonRpcMessage";
 import { dispatchJsonRpcMessage } from "./jsonrpc/dispatchJsonRpcMessage";
+import { createThreadJournalProjector } from "./jsonrpc/journalProjector";
 import { createJsonRpcLegacyEventProjector } from "./jsonrpc/legacyEventProjector";
+import { projectThreadTurnsFromJournal } from "./jsonrpc/threadReadProjector";
 import {
   buildJsonRpcErrorResponse,
   buildJsonRpcResultResponse,
@@ -333,6 +335,10 @@ export async function startAgentServer(
   const removeBindingSink = (binding: SessionBinding, sinkId: string) => {
     binding.sinks.delete(sinkId);
   };
+
+  const countLiveConnectionSinks = (binding: SessionBinding) => (
+    [...binding.sinks.keys()].filter((sinkId) => !sinkId.startsWith("journal:")).length
+  );
 
   const buildSessionCommon = (binding: SessionBinding, sessionKind: SessionKind = "root") => {
     const emit = (evt: ServerEvent) => {
@@ -649,11 +655,13 @@ export async function startAgentServer(
       isResume = built.isResume;
       resumedFromStorage = built.resumedFromStorage;
       binding.session = session;
+      ensureThreadJournalSink(binding, session.id);
       sessionBindings.set(session.id, binding);
     }
 
     ws.data.session = session;
     ws.data.resumeSessionId = session.id;
+    ensureThreadJournalSink(binding, session.id);
     addBindingSink(binding, legacySinkId, (evt) => {
       try {
         ws.send(JSON.stringify(evt));
@@ -763,12 +771,13 @@ export async function startAgentServer(
     if (binding.socket === ws) {
       binding.socket = null;
     }
-    if (binding.sinks.size === 0) {
+    if (countLiveConnectionSinks(binding) === 0) {
       session.beginDisconnectedReplayBuffer();
     }
   };
 
   const jsonRpcSubscriptionsByConnectionId = new Map<string, Map<string, { sinkId: string }>>();
+  const threadJournalWriteQueues = new Map<string, Promise<void>>();
 
   const sendJsonRpc = (ws: Bun.ServerWebSocket<StartServerSocketData>, payload: unknown) => {
     try {
@@ -781,6 +790,33 @@ export async function startAgentServer(
   const shouldSendJsonRpcNotification = (ws: Bun.ServerWebSocket<StartServerSocketData>, method: string) => (
     !ws.data.rpc?.capabilities.optOutNotificationMethods.includes(method)
   );
+
+  const enqueueThreadJournalEvent = (event: {
+    threadId: string;
+    ts: string;
+    eventType: string;
+    turnId: string | null;
+    itemId: string | null;
+    requestId: string | null;
+    payload: unknown;
+  }) => {
+    const previous = threadJournalWriteQueues.get(event.threadId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => {
+        // keep queue alive after prior failure
+      })
+      .then(async () => {
+        await sessionDb.appendThreadJournalEvent(event);
+      });
+    threadJournalWriteQueues.set(event.threadId, next);
+    return next;
+  };
+
+  const waitForThreadJournalIdle = async (threadId: string) => {
+    await (threadJournalWriteQueues.get(threadId) ?? Promise.resolve()).catch(() => {
+      // best-effort only
+    });
+  };
 
   const buildJsonRpcThreadFromSession = (session: AgentSession) => {
     const info = session.getSessionInfoEvent();
@@ -821,9 +857,26 @@ export async function startAgentServer(
     return created;
   };
 
+  const ensureThreadJournalSink = (binding: SessionBinding, threadId: string) => {
+    const sinkId = `journal:${threadId}`;
+    if (binding.sinks.has(sinkId)) {
+      return;
+    }
+    const projector = createThreadJournalProjector({
+      threadId,
+      emit: (event) => {
+        void enqueueThreadJournalEvent(event).catch(() => {
+          // Best-effort journal persistence; session state snapshots remain authoritative fallback state.
+        });
+      },
+    });
+    addBindingSink(binding, sinkId, (event) => projector.handle(event));
+  };
+
   const loadThreadBinding = (threadId: string): SessionBinding | null => {
     const existing = sessionBindings.get(threadId);
     if (existing?.session) {
+      ensureThreadJournalSink(existing, threadId);
       return existing;
     }
     const persisted = sessionDb.getSessionRecord(threadId);
@@ -831,6 +884,7 @@ export async function startAgentServer(
     const binding: SessionBinding = { session: null, socket: null, sinks: new Map() };
     const built = buildSession(binding, threadId);
     binding.session = built.session;
+    ensureThreadJournalSink(binding, built.session.id);
     sessionBindings.set(built.session.id, binding);
     return binding;
   };
@@ -851,7 +905,7 @@ export async function startAgentServer(
       return binding;
     }
 
-    const shouldReplayBufferedEvents = !binding.socket && binding.sinks.size === 0;
+    const shouldReplayBufferedEvents = !binding.socket && countLiveConnectionSinks(binding) === 0;
     const sinkId = `jsonrpc:${connectionId}:${threadId}`;
     const projector = createJsonRpcLegacyEventProjector({
       threadId,
@@ -896,7 +950,7 @@ export async function startAgentServer(
     const binding = sessionBindings.get(threadId);
     if (binding) {
       removeBindingSink(binding, subscription.sinkId);
-      if (!binding.socket && binding.sinks.size === 0 && binding.session) {
+      if (!binding.socket && countLiveConnectionSinks(binding) === 0 && binding.session) {
         binding.session.beginDisconnectedReplayBuffer();
       }
     }
@@ -920,7 +974,7 @@ export async function startAgentServer(
       const binding = sessionBindings.get(threadId);
       if (!binding) continue;
       removeBindingSink(binding, subscription.sinkId);
-      if (!binding.socket && binding.sinks.size === 0 && binding.session) {
+      if (!binding.socket && countLiveConnectionSinks(binding) === 0 && binding.session) {
         binding.session.beginDisconnectedReplayBuffer();
       }
     }
@@ -957,6 +1011,36 @@ export async function startAgentServer(
     const persisted = sessionDb.getSessionRecord(threadId);
     if (!persisted) return null;
     return loadInitialSessionSnapshot(persisted);
+  };
+
+  const replayThreadJournalEvents = (
+    ws: Bun.ServerWebSocket<StartServerSocketData>,
+    threadId: string,
+    afterSeq = 0,
+    limit = 1_000,
+  ) => {
+    for (const event of sessionDb.listThreadJournalEvents(threadId, { afterSeq, limit })) {
+      if (event.eventType.startsWith("request:")) {
+        const method = event.eventType.slice("request:".length);
+        if (event.requestId) {
+          ws.data.rpc?.pendingServerRequests.set(event.requestId, {
+            threadId,
+            type: method === "item/commandExecution/requestApproval" ? "approval" : "ask",
+            requestId: event.requestId,
+          });
+        }
+        sendJsonRpc(ws, {
+          id: event.requestId ?? `${threadId}:${event.seq}`,
+          method,
+          params: event.payload,
+        });
+        continue;
+      }
+      sendJsonRpc(ws, {
+        method: event.eventType,
+        params: event.payload,
+      });
+    }
   };
 
   const routeJsonRpcResponse = (
@@ -1014,6 +1098,20 @@ export async function startAgentServer(
     }
 
     ws.data.rpc?.pendingServerRequests.delete(message.id);
+    void enqueueThreadJournalEvent({
+      threadId: pending.threadId,
+      ts: new Date().toISOString(),
+      eventType: "serverRequest/resolved",
+      turnId: session.activeTurnId ?? null,
+      itemId: null,
+      requestId: pending.requestId,
+      payload: {
+        threadId: pending.threadId,
+        requestId: pending.requestId,
+      },
+    }).catch(() => {
+      // Best-effort journal persistence.
+    });
   };
 
   const routeJsonRpcRequest = async (
@@ -1040,15 +1138,30 @@ export async function startAgentServer(
           config: threadConfig,
         });
         binding.session = built.session;
+        ensureThreadJournalSink(binding, built.session.id);
         sessionBindings.set(built.session.id, binding);
         subscribeJsonRpcThread(ws, built.session.id);
         const thread = buildJsonRpcThreadFromSession(built.session);
+        void enqueueThreadJournalEvent({
+          threadId: built.session.id,
+          ts: new Date().toISOString(),
+          eventType: "thread/started",
+          turnId: null,
+          itemId: null,
+          requestId: null,
+          payload: { thread },
+        }).catch(() => {
+          // Best-effort journal persistence.
+        });
         sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, { thread }));
         sendJsonRpc(ws, { method: "thread/started", params: { thread } });
         return;
       }
       case "thread/resume": {
         const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const afterSeq = typeof params.afterSeq === "number" && Number.isFinite(params.afterSeq)
+          ? Math.max(0, Math.floor(params.afterSeq))
+          : 0;
         if (!threadId) {
           sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
             code: JSONRPC_ERROR_CODES.invalidParams,
@@ -1067,6 +1180,10 @@ export async function startAgentServer(
         const thread = buildJsonRpcThreadFromSession(binding.session);
         sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, { thread }));
         sendJsonRpc(ws, { method: "thread/started", params: { thread } });
+        if (afterSeq > 0) {
+          await waitForThreadJournalIdle(threadId);
+          replayThreadJournalEvents(ws, threadId, afterSeq);
+        }
         return;
       }
       case "thread/list": {
@@ -1109,12 +1226,19 @@ export async function startAgentServer(
         const thread = binding?.session
           ? buildJsonRpcThreadFromSession(binding.session)
           : buildJsonRpcThreadFromRecord(sessionDb.getSessionRecord(threadId)!);
+        await waitForThreadJournalIdle(threadId);
+        const journalEvents = params.includeTurns === true
+          ? sessionDb.listThreadJournalEvents(threadId)
+          : [];
         sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, {
           thread: {
             ...thread,
-            ...(params.includeTurns === true ? { turns: [] } : {}),
+            ...(params.includeTurns === true ? { turns: projectThreadTurnsFromJournal(journalEvents) } : {}),
           },
           coworkSnapshot: snapshot,
+          ...(params.includeTurns === true
+            ? { journalTailSeq: journalEvents.at(-1)?.seq ?? 0 }
+            : {}),
         }));
         return;
       }

@@ -12,6 +12,7 @@ const BACKUPS_ENABLED_OVERRIDE_MIGRATION = 7;
 const AGENT_REALIGNMENT_MIGRATION = 8;
 const PROVIDER_OPTIONS_MIGRATION = 9;
 const SESSION_SNAPSHOTS_MIGRATION = 10;
+const THREAD_JOURNAL_MIGRATION = 11;
 
 type BootstrapSessionDbOptions = {
   db: Database;
@@ -28,6 +29,7 @@ type BootstrapSessionDbOptions = {
     | "addBackupsEnabledOverrideColumn"
     | "addProviderOptionsColumn"
     | "addSessionSnapshotsTable"
+    | "addThreadJournalEventsTable"
   >;
   importLegacySnapshots: () => Promise<void>;
 };
@@ -90,6 +92,11 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   if (!appliedMigrations.has(SESSION_SNAPSHOTS_MIGRATION)) {
     opts.repository.addSessionSnapshotsTable();
     opts.repository.markMigration(SESSION_SNAPSHOTS_MIGRATION);
+  }
+
+  if (!appliedMigrations.has(THREAD_JOURNAL_MIGRATION)) {
+    opts.repository.addThreadJournalEventsTable();
+    opts.repository.markMigration(THREAD_JOURNAL_MIGRATION);
   }
 
   if (!appliedMigrations.has(LEGACY_IMPORT_MIGRATION)) {

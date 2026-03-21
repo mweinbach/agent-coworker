@@ -246,4 +246,55 @@ describe("server JSON-RPC flows", () => {
       server.stop();
     }
   });
+
+  test("thread/read can include journal-projected turns and thread/resume can replay from a journal cursor", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => ({
+        text: "journal reply",
+        responseMessages: [],
+      })) as any,
+    }));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+      await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "build the journal" }],
+      });
+      await rpc.waitFor((message) => message.method === "turn/completed");
+
+      const read = await rpc.sendRequest("thread/read", {
+        threadId: started.result.thread.id,
+        includeTurns: true,
+      });
+      expect(read.result.thread.turns).toHaveLength(1);
+      expect(read.result.thread.turns[0].items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "userMessage" }),
+          expect.objectContaining({ type: "agentMessage", text: "journal reply" }),
+        ]),
+      );
+      expect(read.result.journalTailSeq).toBeGreaterThan(0);
+
+      const replayRpc = await connectJsonRpc(url);
+      await replayRpc.sendRequest("thread/resume", {
+        threadId: started.result.thread.id,
+        afterSeq: 1,
+      });
+      const replayedTurnStarted = await replayRpc.waitFor((message) => message.method === "turn/started");
+      const replayedAgentCompleted = await replayRpc.waitFor((message) =>
+        message.method === "item/completed" && message.params.item.type === "agentMessage",
+      );
+      expect(replayedTurnStarted.params.threadId).toBe(started.result.thread.id);
+      expect(replayedAgentCompleted.params.item.text).toBe("journal reply");
+
+      replayRpc.close();
+      rpc.close();
+    } finally {
+      server.stop();
+    }
+  });
 });

@@ -247,6 +247,128 @@ describe("sessionDb", () => {
     }
   });
 
+  test("persists canonical thread journal events", async () => {
+    const paths = await makeTmpCoworkHome();
+    const db = await SessionDb.create({ paths });
+    try {
+      const now = new Date().toISOString();
+      await db.persistSessionMutation({
+        sessionId: "thread-1",
+        eventType: "session.created",
+        snapshot: {
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          title: "Thread One",
+          titleSource: "default",
+          titleModel: null,
+          provider: "openai",
+          model: "gpt-5.4",
+          workingDirectory: "/tmp/project",
+          enableMcp: true,
+          createdAt: now,
+          updatedAt: now,
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          systemPrompt: "system",
+          messages: [],
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+      });
+
+      const seq1 = await db.appendThreadJournalEvent({
+        threadId: "thread-1",
+        ts: now,
+        eventType: "thread/started",
+        turnId: null,
+        itemId: null,
+        requestId: null,
+        payload: {
+          thread: {
+            id: "thread-1",
+          },
+        },
+      });
+      const seq2 = await db.appendThreadJournalEvent({
+        threadId: "thread-1",
+        ts: now,
+        eventType: "turn/started",
+        turnId: "turn-1",
+        itemId: null,
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            status: "inProgress",
+            items: [],
+          },
+        },
+      });
+
+      expect(seq1).toBe(1);
+      expect(seq2).toBe(2);
+      expect(db.listThreadJournalEvents("thread-1")).toEqual([
+        {
+          threadId: "thread-1",
+          seq: 1,
+          ts: now,
+          eventType: "thread/started",
+          turnId: null,
+          itemId: null,
+          requestId: null,
+          payload: {
+            thread: {
+              id: "thread-1",
+            },
+          },
+        },
+        {
+          threadId: "thread-1",
+          seq: 2,
+          ts: now,
+          eventType: "turn/started",
+          turnId: "turn-1",
+          itemId: null,
+          requestId: null,
+          payload: {
+            threadId: "thread-1",
+            turn: {
+              id: "turn-1",
+              status: "inProgress",
+              items: [],
+            },
+          },
+        },
+      ]);
+      expect(db.listThreadJournalEvents("thread-1", { afterSeq: 1 })).toEqual([
+        {
+          threadId: "thread-1",
+          seq: 2,
+          ts: now,
+          eventType: "turn/started",
+          turnId: "turn-1",
+          itemId: null,
+          requestId: null,
+          payload: {
+            threadId: "thread-1",
+            turn: {
+              id: "turn-1",
+              status: "inProgress",
+              items: [],
+            },
+          },
+        },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   test("filters listed sessions by working directory and persists materialized snapshots", async () => {
     const paths = await makeTmpCoworkHome();
     const db = await SessionDb.create({ paths });

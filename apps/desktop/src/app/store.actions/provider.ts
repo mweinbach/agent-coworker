@@ -477,7 +477,18 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
       const workspaceId = await ensureProviderControlReady({
         notifyDetail: "Unable to update global user config.",
       });
-      if (!workspaceId) return;
+      if (!workspaceId) {
+        set(() => ({
+          pendingUserConfigSave: false,
+          userConfigLastResult: {
+            type: "user_config_result",
+            sessionId: "",
+            ok: false,
+            message: "Unable to update global user config.",
+          },
+        }));
+        return;
+      }
 
       const normalizedBaseUrl = typeof baseUrl === "string" ? baseUrl.trim() : "";
       set(() => ({

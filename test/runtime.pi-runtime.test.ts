@@ -90,6 +90,56 @@ async function withMockedFetch<T>(
   }
 }
 
+type PromptCachingTtl = "5m" | "1h";
+
+function extractPromptCachingTtl(content: unknown): PromptCachingTtl | null {
+  if (!Array.isArray(content)) return null;
+  for (let index = content.length - 1; index >= 0; index -= 1) {
+    const entry = content[index];
+    if (typeof entry !== "object" || entry === null) continue;
+    const part = entry as Record<string, unknown>;
+    if (part.type !== "text" || typeof part.text !== "string") continue;
+    if (typeof part.cache_control !== "object" || part.cache_control === null) return null;
+    const ttl = (part.cache_control as Record<string, unknown>).ttl;
+    return ttl === "1h" ? "1h" : "5m";
+  }
+  return null;
+}
+
+function extractMessageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  for (const entry of content) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const part = entry as Record<string, unknown>;
+    if (part.type === "text" && typeof part.text === "string") {
+      return part.text;
+    }
+  }
+  return "";
+}
+
+async function parseProxyFetchPayload(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<{ label: string; ttl: PromptCachingTtl | null } | null> {
+  const body = typeof init?.body === "string"
+    ? init.body
+    : input instanceof Request
+      ? await input.clone().text()
+      : null;
+  if (!body) return null;
+  const payload = JSON.parse(body) as Record<string, unknown>;
+  if (!Array.isArray(payload.messages) || payload.messages.length === 0) return null;
+  const first = payload.messages[0];
+  if (typeof first !== "object" || first === null) return null;
+  const firstMessage = first as Record<string, unknown>;
+  return {
+    label: extractMessageText(firstMessage.content),
+    ttl: extractPromptCachingTtl(firstMessage.content),
+  };
+}
+
 describe("pi runtime regressions", () => {
   test("calls onModelAbort exactly once when turn starts with an aborted signal", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-abort-"));
@@ -1288,52 +1338,75 @@ describe("pi runtime regressions", () => {
     expect(result.content).toEqual([{ type: "text", text: toolResultOutput.value }]);
   });
 
-  test.serial("overlapping fetch patchers share the same stack and restore correctly", async () => {
+  test.serial("nested aws-bedrock-proxy runs isolate prompt-caching rewrites by invocation", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-fetch-nested-"));
+    const captured: Array<{ label: string; ttl: PromptCachingTtl | null }> = [];
     const originalFetch = globalThis.fetch;
-    const calls: string[] = [];
-
-    globalThis.fetch = (async (input: RequestInfo | URL, _init?: RequestInit) => {
-      calls.push(`original:${String(input)}`);
+    const fetchMock = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = await parseProxyFetchPayload(input, init);
+      if (request) captured.push(request);
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
 
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-fetch-stack-"));
-    const nvidiaModelId = defaultSupportedModel("nvidia").id;
-    const config = makeConfig(homeDir, {
-      provider: "nvidia",
-      model: nvidiaModelId,
-      subAgentModel: nvidiaModelId,
+    const outerConfig = makeConfig(homeDir, {
+      provider: "aws-bedrock-proxy",
+      model: "anthropic.claude-sonnet-4-5",
+      preferredChildModel: "anthropic.claude-sonnet-4-5",
+      awsBedrockProxyBaseUrl: "https://proxy.internal/v1",
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          promptCaching: {
+            enabled: true,
+            ttl: "5m",
+          },
+        },
+      },
     });
 
-    const nvidiaRuntime = createPiRuntime({
+    const outerRuntime = createPiRuntime({
       piStreamImpl: () => ({
         async *[Symbol.asyncIterator]() {
-          // While inside nvidia's patched fetch, nest an aws-bedrock-proxy run
-          const proxyConfig = makeConfig(homeDir, {
-            provider: "aws-bedrock-proxy",
-            model: "anthropic.claude-3-5-sonnet-20241022-v2:0",
-            subAgentModel: "anthropic.claude-3-5-sonnet-20241022-v2:0",
-            awsBedrockProxyBaseUrl: "https://proxy.internal/v1",
+          await fetch("https://proxy.internal/v1/chat/completions", {
+            method: "POST",
+            body: JSON.stringify({
+              model: "anthropic.claude-sonnet-4-5",
+              messages: [{ role: "user", content: "outer-before" }],
+            }),
           });
 
-          const proxyRuntime = createPiRuntime({
+          const innerConfig = makeConfig(homeDir, {
+            provider: "aws-bedrock-proxy",
+            model: "anthropic.claude-sonnet-4-5",
+            preferredChildModel: "anthropic.claude-sonnet-4-5",
+            awsBedrockProxyBaseUrl: "https://proxy.internal/v1",
+            providerOptions: {
+              "aws-bedrock-proxy": {
+                promptCaching: {
+                  enabled: true,
+                  ttl: "1h",
+                },
+              },
+            },
+          });
+
+          const innerRuntime = createPiRuntime({
             piStreamImpl: () => ({
               async *[Symbol.asyncIterator]() {
-                await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+                await fetch("https://proxy.internal/v1/chat/completions", {
                   method: "POST",
                   body: JSON.stringify({
-                    model: nvidiaModelId,
-                    messages: [{ role: "user", content: "test" }],
+                    model: "anthropic.claude-sonnet-4-5",
+                    messages: [{ role: "user", content: "inner" }],
                   }),
                 });
               },
               async result() {
                 return {
                   role: "assistant",
-                  content: [{ type: "text", text: "proxy ok" }],
+                  content: [{ type: "text", text: "inner ok" }],
                   api: "openai-completions",
                   provider: "aws-bedrock-proxy",
-                  model: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+                  model: "anthropic.claude-sonnet-4-5",
                   usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
                   stopReason: "stop",
                   timestamp: Date.now(),
@@ -1343,16 +1416,26 @@ describe("pi runtime regressions", () => {
           });
 
           await withEnv("AWS_BEDROCK_PROXY_API_KEY", "test-key", async () => {
-            await proxyRuntime.runTurn(makeParams(proxyConfig));
+            await innerRuntime.runTurn(makeParams(innerConfig, {
+              providerOptions: innerConfig.providerOptions as Record<string, unknown>,
+            }));
+          });
+
+          await fetch("https://proxy.internal/v1/chat/completions", {
+            method: "POST",
+            body: JSON.stringify({
+              model: "anthropic.claude-sonnet-4-5",
+              messages: [{ role: "user", content: "outer-after" }],
+            }),
           });
         },
         async result() {
           return {
             role: "assistant",
-            content: [{ type: "text", text: "nvidia ok" }],
+            content: [{ type: "text", text: "outer ok" }],
             api: "openai-completions",
-            provider: "nvidia",
-            model: nvidiaModelId,
+            provider: "aws-bedrock-proxy",
+            model: "anthropic.claude-sonnet-4-5",
             usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
             stopReason: "stop",
             timestamp: Date.now(),
@@ -1361,18 +1444,150 @@ describe("pi runtime regressions", () => {
       }) as any,
     });
 
+    globalThis.fetch = fetchMock;
     try {
-      await withEnv("NVIDIA_API_KEY", "test-nvidia-key", async () => {
-        await nvidiaRuntime.runTurn(makeParams(config));
+      await withEnv("AWS_BEDROCK_PROXY_API_KEY", "test-key", async () => {
+        await outerRuntime.runTurn(makeParams(outerConfig, {
+          providerOptions: outerConfig.providerOptions as Record<string, unknown>,
+        }));
       });
 
-      expect(calls.length).toBeGreaterThanOrEqual(1);
+      const ttlByLabel = new Map(captured.map((entry) => [entry.label, entry.ttl]));
+      expect(ttlByLabel.get("outer-before")).toBe("5m");
+      expect(ttlByLabel.get("inner")).toBe("1h");
+      expect(ttlByLabel.get("outer-after")).toBe("5m");
+      expect(globalThis.fetch).toBe(fetchMock);
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
 
-    // Verify fetch is fully restored — no dangling wrappers
-    expect(globalThis.fetch).toBe(originalFetch);
+  test.serial("concurrent aws-bedrock-proxy runs do not leak prompt-caching context", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-fetch-concurrent-"));
+    const captured: Array<{ label: string; ttl: PromptCachingTtl | null }> = [];
+    const originalFetch = globalThis.fetch;
+    const fetchMock = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = await parseProxyFetchPayload(input, init);
+      if (request) captured.push(request);
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    let waitingCount = 0;
+    let releaseBarrier: (() => void) | null = null;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const waitForBothRuntimes = async () => {
+      waitingCount += 1;
+      if (waitingCount === 2) {
+        releaseBarrier?.();
+      }
+      await barrier;
+    };
+
+    const runAConfig = makeConfig(homeDir, {
+      provider: "aws-bedrock-proxy",
+      model: "anthropic.claude-sonnet-4-5",
+      preferredChildModel: "anthropic.claude-sonnet-4-5",
+      awsBedrockProxyBaseUrl: "https://proxy.internal/v1",
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          promptCaching: {
+            enabled: true,
+            ttl: "5m",
+          },
+        },
+      },
+    });
+    const runBConfig = makeConfig(homeDir, {
+      provider: "aws-bedrock-proxy",
+      model: "anthropic.claude-sonnet-4-5",
+      preferredChildModel: "anthropic.claude-sonnet-4-5",
+      awsBedrockProxyBaseUrl: "https://proxy.internal/v1",
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          promptCaching: {
+            enabled: true,
+            ttl: "1h",
+          },
+        },
+      },
+    });
+
+    const runtimeA = createPiRuntime({
+      piStreamImpl: () => ({
+        async *[Symbol.asyncIterator]() {
+          await waitForBothRuntimes();
+          await fetch("https://proxy.internal/v1/chat/completions", {
+            method: "POST",
+            body: JSON.stringify({
+              model: "anthropic.claude-sonnet-4-5",
+              messages: [{ role: "user", content: "run-a" }],
+            }),
+          });
+        },
+        async result() {
+          return {
+            role: "assistant",
+            content: [{ type: "text", text: "run-a ok" }],
+            api: "openai-completions",
+            provider: "aws-bedrock-proxy",
+            model: "anthropic.claude-sonnet-4-5",
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+            stopReason: "stop",
+            timestamp: Date.now(),
+          };
+        },
+      }) as any,
+    });
+
+    const runtimeB = createPiRuntime({
+      piStreamImpl: () => ({
+        async *[Symbol.asyncIterator]() {
+          await waitForBothRuntimes();
+          await fetch("https://proxy.internal/v1/chat/completions", {
+            method: "POST",
+            body: JSON.stringify({
+              model: "anthropic.claude-sonnet-4-5",
+              messages: [{ role: "user", content: "run-b" }],
+            }),
+          });
+        },
+        async result() {
+          return {
+            role: "assistant",
+            content: [{ type: "text", text: "run-b ok" }],
+            api: "openai-completions",
+            provider: "aws-bedrock-proxy",
+            model: "anthropic.claude-sonnet-4-5",
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+            stopReason: "stop",
+            timestamp: Date.now(),
+          };
+        },
+      }) as any,
+    });
+
+    globalThis.fetch = fetchMock;
+    try {
+      await withEnv("AWS_BEDROCK_PROXY_API_KEY", "test-key", async () => {
+        await Promise.all([
+          runtimeA.runTurn(makeParams(runAConfig, {
+            providerOptions: runAConfig.providerOptions as Record<string, unknown>,
+          })),
+          runtimeB.runTurn(makeParams(runBConfig, {
+            providerOptions: runBConfig.providerOptions as Record<string, unknown>,
+          })),
+        ]);
+      });
+
+      const ttlByLabel = new Map(captured.map((entry) => [entry.label, entry.ttl]));
+      expect(ttlByLabel.get("run-a")).toBe("5m");
+      expect(ttlByLabel.get("run-b")).toBe("1h");
+      expect(globalThis.fetch).toBe(fetchMock);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
 });

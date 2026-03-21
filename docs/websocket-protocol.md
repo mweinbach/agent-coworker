@@ -282,7 +282,7 @@ The remainder of this document describes the **legacy Cowork protocol**, which r
 - [Client -> Server Messages](#client---server-messages)
   - Handshake: [client_hello](#client_hello)
   - Conversation: [user_message](#user_message) | [steer_message](#steer_message) | [ask_response](#ask_response) | [approval_response](#approval_response) | [cancel](#cancel) | [reset](#reset)
-  - Model & Provider: [set_model](#set_model) | [apply_session_defaults](#apply_session_defaults) | [refresh_provider_status](#refresh_provider_status) | [provider_catalog_get](#provider_catalog_get) | [provider_auth_methods_get](#provider_auth_methods_get) | [provider_auth_authorize](#provider_auth_authorize) | [provider_auth_logout](#provider_auth_logout) | [provider_auth_callback](#provider_auth_callback) | [provider_auth_set_api_key](#provider_auth_set_api_key) | [provider_auth_copy_api_key](#provider_auth_copy_api_key)
+  - Model & Provider: [set_model](#set_model) | [apply_session_defaults](#apply_session_defaults) | [refresh_provider_status](#refresh_provider_status) | [provider_catalog_get](#provider_catalog_get) | [provider_auth_methods_get](#provider_auth_methods_get) | [user_config_get](#user_config_get) | [user_config_set](#user_config_set) | [provider_auth_authorize](#provider_auth_authorize) | [provider_auth_logout](#provider_auth_logout) | [provider_auth_callback](#provider_auth_callback) | [provider_auth_set_api_key](#provider_auth_set_api_key) | [provider_auth_copy_api_key](#provider_auth_copy_api_key)
   - Tools & Commands: [list_tools](#list_tools) | [list_commands](#list_commands) | [execute_command](#execute_command)
   - Skills: [list_skills](#list_skills) | [read_skill](#read_skill) | [disable_skill](#disable_skill) | [enable_skill](#enable_skill) | [delete_skill](#delete_skill) | [skills_catalog_get](#skills_catalog_get) | [skill_installation_get](#skill_installation_get) | [skill_install_preview](#skill_install_preview) | [skill_install](#skill_install) | [skill_installation_enable](#skill_installation_enable) | [skill_installation_disable](#skill_installation_disable) | [skill_installation_delete](#skill_installation_delete) | [skill_installation_copy](#skill_installation_copy) | [skill_installation_check_update](#skill_installation_check_update) | [skill_installation_update](#skill_installation_update)
   - MCP: [set_enable_mcp](#set_enable_mcp) | [mcp_servers_get](#mcp_servers_get) | [mcp_server_upsert](#mcp_server_upsert) | [mcp_server_delete](#mcp_server_delete) | [mcp_server_validate](#mcp_server_validate) | [mcp_server_auth_authorize](#mcp_server_auth_authorize) | [mcp_server_auth_callback](#mcp_server_auth_callback) | [mcp_server_auth_set_api_key](#mcp_server_auth_set_api_key) | [mcp_servers_migrate_legacy](#mcp_servers_migrate_legacy)
@@ -294,7 +294,7 @@ The remainder of this document describes the **legacy Cowork protocol**, which r
   - Handshake & Lifecycle: [server_hello](#server_hello) | [session_settings](#session_settings) | [session_info](#session_info) | [session_busy](#session_busy) | [session_config](#session_config)
   - Conversation: [steer_accepted](#steer_accepted) | [user_message](#user_message-1) | [model_stream_chunk](#model_stream_chunk) | [model_stream_raw](#model_stream_raw) | [assistant_message](#assistant_message) | [reasoning](#reasoning) | [log](#log) | [todos](#todos) | [reset_done](#reset_done)
   - Prompts: [ask](#ask) | [approval](#approval)
-  - Provider: [provider_catalog](#provider_catalog) | [provider_auth_methods](#provider_auth_methods) | [provider_auth_challenge](#provider_auth_challenge) | [provider_auth_result](#provider_auth_result) | [provider_status](#provider_status) | [config_updated](#config_updated)
+  - Provider: [provider_catalog](#provider_catalog) | [provider_auth_methods](#provider_auth_methods) | [user_config](#user_config) | [user_config_result](#user_config_result) | [provider_auth_challenge](#provider_auth_challenge) | [provider_auth_result](#provider_auth_result) | [provider_status](#provider_status) | [config_updated](#config_updated)
   - Tools & Skills: [tools](#tools) | [commands](#commands) | [skills_list](#skills_list) | [skill_content](#skill_content) | [skills_catalog](#skills_catalog) | [skill_installation](#skill_installation) | [skill_install_preview](#skill_install_preview-1) | [skill_installation_update_check](#skill_installation_update_check)
   - MCP: [mcp_servers](#mcp_servers) | [mcp_server_validation](#mcp_server_validation) | [mcp_server_auth_challenge](#mcp_server_auth_challenge) | [mcp_server_auth_result](#mcp_server_auth_result)
   - Session Data: [messages](#messages) | [sessions](#sessions) | [session_snapshot](#session_snapshot) | [agent_spawned](#agent_spawned) | [agent_list](#agent_list) | [agent_wait_result](#agent_wait_result) | [session_deleted](#session_deleted) | [file_uploaded](#file_uploaded) | [turn_usage](#turn_usage) | [session_usage](#session_usage) | [budget_warning](#budget_warning) | [budget_exceeded](#budget_exceeded)
@@ -1405,6 +1405,47 @@ Request supported auth methods for all providers.
 | `sessionId` | `string` | Yes |
 
 **Response:** `provider_auth_methods`
+
+---
+
+### user_config_get
+
+Request global user config values persisted under `~/.agent/config.json`.
+
+```json
+{ "type": "user_config_get", "sessionId": "..." }
+```
+
+| Field | Type | Required |
+|-------|------|----------|
+| `type` | `"user_config_get"` | Yes |
+| `sessionId` | `string` | Yes |
+
+**Response:** `user_config`
+
+---
+
+### user_config_set
+
+Update global user config values persisted under `~/.agent/config.json`.
+
+```json
+{
+  "type": "user_config_set",
+  "sessionId": "...",
+  "config": {
+    "awsBedrockProxyBaseUrl": "https://proxy.example.com/v1"
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"user_config_set"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `config` | `object` | Yes | Supports `awsBedrockProxyBaseUrl` (`string \| null`). Legacy `openaiProxyBaseUrl` is accepted and normalized to `awsBedrockProxyBaseUrl` |
+
+**Response:** `user_config_result`
 
 ---
 
@@ -3046,6 +3087,54 @@ Auth method registry for all providers.
 | `type` | `"provider_auth_methods"` | — |
 | `sessionId` | `string` | Session identifier |
 | `methods` | `Record<string, ProviderAuthMethod[]>` | Auth methods keyed by provider name |
+
+---
+
+### user_config
+
+Current global user config values loaded from `~/.agent/config.json`.
+
+```json
+{
+  "type": "user_config",
+  "sessionId": "...",
+  "config": {
+    "awsBedrockProxyBaseUrl": "https://proxy.example.com/v1"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"user_config"` | — |
+| `sessionId` | `string` | Session identifier |
+| `config` | `object` | Current user config state (currently `awsBedrockProxyBaseUrl?: string`) |
+
+---
+
+### user_config_result
+
+Result event for `user_config_set` writes.
+
+```json
+{
+  "type": "user_config_result",
+  "sessionId": "...",
+  "ok": true,
+  "message": "Saved globally to ~/.agent/config.json.",
+  "config": {
+    "awsBedrockProxyBaseUrl": "https://proxy.example.com/v1"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"user_config_result"` | — |
+| `sessionId` | `string` | Session identifier |
+| `ok` | `boolean` | Whether the write succeeded |
+| `message` | `string` | Result detail |
+| `config` | `object?` | Normalized persisted config after a successful write |
 
 ---
 

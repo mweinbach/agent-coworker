@@ -474,8 +474,15 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
         },
       }));
       if (!ok) {
+        const sessionId = get().workspaceRuntimeById[workspaceId]?.controlSessionId ?? "";
         set((s) => ({
           pendingUserConfigSave: false,
+          userConfigLastResult: {
+            type: "user_config_result",
+            sessionId,
+            ok: false,
+            message: "Unable to update global user config.",
+          },
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),

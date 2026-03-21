@@ -13,7 +13,7 @@ import {
   formatAwsBedrockProxyDiscoveryFailure,
   resolveAwsBedrockProxyBaseUrl,
 } from "./awsBedrockProxyShared";
-import { PROVIDER_NAMES, type ProviderName } from "../types";
+import { PROVIDER_NAMES, type AgentConfig, type ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
 
 export type ProviderAuthMethodType = "api" | "oauth";
@@ -117,6 +117,7 @@ export async function setProviderApiKey(opts: {
   cwd?: string;
   paths?: AiCoworkerPaths;
   connect: ConnectProviderHandler;
+  config?: AgentConfig;
   providerOptions?: unknown;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
@@ -160,6 +161,7 @@ export async function setProviderApiKey(opts: {
 
   if (opts.provider === "aws-bedrock-proxy" && method.id === "api_key") {
     const baseUrl = resolveAwsBedrockProxyBaseUrl({
+      config: opts.config,
       providerOptions: opts.providerOptions,
       env: opts.env ?? process.env,
     });

@@ -337,6 +337,15 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const runtime = normalizeRuntimeNameForProvider(provider, rawRuntime);
 
   const workingDirectory = env.AGENT_WORKING_DIR || cwd;
+  const awsBedrockProxyBaseUrl =
+    asNonEmptyString(env.AWS_BEDROCK_PROXY_BASE_URL) ||
+    asNonEmptyString(env.OPENAI_PROXY_BASE_URL) ||
+    asNonEmptyString(projectConfig.awsBedrockProxyBaseUrl) ||
+    asNonEmptyString(projectConfig.openaiProxyBaseUrl) ||
+    asNonEmptyString(userConfig.awsBedrockProxyBaseUrl) ||
+    asNonEmptyString(userConfig.openaiProxyBaseUrl) ||
+    asNonEmptyString(builtInDefaults.awsBedrockProxyBaseUrl) ||
+    asNonEmptyString(builtInDefaults.openaiProxyBaseUrl);
 
   const providerOptions = isPlainObject((merged as Record<string, unknown>).providerOptions)
     ? (deepMerge({}, (merged as Record<string, unknown>).providerOptions as Record<string, unknown>) as Record<string, unknown>)
@@ -580,6 +589,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     observability,
     harness,
     command,
+    ...(awsBedrockProxyBaseUrl ? { awsBedrockProxyBaseUrl, openaiProxyBaseUrl: awsBedrockProxyBaseUrl } : {}),
     ...(normalizedProviderOptions ? { providerOptions: normalizedProviderOptions } : {}),
     ...(normalizedModelSettings ? { modelSettings: normalizedModelSettings } : {}),
   };

@@ -167,6 +167,15 @@ export interface AgentConfig {
   providerOptions?: Record<string, any>;
 
   /**
+   * Optional base URL for AWS Bedrock Proxy discovery and auth validation.
+   */
+  awsBedrockProxyBaseUrl?: string;
+  /**
+   * @deprecated Legacy alias accepted while migrating from openai-proxy.
+   */
+  openaiProxyBaseUrl?: string;
+
+  /**
    * Optional runtime controls for model calls.
    */
   modelSettings?: ModelRuntimeSettings;

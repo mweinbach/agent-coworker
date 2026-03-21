@@ -39,6 +39,9 @@ const initialState: AppStoreDataState = {
   providerAuthMethodsByProvider: {},
   providerLastAuthChallenge: null,
   providerLastAuthResult: null,
+  userConfig: {},
+  userConfigLastResult: null,
+  pendingUserConfigSave: false,
   providerUiState: DEFAULT_PROVIDER_UI_STATE,
 
   composerText: "",

@@ -11,7 +11,7 @@ import {
 import { isLmStudioError, listLmStudioModels, resolveLmStudioProviderOptions } from "./lmstudio/client";
 import { getOpenCodeDisplayName } from "./opencodeShared";
 import { resolveAuthHomeDir } from "../utils/authHome";
-import { discoverAwsBedrockProxyModels, resolveAwsBedrockProxyBaseUrl } from "./awsBedrockProxyShared";
+import { discoverAwsBedrockProxyModelsDetailed, resolveAwsBedrockProxyBaseUrl } from "./awsBedrockProxyShared";
 
 function storedProviderApiKey(store: Awaited<ReturnType<typeof readConnectionStore>>, provider: ProviderName): string | undefined {
   const entry = store.services[provider];
@@ -184,12 +184,12 @@ export async function getProviderCatalog(opts: {
       providerOptions: opts.providerOptions,
       env: opts.env,
     });
-    const discoveredModels = await discoverAwsBedrockProxyModels({
+    const discovery = await discoverAwsBedrockProxyModelsDetailed({
       baseUrl,
       apiKey: savedKey,
       fetchImpl: opts.fetchImpl,
     });
-    const mergedModels = discoveredModels.length > 0 ? discoveredModels : proxyEntry.models;
+    const mergedModels = discovery.ok ? discovery.models : proxyEntry.models;
     const activeProxyModel = opts.activeProvider === "aws-bedrock-proxy" ? opts.activeModel?.trim() : undefined;
     const hasActiveModel = Boolean(activeProxyModel && mergedModels.some((model) => model.id === activeProxyModel));
     const models = activeProxyModel && !hasActiveModel

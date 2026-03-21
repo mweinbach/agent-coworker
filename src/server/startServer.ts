@@ -18,6 +18,7 @@ import {
 import { ensureDefaultGlobalSkillsReady } from "../skills/defaultGlobalSkills";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 import { getProviderCatalog } from "../providers/connectionCatalog";
+import { resolveAwsBedrockProxyBaseUrl } from "../providers/awsBedrockProxyShared";
 import { resolveAuthHomeDir } from "../utils/authHome";
 
 import { AgentControl } from "./agents/AgentControl";
@@ -188,6 +189,51 @@ async function persistProjectConfigPatch(
   await fs.mkdir(projectAgentDir, { recursive: true });
   const payload = `${JSON.stringify(next, null, 2)}\n`;
   await writeTextFileAtomic(configPath, payload);
+}
+
+async function readUserConfigState(userAgentDir: string): Promise<PersistedUserConfigState> {
+  const configPath = path.join(userAgentDir, "config.json");
+  const current = await loadJsonObjectSafe(configPath);
+  const normalizedBaseUrl = resolveAwsBedrockProxyBaseUrl({
+    baseUrl: typeof current.awsBedrockProxyBaseUrl === "string"
+      ? current.awsBedrockProxyBaseUrl
+      : typeof current.openaiProxyBaseUrl === "string"
+        ? current.openaiProxyBaseUrl
+        : undefined,
+    env: {},
+  });
+  return normalizedBaseUrl ? { awsBedrockProxyBaseUrl: normalizedBaseUrl } : {};
+}
+
+async function persistUserConfigPatch(
+  userAgentDir: string,
+  patch: PersistedUserConfigPatch,
+): Promise<PersistedUserConfigState> {
+  const rawBaseUrlPatch =
+    patch.awsBedrockProxyBaseUrl !== undefined ? patch.awsBedrockProxyBaseUrl : patch.openaiProxyBaseUrl;
+  if (rawBaseUrlPatch === undefined) {
+    return await readUserConfigState(userAgentDir);
+  }
+
+  const configPath = path.join(userAgentDir, "config.json");
+  const current = await loadJsonObjectSafe(configPath);
+  const next: Record<string, unknown> = { ...current };
+  if (rawBaseUrlPatch === null || (typeof rawBaseUrlPatch === "string" && rawBaseUrlPatch.trim().length === 0)) {
+    delete next.awsBedrockProxyBaseUrl;
+    delete next.openaiProxyBaseUrl;
+  } else if (typeof rawBaseUrlPatch === "string") {
+    const normalized = resolveAwsBedrockProxyBaseUrl({ baseUrl: rawBaseUrlPatch, env: {} });
+    if (!normalized) {
+      throw new Error("awsBedrockProxyBaseUrl must be a valid http(s) URL.");
+    }
+    next.awsBedrockProxyBaseUrl = normalized;
+    delete next.openaiProxyBaseUrl;
+  }
+
+  await fs.mkdir(userAgentDir, { recursive: true });
+  const payload = `${JSON.stringify(next, null, 2)}\n`;
+  await writeTextFileAtomic(configPath, payload);
+  return await readUserConfigState(userAgentDir);
 }
 
 function mergeConfigPatch(
@@ -448,6 +494,9 @@ export async function startAgentServer(
             config = mergeConfigPatch(config, patch);
           }
         : undefined,
+      readUserConfigImpl: async () => await readUserConfigState(config.userAgentDir),
+      persistUserConfigPatchImpl: async (patch: PersistedUserConfigPatch) =>
+        await persistUserConfigPatch(config.userAgentDir, patch),
       sessionDb,
       emit,
       createAgentSessionImpl: async (
@@ -630,7 +679,11 @@ export async function startAgentServer(
   };
 
   const getConnectedProviders = async (parentConfig: AgentConfig): Promise<AgentConfig["provider"][]> => (
-    await getProviderCatalog({ homedir: resolveAuthHomeDir(parentConfig, opts.homedir) })
+    await getProviderCatalog({
+      homedir: resolveAuthHomeDir(parentConfig, opts.homedir),
+      providerOptions: parentConfig.providerOptions,
+      awsBedrockProxyBaseUrl: parentConfig.awsBedrockProxyBaseUrl,
+    })
   ).connected as AgentConfig["provider"][];
 
   agentControl = new AgentControl({

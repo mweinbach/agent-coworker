@@ -437,6 +437,7 @@ export class ProviderAuthManager {
         cwd: config.workingDirectory,
         paths: this.opts.getGlobalAuthPaths(),
         connect: async (opts) => await this.opts.runProviderConnect(opts),
+        config,
         providerOptions: config.providerOptions,
         env: process.env,
         fetchImpl: fetch,

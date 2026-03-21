@@ -43,6 +43,7 @@ import {
   sendUserMessageToThread,
   normalizeThreadTitleSource,
   truncateTitle,
+  waitForControlSession,
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
@@ -427,14 +428,63 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
         }));
       }
     },
-  
 
+    requestUserConfig: async () => {
+      const workspaceId = await ensureProviderControlReady();
+      if (!workspaceId) return;
+
+      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "user_config_get", sessionId }));
+      if (!ok) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to request global user config.",
+          }),
+        }));
+      }
+    },
+
+  
     refreshProviderStatus: async () => {
       const workspaceId = await ensureProviderControlReady();
       if (!workspaceId) return;
 
       const path = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
       await refreshProviderStatusForWorkspace(get, set, workspaceId, path);
+    },
+
+    setGlobalOpenAiProxyBaseUrl: async (baseUrl) => {
+      const workspaceId = await ensureProviderControlReady();
+      if (!workspaceId) return;
+
+      const normalizedBaseUrl = typeof baseUrl === "string" ? baseUrl.trim() : "";
+      set(() => ({
+        pendingUserConfigSave: true,
+        userConfigLastResult: null,
+      }));
+
+      const ok = sendControl(get, workspaceId, (sessionId) => ({
+        type: "user_config_set",
+        sessionId,
+        config: {
+          awsBedrockProxyBaseUrl: normalizedBaseUrl ? normalizedBaseUrl : null,
+        },
+      }));
+      if (!ok) {
+        set((s) => ({
+          pendingUserConfigSave: false,
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to update global user config.",
+          }),
+        }));
+      }
     },
 
     setLmStudioEnabled: async (enabled) => {

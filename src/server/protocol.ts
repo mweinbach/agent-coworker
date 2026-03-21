@@ -12,6 +12,7 @@ import type {
   SkillEntry,
   SkillInstallPreview,
   SkillInstallationEntry,
+  SkillMutationTargetScope,
   SkillUpdateCheckResult,
   TodoItem,
 } from "../types";
@@ -89,7 +90,150 @@ export type SessionConfigState = {
     details: string;
   };
 };
+export type UserConfigPatch = {
+  awsBedrockProxyBaseUrl?: string | null;
+  /** @deprecated Legacy alias accepted for backward compatibility. */
+  openaiProxyBaseUrl?: string | null;
+};
 
+export type UserConfigState = {
+  awsBedrockProxyBaseUrl?: string;
+  /** @deprecated Legacy alias accepted for backward compatibility. */
+  openaiProxyBaseUrl?: string;
+};
+
+export type ClientMessage =
+  | { type: "client_hello"; client: "tui" | "cli" | string; version?: string }
+  | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
+  | {
+    type: "steer_message";
+    sessionId: string;
+    expectedTurnId: string;
+    text: string;
+    clientMessageId?: string;
+  }
+  | { type: "ask_response"; sessionId: string; requestId: string; answer: string }
+  | { type: "approval_response"; sessionId: string; requestId: string; approved: boolean }
+  | { type: "set_model"; sessionId: string; model: string; provider?: AgentConfig["provider"] }
+  | {
+    type: "apply_session_defaults";
+    sessionId: string;
+    provider?: AgentConfig["provider"];
+    model?: string;
+    enableMcp?: boolean;
+    config?: SessionConfigPatch;
+  }
+  | { type: "refresh_provider_status"; sessionId: string }
+  | { type: "provider_catalog_get"; sessionId: string }
+  | { type: "provider_auth_methods_get"; sessionId: string }
+  | { type: "user_config_get"; sessionId: string }
+  | { type: "user_config_set"; sessionId: string; config: UserConfigPatch }
+  | { type: "provider_auth_authorize"; sessionId: string; provider: AgentConfig["provider"]; methodId: string }
+  | { type: "provider_auth_logout"; sessionId: string; provider: AgentConfig["provider"] }
+  | {
+    type: "provider_auth_callback";
+    sessionId: string;
+    provider: AgentConfig["provider"];
+    methodId: string;
+    code?: string;
+  }
+  | {
+    type: "provider_auth_set_api_key";
+    sessionId: string;
+    provider: AgentConfig["provider"];
+    methodId: string;
+    apiKey: string;
+  }
+  | {
+    type: "provider_auth_copy_api_key";
+    sessionId: string;
+    provider: AgentConfig["provider"];
+    sourceProvider: AgentConfig["provider"];
+  }
+  | { type: "list_tools"; sessionId: string }
+  | { type: "list_commands"; sessionId: string }
+  | {
+    type: "execute_command";
+    sessionId: string;
+    name: string;
+    arguments?: string;
+    clientMessageId?: string;
+  }
+  | { type: "list_skills"; sessionId: string }
+  | { type: "read_skill"; sessionId: string; skillName: string }
+  | { type: "disable_skill"; sessionId: string; skillName: string }
+  | { type: "enable_skill"; sessionId: string; skillName: string }
+  | { type: "delete_skill"; sessionId: string; skillName: string }
+  | { type: "skills_catalog_get"; sessionId: string }
+  | { type: "skill_installation_get"; sessionId: string; installationId: string }
+  | { type: "skill_install_preview"; sessionId: string; sourceInput: string; targetScope: SkillMutationTargetScope }
+  | { type: "skill_install"; sessionId: string; sourceInput: string; targetScope: SkillMutationTargetScope }
+  | { type: "skill_installation_enable"; sessionId: string; installationId: string }
+  | { type: "skill_installation_disable"; sessionId: string; installationId: string }
+  | { type: "skill_installation_delete"; sessionId: string; installationId: string }
+  | { type: "skill_installation_copy"; sessionId: string; installationId: string; targetScope: SkillMutationTargetScope }
+  | { type: "skill_installation_check_update"; sessionId: string; installationId: string }
+  | { type: "skill_installation_update"; sessionId: string; installationId: string }
+  | { type: "set_enable_mcp"; sessionId: string; enableMcp: boolean }
+  | { type: "mcp_servers_get"; sessionId: string }
+  | { type: "mcp_server_upsert"; sessionId: string; server: MCPServerConfig; previousName?: string }
+  | { type: "mcp_server_delete"; sessionId: string; name: string }
+  | { type: "mcp_server_validate"; sessionId: string; name: string }
+  | { type: "mcp_server_auth_authorize"; sessionId: string; name: string }
+  | { type: "mcp_server_auth_callback"; sessionId: string; name: string; code?: string }
+  | { type: "mcp_server_auth_set_api_key"; sessionId: string; name: string; apiKey: string }
+  | { type: "mcp_servers_migrate_legacy"; sessionId: string; scope: "workspace" | "user" }
+  | { type: "cancel"; sessionId: string; includeSubagents?: boolean }
+  | { type: "session_close"; sessionId: string }
+  | { type: "ping"; sessionId: string }
+  | { type: "session_backup_get"; sessionId: string }
+  | { type: "session_backup_checkpoint"; sessionId: string }
+  | { type: "session_backup_restore"; sessionId: string; checkpointId?: string }
+  | { type: "session_backup_delete_checkpoint"; sessionId: string; checkpointId: string }
+  | { type: "workspace_backups_get"; sessionId: string }
+  | { type: "workspace_backup_checkpoint"; sessionId: string; targetSessionId: string }
+  | { type: "workspace_backup_restore"; sessionId: string; targetSessionId: string; checkpointId?: string }
+  | { type: "workspace_backup_delete_checkpoint"; sessionId: string; targetSessionId: string; checkpointId: string }
+  | { type: "workspace_backup_delete_entry"; sessionId: string; targetSessionId: string }
+  | { type: "workspace_backup_delta_get"; sessionId: string; targetSessionId: string; checkpointId: string }
+  | { type: "harness_context_get"; sessionId: string }
+  | { type: "harness_context_set"; sessionId: string; context: HarnessContextPayload }
+  | { type: "reset"; sessionId: string }
+  | { type: "get_messages"; sessionId: string; offset?: number; limit?: number }
+  | { type: "set_session_title"; sessionId: string; title: string }
+  | { type: "list_sessions"; sessionId: string; scope?: "all" | "workspace" }
+  | { type: "get_session_snapshot"; sessionId: string; targetSessionId: string }
+  | { type: "delete_session"; sessionId: string; targetSessionId: string }
+  | { type: "memory_list"; sessionId: string; scope?: "workspace" | "user" }
+  | { type: "memory_upsert"; sessionId: string; scope: "workspace" | "user"; id?: string; content: string }
+  | { type: "memory_delete"; sessionId: string; scope: "workspace" | "user"; id: string }
+  | {
+    type: "agent_spawn";
+    sessionId: string;
+    message: string;
+    role?: AgentRole;
+    model?: string;
+    reasoningEffort?: AgentReasoningEffort;
+    forkContext?: boolean;
+  }
+  | { type: "agent_list_get"; sessionId: string }
+  | { type: "agent_input_send"; sessionId: string; agentId: string; message: string; interrupt?: boolean }
+  | { type: "agent_wait"; sessionId: string; agentIds: string[]; timeoutMs?: number }
+  | { type: "agent_resume"; sessionId: string; agentId: string }
+  | { type: "agent_close"; sessionId: string; agentId: string }
+  | {
+    type: "set_config";
+    sessionId: string;
+    config: SessionConfigPatch;
+  }
+  | { type: "upload_file"; sessionId: string; filename: string; contentBase64: string }
+  | { type: "get_session_usage"; sessionId: string }
+  | {
+    type: "set_session_usage_budget";
+    sessionId: string;
+    warnAtUsd?: number | null;
+    stopAtUsd?: number | null;
+  };
 export type ServerEvent =
   | {
     type: "server_hello";
@@ -202,6 +346,8 @@ export type ServerEvent =
   }
   | { type: "provider_catalog"; sessionId: string; all: ProviderCatalogEntry[]; default: Record<string, string>; connected: string[] }
   | { type: "provider_auth_methods"; sessionId: string; methods: Record<string, ProviderAuthMethod[]> }
+  | { type: "user_config"; sessionId: string; config: UserConfigState }
+  | { type: "user_config_result"; sessionId: string; ok: boolean; message: string; config?: UserConfigState }
   | {
     type: "provider_auth_challenge";
     sessionId: string;
@@ -402,3 +548,144 @@ export type ServerEvent =
   | { type: "file_uploaded"; sessionId: string; filename: string; path: string }
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
+
+export const CLIENT_MESSAGE_TYPES = [
+  "client_hello",
+  "user_message",
+  "steer_message",
+  "ask_response",
+  "approval_response",
+  "set_model",
+  "apply_session_defaults",
+  "refresh_provider_status",
+  "provider_catalog_get",
+  "provider_auth_methods_get",
+  "user_config_get",
+  "user_config_set",
+  "provider_auth_authorize",
+  "provider_auth_logout",
+  "provider_auth_callback",
+  "provider_auth_set_api_key",
+  "provider_auth_copy_api_key",
+  "list_tools",
+  "list_commands",
+  "execute_command",
+  "list_skills",
+  "read_skill",
+  "disable_skill",
+  "enable_skill",
+  "delete_skill",
+  "skills_catalog_get",
+  "skill_installation_get",
+  "skill_install_preview",
+  "skill_install",
+  "skill_installation_enable",
+  "skill_installation_disable",
+  "skill_installation_delete",
+  "skill_installation_copy",
+  "skill_installation_check_update",
+  "skill_installation_update",
+  "set_enable_mcp",
+  "mcp_servers_get",
+  "mcp_server_upsert",
+  "mcp_server_delete",
+  "mcp_server_validate",
+  "mcp_server_auth_authorize",
+  "mcp_server_auth_callback",
+  "mcp_server_auth_set_api_key",
+  "mcp_servers_migrate_legacy",
+  "cancel",
+  "session_close",
+  "ping",
+  "session_backup_get",
+  "session_backup_checkpoint",
+  "session_backup_restore",
+  "session_backup_delete_checkpoint",
+  "workspace_backups_get",
+  "workspace_backup_checkpoint",
+  "workspace_backup_restore",
+  "workspace_backup_delete_checkpoint",
+  "workspace_backup_delete_entry",
+  "workspace_backup_delta_get",
+  "harness_context_get",
+  "harness_context_set",
+  "reset",
+  "get_messages",
+  "set_session_title",
+  "list_sessions",
+  "get_session_snapshot",
+  "delete_session",
+  "memory_list",
+  "memory_upsert",
+  "memory_delete",
+  "agent_spawn",
+  "agent_list_get",
+  "agent_input_send",
+  "agent_wait",
+  "agent_resume",
+  "agent_close",
+  "set_config",
+  "upload_file",
+  "get_session_usage",
+  "set_session_usage_budget",
+] as const;
+
+export const SERVER_EVENT_TYPES = [
+  "server_hello",
+  "session_settings",
+  "session_info",
+  "mcp_servers",
+  "mcp_server_validation",
+  "mcp_server_auth_challenge",
+  "mcp_server_auth_result",
+  "provider_catalog",
+  "provider_auth_methods",
+  "user_config",
+  "user_config_result",
+  "provider_auth_challenge",
+  "provider_auth_result",
+  "provider_status",
+  "session_busy",
+  "steer_accepted",
+  "user_message",
+  "model_stream_chunk",
+  "model_stream_raw",
+  "assistant_message",
+  "reasoning",
+  "log",
+  "todos",
+  "reset_done",
+  "ask",
+  "approval",
+  "config_updated",
+  "tools",
+  "commands",
+  "skills_list",
+  "skill_content",
+  "skills_catalog",
+  "skill_installation",
+  "skill_install_preview",
+  "skill_installation_update_check",
+  "session_backup_state",
+  "workspace_backups",
+  "workspace_backup_delta",
+  "observability_status",
+  "harness_context",
+  "turn_usage",
+  "session_usage",
+  "budget_warning",
+  "budget_exceeded",
+  "messages",
+  "sessions",
+  "session_snapshot",
+  "agent_spawned",
+  "agent_list",
+  "agent_status",
+  "agent_wait_result",
+  "session_deleted",
+  "session_config",
+  "memory_list",
+  "file_uploaded",
+  "error",
+  "pong",
+] as const;

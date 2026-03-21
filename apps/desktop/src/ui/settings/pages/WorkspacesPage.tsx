@@ -6,7 +6,6 @@ import { defaultModelForProvider } from "@cowork/providers/catalog";
 
 import {
   AWS_BEDROCK_PROXY_PROMPT_CACHING_TTLS,
-  getWorkspaceAwsBedrockProxyBaseUrl,
   getWorkspaceAwsBedrockProxyPromptCaching,
   getGoogleReasoningEffortValuesForModel,
   getWorkspaceGoogleNativeWebSearchEnabled,
@@ -393,7 +392,6 @@ export function OpenAiCompatibleModelSettingsCard({
   const awsBedrockProxyVerbosity = getWorkspaceTextVerbosity(workspace.providerOptions, "aws-bedrock-proxy");
   const awsBedrockProxyReasoningEffort = getWorkspaceReasoningEffort(workspace.providerOptions, "aws-bedrock-proxy");
   const awsBedrockProxyReasoningSummary = getWorkspaceReasoningSummary(workspace.providerOptions, "aws-bedrock-proxy");
-  const awsBedrockProxyBaseUrl = getWorkspaceAwsBedrockProxyBaseUrl(workspace.providerOptions);
   const awsBedrockProxyPromptCaching = getWorkspaceAwsBedrockProxyPromptCaching(workspace.providerOptions);
 
   const sections = ([
@@ -734,27 +732,6 @@ export function OpenAiCompatibleModelSettingsCard({
 
             {section.key === "aws-bedrock-proxy" ? (
               <div className="space-y-3 border-t border-border/50 pt-3">
-                <div className={MODEL_CARD_FIELD_CLASS}>
-                  <div className="text-[13px] font-medium text-foreground">Proxy URL</div>
-                  <Input
-                    aria-label="AWS Bedrock Proxy base URL"
-                    className={MODEL_SETTINGS_INPUT_CLASS}
-                    autoComplete="off"
-                    placeholder="https://your-proxy.example.com/v1"
-                    value={awsBedrockProxyBaseUrl}
-                    onChange={(event) => {
-                      void updateWorkspaceDefaults(workspace.id, {
-                        providerOptions: updateAwsBedrockProxyProviderOption(workspace.providerOptions, {
-                          baseUrl: event.target.value,
-                        }),
-                      });
-                    }}
-                  />
-                  <div className="text-xs text-muted-foreground">
-                    Required for model discovery and API key validation.
-                  </div>
-                </div>
-
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className={MODEL_CARD_FIELD_CLASS}>
                     <div className="text-[13px] font-medium text-foreground">Prompt caching</div>

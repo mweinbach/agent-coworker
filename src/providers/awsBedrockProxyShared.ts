@@ -67,6 +67,10 @@ function displayNameForModelId(modelId: string): string {
   return titleCaseSegment(base);
 }
 
+function isSelectableModelId(modelId: string): boolean {
+  return modelId !== "*";
+}
+
 function supportsImageByMetadata(rawModel: Record<string, unknown>): boolean {
   const modalities = Array.isArray(rawModel.modalities) ? rawModel.modalities : [];
   if (modalities.some((entry) => typeof entry === "string" && entry.toLowerCase().includes("image"))) {
@@ -98,7 +102,7 @@ function parseDiscoveredModels(raw: unknown): { models: AwsBedrockProxyDiscovere
       id: asNonEmptyString(entry.id) ?? "",
       supportsImageInput: supportsImageByMetadata(entry),
     }))
-    .filter((entry) => entry.id.length > 0);
+    .filter((entry) => entry.id.length > 0 && isSelectableModelId(entry.id));
 
   if (models.length === 0) return { models: [], malformed: false };
 
@@ -110,16 +114,9 @@ function parseDiscoveredModels(raw: unknown): { models: AwsBedrockProxyDiscovere
     }
   }
 
-  const deduped = [...uniqueById.values()];
-  const claudeModels = deduped.filter((entry) => {
-    const lower = entry.id.toLowerCase();
-    return lower.includes("claude") || lower.includes("anthropic");
-  });
-  const preferred = claudeModels.length > 0 ? claudeModels : deduped;
-
   return {
     malformed: false,
-    models: preferred
+    models: [...uniqueById.values()]
       .sort((a, b) => a.id.localeCompare(b.id))
       .map((entry) => ({
         id: entry.id,

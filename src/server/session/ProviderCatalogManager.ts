@@ -35,6 +35,7 @@ export class ProviderCatalogManager {
         providerOptions: cfg.providerOptions,
         activeProvider: cfg.provider,
         activeModel: cfg.model,
+        awsBedrockProxyBaseUrl: cfg.awsBedrockProxyBaseUrl,
         env: process.env,
         fetchImpl: fetch,
       });

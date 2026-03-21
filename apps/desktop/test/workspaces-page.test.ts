@@ -150,7 +150,6 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Reasoning summary");
     expect(html).toContain("Web search");
     expect(html).toContain("Advanced options");
-    expect(html).toContain("Proxy URL");
     expect(html).toContain("Prompt caching");
     expect(html).toContain("OpenAI API");
   });

@@ -73,7 +73,10 @@ const { EXA_SECTION_ID, ProvidersPage } = await import("../src/ui/settings/pages
 const defaultProviderActions = {
   requestProviderCatalog: useAppStore.getState().requestProviderCatalog,
   requestProviderAuthMethods: useAppStore.getState().requestProviderAuthMethods,
+  requestUserConfig: useAppStore.getState().requestUserConfig,
+  setGlobalOpenAiProxyBaseUrl: useAppStore.getState().setGlobalOpenAiProxyBaseUrl,
   refreshProviderStatus: useAppStore.getState().refreshProviderStatus,
+  restartWorkspaceServer: useAppStore.getState().restartWorkspaceServer,
 };
 
 describe("desktop providers page", () => {
@@ -121,6 +124,10 @@ describe("desktop providers page", () => {
       } as any,
       providerLastAuthChallenge: null,
       providerLastAuthResult: null,
+      userConfig: {},
+      userConfigLastResult: null,
+      pendingUserConfigSave: false,
+      workspaceRuntimeById: {},
       providerConnected: [],
       providerUiState: {
         lmstudio: {
@@ -209,6 +216,7 @@ describe("desktop providers page", () => {
   test("mount only triggers the consolidated provider refresh", async () => {
     const requestProviderCatalog = mock(async () => {});
     const requestProviderAuthMethods = mock(async () => {});
+    const requestUserConfig = mock(async () => {});
     const refreshProviderStatus = mock(async () => {});
     const harness = setupJsdom();
 
@@ -221,6 +229,7 @@ describe("desktop providers page", () => {
         useAppStore.setState({
           requestProviderCatalog,
           requestProviderAuthMethods,
+          requestUserConfig,
           refreshProviderStatus,
         });
       });
@@ -229,9 +238,10 @@ describe("desktop providers page", () => {
         root.render(createElement(ProvidersPage));
       });
 
-      expect(refreshProviderStatus).toHaveBeenCalledTimes(1);
-      expect(requestProviderCatalog).not.toHaveBeenCalled();
-      expect(requestProviderAuthMethods).not.toHaveBeenCalled();
+      expect(requestProviderCatalog).toHaveBeenCalledTimes(1);
+      expect(requestProviderAuthMethods).toHaveBeenCalledTimes(1);
+      expect(requestUserConfig).toHaveBeenCalledTimes(1);
+      expect(refreshProviderStatus).not.toHaveBeenCalled();
 
       await act(async () => {
         root.unmount();
@@ -679,6 +689,133 @@ describe("desktop providers page", () => {
 
     expect(html).toContain("OpenCode Zen");
     expect(html).not.toContain("Use OpenCode Go key");
+  });
+
+  test("aws-bedrock-proxy card renders global proxy URL controls and restart prompt on successful save", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      providerCatalog: [
+        { id: "aws-bedrock-proxy", name: "AWS Bedrock Proxy" },
+      ] as any,
+      providerAuthMethodsByProvider: {
+        "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+      } as any,
+      userConfig: {
+        awsBedrockProxyBaseUrl: "https://proxy.example.com/v1",
+      } as any,
+      userConfigLastResult: {
+        type: "user_config_result",
+        sessionId: "control-session",
+        ok: true,
+        message: "Saved globally to ~/.agent/config.json. Restart running workspaces to apply.",
+        config: {
+          awsBedrockProxyBaseUrl: "https://proxy.example.com/v1",
+        },
+      } as any,
+      workspaceRuntimeById: {
+        "ws-1": {
+          serverUrl: "ws://running",
+        },
+      } as any,
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:aws-bedrock-proxy",
+      }),
+    );
+
+    expect(html).toContain("Global proxy URL");
+    expect(html).toContain("~/.agent/config.json");
+    expect(html).toContain("https://proxy.example.com/v1");
+    expect(html).toContain("Restart running workspaces");
+    expect(html).toContain("Later");
+    expect(html).toContain("Fetch models");
+    expect(html).toContain("Proxy token");
+    expect(html).toContain("Paste your LiteLLM proxy token");
+    expect(html).toContain("Use the LiteLLM proxy token configured on your proxy server");
+  });
+
+  test("renders selected workspace startup failure inline with restart action", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        "ws-1": {
+          error: "Server exited before startup JSON",
+          starting: false,
+        },
+      } as any,
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:google",
+      }),
+    );
+
+    expect(html).toContain("Workspace server unavailable");
+    expect(html).toContain("Workspace 1 failed to start");
+    expect(html).toContain("Server exited before startup JSON");
+    expect(html).toContain("Restart workspace server");
+  });
+
+  test("aws-bedrock-proxy global URL controls remain available when a workspace exists but none is selected", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/ws-1",
+          createdAt: "2026-03-07T00:00:00.000Z",
+          lastOpenedAt: "2026-03-07T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: null,
+      providerCatalog: [
+        { id: "aws-bedrock-proxy", name: "AWS Bedrock Proxy" },
+      ] as any,
+      providerAuthMethodsByProvider: {
+        "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+      } as any,
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:aws-bedrock-proxy",
+      }),
+    );
+
+    expect(html).toContain("Global proxy URL");
+    expect(html).not.toContain("Add a workspace first to connect providers.");
+    expect(html).not.toContain("title=\"Add a workspace first.\"");
+  });
+
+  test("aws-bedrock-proxy global URL controls remain disabled only when no workspace exists", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      workspaces: [],
+      selectedWorkspaceId: null,
+      providerCatalog: [
+        { id: "aws-bedrock-proxy", name: "AWS Bedrock Proxy" },
+      ] as any,
+      providerAuthMethodsByProvider: {
+        "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+      } as any,
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:aws-bedrock-proxy",
+      }),
+    );
+
+    expect(html).toContain("Global proxy URL");
+    expect(html).toContain("Add a workspace first to connect providers.");
+    expect(html).toContain("title=\"Add a workspace first.\"");
   });
 
   test("renders LM Studio as a local provider card without API token controls", () => {

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +6,13 @@ import path from "node:path";
 import { getProviderCatalog, listProviderCatalogEntries } from "../../src/providers/connectionCatalog";
 import { getAiCoworkerPaths } from "../../src/connect";
 import { PROVIDER_NAMES } from "../../src/types";
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 describe("providers/connectionCatalog", () => {
   test("catalog entries stay aligned with provider names and default-model map", async () => {
@@ -241,6 +248,116 @@ describe("providers/connectionCatalog", () => {
       ],
       defaultModel: "nvidia/nemotron-3-super-120b-a12b",
     });
+  });
+
+  test("uses discovered AWS Bedrock Proxy models and ignores wildcard placeholders", async () => {
+    const fetchImpl = mock(async () => jsonResponse({
+      object: "list",
+      data: [
+        { id: "*", object: "model" },
+        { id: "openai.gpt-oss-120b-1:0", object: "model" },
+        { id: "router", object: "model" },
+        { id: "router1", object: "model" },
+        { id: "us.anthropic.claude-sonnet-4-6", object: "model" },
+      ],
+    }));
+
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          "aws-bedrock-proxy": {
+            service: "aws-bedrock-proxy",
+            mode: "api_key",
+            apiKey: "proxy-token",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.example.com",
+        },
+      },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const entry = payload.all.find((provider) => provider.id === "aws-bedrock-proxy");
+    expect(entry?.models.map((model) => model.id)).toEqual([
+      "openai.gpt-oss-120b-1:0",
+      "router",
+      "router1",
+      "us.anthropic.claude-sonnet-4-6",
+    ]);
+    expect(entry?.defaultModel).toBe("openai.gpt-oss-120b-1:0");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  test("retains the active AWS Bedrock Proxy model when discovery omits it", async () => {
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          "aws-bedrock-proxy": {
+            service: "aws-bedrock-proxy",
+            mode: "api_key",
+            apiKey: "proxy-token",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.example.com",
+        },
+      },
+      activeProvider: "aws-bedrock-proxy",
+      activeModel: "router-shadow",
+      fetchImpl: (async () => jsonResponse({
+        object: "list",
+        data: [
+          { id: "router", object: "model" },
+          { id: "us.anthropic.claude-sonnet-4-6", object: "model" },
+        ],
+      })) as unknown as typeof fetch,
+    });
+
+    const entry = payload.all.find((provider) => provider.id === "aws-bedrock-proxy");
+    expect(entry?.models.map((model) => model.id)).toEqual([
+      "router-shadow",
+      "router",
+      "us.anthropic.claude-sonnet-4-6",
+    ]);
+    expect(entry?.defaultModel).toBe("router-shadow");
+  });
+
+  test("falls back to static AWS Bedrock Proxy models when discovery fails", async () => {
+    const staticEntry = (await listProviderCatalogEntries()).find((provider) => provider.id === "aws-bedrock-proxy");
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          "aws-bedrock-proxy": {
+            service: "aws-bedrock-proxy",
+            mode: "api_key",
+            apiKey: "proxy-token",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.example.com",
+        },
+      },
+      fetchImpl: (async () => new Response("temporary outage", { status: 503 })) as unknown as typeof fetch,
+    });
+
+    const entry = payload.all.find((provider) => provider.id === "aws-bedrock-proxy");
+    expect(entry).toEqual(staticEntry);
   });
 
   test("connected providers exclude oauth_pending entries", async () => {

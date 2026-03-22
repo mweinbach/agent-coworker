@@ -271,7 +271,6 @@ export class JsonRpcSocket {
     this.ws = ws;
 
     bindSocketHandler(ws, "open", () => {
-      this.reconnectAttempt = 0;
       void this.performHandshake().catch((error) => {
         const formatted = error instanceof Error ? error : new Error(String(error));
         this.ready.reject(formatted);
@@ -356,6 +355,7 @@ export class JsonRpcSocket {
     }
     ws.send(JSON.stringify({ method: "initialized" }));
     this.initialized = true;
+    this.reconnectAttempt = 0;
     this.ready.resolve();
     this.flushQueuedOperations();
     this.onOpen?.();

@@ -347,4 +347,55 @@ describe("JsonRpcSocket runtime", () => {
     await expect(queued).rejects.toThrow("initialize failed");
     expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
   });
+
+  test("counts failed initialize handshakes toward reconnect exhaustion", async () => {
+    FakeWebSocket.instances = [];
+    const timers = createManualTimers();
+    const closedReasons: string[] = [];
+    const socket = new JsonRpcSocket({
+      url: "ws://example.test/socket",
+      clientInfo: { name: "desktop" },
+      WebSocketImpl: FakeWebSocket as any,
+      autoReconnect: true,
+      maxReconnectAttempts: 1,
+      timers: timers.scheduler as any,
+      onClose: (reason) => {
+        closedReasons.push(reason);
+      },
+    });
+
+    socket.connect();
+    await flushMicrotasks();
+
+    const ws1 = FakeWebSocket.instances[0]!;
+    await ws1.emitMessage(JSON.stringify({
+      id: 1,
+      error: {
+        code: -32000,
+        message: "initialize failed",
+      },
+    }));
+    await flushMicrotasks();
+
+    const queued = socket.request("thread/list", { cwd: "/workspace" }, { retryable: true });
+    timers.timeoutCallbacks[0]!();
+    await flushMicrotasks();
+
+    const ws2 = FakeWebSocket.instances[1]!;
+    await ws2.emitMessage(JSON.stringify({
+      id: 2,
+      error: {
+        code: -32000,
+        message: "initialize failed again",
+      },
+    }));
+    await flushMicrotasks();
+
+    await expect(queued).rejects.toThrow("initialize failed again");
+    await expect(socket.request("thread/read", { threadId: "thr-1" }, { retryable: true })).rejects.toThrow(
+      "max reconnect attempts exceeded",
+    );
+    expect(closedReasons).toContain("max reconnect attempts exceeded");
+    expect(timers.timeoutCallbacks).toHaveLength(1);
+  });
 });

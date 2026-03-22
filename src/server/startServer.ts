@@ -1346,7 +1346,7 @@ export async function startAgentServer(
           }));
           return;
         }
-        const binding = subscribeJsonRpcThread(ws, threadId);
+        const binding = loadThreadBinding(threadId);
         if (!binding?.session) {
           sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
             code: JSONRPC_ERROR_CODES.invalidParams,
@@ -1355,17 +1355,23 @@ export async function startAgentServer(
           return;
         }
         const thread = buildJsonRpcThreadFromSession(binding.session);
-        sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, { thread }));
-        sendJsonRpc(ws, { method: "thread/started", params: { thread } });
         if (afterSeq > 0) {
           await waitForThreadJournalIdle(threadId);
           binding.session.ensureDisconnectedReplayBuffer();
           replayThreadJournalEvents(ws, threadId, afterSeq);
         }
-        subscribeJsonRpcThread(ws, threadId, afterSeq > 0 ? {
-          initialActiveTurnId: binding.session.activeTurnId,
-          initialAgentText: binding.session.getLatestAssistantText() ?? "",
-        } : undefined);
+        subscribeJsonRpcThread(
+          ws,
+          threadId,
+          binding.session.activeTurnId
+            ? {
+                initialActiveTurnId: binding.session.activeTurnId,
+                initialAgentText: binding.session.getLatestAssistantText() ?? "",
+              }
+            : undefined,
+        );
+        sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, { thread }));
+        sendJsonRpc(ws, { method: "thread/started", params: { thread } });
         return;
       }
       case "thread/list": {

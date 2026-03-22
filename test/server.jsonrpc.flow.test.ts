@@ -456,4 +456,63 @@ describe("server JSON-RPC flows", () => {
       await server.stop();
     }
   });
+
+  test("thread/resume seeds the live projector so finish-only completions survive reconnect", async () => {
+    const tmpDir = await makeTmpProject();
+    let releaseFinish: (() => void) | undefined;
+    const runTurnImpl = async (params: any) => {
+      await params.onModelStreamPart?.({ type: "start" });
+      await params.onModelStreamPart?.({ type: "text-delta", id: "txt_resume_seed", text: "before disconnect" });
+      await new Promise<void>((resolve) => {
+        releaseFinish = resolve;
+      });
+      await params.onModelStreamPart?.({ type: "finish", finishReason: "stop" });
+      return {
+        text: "before disconnect",
+        responseMessages: [],
+      };
+    };
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: runTurnImpl as any,
+    }));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+      const beforeTurnRead = await rpc.sendRequest("thread/read", {
+        threadId: started.result.thread.id,
+        includeTurns: true,
+      });
+      await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "resume me" }],
+      });
+      await rpc.waitFor((message) =>
+        message.method === "item/agentMessage/delta" && message.params.delta === "before disconnect",
+      );
+      rpc.close();
+
+      const replayRpc = await connectJsonRpc(url);
+      const resumeResponse = replayRpc.sendRequest("thread/resume", {
+        threadId: started.result.thread.id,
+        afterSeq: beforeTurnRead.result.journalTailSeq,
+      });
+      await replayRpc.waitFor((message) => message.method === "thread/started");
+      releaseFinish?.();
+
+      const completed = await replayRpc.waitFor((message) =>
+        message.method === "item/completed" && message.params.item.type === "agentMessage",
+      );
+      const resumed = await resumeResponse;
+
+      expect(resumed.result.thread.id).toBe(started.result.thread.id);
+      expect(completed.params.item.text).toBe("before disconnect");
+      replayRpc.close();
+    } finally {
+      releaseFinish?.();
+      await server.stop();
+    }
+  });
 });

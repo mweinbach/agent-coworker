@@ -220,6 +220,57 @@ describe("desktop JSON-RPC event mapping", () => {
   let threadId = "";
   let sessionId = "";
 
+  async function reconnectThreadAndGetSocket() {
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances[0];
+    expect(socket).toBeDefined();
+    return socket as MockJsonRpcSocket;
+  }
+
+  async function expectPromptRequestToStayOnRequestPath(args: {
+    socket: MockJsonRpcSocket;
+    requestId: string;
+    method: string;
+    params?: Record<string, unknown>;
+    expectedModal: Record<string, unknown>;
+    expectedResponse: Record<string, unknown>;
+    answer: () => void;
+  }) {
+    const { socket, requestId, method, params, expectedModal, expectedResponse, answer } = args;
+    const openedPromptRequestIds: string[] = [];
+    const unsubscribe = useAppStore.subscribe((state, prevState) => {
+      if (state.promptModal !== prevState.promptModal && state.promptModal?.threadId === threadId) {
+        openedPromptRequestIds.push(state.promptModal.prompt.requestId);
+      }
+    });
+    const feedLengthBefore = useAppStore.getState().threadRuntimeById[threadId]?.feed.length ?? 0;
+    const notificationCountBefore = useAppStore.getState().notifications.length;
+    const responseCountBefore = socket.responses.length;
+
+    try {
+      socket.requestFromServer(requestId, method, params);
+      await flushAsyncWork();
+      await flushAsyncWork();
+
+      expect(openedPromptRequestIds).toEqual([requestId]);
+      expect(useAppStore.getState().promptModal).toMatchObject(expectedModal);
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.feed ?? []).toHaveLength(feedLengthBefore);
+      expect(useAppStore.getState().notifications).toHaveLength(notificationCountBefore);
+
+      answer();
+
+      expect(socket.responses.slice(responseCountBefore)).toEqual([{ id: requestId, result: expectedResponse }]);
+      expect(useAppStore.getState().promptModal).toBeNull();
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.feed ?? []).toHaveLength(feedLengthBefore);
+      expect(useAppStore.getState().notifications).toHaveLength(notificationCountBefore);
+    } finally {
+      unsubscribe();
+    }
+  }
+
   beforeEach(() => {
     setJsonRpcSocketOverride(MockJsonRpcSocket);
     workspaceId = `ws-${crypto.randomUUID()}`;
@@ -347,12 +398,7 @@ describe("desktop JSON-RPC event mapping", () => {
   });
 
   test("shared JSON-RPC notifications stream assistant output and clear busy state", async () => {
-    await useAppStore.getState().reconnectThread(threadId);
-    await flushAsyncWork();
-    await flushAsyncWork();
-
-    const socket = MockJsonRpcSocket.instances[0];
-    expect(socket).toBeDefined();
+    const socket = await reconnectThreadAndGetSocket();
 
     socket.notify("turn/started", {
       threadId: sessionId,
@@ -383,12 +429,7 @@ describe("desktop JSON-RPC event mapping", () => {
   });
 
   test("shared JSON-RPC reasoning deltas render before the assistant reply", async () => {
-    await useAppStore.getState().reconnectThread(threadId);
-    await flushAsyncWork();
-    await flushAsyncWork();
-
-    const socket = MockJsonRpcSocket.instances[0];
-    expect(socket).toBeDefined();
+    const socket = await reconnectThreadAndGetSocket();
 
     socket.notify("turn/started", {
       threadId: sessionId,
@@ -465,12 +506,7 @@ describe("desktop JSON-RPC event mapping", () => {
   });
 
   test("shared JSON-RPC notifications hydrate live session metadata immediately", async () => {
-    await useAppStore.getState().reconnectThread(threadId);
-    await flushAsyncWork();
-    await flushAsyncWork();
-
-    const socket = MockJsonRpcSocket.instances[0];
-    expect(socket).toBeDefined();
+    const socket = await reconnectThreadAndGetSocket();
 
     socket.notify("cowork/session/info", {
       type: "session_info",
@@ -528,9 +564,7 @@ describe("desktop JSON-RPC event mapping", () => {
   });
 
   test("shared JSON-RPC notifications map remaining live thread events", async () => {
-    await useAppStore.getState().reconnectThread(threadId);
-    await flushAsyncWork();
-    await flushAsyncWork();
+    const socket = await reconnectThreadAndGetSocket();
 
     RUNTIME.pendingThreadSteers.set(threadId, new Map([
       ["steer-1", {
@@ -555,9 +589,6 @@ describe("desktop JSON-RPC event mapping", () => {
         },
       },
     }));
-
-    const socket = MockJsonRpcSocket.instances[0];
-    expect(socket).toBeDefined();
 
     socket.notify("cowork/session/steerAccepted", {
       type: "steer_accepted",
@@ -615,82 +646,69 @@ describe("desktop JSON-RPC event mapping", () => {
     expect(state.notifications.some((entry) => entry.detail === "session/internal_error: boom")).toBe(true);
   });
 
-  test("server ask requests open a prompt and answerAsk responds on the shared socket", async () => {
-    await useAppStore.getState().reconnectThread(threadId);
-    await flushAsyncWork();
-    await flushAsyncWork();
+  test("server ask requests stay on the request path and answerAsk responds on the shared socket", async () => {
+    const socket = await reconnectThreadAndGetSocket();
 
-    const socket = MockJsonRpcSocket.instances[0];
-    socket.requestFromServer("ask-1", "item/tool/requestUserInput", {
-      threadId: sessionId,
-      turnId: "turn-1",
-      itemId: "item-1",
-      question: "Continue?",
-      options: ["Yes", "No"],
-    });
-    await flushAsyncWork();
-    await flushAsyncWork();
-
-    expect(useAppStore.getState().promptModal).toMatchObject({
-      kind: "ask",
-      threadId,
-      prompt: {
-        requestId: "ask-1",
+    await expectPromptRequestToStayOnRequestPath({
+      socket,
+      requestId: "ask-1",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: sessionId,
+        turnId: "turn-1",
+        itemId: "item-1",
         question: "Continue?",
         options: ["Yes", "No"],
       },
+      expectedModal: {
+        kind: "ask",
+        threadId,
+        prompt: {
+          requestId: "ask-1",
+          question: "Continue?",
+          options: ["Yes", "No"],
+        },
+      },
+      expectedResponse: { answer: "Yes" },
+      answer: () => useAppStore.getState().answerAsk(threadId, "ask-1", "Yes"),
     });
-
-    useAppStore.getState().answerAsk(threadId, "ask-1", "Yes");
-
-    expect(socket.responses).toEqual([{ id: "ask-1", result: { answer: "Yes" } }]);
-    expect(useAppStore.getState().promptModal).toBeNull();
   });
 
-  test("server approval requests open a prompt and answerApproval responds on the shared socket", async () => {
-    await useAppStore.getState().reconnectThread(threadId);
-    await flushAsyncWork();
-    await flushAsyncWork();
+  test("server approval requests stay on the request path and answerApproval responds on the shared socket", async () => {
+    const socket = await reconnectThreadAndGetSocket();
 
-    const socket = MockJsonRpcSocket.instances[0];
-    socket.requestFromServer("approval-1", "item/commandExecution/requestApproval", {
-      threadId: sessionId,
-      turnId: "turn-1",
-      itemId: "item-2",
-      command: "rm -rf build",
-      dangerous: true,
-      reason: "requires_manual_review",
-    });
-    await flushAsyncWork();
-    await flushAsyncWork();
-
-    expect(useAppStore.getState().promptModal).toMatchObject({
-      kind: "approval",
-      threadId,
-      prompt: {
-        requestId: "approval-1",
+    await expectPromptRequestToStayOnRequestPath({
+      socket,
+      requestId: "approval-1",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: sessionId,
+        turnId: "turn-1",
+        itemId: "item-2",
         command: "rm -rf build",
         dangerous: true,
-        reasonCode: "requires_manual_review",
+        reason: "requires_manual_review",
       },
+      expectedModal: {
+        kind: "approval",
+        threadId,
+        prompt: {
+          requestId: "approval-1",
+          command: "rm -rf build",
+          dangerous: true,
+          reasonCode: "requires_manual_review",
+        },
+      },
+      expectedResponse: { decision: "accept" },
+      answer: () => useAppStore.getState().answerApproval(threadId, "approval-1", true),
     });
-
-    useAppStore.getState().answerApproval(threadId, "approval-1", true);
-
-    expect(socket.responses).toEqual([{ id: "approval-1", result: { decision: "accept" } }]);
-    expect(useAppStore.getState().promptModal).toBeNull();
   });
 
   test("shared JSON-RPC user message notifications reconcile optimistic sends", async () => {
-    await useAppStore.getState().reconnectThread(threadId);
-    await flushAsyncWork();
-    await flushAsyncWork();
+    const socket = await reconnectThreadAndGetSocket();
 
     await useAppStore.getState().sendMessage("hello once");
     await flushAsyncWork();
-
-    const socket = MockJsonRpcSocket.instances[0];
-    expect(socket).toBeDefined();
 
     const turnStartParams = jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params as
       | { clientMessageId?: string }

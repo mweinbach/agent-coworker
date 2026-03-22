@@ -3,6 +3,7 @@ import {
   resolveDefaultLmStudioModelMetadata,
   resolveLmStudioDiscoveredModelMetadata,
 } from "../providers/lmstudio/catalog";
+import { resolveAwsBedrockProxyDiscoveredModel } from "../providers/awsBedrockProxyShared";
 import type { ProviderName } from "../types";
 import {
   assertSupportedModel,
@@ -25,14 +26,18 @@ function toResolvedStaticModel(provider: ProviderName, modelId: string, source =
   };
 }
 
-function toResolvedDynamicModel(provider: ProviderName, modelId: string): ResolvedModelMetadata {
+function toResolvedDynamicModel(
+  provider: ProviderName,
+  modelId: string,
+  overrides: Partial<Pick<ResolvedModelMetadata, "displayName" | "knowledgeCutoff" | "supportsImageInput">> = {},
+): ResolvedModelMetadata {
   const fallback = defaultSupportedModel(provider);
   return {
     id: modelId,
     provider,
-    displayName: modelId,
-    knowledgeCutoff: fallback.knowledgeCutoff,
-    supportsImageInput: fallback.supportsImageInput,
+    displayName: overrides.displayName ?? modelId,
+    knowledgeCutoff: overrides.knowledgeCutoff ?? fallback.knowledgeCutoff,
+    supportsImageInput: overrides.supportsImageInput ?? fallback.supportsImageInput,
     promptTemplate: fallback.promptTemplate,
     providerOptionsDefaults: { ...fallback.providerOptionsDefaults },
     source: "dynamic",
@@ -85,7 +90,21 @@ export async function resolveModelMetadata(
   } = {},
 ): Promise<ResolvedModelMetadata> {
   if (provider === "aws-bedrock-proxy") {
-    return toResolvedDynamicModel(provider, normalizeModelIdForProvider(provider, modelId, opts.source));
+    const normalizedModelId = normalizeModelIdForProvider(provider, modelId, opts.source);
+    const discovered = await resolveAwsBedrockProxyDiscoveredModel({
+      modelId: normalizedModelId,
+      providerOptions: opts.providerOptions,
+      env: opts.env,
+      fetchImpl: opts.fetchImpl,
+    });
+    if (discovered) {
+      return toResolvedDynamicModel(provider, discovered.id, {
+        displayName: discovered.displayName,
+        knowledgeCutoff: discovered.knowledgeCutoff,
+        supportsImageInput: discovered.supportsImageInput,
+      });
+    }
+    return toResolvedDynamicModel(provider, normalizedModelId);
   }
   if (provider !== "lmstudio") {
     return toResolvedStaticModel(provider, modelId, opts.source);

@@ -68,6 +68,13 @@ async function withMockedFetch<T>(
   }
 }
 
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 function skillDoc(name: string, description: string, body = "# Skill Body\n"): string {
   return ["---", `name: \"${name}\"`, `description: \"${description}\"`, "---", "", body].join("\n");
 }
@@ -194,6 +201,32 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("local/qwen-2.5");
     expect(prompt).toContain("Available model overrides for the current provider (LM Studio):");
     expect(prompt).toContain("Any LM Studio LLM key discovered at runtime is allowed.");
+  });
+
+  test("preserves image guidance for discovered AWS Bedrock Proxy vision models", async () => {
+    const config = makeConfig({
+      provider: "aws-bedrock-proxy",
+      model: "vision-router",
+      preferredChildModel: "vision-router",
+      knowledgeCutoff: "Unknown",
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.example.com/v1",
+        },
+      },
+    });
+
+    const prompt = await withMockedFetch(
+      (async () => jsonResponse({
+        object: "list",
+        data: [
+          { id: "vision-router", object: "model", modalities: ["text", "image"] },
+        ],
+      })) as typeof fetch,
+      async () => await loadSystemPrompt(config),
+    );
+
+    expectImageInspectionGuidance(prompt);
   });
 
   test("renders dynamic spawnAgent roles and current-provider model guidance", async () => {

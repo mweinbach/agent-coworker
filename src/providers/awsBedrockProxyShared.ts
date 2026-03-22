@@ -359,3 +359,33 @@ export async function discoverAwsBedrockProxyModelsDetailed(opts: {
     clearTimeout(timer);
   }
 }
+
+export async function resolveAwsBedrockProxyDiscoveredModel(opts: {
+  modelId: string;
+  baseUrl?: string;
+  apiKey?: string;
+  providerOptions?: unknown;
+  env?: MaybeEnv;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+}): Promise<AwsBedrockProxyDiscoveredModel | null> {
+  const modelId = asNonEmptyString(opts.modelId);
+  if (!modelId) return null;
+
+  const discovery = await discoverAwsBedrockProxyModelsDetailed({
+    baseUrl: resolveAwsBedrockProxyBaseUrl({
+      baseUrl: opts.baseUrl,
+      providerOptions: opts.providerOptions,
+      env: opts.env,
+    }),
+    apiKey: resolveAwsBedrockProxyApiKey({
+      savedKey: opts.apiKey,
+      env: opts.env,
+    }),
+    fetchImpl: opts.fetchImpl,
+    timeoutMs: opts.timeoutMs,
+  });
+
+  if (!discovery.ok) return null;
+  return discovery.models.find((model) => model.id === modelId) ?? null;
+}

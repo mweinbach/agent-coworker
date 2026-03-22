@@ -38,7 +38,7 @@ import {
 import { getFireworksModelSpec, resolveFireworksApiKey } from "../providers/fireworksShared";
 import { getTogetherModelSpec, resolveTogetherApiKey } from "../providers/togetherShared";
 import type { ModelMessage, ProviderName } from "../types";
-import { getResolvedModelMetadataSync } from "../models/metadata";
+import { getResolvedModelMetadataSync, resolveModelMetadata } from "../models/metadata";
 import type { TelemetrySettings } from "../observability/runtime";
 import {
   continuationMatchesTarget,
@@ -361,15 +361,20 @@ function getNvidiaPiModel(modelId: string): PiModel | null {
   };
 }
 
-function getAwsBedrockProxyPiModel(modelId: string, baseUrl: string): PiModel {
+function getAwsBedrockProxyPiModel(opts: {
+  modelId: string;
+  baseUrl: string;
+  displayName?: string;
+  supportsImageInput?: boolean;
+}): PiModel {
   return {
-    id: modelId,
-    name: modelId,
+    id: opts.modelId,
+    name: opts.displayName ?? opts.modelId,
     api: "openai-completions",
     provider: "aws-bedrock-proxy",
-    baseUrl,
+    baseUrl: opts.baseUrl,
     reasoning: true,
-    input: ["text"],
+    input: opts.supportsImageInput ? ["text", "image"] : ["text"],
     contextWindow: 262_144,
     maxTokens: 65_536,
   };
@@ -794,20 +799,31 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
   }
 
   if (provider === "aws-bedrock-proxy") {
+    const providerOptions = params.providerOptions ?? params.config.providerOptions;
     const baseUrl = resolveAwsBedrockProxyBaseUrl({
       config: params.config,
-      providerOptions: params.providerOptions ?? params.config.providerOptions,
+      providerOptions,
     });
     if (!baseUrl) {
       throw new Error(
         "Missing AWS_BEDROCK_PROXY_BASE_URL (or providerOptions[\"aws-bedrock-proxy\"].baseUrl) for provider aws-bedrock-proxy.",
       );
     }
+    const apiKey = resolveAwsBedrockProxyApiKey({
+      savedKey: getSavedProviderApiKey(params.config, "aws-bedrock-proxy"),
+    });
+    const resolvedMetadata = await resolveModelMetadata(provider, modelId, {
+      providerOptions,
+      source: "model",
+    });
     return {
-      model: getAwsBedrockProxyPiModel(modelId, baseUrl),
-      apiKey: resolveAwsBedrockProxyApiKey({
-        savedKey: getSavedProviderApiKey(params.config, "aws-bedrock-proxy"),
+      model: getAwsBedrockProxyPiModel({
+        modelId: resolvedMetadata.id,
+        baseUrl,
+        displayName: resolvedMetadata.displayName,
+        supportsImageInput: resolvedMetadata.supportsImageInput,
       }),
+      apiKey,
       headers: awsBedrockProxyForcedHeaders(),
     };
   }

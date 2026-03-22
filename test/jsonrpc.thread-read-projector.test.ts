@@ -350,4 +350,95 @@ describe("JSON-RPC thread read projector", () => {
       "second",
     ]);
   });
+
+  test("drops a late aggregate reasoning replay item that only repeats earlier reasoning", () => {
+    const turns = projectThreadTurnsFromJournal([
+      {
+        threadId: "thread-1",
+        seq: 1,
+        ts: "2026-03-22T15:39:39.127Z",
+        eventType: "turn/started",
+        turnId: "turn-1",
+        itemId: null,
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "inProgress", items: [] },
+        },
+      },
+      {
+        threadId: "thread-1",
+        seq: 2,
+        ts: "2026-03-22T15:39:41.772Z",
+        eventType: "item/completed",
+        turnId: "turn-1",
+        itemId: "reasoning-1",
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "reasoning-1", type: "reasoning", mode: "reasoning", text: "First step." },
+        },
+      },
+      {
+        threadId: "thread-1",
+        seq: 3,
+        ts: "2026-03-22T15:39:41.773Z",
+        eventType: "item/completed",
+        turnId: "turn-1",
+        itemId: "reasoning-2",
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "reasoning-2", type: "reasoning", mode: "reasoning", text: "Second step." },
+        },
+      },
+      {
+        threadId: "thread-1",
+        seq: 4,
+        ts: "2026-03-22T15:39:41.774Z",
+        eventType: "item/completed",
+        turnId: "turn-1",
+        itemId: "assistant-1",
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "assistant-1", type: "agentMessage", text: "Final answer." },
+        },
+      },
+      {
+        threadId: "thread-1",
+        seq: 5,
+        ts: "2026-03-22T15:39:41.775Z",
+        eventType: "item/completed",
+        turnId: "turn-1",
+        itemId: "reasoning-3",
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "reasoning-3",
+            type: "reasoning",
+            mode: "reasoning",
+            text: "First step.\n\nSecond step.",
+          },
+        },
+      },
+    ] as any);
+
+    expect(turns).toEqual([
+      {
+        id: "turn-1",
+        status: "inProgress",
+        items: [
+          { id: "reasoning-1", type: "reasoning", mode: "reasoning", text: "First step." },
+          { id: "reasoning-2", type: "reasoning", mode: "reasoning", text: "Second step." },
+          { id: "assistant-1", type: "agentMessage", text: "Final answer." },
+        ],
+      },
+    ]);
+  });
 });

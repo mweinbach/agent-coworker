@@ -11,7 +11,7 @@
 
 - `src/server/jsonrpc/legacyEventProjector.ts` and `src/server/jsonrpc/journalProjector.ts` now assign occurrence-stable item ids per turn/stream key for repeated reasoning and tool lifecycles, so PI/OpenCode providers can reuse `s0` or fallback tool ids across steps without collapsing later items onto the first occurrence.
 - The same projector path now drops the late aggregate `reasoning` event emitted after PI/OpenCode turns when it only repeats the already-streamed reasoning text, preventing reasoning from appearing below the final assistant reply.
-- `src/server/jsonrpc/threadReadProjector.ts` now disambiguates older repeated journal item ids on replay, preserving chronological order for already-persisted PI/OpenCode journals instead of overwriting later occurrences in a per-turn map.
+- `src/server/jsonrpc/threadReadProjector.ts` now disambiguates older repeated journal item ids on replay and drops late aggregate reasoning items that only repeat earlier streamed reasoning, so already-persisted PI/OpenCode journals preserve chronology without replaying the old reasoning-after-answer artifact.
 - Verification passed with `bun test test/jsonrpc.projectors.test.ts`, `bun test test/jsonrpc.thread-read-projector.test.ts`, `bun test apps/desktop/test/protocol-v2-events.test.ts`, and `bun run typecheck`.
 
 ## Fix JSON-RPC Gemini Reasoning and Tool Projection

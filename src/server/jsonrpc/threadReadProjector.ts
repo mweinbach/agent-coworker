@@ -19,6 +19,51 @@ function occurrenceItemId(baseId: string, occurrence: number): string {
   return occurrence <= 1 ? baseId : `${baseId}:${occurrence}`;
 }
 
+function normalizeReasoningText(text: string): string | null {
+  const normalized = text.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeTranscriptReplayText(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function dedupeReplayReasoningItems(items: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const reasoningHistory: string[] = [];
+  const seenReasoningTexts = new Set<string>();
+  const out: Array<Record<string, unknown>> = [];
+
+  for (const item of items) {
+    if (item.type !== "reasoning" || typeof item.text !== "string") {
+      out.push(item);
+      continue;
+    }
+
+    const normalized = normalizeReasoningText(item.text);
+    if (!normalized) continue;
+    if (seenReasoningTexts.has(normalized)) {
+      continue;
+    }
+
+    const aggregate = normalizeTranscriptReplayText(reasoningHistory.join("\n\n"));
+    if (aggregate && aggregate === normalizeTranscriptReplayText(normalized)) {
+      continue;
+    }
+
+    seenReasoningTexts.add(normalized);
+    reasoningHistory.push(normalized);
+    out.push(item);
+  }
+
+  return out;
+}
+
 export function createThreadTurnProjector() {
   const turns = new Map<string, ProjectedTurnState>();
   const order: string[] = [];
@@ -74,6 +119,9 @@ export function createThreadTurnProjector() {
           event.eventType === "item/started"
             ? projectStartedItemId(turn, rawId)
             : currentProjectedItemId(turn, rawId);
+        if (event.eventType === "item/completed" && !turn.items.has(projectedId)) {
+          turn.itemOrder.push(projectedId);
+        }
         turn.items.set(projectedId, { ...item, id: projectedId });
         break;
       }
@@ -133,7 +181,9 @@ export function createThreadTurnProjector() {
     return {
       id: turn.id,
       status: turn.status,
-      items: turn.itemOrder.map((itemId) => turn.items.get(itemId)!).filter(Boolean),
+      items: dedupeReplayReasoningItems(
+        turn.itemOrder.map((itemId) => turn.items.get(itemId)!).filter(Boolean),
+      ),
     };
   });
 

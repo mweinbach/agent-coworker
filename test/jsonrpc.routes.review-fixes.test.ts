@@ -328,6 +328,47 @@ describe("JSON-RPC extracted route review fixes", () => {
     expect(response.result).toBeUndefined();
   });
 
+  test("cowork/skills/installation/read returns an emitted validation error instead of timing out", async () => {
+    const harness = createRouteHarness({
+      getSkillInstallation: async () => {
+        harness.emitted.push(sessionError("Installation ID is required"));
+      },
+    });
+
+    const handlers = createSkillsMemoryAndWorkspaceBackupRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/skills/installation/read", {
+      cwd: "C:/workspace",
+      installationId: "   ",
+    });
+
+    expect(response.error?.message).toContain("Installation ID is required");
+    expect(response.result).toBeUndefined();
+  });
+
+  for (const scenario of [
+    { method: "cowork/skills/installation/enable", sessionMethod: "enableSkillInstallation" },
+    { method: "cowork/skills/installation/disable", sessionMethod: "disableSkillInstallation" },
+    { method: "cowork/skills/installation/delete", sessionMethod: "deleteSkillInstallation" },
+    { method: "cowork/skills/installation/update", sessionMethod: "updateSkillInstallation" },
+  ] as const) {
+    test(`${scenario.method} returns an emitted validation error instead of timing out`, async () => {
+      const harness = createRouteHarness({
+        [scenario.sessionMethod]: async () => {
+          harness.emitted.push(sessionError('Skill installation "missing-installation" was not found'));
+        },
+      });
+
+      const handlers = createSkillsMemoryAndWorkspaceBackupRouteHandlers(harness.context);
+      const response = await harness.invoke(handlers, scenario.method, {
+        cwd: "C:/workspace",
+        installationId: "missing-installation",
+      });
+
+      expect(response.error?.message).toContain('Skill installation "missing-installation" was not found');
+      expect(response.result).toBeUndefined();
+    });
+  }
+
   for (const scenario of [
     { method: "cowork/memory/list", sessionMethod: "emitMemories" },
     { method: "cowork/memory/upsert", sessionMethod: "upsertMemory", params: { content: "hello" } },

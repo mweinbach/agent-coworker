@@ -59,10 +59,89 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     sessionConfig: any;
     enableMcp: boolean | null | undefined;
   };
+  type ThreadJsonRpcApplyResult = {
+    ok: boolean;
+    errorMessage?: string;
+  };
+  class ThreadDefaultsApplyResponseError extends Error {}
 
   const stringArrayEqual = (left: string[] | undefined, right: string[] | undefined): boolean => {
     if ((left?.length ?? 0) !== (right?.length ?? 0)) return false;
     return (left ?? []).every((value, index) => value === (right ?? [])[index]);
+  };
+
+  const applyThreadJsonRpcResponseState = (
+    threadId: string,
+    sessionId: string,
+    result: unknown,
+  ): ThreadJsonRpcApplyResult => {
+    const events = Array.isArray((result as { events?: unknown[] })?.events)
+      ? (result as { events: unknown[] }).events
+      : (result as { event?: unknown })?.event !== undefined
+        ? [(result as { event: unknown }).event]
+        : [];
+    if (events.length === 0) {
+      return { ok: true };
+    }
+
+    const unset = Symbol("thread-response-state-unset");
+    let nextConfig: Record<string, unknown> | typeof unset = unset;
+    let nextSessionConfig: Record<string, unknown> | typeof unset = unset;
+    let nextEnableMcp: boolean | typeof unset = unset;
+    let errorMessage: string | undefined;
+
+    for (const event of events) {
+      if (!event || typeof event !== "object") continue;
+      const candidate = event as {
+        type?: string;
+        sessionId?: unknown;
+        message?: unknown;
+        config?: unknown;
+        enableMcp?: unknown;
+      };
+      if (candidate.type === "error") {
+        errorMessage = typeof candidate.message === "string" && candidate.message.trim()
+          ? candidate.message
+          : "Unable to apply workspace defaults to the active thread.";
+        continue;
+      }
+      if (candidate.sessionId !== sessionId) {
+        continue;
+      }
+      if (candidate.type === "config_updated" && candidate.config && typeof candidate.config === "object") {
+        nextConfig = candidate.config as Record<string, unknown>;
+        continue;
+      }
+      if (candidate.type === "session_config" && candidate.config && typeof candidate.config === "object") {
+        nextSessionConfig = candidate.config as Record<string, unknown>;
+        continue;
+      }
+      if (candidate.type === "session_settings" && typeof candidate.enableMcp === "boolean") {
+        nextEnableMcp = candidate.enableMcp;
+      }
+    }
+
+    if (nextConfig !== unset || nextSessionConfig !== unset || nextEnableMcp !== unset) {
+      set((state) => {
+        const runtime = state.threadRuntimeById[threadId];
+        if (!runtime || runtime.sessionId !== sessionId) {
+          return {};
+        }
+        return {
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            [threadId]: {
+              ...runtime,
+              ...(nextConfig !== unset ? { config: nextConfig as typeof runtime.config } : {}),
+              ...(nextSessionConfig !== unset ? { sessionConfig: nextSessionConfig as typeof runtime.sessionConfig } : {}),
+              ...(nextEnableMcp !== unset ? { enableMcp: nextEnableMcp } : {}),
+            },
+          },
+        };
+      });
+    }
+
+    return errorMessage ? { ok: false, errorMessage } : { ok: true };
   };
 
   const userProfileEqual = (
@@ -434,7 +513,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         inFlight: true,
       });
       try {
-        await requestJsonRpc(get, set, thread.workspaceId, "cowork/session/defaults/apply", {
+        const result = await requestJsonRpc(get, set, thread.workspaceId, "cowork/session/defaults/apply", {
           threadId: rt.sessionId,
           cwd: ws.path,
           ...(message.provider !== undefined ? { provider: message.provider } : {}),
@@ -442,15 +521,26 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           ...(message.enableMcp !== undefined ? { enableMcp: message.enableMcp } : {}),
           ...(message.config !== undefined ? { config: message.config } : {}),
         });
+        const applied = applyThreadJsonRpcResponseState(threadId, rt.sessionId, result);
+        if (!applied.ok) {
+          throw new ThreadDefaultsApplyResponseError(
+            applied.errorMessage ?? "Unable to apply workspace defaults to the active thread.",
+          );
+        }
         appendThreadTranscript(threadId, "client", message);
-      } catch {
+      } catch (error) {
+        const detail = error instanceof ThreadDefaultsApplyResponseError && error.message.trim()
+          ? error.message
+          : "Unable to apply workspace defaults to the active thread.";
         set((s) => ({
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),
             kind: "error",
-            title: "Not connected",
-            detail: "Unable to apply workspace defaults to the active thread.",
+            title: detail === "Unable to apply workspace defaults to the active thread."
+              ? "Not connected"
+              : "Unable to apply workspace defaults",
+            detail,
           }),
         }));
       } finally {

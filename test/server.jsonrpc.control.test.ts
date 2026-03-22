@@ -222,10 +222,55 @@ describe("server JSON-RPC control methods", () => {
       expect(response.error.message).toContain('Skill installation "missing-installation" was not found');
       expect(response.result).toBeUndefined();
       rpc.close();
+      } finally {
+        server.stop();
+      }
+  });
+
+  test("cowork/skills/installation/read returns the emitted validation error instead of timing out", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request("cowork/skills/installation/read", {
+        cwd: tmpDir,
+        installationId: "   ",
+      });
+
+      expect(response.error.message).toContain("Installation ID is required");
+      expect(response.result).toBeUndefined();
+      rpc.close();
     } finally {
       server.stop();
     }
   });
+
+  for (const method of [
+    "cowork/skills/installation/enable",
+    "cowork/skills/installation/disable",
+    "cowork/skills/installation/delete",
+    "cowork/skills/installation/update",
+  ] as const) {
+    test(`${method} returns the emitted validation error instead of timing out`, async () => {
+      const tmpDir = await makeTmpProject();
+      const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+      try {
+        const rpc = await connectJsonRpc(url);
+        const response = await rpc.request(method, {
+          cwd: tmpDir,
+          installationId: "missing-installation",
+        });
+
+        expect(response.error.message).toContain('Skill installation "missing-installation" was not found');
+        expect(response.result).toBeUndefined();
+        rpc.close();
+      } finally {
+        server.stop();
+      }
+    });
+  }
 
   for (const scenario of [
     {

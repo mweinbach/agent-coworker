@@ -208,3 +208,16 @@
 - `src/server/session/AgentSession.ts`, `src/server/session/SessionSnapshotProjector.ts`, and `src/server/jsonrpc/routes/shared.ts` now expose a non-cloning live snapshot read path for JSON-RPC/session summary callers, avoiding redundant deep copies of large live snapshots during server reads.
 - `apps/desktop/src/ui/chat/activityGroups.ts` now preserves feed chronology when mixing reasoning and tool entries, while still deduping adjacent identical reasoning notes and merging only truly adjacent compatible tool lifecycle rows.
 - Verification passed with `bun test test/server.jsonrpc.flow.test.ts --test-name-pattern "thread/resume replays a pending user input request after reconnect|thread/resume replays a pending approval request after reconnect|thread/read and thread/resume replay journals beyond 1000 events"`, `bun test apps/desktop/test/chat-activity-group-card.test.tsx apps/desktop/test/chat-activity-groups.test.ts`, `bun run typecheck`, and `bun run test`.
+
+## Final Comment Cleanup
+
+- [x] Apply JSON-RPC response-envelope thread state to `applyWorkspaceDefaultsToThread` without routing thread results through the workspace control reducer.
+- [x] Return emitted skill-installation read and mutation errors immediately in both the legacy JSON-RPC switch and the extracted route handlers.
+- [x] Add focused desktop and server regressions, then re-run typecheck and the full Bun test lane before resolving the remaining review threads.
+
+## Final Comment Cleanup Review
+
+- `apps/desktop/src/app/store.actions/workspaceDefaults.ts` now normalizes JSON-RPC `event`/`events` payloads for thread-scoped defaults application and applies thread runtime `config`, `sessionConfig`, and `enableMcp` state directly from the response envelope, while still preserving the old generic transport-failure notification for socket/request errors.
+- `src/server/startServer.ts` and `src/server/jsonrpc/routes/skillsMemoryAndWorkspaceBackup.ts` now treat emitted validation errors from `cowork/skills/installation/read` and `cowork/skills/installation/{enable,disable,delete,update}` as terminal JSON-RPC errors instead of waiting for the capture timeout.
+- `apps/desktop/test/workspace-settings-sync.test.ts`, `test/jsonrpc.routes.review-fixes.test.ts`, and `test/server.jsonrpc.control.test.ts` now lock down the thread-response envelope state path plus the skill-installation error returns in both extracted-route and live-server coverage.
+- Verification passed with `bun test apps/desktop/test/workspace-settings-sync.test.ts`, `bun test test/jsonrpc.routes.review-fixes.test.ts`, `bun test test/server.jsonrpc.control.test.ts`, `bun run typecheck`, and `bun run test`.

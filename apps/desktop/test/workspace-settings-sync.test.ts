@@ -1276,6 +1276,65 @@ describe("workspace settings sync", () => {
     });
   });
 
+  test("applyWorkspaceDefaultsToThread applies response-envelope thread state when no notification arrives", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread();
+    jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async () => ({
+      events: [
+        {
+          type: "config_updated",
+          sessionId,
+          config: {
+            provider: "google",
+            model: "gemini-3-pro",
+            workingDirectory: "/tmp/workspace",
+            outputDirectory: "/tmp/workspace/output",
+          },
+        },
+        {
+          type: "session_settings",
+          sessionId,
+          enableMcp: false,
+          enableMemory: true,
+          memoryRequireApproval: false,
+        },
+        {
+          type: "session_config",
+          sessionId,
+          config: {
+            yolo: false,
+            observabilityEnabled: false,
+            backupsEnabled: true,
+            defaultBackupsEnabled: true,
+            enableMemory: true,
+            memoryRequireApproval: false,
+            preferredChildModel: "gemini-3-pro",
+            childModelRoutingMode: "same-provider",
+            preferredChildModelRef: "google:gemini-3-pro",
+            allowedChildModelRefs: [],
+            maxSteps: 100,
+            toolOutputOverflowChars: 32000,
+          },
+        },
+      ],
+    }));
+
+    await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
+    await flushAsyncWork();
+
+    const runtime = useAppStore.getState().threadRuntimeById[threadId];
+    expect(runtime.config).toMatchObject({
+      provider: "google",
+      model: "gemini-3-pro",
+    });
+    expect(runtime.enableMcp).toBe(false);
+    expect(runtime.sessionConfig).toMatchObject({
+      preferredChildModel: "gemini-3-pro",
+      preferredChildModelRef: "google:gemini-3-pro",
+      toolOutputOverflowChars: 32000,
+    });
+  });
+
   test("applyWorkspaceDefaultsToThread preserves allowBeforeHydration when deferring for a busy thread", async () => {
     primeWorkspaceConnection();
     const { threadId } = seedConnectedThread();

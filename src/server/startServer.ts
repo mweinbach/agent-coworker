@@ -2303,13 +2303,15 @@ export async function startAgentServer(
       case "cowork/skills/installation/read": {
         const cwd = requireWorkspacePath(params, message.method);
         const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
-        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
-          await captureSessionEvent(
-            binding,
-            async () => await session.getSkillInstallation(installationId),
-            (event): event is Extract<ServerEvent, { type: "skill_installation" }> => event.type === "skill_installation",
-          ),
+        const event = await captureWorkspaceControlSessionOutcome(
+          cwd,
+          async (session) => await session.getSkillInstallation(installationId),
+          (event): event is Extract<ServerEvent, { type: "skill_installation" }> => event.type === "skill_installation",
         );
+        if (event.type === "error") {
+          sendJsonRpcSessionMutationError(ws, message.id, event);
+          return;
+        }
         emitControlResult(ws, message.id, event);
         return;
       }
@@ -2347,18 +2349,20 @@ export async function startAgentServer(
       case "cowork/skills/installation/update": {
         const cwd = requireWorkspacePath(params, message.method);
         const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
-        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
-          await captureSessionEvent(
-            binding,
-            async () => {
-              if (message.method === "cowork/skills/installation/enable") await session.enableSkillInstallation(installationId);
-              if (message.method === "cowork/skills/installation/disable") await session.disableSkillInstallation(installationId);
-              if (message.method === "cowork/skills/installation/delete") await session.deleteSkillInstallation(installationId);
-              if (message.method === "cowork/skills/installation/update") await session.updateSkillInstallation(installationId);
-            },
-            (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
-          ),
+        const event = await captureWorkspaceControlSessionOutcome(
+          cwd,
+          async (session) => {
+            if (message.method === "cowork/skills/installation/enable") await session.enableSkillInstallation(installationId);
+            if (message.method === "cowork/skills/installation/disable") await session.disableSkillInstallation(installationId);
+            if (message.method === "cowork/skills/installation/delete") await session.deleteSkillInstallation(installationId);
+            if (message.method === "cowork/skills/installation/update") await session.updateSkillInstallation(installationId);
+          },
+          (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
         );
+        if (event.type === "error") {
+          sendJsonRpcSessionMutationError(ws, message.id, event);
+          return;
+        }
         emitControlResult(ws, message.id, event);
         return;
       }

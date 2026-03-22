@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
+import { hiddenProviderNamesFromUiState } from "../../app/providerUiState";
 import { useAppStore } from "../../app/store";
 import type { OnboardingStep } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
@@ -542,7 +543,7 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
   const backupsEnabled = workspace?.defaultBackupsEnabled ?? true;
 
   const modelSelectorVisibility = useMemo<CatalogVisibilityOptions>(() => ({
-    hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
+    hiddenProviders: hiddenProviderNamesFromUiState(providerUiState),
     hiddenModelsByProvider: {
       lmstudio: providerUiState.lmstudio.hiddenModels,
     },

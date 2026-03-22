@@ -243,6 +243,9 @@ const persistedProviderUiStateSchema = z.object({
       z.array(nonEmptyStringSchema),
     ),
   }).optional(),
+  awsBedrockProxy: z.object({
+    enabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
+  }).optional(),
 }).optional();
 
 export const persistedStateInputSchema: z.ZodType<PersistedState> = z.object({

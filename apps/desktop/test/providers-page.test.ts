@@ -76,6 +76,7 @@ const defaultProviderActions = {
   requestProviderAuthMethods: useAppStore.getState().requestProviderAuthMethods,
   requestUserConfig: useAppStore.getState().requestUserConfig,
   setGlobalOpenAiProxyBaseUrl: useAppStore.getState().setGlobalOpenAiProxyBaseUrl,
+  setAwsBedrockProxyEnabled: useAppStore.getState().setAwsBedrockProxyEnabled,
   refreshProviderStatus: useAppStore.getState().refreshProviderStatus,
   restartWorkspaceServer: useAppStore.getState().restartWorkspaceServer,
 };
@@ -131,6 +132,9 @@ describe("desktop providers page", () => {
       workspaceRuntimeById: {},
       providerConnected: [],
       providerUiState: {
+        awsBedrockProxy: {
+          enabled: true,
+        },
         lmstudio: {
           enabled: false,
           hiddenModels: [],
@@ -726,6 +730,7 @@ describe("desktop providers page", () => {
       }),
     );
 
+    expect(html).toContain("Disable");
     expect(html).toContain("Global proxy URL");
     expect(html).toContain("~/.agent/config.json");
     expect(html).toContain("https://proxy.example.com/v1");
@@ -735,6 +740,46 @@ describe("desktop providers page", () => {
     expect(html).toContain("Proxy token");
     expect(html).toContain("Paste your LiteLLM proxy token");
     expect(html).toContain("Use the LiteLLM proxy token configured on your proxy server");
+  });
+
+  test("aws-bedrock-proxy card renders disabled badge and enable action when UI-hidden", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      providerStatusByName: {
+        "aws-bedrock-proxy": {
+          provider: "aws-bedrock-proxy",
+          authorized: true,
+          verified: false,
+          mode: "api_key",
+          account: null,
+          message: "Proxy token saved.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+      } as any,
+      providerCatalog: [
+        { id: "aws-bedrock-proxy", name: "AWS Bedrock Proxy", models: [], defaultModel: "" },
+      ] as any,
+      providerAuthMethodsByProvider: {
+        "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+      } as any,
+      providerUiState: {
+        ...useAppStore.getState().providerUiState,
+        awsBedrockProxy: {
+          enabled: false,
+        },
+      },
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:aws-bedrock-proxy",
+      }),
+    );
+
+    expect(html).toContain("Disabled");
+    expect(html).toContain("Enable");
+    expect(html).toContain("Disabled providers stay out of provider and model selectors");
+    expect(html).toContain("Global proxy URL");
   });
 
   test("renders selected workspace startup failure inline with restart action", () => {
@@ -909,6 +954,9 @@ describe("desktop providers page", () => {
         },
       ] as any,
       providerUiState: {
+        awsBedrockProxy: {
+          enabled: true,
+        },
         lmstudio: {
           enabled: true,
           hiddenModels: ["llama/llama-3.2-vision"],
@@ -951,6 +999,9 @@ describe("desktop providers page", () => {
       } as any,
       providerCatalog: [],
       providerUiState: {
+        awsBedrockProxy: {
+          enabled: true,
+        },
         lmstudio: {
           enabled: true,
           hiddenModels: [],
@@ -1008,6 +1059,9 @@ describe("desktop providers page", () => {
             },
           ] as any,
           providerUiState: {
+            awsBedrockProxy: {
+              enabled: true,
+            },
             lmstudio: {
               enabled: false,
               hiddenModels: [],
@@ -1045,6 +1099,58 @@ describe("desktop providers page", () => {
         modelCheckbox.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
       expect(setLmStudioModelVisible).toHaveBeenCalledWith("qwen/qwen3-30b-a3b", false);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("AWS Bedrock Proxy card action calls local enable handler", async () => {
+    const harness = setupJsdom();
+    const setAwsBedrockProxyEnabled = mock(async () => {});
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          ...useAppStore.getState(),
+          providerCatalog: [
+            {
+              id: "aws-bedrock-proxy",
+              name: "AWS Bedrock Proxy",
+              models: [],
+              defaultModel: "",
+            },
+          ] as any,
+          providerAuthMethodsByProvider: {
+            "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+          } as any,
+          providerUiState: {
+            ...useAppStore.getState().providerUiState,
+            awsBedrockProxy: {
+              enabled: true,
+            },
+          },
+          setAwsBedrockProxyEnabled,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(ProvidersPage, { initialExpandedSectionId: "provider:aws-bedrock-proxy" }));
+      });
+
+      const disableButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Disable");
+      if (!disableButton) throw new Error("missing AWS Bedrock Proxy disable button");
+      await act(async () => {
+        disableButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+      expect(setAwsBedrockProxyEnabled).toHaveBeenCalledWith(false);
 
       await act(async () => {
         root.unmount();

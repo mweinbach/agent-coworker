@@ -525,6 +525,40 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
       }
     },
 
+    setAwsBedrockProxyEnabled: async (enabled) => {
+      const previousEnabled = get().providerUiState.awsBedrockProxy.enabled;
+      set((s) => ({
+        providerUiState: {
+          ...s.providerUiState,
+          awsBedrockProxy: {
+            ...s.providerUiState.awsBedrockProxy,
+            enabled,
+          },
+        },
+      }));
+      try {
+        await persistNow(get);
+      } catch (error) {
+        console.error("Failed to persist AWS Bedrock Proxy enabled state", error);
+        set((s) => ({
+          providerUiState: {
+            ...s.providerUiState,
+            awsBedrockProxy: {
+              ...s.providerUiState.awsBedrockProxy,
+              enabled: previousEnabled,
+            },
+          },
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Save failed",
+            detail: "Unable to save AWS Bedrock Proxy settings.",
+          }),
+        }));
+      }
+    },
+
     setLmStudioEnabled: async (enabled) => {
       const previousEnabled = get().providerUiState.lmstudio.enabled;
       set((s) => ({

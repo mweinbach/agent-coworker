@@ -47,6 +47,7 @@ import {
   type WorkspaceRecord,
   type WorkspaceUserProfile,
 } from "../../../app/types";
+import { hiddenProviderNamesFromUiState } from "../../../app/providerUiState";
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -1121,7 +1122,7 @@ export function WorkspacesPage() {
   const yolo = ws?.yolo ?? false;
 
   const modelSelectorVisibility = useMemo<CatalogVisibilityOptions>(() => ({
-    hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
+    hiddenProviders: hiddenProviderNamesFromUiState(providerUiState),
     hiddenModelsByProvider: {
       lmstudio: providerUiState.lmstudio.hiddenModels,
     },

@@ -258,4 +258,64 @@ describe("modelOptionsForProvider", () => {
 
     expect(providers).toEqual(["openai"]);
   });
+
+  test("hides AWS Bedrock Proxy from provider choices when the UI toggle disables it", () => {
+    const providers = availableProvidersFromCatalog(
+      [
+        {
+          id: "aws-bedrock-proxy",
+          name: "AWS Bedrock Proxy",
+          models: [{ id: "router/claude-sonnet-4-5", displayName: "Claude Sonnet 4.5", knowledgeCutoff: "Unknown", supportsImageInput: true }],
+          defaultModel: "router/claude-sonnet-4-5",
+        },
+        {
+          id: "openai",
+          name: "OpenAI",
+          models: [{ id: "gpt-5.4", displayName: "GPT-5.4", knowledgeCutoff: "Unknown", supportsImageInput: true }],
+          defaultModel: "gpt-5.4",
+        },
+      ],
+      ["aws-bedrock-proxy", "openai"],
+      undefined,
+      {
+        hiddenProviders: ["aws-bedrock-proxy"],
+        visibleModelsByProvider: {
+          "aws-bedrock-proxy": [],
+          openai: ["gpt-5.4"],
+        },
+      },
+    );
+
+    expect(providers).toEqual(["openai"]);
+  });
+
+  test("preserves the current AWS Bedrock Proxy provider when it is hidden by the UI toggle", () => {
+    const providers = availableProvidersFromCatalog(
+      [
+        {
+          id: "aws-bedrock-proxy",
+          name: "AWS Bedrock Proxy",
+          models: [{ id: "router/claude-sonnet-4-5", displayName: "Claude Sonnet 4.5", knowledgeCutoff: "Unknown", supportsImageInput: true }],
+          defaultModel: "router/claude-sonnet-4-5",
+        },
+        {
+          id: "openai",
+          name: "OpenAI",
+          models: [{ id: "gpt-5.4", displayName: "GPT-5.4", knowledgeCutoff: "Unknown", supportsImageInput: true }],
+          defaultModel: "gpt-5.4",
+        },
+      ],
+      ["aws-bedrock-proxy", "openai"],
+      "aws-bedrock-proxy",
+      {
+        hiddenProviders: ["aws-bedrock-proxy"],
+        visibleModelsByProvider: {
+          "aws-bedrock-proxy": [],
+          openai: ["gpt-5.4"],
+        },
+      },
+    );
+
+    expect(providers).toEqual(["openai", "aws-bedrock-proxy"]);
+  });
 });

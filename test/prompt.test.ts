@@ -229,6 +229,28 @@ describe("loadSystemPrompt", () => {
     expectImageInspectionGuidance(prompt);
   });
 
+  test("preserves image guidance for AWS Bedrock Proxy vision models when base URL is only in global config fields", async () => {
+    const config = makeConfig({
+      provider: "aws-bedrock-proxy",
+      model: "vision-router",
+      preferredChildModel: "vision-router",
+      knowledgeCutoff: "Unknown",
+      awsBedrockProxyBaseUrl: "https://proxy.global.example.com/v1",
+    });
+
+    const prompt = await withMockedFetch(
+      (async () => jsonResponse({
+        object: "list",
+        data: [
+          { id: "vision-router", object: "model", modalities: ["text", "image"] },
+        ],
+      })) as typeof fetch,
+      async () => await loadSystemPrompt(config),
+    );
+
+    expectImageInspectionGuidance(prompt);
+  });
+
   test("renders dynamic spawnAgent roles and current-provider model guidance", async () => {
     const config = makeConfig({ provider: "openai", model: "gpt-5.4", preferredChildModel: "gpt-5.4" });
     const prompt = await loadSystemPrompt(config);

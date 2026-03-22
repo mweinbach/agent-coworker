@@ -813,6 +813,7 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
       savedKey: getSavedProviderApiKey(params.config, "aws-bedrock-proxy"),
     });
     const resolvedMetadata = await resolveModelMetadata(provider, modelId, {
+      config: params.config,
       providerOptions,
       source: "model",
     });

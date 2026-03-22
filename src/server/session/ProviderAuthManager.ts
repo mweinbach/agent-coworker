@@ -100,6 +100,7 @@ export class ProviderAuthManager {
     let resolvedModel;
     try {
       resolvedModel = await resolveModelMetadata(nextProvider, modelId, {
+        config: currentConfig,
         providerOptions: currentConfig.providerOptions,
         source: "model",
       });

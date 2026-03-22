@@ -45,6 +45,33 @@ describe("models/metadata", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  test("resolveModelMetadata discovers AWS Bedrock Proxy using global config baseUrl when providerOptions omit baseUrl", async () => {
+    const fetchImpl = mock(async () => jsonResponse({
+      object: "list",
+      data: [
+        { id: "vision-router", object: "model", modalities: ["text", "image"] },
+      ],
+    }));
+
+    const metadata = await resolveModelMetadata("aws-bedrock-proxy", "vision-router", {
+      config: {
+        awsBedrockProxyBaseUrl: "https://proxy.global.example.com/v1/",
+        openaiProxyBaseUrl: "https://proxy.global.example.com/v1/",
+      },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(metadata).toMatchObject({
+      id: "vision-router",
+      provider: "aws-bedrock-proxy",
+      displayName: "Vision Router",
+      supportsImageInput: true,
+      source: "dynamic",
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe("https://proxy.global.example.com/v1/models");
+  });
+
   test("resolveModelMetadata falls back conservatively when AWS Bedrock Proxy discovery fails", async () => {
     const metadata = await resolveModelMetadata("aws-bedrock-proxy", "vision-router", {
       providerOptions: {

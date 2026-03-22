@@ -4,6 +4,16 @@ import path from "node:path";
 import { createRuntime, resolveRuntimeName } from "../src/runtime";
 import type { AgentConfig } from "../src/types";
 
+const PI_PROVIDER_CASES = [
+  { provider: "anthropic", model: "claude-sonnet-4-6" },
+  { provider: "baseten", model: "deepseek-r1-0528" },
+  { provider: "together", model: "deepseek-ai/DeepSeek-R1" },
+  { provider: "nvidia", model: "meta/llama-4-maverick-17b-128e-instruct" },
+  { provider: "lmstudio", model: "local-model" },
+  { provider: "opencode-go", model: "glm-5" },
+  { provider: "opencode-zen", model: "kimi-k2.5" },
+] as const;
+
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const base = "/tmp/runtime-selection";
   return {
@@ -60,25 +70,17 @@ describe("runtime selection", () => {
     expect(createRuntime(config).name).toBe("openai-responses");
   });
 
-  test("routes opencode-go through the pi runtime", () => {
-    const config = makeConfig({
-      provider: "opencode-go",
-      model: "glm-5",
-      preferredChildModel: "glm-5",
+  for (const { provider, model } of PI_PROVIDER_CASES) {
+    test(`routes ${provider} through the pi runtime`, () => {
+      const config = makeConfig({
+        provider,
+        model,
+        preferredChildModel: model,
+      });
+      expect(resolveRuntimeName(config)).toBe("pi");
+      expect(createRuntime(config).name).toBe("pi");
     });
-    expect(resolveRuntimeName(config)).toBe("pi");
-    expect(createRuntime(config).name).toBe("pi");
-  });
-
-  test("routes opencode-zen through the pi runtime", () => {
-    const config = makeConfig({
-      provider: "opencode-zen",
-      model: "glm-5",
-      preferredChildModel: "glm-5",
-    });
-    expect(resolveRuntimeName(config)).toBe("pi");
-    expect(createRuntime(config).name).toBe("pi");
-  });
+  }
 
   test("defaults google provider to the Google Interactions runtime", () => {
     const config = makeConfig({
@@ -103,7 +105,7 @@ describe("runtime selection", () => {
     expect(createRuntime(config).name).toBe("google-interactions");
   });
 
-  test("normalizes stale OpenAI Responses runtime config away for unsupported providers", () => {
+  test("normalizes stale OpenAI Responses runtime config away for pi-family providers", () => {
     const config = makeConfig({
       provider: "anthropic",
       model: "claude-sonnet-4-6",

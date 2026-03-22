@@ -5,14 +5,15 @@
 - [x] Inspect an affected `opencode-go` session in `~/.cowork/sessions.db` and compare the snapshot feed, JSON-RPC journal, and persisted raw stream data to isolate whether the remaining ordering bug is provider-specific or a shared replay issue.
 - [x] Patch the shared JSON-RPC projector path so repeated stream/tool ids within one turn get distinct item ids and late aggregate reasoning from PI/OpenCode providers is dropped when it only repeats streamed reasoning.
 - [x] Patch `thread/read` journal replay so older journals that reused reasoning/tool item ids are disambiguated on read and preserve chronological order.
-- [x] Add focused regressions for repeated PI reasoning/tool ids plus late aggregate reasoning, then rerun the JSON-RPC projector, thread-read, desktop JSON-RPC, and typecheck verification slices.
+- [x] Add focused regressions for repeated PI reasoning/tool ids plus late aggregate reasoning across the full PI-provider family, then rerun the JSON-RPC projector, thread-read, desktop JSON-RPC, runtime-selection, and typecheck verification slices.
 
 ## Fix JSON-RPC Replay For PI/OpenCode Providers Review
 
 - `src/server/jsonrpc/legacyEventProjector.ts` and `src/server/jsonrpc/journalProjector.ts` now assign occurrence-stable item ids per turn/stream key for repeated reasoning and tool lifecycles, so PI/OpenCode providers can reuse `s0` or fallback tool ids across steps without collapsing later items onto the first occurrence.
 - The same projector path now drops the late aggregate `reasoning` event emitted after PI/OpenCode turns when it only repeats the already-streamed reasoning text, preventing reasoning from appearing below the final assistant reply.
 - `src/server/jsonrpc/threadReadProjector.ts` now disambiguates older repeated journal item ids on replay and drops late aggregate reasoning items that only repeat earlier streamed reasoning, so already-persisted PI/OpenCode journals preserve chronology without replaying the old reasoning-after-answer artifact.
-- Verification passed with `bun test test/jsonrpc.projectors.test.ts`, `bun test test/jsonrpc.thread-read-projector.test.ts`, `bun test apps/desktop/test/protocol-v2-events.test.ts`, and `bun run typecheck`.
+- `test/jsonrpc.projectors.test.ts` and `test/runtime.selection.test.ts` now explicitly cover the full PI-provider set: `anthropic`, `baseten`, `together`, `nvidia`, `lmstudio`, `opencode-go`, and `opencode-zen`.
+- Verification passed with `bun test test/jsonrpc.projectors.test.ts`, `bun test test/jsonrpc.thread-read-projector.test.ts`, `bun test test/runtime.selection.test.ts`, `bun test apps/desktop/test/protocol-v2-events.test.ts`, and `bun run typecheck`.
 
 ## Fix JSON-RPC Gemini Reasoning and Tool Projection
 

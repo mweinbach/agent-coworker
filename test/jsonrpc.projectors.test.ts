@@ -6,6 +6,15 @@ import type { ServerEvent } from "../src/server/protocol";
 
 const sessionId = "session-1";
 const turnId = "turn-1";
+const PI_PROVIDER_CASES = [
+  { provider: "anthropic", model: "claude-sonnet-4-6" },
+  { provider: "baseten", model: "deepseek-r1-0528" },
+  { provider: "together", model: "deepseek-ai/DeepSeek-R1" },
+  { provider: "nvidia", model: "meta/llama-4-maverick-17b-128e-instruct" },
+  { provider: "lmstudio", model: "local-model" },
+  { provider: "opencode-go", model: "glm-5" },
+  { provider: "opencode-zen", model: "kimi-k2.5" },
+] as const;
 
 function streamChunk(partType: Extract<ServerEvent, { type: "model_stream_chunk" }>["partType"], part: Record<string, unknown>): ServerEvent {
   return {
@@ -20,7 +29,9 @@ function streamChunk(partType: Extract<ServerEvent, { type: "model_stream_chunk"
   };
 }
 
-function opencodeChunk(
+function piChunk(
+  provider: (typeof PI_PROVIDER_CASES)[number]["provider"],
+  model: string,
   partType: Extract<ServerEvent, { type: "model_stream_chunk" }>["partType"],
   part: Record<string, unknown>,
 ): ServerEvent {
@@ -29,8 +40,8 @@ function opencodeChunk(
     sessionId,
     turnId,
     index: 0,
-    provider: "opencode-go",
-    model: "glm-5",
+    provider,
+    model,
     partType,
     part,
   };
@@ -395,106 +406,108 @@ describe("JSON-RPC projectors", () => {
     });
   });
 
-  test("projectors keep repeated PI reasoning and tool occurrences distinct while dropping the late aggregate reasoning", () => {
-    const outbound: Array<{ method: string; params?: any }> = [];
-    const emissions: Array<{ eventType: string; payload: any }> = [];
-    const legacy = createJsonRpcLegacyEventProjector({
-      threadId: sessionId,
-      send: (message) => outbound.push(message as { method: string; params?: any }),
+  for (const { provider, model } of PI_PROVIDER_CASES) {
+    test(`projectors keep repeated PI reasoning and tool occurrences distinct for ${provider}`, () => {
+      const outbound: Array<{ method: string; params?: any }> = [];
+      const emissions: Array<{ eventType: string; payload: any }> = [];
+      const legacy = createJsonRpcLegacyEventProjector({
+        threadId: sessionId,
+        send: (message) => outbound.push(message as { method: string; params?: any }),
+      });
+      const journal = createThreadJournalProjector({
+        threadId: sessionId,
+        emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
+      });
+      const both = [legacy, journal] as const;
+
+      for (const projector of both) {
+        projector.handle({
+          type: "session_busy",
+          sessionId,
+          busy: true,
+          turnId,
+          cause: "user_message",
+        });
+        projector.handle(piChunk(provider, model, "reasoning_start", { id: "s0", mode: "reasoning" }));
+        projector.handle(piChunk(provider, model, "reasoning_delta", { id: "s0", mode: "reasoning", text: "First step." }));
+        projector.handle(piChunk(provider, model, "reasoning_end", { id: "s0", mode: "reasoning" }));
+        projector.handle(piChunk(provider, model, "tool_input_start", { id: "tool_call_0", toolName: "webSearch" }));
+        projector.handle(piChunk(provider, model, "tool_input_delta", { id: "tool_call_0", delta: "{\"query\":\"first\"}" }));
+        projector.handle(piChunk(provider, model, "tool_input_end", { id: "tool_call_0", toolName: "webSearch" }));
+        projector.handle(piChunk(provider, model, "tool_call", {
+          toolCallId: "tool_call_0",
+          toolName: "webSearch",
+          input: { query: "first" },
+        }));
+        projector.handle(piChunk(provider, model, "tool_result", {
+          toolCallId: "tool_call_0",
+          toolName: "webSearch",
+          output: { result: "first" },
+        }));
+        projector.handle(piChunk(provider, model, "reasoning_start", { id: "s0", mode: "reasoning" }));
+        projector.handle(piChunk(provider, model, "reasoning_delta", { id: "s0", mode: "reasoning", text: "Second step." }));
+        projector.handle(piChunk(provider, model, "reasoning_end", { id: "s0", mode: "reasoning" }));
+        projector.handle(piChunk(provider, model, "tool_input_start", { id: "tool_call_0", toolName: "webSearch" }));
+        projector.handle(piChunk(provider, model, "tool_input_delta", { id: "tool_call_0", delta: "{\"query\":\"second\"}" }));
+        projector.handle(piChunk(provider, model, "tool_input_end", { id: "tool_call_0", toolName: "webSearch" }));
+        projector.handle(piChunk(provider, model, "tool_call", {
+          toolCallId: "tool_call_0",
+          toolName: "webSearch",
+          input: { query: "second" },
+        }));
+        projector.handle(piChunk(provider, model, "tool_result", {
+          toolCallId: "tool_call_0",
+          toolName: "webSearch",
+          output: { result: "second" },
+        }));
+        projector.handle({
+          type: "reasoning",
+          sessionId,
+          kind: "reasoning",
+          text: "First step.\n\nSecond step.",
+        });
+        projector.handle({
+          type: "assistant_message",
+          sessionId,
+          text: "Final answer.",
+        });
+      }
+
+      const legacyCompletedReasoning = outbound
+        .filter((message) => message.method === "item/completed")
+        .filter((message) => message.params?.item?.type === "reasoning");
+      expect(legacyCompletedReasoning.map((message) => message.params?.item?.text)).toEqual([
+        "First step.",
+        "Second step.",
+      ]);
+      expect(new Set(legacyCompletedReasoning.map((message) => message.params?.item?.id)).size).toBe(2);
+
+      const legacyCompletedTools = outbound
+        .filter((message) => message.method === "item/completed")
+        .filter((message) => message.params?.item?.type === "toolCall");
+      expect(legacyCompletedTools.map((message) => message.params?.item?.args)).toEqual([
+        { query: "first" },
+        { query: "second" },
+      ]);
+      expect(new Set(legacyCompletedTools.map((message) => message.params?.item?.id)).size).toBe(2);
+
+      const journalCompletedReasoning = emissions
+        .filter((event) => event.eventType === "item/completed")
+        .filter((event) => event.payload?.item?.type === "reasoning");
+      expect(journalCompletedReasoning.map((event) => event.payload?.item?.text)).toEqual([
+        "First step.",
+        "Second step.",
+      ]);
+      expect(new Set(journalCompletedReasoning.map((event) => event.payload?.item?.id)).size).toBe(2);
+
+      const journalCompletedTools = emissions
+        .filter((event) => event.eventType === "item/completed")
+        .filter((event) => event.payload?.item?.type === "toolCall");
+      expect(journalCompletedTools.map((event) => event.payload?.item?.args)).toEqual([
+        { query: "first" },
+        { query: "second" },
+      ]);
+      expect(new Set(journalCompletedTools.map((event) => event.payload?.item?.id)).size).toBe(2);
     });
-    const journal = createThreadJournalProjector({
-      threadId: sessionId,
-      emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
-    });
-    const both = [legacy, journal] as const;
-
-    for (const projector of both) {
-      projector.handle({
-        type: "session_busy",
-        sessionId,
-        busy: true,
-        turnId,
-        cause: "user_message",
-      });
-      projector.handle(opencodeChunk("reasoning_start", { id: "s0", mode: "reasoning" }));
-      projector.handle(opencodeChunk("reasoning_delta", { id: "s0", mode: "reasoning", text: "First step." }));
-      projector.handle(opencodeChunk("reasoning_end", { id: "s0", mode: "reasoning" }));
-      projector.handle(opencodeChunk("tool_input_start", { id: "tool_call_0", toolName: "webSearch" }));
-      projector.handle(opencodeChunk("tool_input_delta", { id: "tool_call_0", delta: "{\"query\":\"first\"}" }));
-      projector.handle(opencodeChunk("tool_input_end", { id: "tool_call_0", toolName: "webSearch" }));
-      projector.handle(opencodeChunk("tool_call", {
-        toolCallId: "tool_call_0",
-        toolName: "webSearch",
-        input: { query: "first" },
-      }));
-      projector.handle(opencodeChunk("tool_result", {
-        toolCallId: "tool_call_0",
-        toolName: "webSearch",
-        output: { result: "first" },
-      }));
-      projector.handle(opencodeChunk("reasoning_start", { id: "s0", mode: "reasoning" }));
-      projector.handle(opencodeChunk("reasoning_delta", { id: "s0", mode: "reasoning", text: "Second step." }));
-      projector.handle(opencodeChunk("reasoning_end", { id: "s0", mode: "reasoning" }));
-      projector.handle(opencodeChunk("tool_input_start", { id: "tool_call_0", toolName: "webSearch" }));
-      projector.handle(opencodeChunk("tool_input_delta", { id: "tool_call_0", delta: "{\"query\":\"second\"}" }));
-      projector.handle(opencodeChunk("tool_input_end", { id: "tool_call_0", toolName: "webSearch" }));
-      projector.handle(opencodeChunk("tool_call", {
-        toolCallId: "tool_call_0",
-        toolName: "webSearch",
-        input: { query: "second" },
-      }));
-      projector.handle(opencodeChunk("tool_result", {
-        toolCallId: "tool_call_0",
-        toolName: "webSearch",
-        output: { result: "second" },
-      }));
-      projector.handle({
-        type: "reasoning",
-        sessionId,
-        kind: "reasoning",
-        text: "First step.\n\nSecond step.",
-      });
-      projector.handle({
-        type: "assistant_message",
-        sessionId,
-        text: "Final answer.",
-      });
-    }
-
-    const legacyCompletedReasoning = outbound
-      .filter((message) => message.method === "item/completed")
-      .filter((message) => message.params?.item?.type === "reasoning");
-    expect(legacyCompletedReasoning.map((message) => message.params?.item?.text)).toEqual([
-      "First step.",
-      "Second step.",
-    ]);
-    expect(new Set(legacyCompletedReasoning.map((message) => message.params?.item?.id)).size).toBe(2);
-
-    const legacyCompletedTools = outbound
-      .filter((message) => message.method === "item/completed")
-      .filter((message) => message.params?.item?.type === "toolCall");
-    expect(legacyCompletedTools.map((message) => message.params?.item?.args)).toEqual([
-      { query: "first" },
-      { query: "second" },
-    ]);
-    expect(new Set(legacyCompletedTools.map((message) => message.params?.item?.id)).size).toBe(2);
-
-    const journalCompletedReasoning = emissions
-      .filter((event) => event.eventType === "item/completed")
-      .filter((event) => event.payload?.item?.type === "reasoning");
-    expect(journalCompletedReasoning.map((event) => event.payload?.item?.text)).toEqual([
-      "First step.",
-      "Second step.",
-    ]);
-    expect(new Set(journalCompletedReasoning.map((event) => event.payload?.item?.id)).size).toBe(2);
-
-    const journalCompletedTools = emissions
-      .filter((event) => event.eventType === "item/completed")
-      .filter((event) => event.payload?.item?.type === "toolCall");
-    expect(journalCompletedTools.map((event) => event.payload?.item?.args)).toEqual([
-      { query: "first" },
-      { query: "second" },
-    ]);
-    expect(new Set(journalCompletedTools.map((event) => event.payload?.item?.id)).size).toBe(2);
-  });
+  }
 });

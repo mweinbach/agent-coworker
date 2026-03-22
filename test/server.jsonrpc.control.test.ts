@@ -208,6 +208,25 @@ describe("server JSON-RPC control methods", () => {
     });
   }
 
+  test("cowork/skills/installation/checkUpdate returns the emitted validation error instead of timing out", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request("cowork/skills/installation/checkUpdate", {
+        cwd: tmpDir,
+        installationId: "missing-installation",
+      });
+
+      expect(response.error.message).toContain('Skill installation "missing-installation" was not found');
+      expect(response.result).toBeUndefined();
+      rpc.close();
+    } finally {
+      server.stop();
+    }
+  });
+
   for (const scenario of [
     {
       name: "list",

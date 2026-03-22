@@ -295,13 +295,17 @@ export function createSkillsMemoryAndWorkspaceBackupRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.requireWorkspacePath(params, message.method);
       const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
-      const event = await captureWorkspaceControlEvent(
+      const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
         async (session) => await session.checkSkillInstallationUpdate(installationId),
         (event): event is Extract<ServerEvent, { type: "skill_installation_update_check" }> =>
           event.type === "skill_installation_update_check",
       );
+      if (context.utils.isSessionError(event)) {
+        sendSessionMutationError(context, ws, message.id, event);
+        return;
+      }
       context.jsonrpc.sendResult(ws, message.id, { event });
     },
 

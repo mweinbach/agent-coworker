@@ -2264,13 +2264,16 @@ export async function startAgentServer(
       case "cowork/skills/installation/checkUpdate": {
         const cwd = requireWorkspacePath(params, message.method);
         const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
-        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
-          await captureSessionEvent(
-            binding,
-            async () => await session.checkSkillInstallationUpdate(installationId),
-            (event): event is Extract<ServerEvent, { type: "skill_installation_update_check" }> => event.type === "skill_installation_update_check",
-          ),
+        const event = await captureWorkspaceControlSessionOutcome(
+          cwd,
+          async (session) => await session.checkSkillInstallationUpdate(installationId),
+          (event): event is Extract<ServerEvent, { type: "skill_installation_update_check" }> =>
+            event.type === "skill_installation_update_check",
         );
+        if (event.type === "error") {
+          sendJsonRpcSessionMutationError(ws, message.id, event);
+          return;
+        }
         emitControlResult(ws, message.id, event);
         return;
       }

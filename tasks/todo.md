@@ -185,12 +185,12 @@
 
 - [x] Correlate MCP validation and MCP auth responses by server name in both the extracted JSON-RPC route handlers and the legacy `startServer.ts` switch.
 - [x] Correlate `cowork/skills/read` results by requested skill name and stop skill enable/disable/delete from reporting success after a rejected mutation.
-- [x] Return emitted provider, memory, and workspace-backup error events as JSON-RPC errors instead of waiting for the 5-second capture timeout.
+- [x] Return emitted provider, skill-installation, memory, and workspace-backup error events as JSON-RPC errors instead of waiting for the 5-second capture timeout.
 - [x] Add focused extracted-route and live-server regressions for the review-thread cases, then rerun the affected tests plus `bun run typecheck`.
 
 ## JSON-RPC Review Thread Fixes Review
 
 - `src/server/jsonrpc/routes/providerAndMcp.ts`, `src/server/jsonrpc/routes/skillsMemoryAndWorkspaceBackup.ts`, and `src/server/startServer.ts` now correlate MCP validation/auth and skill-read captures to the requested server or skill, so concurrent control calls cannot cross-resolve on the first matching event.
-- The same handlers now treat emitted `error` events as terminal JSON-RPC outcomes across provider auth, skill mutations, memory controls, and workspace backup controls, instead of waiting for a timeout when the session already reported a concrete failure.
-- `test/jsonrpc.routes.review-fixes.test.ts` adds extracted-route regressions for the review fixes, including realistic provider- and backup-sourced error events, and `test/server.jsonrpc.control.test.ts` covers the live server behavior for provider auth, skill mutation failures, memory failures, and workspace backup failures.
+- The same handlers now treat emitted `error` events as terminal JSON-RPC outcomes across provider auth, skill mutations, skill-installation update checks, memory controls, and workspace backup controls, instead of waiting for a timeout when the session already reported a concrete failure.
+- `test/jsonrpc.routes.review-fixes.test.ts` adds extracted-route regressions for the review fixes, including realistic provider- and backup-sourced error events plus installation-check failures, and `test/server.jsonrpc.control.test.ts` covers the live server behavior for provider auth, skill mutation failures, installation-check failures, memory failures, and workspace backup failures.
 - Verification passed with `bun test test/jsonrpc.routes.review-fixes.test.ts`, `bun test test/server.jsonrpc.control.test.ts`, and `bun run typecheck`.

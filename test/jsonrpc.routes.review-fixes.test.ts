@@ -311,6 +311,23 @@ describe("JSON-RPC extracted route review fixes", () => {
     });
   }
 
+  test("cowork/skills/installation/checkUpdate forwards emitted validation errors", async () => {
+    const harness = createRouteHarness({
+      checkSkillInstallationUpdate: async () => {
+        harness.emitted.push(sessionError('Skill installation "missing-installation" was not found'));
+      },
+    });
+
+    const handlers = createSkillsMemoryAndWorkspaceBackupRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/skills/installation/checkUpdate", {
+      cwd: "C:/workspace",
+      installationId: "missing-installation",
+    });
+
+    expect(response.error?.message).toContain('Skill installation "missing-installation" was not found');
+    expect(response.result).toBeUndefined();
+  });
+
   for (const scenario of [
     { method: "cowork/memory/list", sessionMethod: "emitMemories" },
     { method: "cowork/memory/upsert", sessionMethod: "upsertMemory", params: { content: "hello" } },

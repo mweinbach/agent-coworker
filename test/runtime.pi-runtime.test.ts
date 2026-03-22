@@ -24,6 +24,13 @@ function makeJwt(payload: Record<string, unknown>): string {
   return `${header}.${body}.`;
 }
 
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     provider: "openai",
@@ -789,6 +796,64 @@ describe("pi runtime regressions", () => {
       },
       stream: true,
     });
+  });
+
+  test("aws-bedrock-proxy runtime model resolution preserves discovered image capability", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-bedrock-vision-"));
+    const config = makeConfig(homeDir, {
+      provider: "aws-bedrock-proxy",
+      model: "vision-router",
+      preferredChildModel: "vision-router",
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.example.com/v1",
+        },
+      },
+    });
+
+    const resolved = await withMockedFetch(
+      (async () => jsonResponse({
+        object: "list",
+        data: [
+          { id: "vision-router", object: "model", input_modalities: ["text", "image"] },
+        ],
+      })) as typeof fetch,
+      async () => await piRuntimeInternal.resolvePiModel(makeParams(config)),
+    );
+
+    expect(resolved.model).toMatchObject({
+      id: "vision-router",
+      name: "Vision Router",
+      api: "openai-completions",
+      provider: "aws-bedrock-proxy",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: true,
+      contextWindow: 262_144,
+      maxTokens: 65_536,
+    });
+    expect(resolved.model.input).toEqual(["text", "image"]);
+  });
+
+  test("aws-bedrock-proxy runtime model resolution falls back to text-only when discovery fails", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-bedrock-fallback-"));
+    const config = makeConfig(homeDir, {
+      provider: "aws-bedrock-proxy",
+      model: "vision-router",
+      preferredChildModel: "vision-router",
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.example.com/v1",
+        },
+      },
+    });
+
+    const resolved = await withMockedFetch(
+      (async () => new Response("forbidden", { status: 403 })) as typeof fetch,
+      async () => await piRuntimeInternal.resolvePiModel(makeParams(config)),
+    );
+
+    expect(resolved.model.name).toBe("vision-router");
+    expect(resolved.model.input).toEqual(["text"]);
   });
 
   test.serial("nvidia PI runtime tolerates missing local pricing metadata without surfacing model.cost errors", async () => {

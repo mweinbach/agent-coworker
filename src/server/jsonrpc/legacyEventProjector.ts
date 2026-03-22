@@ -24,6 +24,7 @@ type BufferedReasoningState = {
   itemId: string;
   mode: ProjectedReasoningMode;
   text: string;
+  started: boolean;
 };
 
 function makeItemId(prefix: string, seed: string): string {
@@ -130,9 +131,25 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
       itemId: makeItemId("reasoning", `${turnId}:${readPartString(part, "id") ?? crypto.randomUUID()}`),
       mode: reasoningModeFromPart(part),
       text: "",
+      started: false,
     };
     reasoningByKey.set(key, next);
     return { key, state: next };
+  };
+
+  const startBufferedReasoning = (turnId: string, state: BufferedReasoningState) => {
+    if (state.started) return;
+    state.started = true;
+    sendNotification("item/started", {
+      threadId: opts.threadId,
+      turnId,
+      item: {
+        id: state.itemId,
+        type: "reasoning",
+        mode: state.mode,
+        text: "",
+      },
+    });
   };
 
   const emitReasoningItem = (
@@ -169,7 +186,17 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
     const state = reasoningByKey.get(key);
     if (!state) return;
     reasoningByKey.delete(key);
-    if (!emitReasoningItem(turnId, state.mode, state.text, state.itemId)) return;
+    startBufferedReasoning(turnId, state);
+    sendNotification("item/completed", {
+      threadId: opts.threadId,
+      turnId,
+      item: {
+        id: state.itemId,
+        type: "reasoning",
+        mode: state.mode,
+        text: state.text,
+      },
+    });
     const dedupKey = reasoningDedupKey(state.mode, state.text);
     if (dedupKey) {
       lastBufferedReasoningKeyByTurn.set(turnId, dedupKey);
@@ -277,12 +304,14 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
           }
 
           if (event.partType === "reasoning_start") {
-            ensureBufferedReasoning(event.turnId, event.part);
+            const { state } = ensureBufferedReasoning(event.turnId, event.part);
+            startBufferedReasoning(event.turnId, state);
             return;
           }
 
           if (event.partType === "reasoning_delta") {
             const { state } = ensureBufferedReasoning(event.turnId, event.part);
+            startBufferedReasoning(event.turnId, state);
             const delta =
               typeof event.part?.text === "string"
                 ? event.part.text
@@ -290,6 +319,15 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
                   ? event.part.delta
                   : "";
             state.text = `${state.text}${delta}`;
+            if (delta) {
+              sendNotification("item/reasoning/delta", {
+                threadId: opts.threadId,
+                turnId: event.turnId,
+                itemId: state.itemId,
+                mode: state.mode,
+                delta,
+              });
+            }
             return;
           }
 

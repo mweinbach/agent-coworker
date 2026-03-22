@@ -3207,6 +3207,41 @@
           ],
           "additionalProperties": false
         },
+        "item/reasoning/delta": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "turnId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "itemId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "reasoning",
+                "summary"
+              ]
+            },
+            "delta": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "threadId",
+            "turnId",
+            "itemId",
+            "mode",
+            "delta"
+          ],
+          "additionalProperties": false
+        },
         "item/agentMessage/delta": {
           "type": "object",
           "properties": {
@@ -3648,6 +3683,7 @@
         "thread/started",
         "turn/started",
         "item/started",
+        "item/reasoning/delta",
         "item/agentMessage/delta",
         "item/completed",
         "turn/completed",

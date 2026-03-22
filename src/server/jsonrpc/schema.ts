@@ -445,6 +445,13 @@ export const jsonRpcNotificationSchemas = {
     turnId: nonEmptyTrimmedStringSchema,
     item: z.record(z.string(), z.unknown()),
   }).strict(),
+  "item/reasoning/delta": z.object({
+    threadId: nonEmptyTrimmedStringSchema,
+    turnId: nonEmptyTrimmedStringSchema,
+    itemId: nonEmptyTrimmedStringSchema,
+    mode: z.enum(["reasoning", "summary"]),
+    delta: z.string(),
+  }).strict(),
   "item/agentMessage/delta": z.object({
     threadId: nonEmptyTrimmedStringSchema,
     turnId: nonEmptyTrimmedStringSchema,

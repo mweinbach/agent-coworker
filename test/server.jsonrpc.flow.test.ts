@@ -237,6 +237,80 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("turn/start streams reasoning notifications before assistant output", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async (params: any) => {
+        await params.onModelStreamPart?.({ type: "start" });
+        await params.onModelStreamPart?.({ type: "reasoning-start", id: "rs_live", mode: "summary" });
+        await params.onModelStreamPart?.({ type: "reasoning-delta", id: "rs_live", text: "Inspecting the reports." });
+        await params.onModelStreamPart?.({ type: "reasoning-end", id: "rs_live", mode: "summary" });
+        await params.onModelStreamPart?.({ type: "text-delta", id: "txt_live", text: "Final answer" });
+        await params.onModelStreamPart?.({ type: "finish", finishReason: "stop" });
+        return {
+          text: "Final answer",
+          reasoningText: "Inspecting the reports.",
+          responseMessages: [],
+        };
+      }) as any,
+    }));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      const turnResponse = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        clientMessageId: "msg-reasoning-1",
+        input: [{ type: "text", text: "hello there" }],
+      });
+      expect(turnResponse.result.turn.threadId).toBe(started.result.thread.id);
+
+      await rpc.waitFor((message) => message.method === "turn/started");
+      await rpc.waitFor((message) =>
+        message.method === "item/started" && message.params.item.type === "userMessage",
+      );
+      const reasoningStarted = await rpc.waitFor((message) =>
+        message.method === "item/started" && message.params.item.type === "reasoning",
+      );
+      const reasoningDelta = await rpc.waitFor((message) => message.method === "item/reasoning/delta");
+      const reasoningCompleted = await rpc.waitFor((message) =>
+        message.method === "item/completed" && message.params.item.type === "reasoning",
+      );
+      const agentDelta = await rpc.waitFor((message) => message.method === "item/agentMessage/delta");
+      const agentCompleted = await rpc.waitFor((message) =>
+        message.method === "item/completed" && message.params.item.type === "agentMessage",
+      );
+      const turnCompleted = await rpc.waitFor((message) => message.method === "turn/completed");
+
+      expect(reasoningStarted.params.item).toMatchObject({
+        type: "reasoning",
+        mode: "reasoning",
+        text: "",
+      });
+      expect(reasoningDelta.params).toMatchObject({
+        threadId: started.result.thread.id,
+        turnId: turnResponse.result.turn.id,
+        mode: "reasoning",
+        delta: "Inspecting the reports.",
+      });
+      expect(reasoningDelta.params.itemId).toBe(reasoningStarted.params.item.id);
+      expect(reasoningCompleted.params.item).toMatchObject({
+        id: reasoningStarted.params.item.id,
+        type: "reasoning",
+        mode: "reasoning",
+        text: "Inspecting the reports.",
+      });
+      expect(agentDelta.params.delta).toBe("Final answer");
+      expect(agentCompleted.params.item.text).toBe("Final answer");
+      expect(turnCompleted.params.turn.status).toBe("completed");
+      rpc.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
   test("turn/start rejects at the request layer when the thread is already running", async () => {
     const tmpDir = await makeTmpProject();
     const releaseTurn = Promise.withResolvers<void>();
@@ -478,10 +552,19 @@ describe("server JSON-RPC flows", () => {
   test("thread/read can include journal-projected turns and thread/resume can replay from a journal cursor", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir, {
-      runTurnImpl: (async () => ({
-        text: "journal reply",
-        responseMessages: [],
-      })) as any,
+      runTurnImpl: (async (params: any) => {
+        await params.onModelStreamPart?.({ type: "start" });
+        await params.onModelStreamPart?.({ type: "reasoning-start", id: "rs_journal", mode: "summary" });
+        await params.onModelStreamPart?.({ type: "reasoning-delta", id: "rs_journal", text: "Inspecting the reports." });
+        await params.onModelStreamPart?.({ type: "reasoning-end", id: "rs_journal", mode: "summary" });
+        await params.onModelStreamPart?.({ type: "text-delta", id: "txt_journal", text: "journal reply" });
+        await params.onModelStreamPart?.({ type: "finish", finishReason: "stop" });
+        return {
+          text: "journal reply",
+          reasoningText: "Inspecting the reports.",
+          responseMessages: [],
+        };
+      }) as any,
     }));
 
     try {
@@ -503,6 +586,7 @@ describe("server JSON-RPC flows", () => {
       expect(read.result.thread.turns[0].items).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ type: "userMessage", clientMessageId: "journal-msg-1" }),
+          expect.objectContaining({ type: "reasoning", mode: "reasoning", text: "Inspecting the reports." }),
           expect.objectContaining({ type: "agentMessage", text: "journal reply" }),
         ]),
       );
@@ -514,10 +598,17 @@ describe("server JSON-RPC flows", () => {
         afterSeq: 1,
       });
       const replayedTurnStarted = await replayRpc.waitFor((message) => message.method === "turn/started");
+      const replayedReasoningStarted = await replayRpc.waitFor((message) =>
+        message.method === "item/started" && message.params.item.type === "reasoning",
+      );
+      const replayedReasoningDelta = await replayRpc.waitFor((message) => message.method === "item/reasoning/delta");
       const replayedAgentCompleted = await replayRpc.waitFor((message) =>
         message.method === "item/completed" && message.params.item.type === "agentMessage",
       );
       expect(replayedTurnStarted.params.threadId).toBe(started.result.thread.id);
+      expect(replayedReasoningStarted.params.item.text).toBe("");
+      expect(replayedReasoningDelta.params.delta).toBe("Inspecting the reports.");
+      expect(replayedReasoningDelta.params.itemId).toBe(replayedReasoningStarted.params.item.id);
       expect(replayedAgentCompleted.params.item.text).toBe("journal reply");
 
       replayRpc.close();

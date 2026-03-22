@@ -21,7 +21,7 @@ function streamChunk(partType: Extract<ServerEvent, { type: "model_stream_chunk"
 }
 
 describe("JSON-RPC projectors", () => {
-  test("legacy projector suppresses commentary deltas and emits completed reasoning items from live chunks", () => {
+  test("legacy projector suppresses commentary deltas and streams reasoning items from live chunks", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
     const projector = createJsonRpcLegacyEventProjector({
       threadId: sessionId,
@@ -56,20 +56,49 @@ describe("JSON-RPC projectors", () => {
       .map((message) => String(message.params?.delta ?? ""));
     expect(assistantDeltas).toEqual(["Here is the result."]);
 
-    const reasoningItems = outbound
-      .filter((message) => message.method === "item/started" || message.method === "item/completed")
+    const reasoningStarted = outbound
+      .filter((message) => message.method === "item/started")
       .filter((message) => message.params?.item?.type === "reasoning");
-    expect(reasoningItems).toHaveLength(2);
-    for (const message of reasoningItems) {
-      expect(message.params?.item).toMatchObject({
-        type: "reasoning",
-        mode: "summary",
-        text: "Inspecting the reports.",
-      });
-    }
+    const reasoningDeltas = outbound.filter((message) => message.method === "item/reasoning/delta");
+    const reasoningCompleted = outbound
+      .filter((message) => message.method === "item/completed")
+      .filter((message) => message.params?.item?.type === "reasoning");
+
+    expect(reasoningStarted).toHaveLength(1);
+    expect(reasoningDeltas).toHaveLength(1);
+    expect(reasoningCompleted).toHaveLength(1);
+
+    expect(reasoningStarted[0]?.params?.item).toMatchObject({
+      type: "reasoning",
+      mode: "summary",
+      text: "",
+    });
+    expect(reasoningDeltas[0]?.params).toMatchObject({
+      threadId: sessionId,
+      turnId,
+      mode: "summary",
+      delta: "Inspecting the reports.",
+    });
+    expect(reasoningDeltas[0]?.params?.itemId).toBe(reasoningStarted[0]?.params?.item?.id);
+    expect(reasoningCompleted[0]?.params?.item).toMatchObject({
+      id: reasoningStarted[0]?.params?.item?.id,
+      type: "reasoning",
+      mode: "summary",
+      text: "Inspecting the reports.",
+    });
+
+    const reasoningStartedIndex = outbound.findIndex((message) => message === reasoningStarted[0]);
+    const reasoningDeltaIndex = outbound.findIndex((message) => message === reasoningDeltas[0]);
+    const reasoningCompletedIndex = outbound.findIndex((message) => message === reasoningCompleted[0]);
+    const assistantDeltaIndex = outbound.findIndex((message) =>
+      message.method === "item/agentMessage/delta" && message.params?.delta === "Here is the result.",
+    );
+    expect(reasoningStartedIndex).toBeLessThan(reasoningDeltaIndex);
+    expect(reasoningDeltaIndex).toBeLessThan(reasoningCompletedIndex);
+    expect(reasoningCompletedIndex).toBeLessThan(assistantDeltaIndex);
   });
 
-  test("journal projector suppresses commentary deltas and records a single completed reasoning item from live chunks", () => {
+  test("journal projector suppresses commentary deltas and records streamed reasoning events from live chunks", () => {
     const emissions: Array<{ eventType: string; payload: any }> = [];
     const projector = createThreadJournalProjector({
       threadId: sessionId,
@@ -104,16 +133,35 @@ describe("JSON-RPC projectors", () => {
       .map((event) => String(event.payload?.delta ?? ""));
     expect(assistantDeltas).toEqual(["Here is the result."]);
 
-    const reasoningItems = emissions
-      .filter((event) => event.eventType === "item/started" || event.eventType === "item/completed")
+    const reasoningStarted = emissions
+      .filter((event) => event.eventType === "item/started")
       .filter((event) => event.payload?.item?.type === "reasoning");
-    expect(reasoningItems).toHaveLength(2);
-    for (const event of reasoningItems) {
-      expect(event.payload?.item).toMatchObject({
-        type: "reasoning",
-        mode: "summary",
-        text: "Inspecting the reports.",
-      });
-    }
+    const reasoningDeltas = emissions.filter((event) => event.eventType === "item/reasoning/delta");
+    const reasoningCompleted = emissions
+      .filter((event) => event.eventType === "item/completed")
+      .filter((event) => event.payload?.item?.type === "reasoning");
+
+    expect(reasoningStarted).toHaveLength(1);
+    expect(reasoningDeltas).toHaveLength(1);
+    expect(reasoningCompleted).toHaveLength(1);
+
+    expect(reasoningStarted[0]?.payload?.item).toMatchObject({
+      type: "reasoning",
+      mode: "summary",
+      text: "",
+    });
+    expect(reasoningDeltas[0]?.payload).toMatchObject({
+      threadId: sessionId,
+      turnId,
+      mode: "summary",
+      delta: "Inspecting the reports.",
+    });
+    expect(reasoningDeltas[0]?.payload?.itemId).toBe(reasoningStarted[0]?.payload?.item?.id);
+    expect(reasoningCompleted[0]?.payload?.item).toMatchObject({
+      id: reasoningStarted[0]?.payload?.item?.id,
+      type: "reasoning",
+      mode: "summary",
+      text: "Inspecting the reports.",
+    });
   });
 });

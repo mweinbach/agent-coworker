@@ -54,6 +54,23 @@ export function projectThreadTurnsFromJournal(events: PersistedThreadJournalEven
         });
         break;
       }
+      case "item/reasoning/delta": {
+        const turnId = typeof payload.turnId === "string" ? payload.turnId : event.turnId;
+        const itemId = typeof payload.itemId === "string" ? payload.itemId : event.itemId;
+        const delta = typeof payload.delta === "string" ? payload.delta : "";
+        const mode = payload.mode === "summary" ? "summary" : "reasoning";
+        if (!turnId || !itemId) continue;
+        const turn = ensureTurn(turnId);
+        const existing = turn.items.get(itemId) ?? { id: itemId, type: "reasoning", mode, text: "" };
+        const currentText = typeof existing.text === "string" ? existing.text : "";
+        turn.items.set(itemId, {
+          ...existing,
+          type: "reasoning",
+          mode,
+          text: `${currentText}${delta}`,
+        });
+        break;
+      }
       case "turn/completed": {
         const turn = payload.turn as { id?: unknown; status?: unknown } | undefined;
         const turnId = typeof turn?.id === "string" ? turn.id : event.turnId;

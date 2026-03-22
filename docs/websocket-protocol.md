@@ -189,6 +189,7 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - `thread/started`
 - `turn/started`
 - `item/started`
+- `item/reasoning/delta`
 - `item/agentMessage/delta`
 - `item/completed`
 - `turn/completed`

@@ -433,7 +433,6 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         ...(allowBeforeHydration ? { allowBeforeHydration: true } : {}),
         inFlight: true,
       });
-      appendThreadTranscript(threadId, "client", message);
       try {
         await requestJsonRpc(get, set, thread.workspaceId, "cowork/session/defaults/apply", {
           threadId: rt.sessionId,
@@ -443,6 +442,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           ...(message.enableMcp !== undefined ? { enableMcp: message.enableMcp } : {}),
           ...(message.config !== undefined ? { config: message.config } : {}),
         });
+        appendThreadTranscript(threadId, "client", message);
       } catch {
         set((s) => ({
           notifications: pushNotification(s.notifications, {

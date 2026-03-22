@@ -4,6 +4,12 @@ import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/
 
 const jsonRpcRequests: Array<{ method: string; params?: unknown }> = [];
 const jsonRpcResponseOverrides = new Map<string, (params?: unknown) => unknown | Promise<unknown>>();
+const transcriptBatches: Array<Array<{
+  ts: string;
+  threadId: string;
+  direction: "server" | "client";
+  payload: unknown;
+}>> = [];
 let mockedLoadedState: any = { version: 2, workspaces: [], threads: [] };
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -268,7 +274,14 @@ class MockJsonRpcSocket {
 }
 
 mock.module("../src/lib/desktopCommands", () => ({
-  appendTranscriptBatch: async () => {},
+  appendTranscriptBatch: async (events: Array<{
+    ts: string;
+    threadId: string;
+    direction: "server" | "client";
+    payload: unknown;
+  }>) => {
+    transcriptBatches.push(events);
+  },
   appendTranscriptEvent: async () => {},
   deleteTranscript: async () => {},
   listDirectory: async () => [],
@@ -494,6 +507,7 @@ describe("workspace settings sync", () => {
     MockJsonRpcSocket.instances.length = 0;
     jsonRpcRequests.length = 0;
     jsonRpcResponseOverrides.clear();
+    transcriptBatches.length = 0;
     mockedLoadedState = { version: 2, workspaces: [], threads: [] };
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.optimisticUserMessageIds.clear();
@@ -1341,6 +1355,32 @@ describe("workspace settings sync", () => {
       input: [{ type: "text", text: "first queued" }],
     });
     expect(RUNTIME.pendingThreadMessages.get(threadId)).toEqual(["second queued"]);
+  });
+
+  test("applyWorkspaceDefaultsToThread does not persist a transcript entry when the request fails", async () => {
+    primeWorkspaceConnection();
+    const { threadId } = seedConnectedThread();
+    jsonRpcResponseOverrides.set("cowork/session/defaults/apply", async () => {
+      throw new Error("boom");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    transcriptBatches.length = 0;
+
+    await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await flushAsyncWork();
+
+    const appliedDefaultsEntries = transcriptBatches
+      .flat()
+      .filter((entry) =>
+        entry.direction === "client"
+        && typeof entry.payload === "object"
+        && entry.payload !== null
+        && (entry.payload as { type?: unknown }).type === "apply_session_defaults");
+    expect(appliedDefaultsEntries).toHaveLength(0);
+    expect(useAppStore.getState().notifications.at(-1)?.detail).toBe(
+      "Unable to apply workspace defaults to the active thread.",
+    );
   });
 
   test("applyWorkspaceDefaultsToThread preserves a baseten workspace provider", async () => {

@@ -80,7 +80,7 @@ export function createControlSocketHelpers(
     const nextServerThreads = sessions.map((session) => {
       const existing = serverBackedBySessionId.get(session.sessionId);
       const threadId = existing?.id ?? session.sessionId;
-      const runtime = threadRuntimeById[threadId] ?? (existing ? threadRuntimeById[existing.id] : undefined);
+      const runtime = threadRuntimeById[threadId];
       return {
         id: threadId,
         workspaceId,

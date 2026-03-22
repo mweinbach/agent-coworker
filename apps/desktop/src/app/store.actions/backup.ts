@@ -9,7 +9,7 @@ import {
   makeId,
   nowIso,
   pushNotification,
-  sendControl,
+  requestJsonRpcControlEvent,
   sendThread,
 } from "../store.helpers";
 import { workspaceBackupActionKey } from "../store.helpers/backupActionKey";
@@ -101,10 +101,9 @@ export function createWorkspaceBackupActions(
       await ensureWorkspaceControl(workspaceId);
       setWorkspaceBackupsLoading(set, workspaceId, true, null);
 
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "workspace_backups_get",
-        sessionId,
-      }));
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/read", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+      });
       if (ok) return;
 
       setWorkspaceBackupsLoading(set, workspaceId, false, "Unable to request workspace backups.");
@@ -124,12 +123,11 @@ export function createWorkspaceBackupActions(
         },
       }));
 
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "workspace_backup_delta_get",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/delta/read", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         targetSessionId,
         checkpointId,
-      }));
+      });
       if (ok) return;
 
       set((s) => ({
@@ -150,11 +148,10 @@ export function createWorkspaceBackupActions(
       const actionKey = workspaceBackupActionKey("checkpoint", targetSessionId);
       addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
 
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "workspace_backup_checkpoint",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/checkpoint", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         targetSessionId,
-      }));
+      });
       if (ok) return;
 
       clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
@@ -166,11 +163,10 @@ export function createWorkspaceBackupActions(
       const actionKey = workspaceBackupActionKey("restore-original", targetSessionId);
       addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
 
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "workspace_backup_restore",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/restore", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         targetSessionId,
-      }));
+      });
       if (ok) return;
 
       clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
@@ -182,12 +178,11 @@ export function createWorkspaceBackupActions(
       const actionKey = workspaceBackupActionKey("restore-checkpoint", targetSessionId, checkpointId);
       addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
 
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "workspace_backup_restore",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/restore", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         targetSessionId,
         checkpointId,
-      }));
+      });
       if (ok) return;
 
       clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
@@ -199,12 +194,11 @@ export function createWorkspaceBackupActions(
       const actionKey = workspaceBackupActionKey("delete-checkpoint", targetSessionId, checkpointId);
       addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
 
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "workspace_backup_delete_checkpoint",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/deleteCheckpoint", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         targetSessionId,
         checkpointId,
-      }));
+      });
       if (ok) return;
 
       clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
@@ -216,11 +210,10 @@ export function createWorkspaceBackupActions(
       const actionKey = workspaceBackupActionKey("delete-entry", targetSessionId);
       addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
 
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "workspace_backup_delete_entry",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/backups/workspace/deleteEntry", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         targetSessionId,
-      }));
+      });
       if (ok) return;
 
       clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);

@@ -2,6 +2,8 @@ import { describe, expect, mock, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
+
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
   themeSource: "system",
@@ -65,6 +67,7 @@ mock.module("../src/lib/agentSocket", () => ({
     }
     close() {}
   },
+  JsonRpcSocket: NoopJsonRpcSocket,
 }));
 
 const { UsagePage, aggregateUsageFromRuntimes } = await import("../src/ui/settings/pages/UsagePage");

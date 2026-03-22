@@ -38,7 +38,7 @@ import {
   providerAuthMethodsFor,
   pushNotification,
   queuePendingThreadMessage,
-  sendControl,
+  requestJsonRpcControlEvent,
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,
@@ -52,7 +52,9 @@ export function createWorkspaceMcpActions(set: StoreSet, get: StoreGet): Pick<Ap
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
 
-      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "mcp_servers_get", sessionId }));
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/servers/read", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+      });
       if (!ok) {
         set((s) => ({
           notifications: pushNotification(s.notifications, {
@@ -71,12 +73,11 @@ export function createWorkspaceMcpActions(set: StoreSet, get: StoreGet): Pick<Ap
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
 
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "mcp_server_upsert",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/server/upsert", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         server,
         previousName,
-      }));
+      });
       if (ok) return;
 
       set((s) => ({
@@ -94,11 +95,10 @@ export function createWorkspaceMcpActions(set: StoreSet, get: StoreGet): Pick<Ap
     deleteWorkspaceMcpServer: async (workspaceId, name) => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "mcp_server_delete",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/server/delete", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         name,
-      }));
+      });
       if (ok) return;
       set((s) => ({
         notifications: pushNotification(s.notifications, {
@@ -115,11 +115,10 @@ export function createWorkspaceMcpActions(set: StoreSet, get: StoreGet): Pick<Ap
     validateWorkspaceMcpServer: async (workspaceId, name) => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "mcp_server_validate",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/server/validate", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         name,
-      }));
+      });
       if (ok) return;
       set((s) => ({
         notifications: pushNotification(s.notifications, {
@@ -136,11 +135,10 @@ export function createWorkspaceMcpActions(set: StoreSet, get: StoreGet): Pick<Ap
     authorizeWorkspaceMcpServerAuth: async (workspaceId, name) => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "mcp_server_auth_authorize",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/server/auth/authorize", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         name,
-      }));
+      });
       if (ok) return;
       set((s) => ({
         notifications: pushNotification(s.notifications, {
@@ -157,12 +155,11 @@ export function createWorkspaceMcpActions(set: StoreSet, get: StoreGet): Pick<Ap
     callbackWorkspaceMcpServerAuth: async (workspaceId, name, code) => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "mcp_server_auth_callback",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/server/auth/callback", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         name,
         code: code?.trim() ? code.trim() : undefined,
-      }));
+      });
       if (ok) return;
       set((s) => ({
         notifications: pushNotification(s.notifications, {
@@ -192,12 +189,11 @@ export function createWorkspaceMcpActions(set: StoreSet, get: StoreGet): Pick<Ap
       }
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "mcp_server_auth_set_api_key",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/server/auth/setApiKey", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         name,
         apiKey: trimmedKey,
-      }));
+      });
       if (ok) return;
       set((s) => ({
         notifications: pushNotification(s.notifications, {
@@ -214,11 +210,10 @@ export function createWorkspaceMcpActions(set: StoreSet, get: StoreGet): Pick<Ap
     migrateWorkspaceMcpLegacy: async (workspaceId, scope) => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "mcp_servers_migrate_legacy",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/legacy/migrate", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
         scope,
-      }));
+      });
       if (ok) return;
       set((s) => ({
         notifications: pushNotification(s.notifications, {

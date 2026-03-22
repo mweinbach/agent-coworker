@@ -38,7 +38,6 @@ import {
   providerAuthMethodsFor,
   pushNotification,
   queuePendingThreadMessage,
-  sendControl,
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,

@@ -29,10 +29,26 @@ import {
   WEBSOCKET_PROTOCOL_VERSION,
   type ServerEvent,
 } from "./protocol";
+import { decodeJsonRpcMessage } from "./jsonrpc/decodeJsonRpcMessage";
+import { dispatchJsonRpcMessage } from "./jsonrpc/dispatchJsonRpcMessage";
+import { createThreadJournalProjector } from "./jsonrpc/journalProjector";
+import { createJsonRpcLegacyEventProjector } from "./jsonrpc/legacyEventProjector";
+import { projectThreadTurnsFromJournal } from "./jsonrpc/threadReadProjector";
+import {
+  buildJsonRpcErrorResponse,
+  buildJsonRpcResultResponse,
+  JSONRPC_ERROR_CODES,
+} from "./jsonrpc/protocol";
 import { decodeClientMessage } from "./startServer/decodeClientMessage";
 import { dispatchClientMessage } from "./startServer/dispatchClientMessage";
 import { type SessionBinding, type StartServerSocketData } from "./startServer/types";
 import type { SeededSessionContext, SessionDependencies, SessionInfoState } from "./session/SessionContext";
+import {
+  parseWsProtocolDefault,
+  resolveWsProtocol,
+  splitWebSocketSubprotocolHeader,
+  type WsProtocolMode,
+} from "./wsProtocol/negotiation";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const errorWithCodeSchema = z.object({
@@ -222,6 +238,7 @@ export interface StartAgentServerOptions {
   connectProviderImpl?: typeof connectModelProvider;
   getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
   runTurnImpl?: typeof runTurnFn;
+  wsProtocolDefault?: WsProtocolMode;
 }
 
 export async function startAgentServer(
@@ -237,6 +254,14 @@ export async function startAgentServer(
   const env: Record<string, string | undefined> & {
     COWORK_BUILTIN_DIR?: string;
   } = { ...rawEnv };
+  const wsProtocolDefault = opts.wsProtocolDefault ?? parseWsProtocolDefault(env.COWORK_WS_DEFAULT_PROTOCOL);
+  const parsedJsonRpcMaxPendingRequests = Number(env.COWORK_WS_JSONRPC_MAX_PENDING_REQUESTS ?? "128");
+  const jsonRpcMaxPendingRequests = Math.max(
+    0,
+    Number.isFinite(parsedJsonRpcMaxPendingRequests)
+      ? Math.floor(parsedJsonRpcMaxPendingRequests)
+      : 128,
+  );
 
   await ensureDefaultGlobalSkillsReady({
     homedir: opts.homedir,
@@ -283,6 +308,7 @@ export async function startAgentServer(
     },
   });
   const sessionBindings = new Map<string, SessionBinding>();
+  const workspaceControlBindings = new Map<string, SessionBinding>();
   const workspaceBackupService = new WorkspaceBackupService({
     homedir: opts.homedir,
     sessionDb,
@@ -310,14 +336,184 @@ export async function startAgentServer(
 
   let agentControl: AgentControl;
 
+  const addBindingSink = (binding: SessionBinding, sinkId: string, sink: (evt: ServerEvent) => void) => {
+    binding.sinks.set(sinkId, sink);
+  };
+
+  const removeBindingSink = (binding: SessionBinding, sinkId: string) => {
+    binding.sinks.delete(sinkId);
+  };
+
+  const countLiveConnectionSinks = (binding: SessionBinding) => (
+    [...binding.sinks.keys()].filter((sinkId) => !sinkId.startsWith("journal:")).length
+  );
+
+  const requireWorkspacePath = (params: Record<string, unknown>, method: string): string => {
+    const cwd = typeof params.cwd === "string" ? params.cwd.trim() : "";
+    if (!cwd) {
+      throw new Error(`${method} requires cwd`);
+    }
+    return cwd;
+  };
+
+  const getOrCreateWorkspaceControlBinding = (cwd: string): SessionBinding => {
+    const existing = workspaceControlBindings.get(cwd);
+    if (existing?.session) {
+      return existing;
+    }
+    const binding: SessionBinding = {
+      session: null,
+      socket: null,
+      sinks: new Map(),
+    };
+    const controlConfig: AgentConfig = {
+      ...config,
+      workingDirectory: cwd,
+    };
+    const built = buildSession(binding, undefined, {
+      config: controlConfig,
+    });
+    binding.session = built.session;
+    workspaceControlBindings.set(cwd, binding);
+    return binding;
+  };
+
+  const captureSessionEvent = async <T extends ServerEvent>(
+    binding: SessionBinding,
+    action: () => Promise<void> | void,
+    predicate: (event: ServerEvent) => event is T,
+    timeoutMs = 5_000,
+  ): Promise<T> => {
+    const sinkId = `capture:${crypto.randomUUID()}`;
+    return await new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        removeBindingSink(binding, sinkId);
+        reject(new Error("Timed out waiting for control event"));
+      }, timeoutMs);
+
+      addBindingSink(binding, sinkId, (event) => {
+        if (!predicate(event)) return;
+        clearTimeout(timeout);
+        removeBindingSink(binding, sinkId);
+        resolve(event);
+      });
+
+      void Promise.resolve(action()).catch((error) => {
+        clearTimeout(timeout);
+        removeBindingSink(binding, sinkId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  };
+
+  const captureSessionMutationOutcome = async <T extends ServerEvent>(
+    binding: SessionBinding,
+    action: () => Promise<void> | void,
+    predicate: (event: ServerEvent) => event is T,
+    timeoutMs = 5_000,
+    idleMs = 25,
+  ): Promise<T | null> => {
+    const sinkId = `capture:${crypto.randomUUID()}`;
+    return await new Promise<T | null>((resolve, reject) => {
+      let actionResolved = false;
+      let settled = false;
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const settle = (value: T | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+        }
+        removeBindingSink(binding, sinkId);
+        resolve(value);
+      };
+
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+        }
+        removeBindingSink(binding, sinkId);
+        reject(new Error("Timed out waiting for control event"));
+      }, timeoutMs);
+
+      addBindingSink(binding, sinkId, (event) => {
+        if (!predicate(event)) return;
+        settle(event);
+      });
+
+      void Promise.resolve(action())
+        .then(() => {
+          actionResolved = true;
+          idleTimer = setTimeout(() => {
+            if (actionResolved) {
+              settle(null);
+            }
+          }, idleMs);
+        })
+        .catch((error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          if (idleTimer) {
+            clearTimeout(idleTimer);
+          }
+          removeBindingSink(binding, sinkId);
+          reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  };
+
+  type JsonRpcTurnStartOutcome =
+    | Extract<ServerEvent, { type: "session_busy" }>
+    | Extract<ServerEvent, { type: "error" }>;
+  type JsonRpcTurnSteerOutcome =
+    | Extract<ServerEvent, { type: "steer_accepted" }>
+    | Extract<ServerEvent, { type: "error" }>;
+
+  const isJsonRpcSessionError = (
+    event: ServerEvent,
+  ): event is Extract<ServerEvent, { type: "error" }> => (
+    event.type === "error" && event.source === "session"
+  );
+
+  const sendJsonRpcSessionMutationError = (
+    ws: Bun.ServerWebSocket<StartServerSocketData>,
+    id: string | number | null,
+    event: Extract<ServerEvent, { type: "error" }>,
+  ) => {
+    sendJsonRpc(ws, buildJsonRpcErrorResponse(id, {
+      code: JSONRPC_ERROR_CODES.invalidRequest,
+      message: event.message,
+    }));
+  };
+
+  const shouldIncludeJsonRpcThreadSummary = (summary: {
+    titleSource?: string | null;
+    messageCount?: number | null;
+    hasPendingAsk?: boolean | null;
+    hasPendingApproval?: boolean | null;
+    executionState?: string | null;
+  }) => (
+    summary.executionState === "running"
+    || summary.executionState === "pending_init"
+    || (summary.messageCount ?? 0) > 0
+    || summary.titleSource !== "default"
+    || summary.hasPendingAsk === true
+    || summary.hasPendingApproval === true
+  );
+
   const buildSessionCommon = (binding: SessionBinding, sessionKind: SessionKind = "root") => {
     const emit = (evt: ServerEvent) => {
-      const socket = binding.socket;
-      if (!socket) return;
-      try {
-        socket.send(JSON.stringify(evt));
-      } catch {
-        // ignore
+      for (const sink of binding.sinks.values()) {
+        try {
+          sink(evt);
+        } catch {
+          // ignore individual sink failures
+        }
       }
     };
 
@@ -561,93 +757,125 @@ export async function startAgentServer(
     disposeBinding,
     emitParentAgentStatus: (parentSessionId, agent) => {
       const parentBinding = sessionBindings.get(parentSessionId);
-      const socket = parentBinding?.socket;
-      if (!socket) return;
-      try {
-        socket.send(JSON.stringify({ type: "agent_status", sessionId: parentSessionId, agent }));
-      } catch {
-        // ignore
+      if (!parentBinding) return;
+      for (const sink of parentBinding.sinks.values()) {
+        try {
+          sink({ type: "agent_status", sessionId: parentSessionId, agent });
+        } catch {
+          // ignore
+        }
       }
     },
     emitParentLog: (parentSessionId, line) => {
       const parentBinding = sessionBindings.get(parentSessionId);
-      const socket = parentBinding?.socket;
-      if (!socket) return;
-      try {
-        socket.send(JSON.stringify({ type: "log", sessionId: parentSessionId, line }));
-      } catch {
-        // ignore
+      if (!parentBinding) return;
+      for (const sink of parentBinding.sinks.values()) {
+        try {
+          sink({ type: "log", sessionId: parentSessionId, line });
+        } catch {
+          // ignore
+        }
       }
     },
   });
 
-  function createServer(port: number): ReturnType<typeof Bun.serve> {
-    return Bun.serve<StartServerSocketData>({
-      hostname,
-      port,
-      fetch(req, srv) {
-        const url = new URL(req.url);
-        if (url.pathname === "/ws") {
-          const resumeSessionIdRaw = url.searchParams.get("resumeSessionId");
-          const resumeSessionId = resumeSessionIdRaw && resumeSessionIdRaw.trim() ? resumeSessionIdRaw.trim() : undefined;
-          const upgraded = srv.upgrade(req, { data: { resumeSessionId } });
-          if (upgraded) return;
-          return new Response("WebSocket upgrade failed", { status: 400 });
-        }
-        return new Response("OK", { status: 200 });
+  const openJsonRpcSocket = (ws: Bun.ServerWebSocket<StartServerSocketData>) => {
+    ws.data.rpc = {
+      initializeRequestReceived: false,
+      initializedNotificationReceived: false,
+      pendingRequestCount: 0,
+      maxPendingRequests: jsonRpcMaxPendingRequests,
+      capabilities: {
+        experimentalApi: false,
+        optOutNotificationMethods: [],
       },
-      websocket: {
-        open(ws) {
-          const resumeSessionId = ws.data.resumeSessionId;
-          const resumable =
-            resumeSessionId && sessionBindings.has(resumeSessionId)
-              ? sessionBindings.get(resumeSessionId)
-              : undefined;
-          const resumableSession = resumable?.session ?? null;
+      pendingServerRequests: new Map(),
+    };
+  };
 
-          let session: AgentSession;
-          let binding: SessionBinding;
-          let isResume = false;
-          let resumedFromStorage = false;
+  const openLegacySocket = (ws: Bun.ServerWebSocket<StartServerSocketData>) => {
+    const resumeSessionId = ws.data.resumeSessionId;
+    const legacySinkId = `legacy:${ws.data.connectionId ?? "unknown"}`;
+    const resumable =
+      resumeSessionId && sessionBindings.has(resumeSessionId)
+        ? sessionBindings.get(resumeSessionId)
+        : undefined;
+    const resumableSession = resumable?.session ?? null;
 
-          if (resumable && resumable.socket === null && resumableSession) {
-            binding = resumable;
-            binding.socket = ws;
-            session = resumableSession;
-            isResume = true;
-          } else {
-            binding = {
-              session: null,
-              socket: ws,
-            };
-            const built = buildSession(binding, resumeSessionId);
-            session = built.session;
-            isResume = built.isResume;
-            resumedFromStorage = built.resumedFromStorage;
-            binding.session = session;
-            sessionBindings.set(session.id, binding);
+    let session: AgentSession;
+    let binding: SessionBinding;
+    let isResume = false;
+    let resumedFromStorage = false;
+
+    if (resumable && resumable.socket === null && resumableSession) {
+      binding = resumable;
+      binding.socket = ws;
+      session = resumableSession;
+      isResume = true;
+    } else {
+      binding = {
+        session: null,
+        socket: ws,
+        sinks: new Map(),
+      };
+      const built = buildSession(binding, resumeSessionId);
+      session = built.session;
+      isResume = built.isResume;
+      resumedFromStorage = built.resumedFromStorage;
+      binding.session = session;
+      ensureThreadJournalSink(binding, session.id);
+      sessionBindings.set(session.id, binding);
+    }
+
+    ws.data.session = session;
+    ws.data.resumeSessionId = session.id;
+    ensureThreadJournalSink(binding, session.id);
+    addBindingSink(binding, legacySinkId, (evt) => {
+      try {
+        ws.send(JSON.stringify(evt));
+      } catch {
+        // ignore
+      }
+    });
+
+    const sessionInfo = session.getSessionInfoEvent();
+    const hello: ServerEvent = {
+      type: "server_hello",
+      sessionId: session.id,
+      protocolVersion: WEBSOCKET_PROTOCOL_VERSION,
+      capabilities: {
+        modelStreamChunk: "v1",
+      },
+      config: session.getPublicConfig(),
+      sessionKind: sessionInfo.sessionKind,
+      ...(sessionInfo.parentSessionId ? { parentSessionId: sessionInfo.parentSessionId } : {}),
+      ...(sessionInfo.role ? { role: sessionInfo.role } : {}),
+      ...(sessionInfo.mode ? { mode: sessionInfo.mode } : {}),
+      ...(typeof sessionInfo.depth === "number" ? { depth: sessionInfo.depth } : {}),
+      ...(sessionInfo.nickname ? { nickname: sessionInfo.nickname } : {}),
+      ...(sessionInfo.requestedModel ? { requestedModel: sessionInfo.requestedModel } : {}),
+      ...(sessionInfo.effectiveModel ? { effectiveModel: sessionInfo.effectiveModel } : {}),
+      ...(sessionInfo.requestedReasoningEffort
+        ? { requestedReasoningEffort: sessionInfo.requestedReasoningEffort }
+        : {}),
+      ...(sessionInfo.effectiveReasoningEffort
+        ? { effectiveReasoningEffort: sessionInfo.effectiveReasoningEffort }
+        : {}),
+      ...(sessionInfo.executionState ? { executionState: sessionInfo.executionState } : {}),
+      ...(sessionInfo.lastMessagePreview ? { lastMessagePreview: sessionInfo.lastMessagePreview } : {}),
+      ...(isResume
+        ? {
+            isResume: true,
+            ...(resumedFromStorage ? { resumedFromStorage: true } : {}),
+            busy: session.isBusy,
+            ...(session.isBusy && session.activeTurnId ? { turnId: session.activeTurnId } : {}),
+            messageCount: session.messageCount,
+            hasPendingAsk: session.hasPendingAsk,
+            hasPendingApproval: session.hasPendingApproval,
           }
-
-          ws.data.session = session;
-          ws.data.resumeSessionId = session.id;
-
-          const emitToCurrentSocket = (evt: ServerEvent) => {
-            try {
-              ws.send(JSON.stringify(evt));
-            } catch {
-              // ignore
-            }
-          };
-
-          const sessionInfo = session.getSessionInfoEvent();
-          const hello: ServerEvent = {
-            type: "server_hello",
-            sessionId: session.id,
-            protocolVersion: WEBSOCKET_PROTOCOL_VERSION,
-            capabilities: {
-              modelStreamChunk: "v1",
-            },
-            config: session.getPublicConfig(),
+        : {}),
+      ...(sessionInfo.sessionKind !== "root"
+        ? {
             sessionKind: sessionInfo.sessionKind,
             ...(sessionInfo.parentSessionId ? { parentSessionId: sessionInfo.parentSessionId } : {}),
             ...(sessionInfo.role ? { role: sessionInfo.role } : {}),
@@ -664,70 +892,1474 @@ export async function startAgentServer(
               : {}),
             ...(sessionInfo.executionState ? { executionState: sessionInfo.executionState } : {}),
             ...(sessionInfo.lastMessagePreview ? { lastMessagePreview: sessionInfo.lastMessagePreview } : {}),
-            ...(isResume
-              ? {
-                  isResume: true,
-                  ...(resumedFromStorage ? { resumedFromStorage: true } : {}),
-                  busy: session.isBusy,
-                  ...(session.isBusy && session.activeTurnId ? { turnId: session.activeTurnId } : {}),
-                  messageCount: session.messageCount,
-                  hasPendingAsk: session.hasPendingAsk,
-                  hasPendingApproval: session.hasPendingApproval,
-                }
-              : {}),
-            ...(sessionInfo.sessionKind !== "root"
-              ? {
-                  sessionKind: sessionInfo.sessionKind,
-                  ...(sessionInfo.parentSessionId ? { parentSessionId: sessionInfo.parentSessionId } : {}),
-                  ...(sessionInfo.role ? { role: sessionInfo.role } : {}),
-                  ...(sessionInfo.mode ? { mode: sessionInfo.mode } : {}),
-                  ...(typeof sessionInfo.depth === "number" ? { depth: sessionInfo.depth } : {}),
-                  ...(sessionInfo.nickname ? { nickname: sessionInfo.nickname } : {}),
-                  ...(sessionInfo.requestedModel ? { requestedModel: sessionInfo.requestedModel } : {}),
-                  ...(sessionInfo.effectiveModel ? { effectiveModel: sessionInfo.effectiveModel } : {}),
-                  ...(sessionInfo.requestedReasoningEffort
-                    ? { requestedReasoningEffort: sessionInfo.requestedReasoningEffort }
-                    : {}),
-                  ...(sessionInfo.effectiveReasoningEffort
-                    ? { effectiveReasoningEffort: sessionInfo.effectiveReasoningEffort }
-                    : {}),
-                  ...(sessionInfo.executionState ? { executionState: sessionInfo.executionState } : {}),
-                  ...(sessionInfo.lastMessagePreview ? { lastMessagePreview: sessionInfo.lastMessagePreview } : {}),
-                }
-              : {}),
-          };
-
-          ws.send(JSON.stringify(hello));
-
-          const settings: ServerEvent = {
-            type: "session_settings",
-            sessionId: session.id,
-            enableMcp: session.getEnableMcp(),
-            enableMemory: session.getEnableMemory(),
-            memoryRequireApproval: session.getMemoryRequireApproval(),
-          };
-          ws.send(JSON.stringify(settings));
-          ws.send(JSON.stringify(session.getSessionConfigEvent()));
-          ws.send(JSON.stringify(session.getSessionInfoEvent()));
-
-          ws.send(JSON.stringify(session.getObservabilityStatusEvent()));
-          void session.emitProviderCatalog();
-          session.emitProviderAuthMethods();
-          void session.refreshProviderStatus();
-          void session.emitMcpServers();
-          // Feature 7: push backup state on connect
-          void session.getSessionBackupState();
-          if (isResume) {
-            for (const evt of session.drainDisconnectedReplayEvents()) {
-              emitToCurrentSocket(evt);
-            }
           }
-          // Feature 1: replay pending prompts on reconnect
-          if (isResume) {
-            session.replayPendingPrompts();
+        : {}),
+    };
+
+    ws.send(JSON.stringify(hello));
+
+    const settings: ServerEvent = {
+      type: "session_settings",
+      sessionId: session.id,
+      enableMcp: session.getEnableMcp(),
+      enableMemory: session.getEnableMemory(),
+      memoryRequireApproval: session.getMemoryRequireApproval(),
+    };
+    ws.send(JSON.stringify(settings));
+    ws.send(JSON.stringify(session.getSessionConfigEvent()));
+    ws.send(JSON.stringify(session.getSessionInfoEvent()));
+
+    ws.send(JSON.stringify(session.getObservabilityStatusEvent()));
+    void session.emitProviderCatalog();
+    session.emitProviderAuthMethods();
+    void session.refreshProviderStatus();
+    void session.emitMcpServers();
+    void session.getSessionBackupState();
+    if (isResume) {
+      for (const evt of session.drainDisconnectedReplayEvents()) {
+        try {
+          ws.send(JSON.stringify(evt));
+        } catch {
+          // ignore
+        }
+      }
+    }
+    if (isResume) {
+      session.replayPendingPrompts();
+    }
+  };
+
+  const closeLegacySocket = (ws: Bun.ServerWebSocket<StartServerSocketData>) => {
+    const session = ws.data.session;
+    if (!session) return;
+    const binding = sessionBindings.get(session.id);
+    if (!binding) return;
+    removeBindingSink(binding, `legacy:${ws.data.connectionId ?? "unknown"}`);
+
+    if (binding.socket === ws) {
+      binding.socket = null;
+    }
+    if (countLiveConnectionSinks(binding) === 0) {
+      session.beginDisconnectedReplayBuffer();
+    }
+  };
+
+  const jsonRpcSubscriptionsByConnectionId = new Map<string, Map<string, { sinkId: string }>>();
+  const threadJournalWriteQueues = new Map<string, Promise<void>>();
+
+  const sendJsonRpc = (ws: Bun.ServerWebSocket<StartServerSocketData>, payload: unknown) => {
+    try {
+      ws.send(JSON.stringify(payload));
+    } catch {
+      // ignore
+    }
+  };
+
+  const shouldSendJsonRpcNotification = (ws: Bun.ServerWebSocket<StartServerSocketData>, method: string) => (
+    !ws.data.rpc?.capabilities.optOutNotificationMethods.includes(method)
+  );
+
+  const enqueueThreadJournalEvent = (event: {
+    threadId: string;
+    ts: string;
+    eventType: string;
+    turnId: string | null;
+    itemId: string | null;
+    requestId: string | null;
+    payload: unknown;
+  }) => {
+    const previous = threadJournalWriteQueues.get(event.threadId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => {
+        // keep queue alive after prior failure
+      })
+      .then(async () => {
+        await sessionDb.appendThreadJournalEvent(event);
+      });
+    threadJournalWriteQueues.set(event.threadId, next);
+    return next;
+  };
+
+  const waitForThreadJournalIdle = async (threadId: string) => {
+    await (threadJournalWriteQueues.get(threadId) ?? Promise.resolve()).catch(() => {
+      // best-effort only
+    });
+  };
+
+  const buildJsonRpcThreadFromSession = (session: AgentSession) => {
+    const info = session.getSessionInfoEvent();
+    const snapshot = session.buildSessionSnapshot();
+    return {
+      id: session.id,
+      title: info.title,
+      preview: info.lastMessagePreview ?? session.getLatestAssistantText() ?? "",
+      modelProvider: info.provider,
+      model: info.model,
+      cwd: session.getWorkingDirectory(),
+      createdAt: info.createdAt,
+      updatedAt: info.updatedAt,
+      messageCount: snapshot.messageCount,
+      lastEventSeq: snapshot.lastEventSeq,
+      status: {
+        type: session.isBusy ? "running" : "loaded",
+      },
+    };
+  };
+
+  const buildJsonRpcThreadFromRecord = (record: PersistedSessionRecord) => ({
+    id: record.sessionId,
+    title: record.title,
+    preview: record.lastMessagePreview ?? "",
+    modelProvider: record.provider,
+    model: record.model,
+    cwd: record.workingDirectory,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    messageCount: record.messageCount,
+    lastEventSeq: record.lastEventSeq,
+    status: {
+      type: "notLoaded",
+    },
+  });
+
+  const ensureJsonRpcConnectionSubscriptions = (connectionId: string) => {
+    const existing = jsonRpcSubscriptionsByConnectionId.get(connectionId);
+    if (existing) return existing;
+    const created = new Map<string, { sinkId: string }>();
+    jsonRpcSubscriptionsByConnectionId.set(connectionId, created);
+    return created;
+  };
+
+  const ensureThreadJournalSink = (binding: SessionBinding, threadId: string) => {
+    const sinkId = `journal:${threadId}`;
+    if (binding.sinks.has(sinkId)) {
+      return;
+    }
+    const projector = createThreadJournalProjector({
+      threadId,
+      emit: (event) => {
+        void enqueueThreadJournalEvent(event).catch(() => {
+          // Best-effort journal persistence; session state snapshots remain authoritative fallback state.
+        });
+      },
+    });
+    addBindingSink(binding, sinkId, (event) => projector.handle(event));
+  };
+
+  const loadThreadBinding = (threadId: string): SessionBinding | null => {
+    const existing = sessionBindings.get(threadId);
+    if (existing?.session) {
+      ensureThreadJournalSink(existing, threadId);
+      return existing;
+    }
+    const persisted = sessionDb.getSessionRecord(threadId);
+    if (!persisted) return null;
+    const binding: SessionBinding = { session: null, socket: null, sinks: new Map() };
+    const built = buildSession(binding, threadId);
+    binding.session = built.session;
+    ensureThreadJournalSink(binding, built.session.id);
+    sessionBindings.set(built.session.id, binding);
+    return binding;
+  };
+
+  const subscribeJsonRpcThread = (
+    ws: Bun.ServerWebSocket<StartServerSocketData>,
+    threadId: string,
+    opts?: {
+      initialActiveTurnId?: string | null;
+      initialAgentText?: string | null;
+    },
+  ): SessionBinding | null => {
+    const connectionId = ws.data.connectionId;
+    if (!connectionId) {
+      return null;
+    }
+
+    const binding = loadThreadBinding(threadId);
+    if (!binding?.session) {
+      return null;
+    }
+
+    const subscriptions = ensureJsonRpcConnectionSubscriptions(connectionId);
+    if (subscriptions.has(threadId)) {
+      return binding;
+    }
+
+    const shouldReplayBufferedEvents = !binding.socket && countLiveConnectionSinks(binding) === 0;
+    const sinkId = `jsonrpc:${connectionId}:${threadId}`;
+    const projector = createJsonRpcLegacyEventProjector({
+      threadId,
+      send: (message) => sendJsonRpc(ws, message),
+      shouldSendNotification: (method) => shouldSendJsonRpcNotification(ws, method),
+      ...(opts?.initialActiveTurnId
+        ? {
+            initialActiveTurnId: opts.initialActiveTurnId,
+            initialAgentText: opts.initialAgentText ?? "",
           }
+        : {}),
+      onServerRequest: (request) => {
+        ws.data.rpc?.pendingServerRequests.set(request.id, {
+          threadId: request.threadId,
+          type: request.type,
+          requestId: request.id,
+        });
+        sendJsonRpc(ws, {
+          id: request.id,
+          method: request.method,
+          params: request.params,
+        });
+      },
+    });
+
+    addBindingSink(binding, sinkId, (event) => projector.handle(event));
+    subscriptions.set(threadId, { sinkId });
+    if (shouldReplayBufferedEvents) {
+      for (const event of binding.session.drainDisconnectedReplayEvents()) {
+        projector.handle(event);
+      }
+    }
+    return binding;
+  };
+
+  const unsubscribeJsonRpcThread = (ws: Bun.ServerWebSocket<StartServerSocketData>, threadId: string) => {
+    const connectionId = ws.data.connectionId;
+    if (!connectionId) {
+      return "notSubscribed" as const;
+    }
+    const subscriptions = jsonRpcSubscriptionsByConnectionId.get(connectionId);
+    const subscription = subscriptions?.get(threadId);
+    if (!subscription) {
+      const existingBinding = sessionBindings.get(threadId);
+      return existingBinding?.session ? "notSubscribed" as const : "notLoaded" as const;
+    }
+
+    const binding = sessionBindings.get(threadId);
+    if (binding) {
+      removeBindingSink(binding, subscription.sinkId);
+      if (!binding.socket && countLiveConnectionSinks(binding) === 0 && binding.session) {
+        binding.session.beginDisconnectedReplayBuffer();
+      }
+    }
+    subscriptions?.delete(threadId);
+    if (subscriptions && subscriptions.size === 0) {
+      jsonRpcSubscriptionsByConnectionId.delete(connectionId);
+    }
+    return "unsubscribed" as const;
+  };
+
+  const cleanupJsonRpcConnection = (ws: Bun.ServerWebSocket<StartServerSocketData>) => {
+    const connectionId = ws.data.connectionId;
+    if (!connectionId) {
+      return;
+    }
+    const subscriptions = jsonRpcSubscriptionsByConnectionId.get(connectionId);
+    if (!subscriptions) {
+      return;
+    }
+    for (const [threadId, subscription] of subscriptions) {
+      const binding = sessionBindings.get(threadId);
+      if (!binding) continue;
+      removeBindingSink(binding, subscription.sinkId);
+      if (!binding.socket && countLiveConnectionSinks(binding) === 0 && binding.session) {
+        binding.session.beginDisconnectedReplayBuffer();
+      }
+    }
+    jsonRpcSubscriptionsByConnectionId.delete(connectionId);
+  };
+
+  const extractJsonRpcTextInput = (input: unknown): string => {
+    if (typeof input === "string") {
+      return input.trim();
+    }
+    if (!Array.isArray(input)) {
+      return "";
+    }
+    return input
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return "";
+        const record = entry as Record<string, unknown>;
+        if (record.type === "text" && typeof record.text === "string") {
+          return record.text;
+        }
+        if (record.type === "inputText" && typeof record.text === "string") {
+          return record.text;
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  };
+
+  const readThreadSnapshot = (threadId: string) => {
+    const liveSnapshot = sessionBindings.get(threadId)?.session?.buildSessionSnapshot() ?? null;
+    if (liveSnapshot) return liveSnapshot;
+    const persisted = sessionDb.getSessionRecord(threadId);
+    if (!persisted) return null;
+    return loadInitialSessionSnapshot(persisted);
+  };
+
+  const replayThreadJournalEvents = (
+    ws: Bun.ServerWebSocket<StartServerSocketData>,
+    threadId: string,
+    afterSeq = 0,
+    limit?: number,
+  ) => {
+    const journalEvents = limit === undefined
+      ? sessionDb.listThreadJournalEvents(threadId, { afterSeq })
+      : sessionDb.listThreadJournalEvents(threadId, { afterSeq, limit });
+    for (const event of journalEvents) {
+      if (event.eventType.startsWith("request:")) {
+        const method = event.eventType.slice("request:".length);
+        if (event.requestId) {
+          ws.data.rpc?.pendingServerRequests.set(event.requestId, {
+            threadId,
+            type: method === "item/commandExecution/requestApproval" ? "approval" : "ask",
+            requestId: event.requestId,
+          });
+        }
+        sendJsonRpc(ws, {
+          id: event.requestId ?? `${threadId}:${event.seq}`,
+          method,
+          params: event.payload,
+        });
+        continue;
+      }
+      if (!shouldSendJsonRpcNotification(ws, event.eventType)) {
+        continue;
+      }
+      sendJsonRpc(ws, {
+        method: event.eventType,
+        params: event.payload,
+      });
+    }
+  };
+
+  const withWorkspaceControlSession = async <T>(
+    cwd: string,
+    runner: (binding: SessionBinding, session: AgentSession) => Promise<T>,
+  ): Promise<T> => {
+    const binding = getOrCreateWorkspaceControlBinding(cwd);
+    if (!binding.session) {
+      throw new Error(`Unable to create workspace control session for ${cwd}`);
+    }
+    return await runner(binding, binding.session);
+  };
+
+  const emitControlResult = (ws: Bun.ServerWebSocket<StartServerSocketData>, id: string | number, event: ServerEvent) => {
+    sendJsonRpc(ws, buildJsonRpcResultResponse(id, { event }));
+  };
+
+  const routeJsonRpcResponse = (
+    ws: Bun.ServerWebSocket<StartServerSocketData>,
+    message: { id: string | number; result?: unknown; error?: { code: number; message: string } },
+  ) => {
+    const pending = ws.data.rpc?.pendingServerRequests.get(message.id);
+    if (!pending) {
+      sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+        code: JSONRPC_ERROR_CODES.invalidRequest,
+        message: `Unknown server request id: ${String(message.id)}`,
+      }));
+      return;
+    }
+
+    const binding = sessionBindings.get(pending.threadId);
+    const session = binding?.session;
+    if (!session) {
+      ws.data.rpc?.pendingServerRequests.delete(message.id);
+      sendJsonRpc(ws, {
+        method: "serverRequest/resolved",
+        params: {
+          threadId: pending.threadId,
+          requestId: pending.requestId,
+        },
+      });
+      return;
+    }
+
+    sendJsonRpc(ws, {
+      method: "serverRequest/resolved",
+      params: {
+        threadId: pending.threadId,
+        requestId: pending.requestId,
+      },
+    });
+
+    if (pending.type === "approval") {
+      const result = message.result as Record<string, unknown> | undefined;
+      const decision = typeof result?.decision === "string" ? result.decision : undefined;
+      const approved =
+        result?.approved === true
+        || decision === "accept"
+        || decision === "acceptForSession";
+      session.handleApprovalResponse(pending.requestId, approved);
+    } else {
+      const result = message.result as Record<string, unknown> | undefined;
+      const answer =
+        typeof result?.answer === "string"
+          ? result.answer
+          : Array.isArray(result?.content)
+            ? extractJsonRpcTextInput(result.content)
+            : "";
+      session.handleAskResponse(pending.requestId, answer);
+    }
+
+    ws.data.rpc?.pendingServerRequests.delete(message.id);
+    void enqueueThreadJournalEvent({
+      threadId: pending.threadId,
+      ts: new Date().toISOString(),
+      eventType: "serverRequest/resolved",
+      turnId: session.activeTurnId ?? null,
+      itemId: null,
+      requestId: pending.requestId,
+      payload: {
+        threadId: pending.threadId,
+        requestId: pending.requestId,
+      },
+    }).catch(() => {
+      // Best-effort journal persistence.
+    });
+  };
+
+  const routeJsonRpcRequest = async (
+    ws: Bun.ServerWebSocket<StartServerSocketData>,
+    message: { id: string | number; method: string; params?: unknown },
+  ) => {
+    const params = message.params && typeof message.params === "object"
+      ? message.params as Record<string, unknown>
+      : {};
+
+    switch (message.method) {
+      case "thread/start": {
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        const model = typeof params.model === "string" ? params.model : undefined;
+        const cwd = typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : config.workingDirectory;
+        const binding: SessionBinding = { session: null, socket: null, sinks: new Map() };
+        const threadConfig: AgentConfig = {
+          ...config,
+          workingDirectory: cwd,
+          ...(provider ? { provider, runtime: defaultRuntimeNameForProvider(provider) } : {}),
+          ...(model ? { model } : {}),
+        };
+        const built = buildSession(binding, undefined, {
+          config: threadConfig,
+        });
+        binding.session = built.session;
+        ensureThreadJournalSink(binding, built.session.id);
+        sessionBindings.set(built.session.id, binding);
+        subscribeJsonRpcThread(ws, built.session.id);
+        const thread = buildJsonRpcThreadFromSession(built.session);
+        void enqueueThreadJournalEvent({
+          threadId: built.session.id,
+          ts: new Date().toISOString(),
+          eventType: "thread/started",
+          turnId: null,
+          itemId: null,
+          requestId: null,
+          payload: { thread },
+        }).catch(() => {
+          // Best-effort journal persistence.
+        });
+        sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, { thread }));
+        sendJsonRpc(ws, { method: "thread/started", params: { thread } });
+        return;
+      }
+      case "thread/resume": {
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const afterSeq = typeof params.afterSeq === "number" && Number.isFinite(params.afterSeq)
+          ? Math.max(0, Math.floor(params.afterSeq))
+          : 0;
+        if (!threadId) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: "thread/resume requires threadId",
+          }));
+          return;
+        }
+        const binding = loadThreadBinding(threadId);
+        if (!binding?.session) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `Unknown thread: ${threadId}`,
+          }));
+          return;
+        }
+        const thread = buildJsonRpcThreadFromSession(binding.session);
+        if (afterSeq > 0) {
+          await waitForThreadJournalIdle(threadId);
+          binding.session.ensureDisconnectedReplayBuffer();
+          replayThreadJournalEvents(ws, threadId, afterSeq);
+        }
+        subscribeJsonRpcThread(
+          ws,
+          threadId,
+          binding.session.activeTurnId
+            ? {
+                initialActiveTurnId: binding.session.activeTurnId,
+                initialAgentText: binding.session.getLatestAssistantText() ?? "",
+              }
+            : undefined,
+        );
+        sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, { thread }));
+        sendJsonRpc(ws, { method: "thread/started", params: { thread } });
+        return;
+      }
+      case "thread/list": {
+        const cwd = typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : undefined;
+        const threads = new Map<string, ReturnType<typeof buildJsonRpcThreadFromRecord>>();
+        for (const record of sessionDb.listSessions({ ...(cwd ? { workingDirectory: cwd } : {}) })) {
+          const persisted = sessionDb.getSessionRecord(record.sessionId);
+          if (!persisted) continue;
+          if (!shouldIncludeJsonRpcThreadSummary({
+            titleSource: persisted.titleSource,
+            messageCount: persisted.messageCount,
+            hasPendingAsk: persisted.hasPendingAsk,
+            hasPendingApproval: persisted.hasPendingApproval,
+            executionState: persisted.executionState ?? null,
+          })) {
+            continue;
+          }
+          threads.set(record.sessionId, buildJsonRpcThreadFromRecord(persisted));
+        }
+        for (const binding of sessionBindings.values()) {
+          const session = binding.session;
+          if (!session || session.sessionKind !== "root") continue;
+          if (cwd && session.getWorkingDirectory() !== cwd) continue;
+          threads.set(session.id, buildJsonRpcThreadFromSession(session));
+        }
+        sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, {
+          threads: [...threads.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+        }));
+        return;
+      }
+      case "thread/read": {
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        if (!threadId) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: "thread/read requires threadId",
+          }));
+          return;
+        }
+        const snapshot = readThreadSnapshot(threadId);
+        if (!snapshot) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `Unknown thread: ${threadId}`,
+          }));
+          return;
+        }
+        const binding = sessionBindings.get(threadId);
+        const thread = binding?.session
+          ? buildJsonRpcThreadFromSession(binding.session)
+          : buildJsonRpcThreadFromRecord(sessionDb.getSessionRecord(threadId)!);
+        await waitForThreadJournalIdle(threadId);
+        const journalEvents = params.includeTurns === true
+          ? sessionDb.listThreadJournalEvents(threadId)
+          : [];
+        sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, {
+          thread: {
+            ...thread,
+            ...(params.includeTurns === true ? { turns: projectThreadTurnsFromJournal(journalEvents) } : {}),
+          },
+          coworkSnapshot: snapshot,
+          ...(params.includeTurns === true
+            ? { journalTailSeq: journalEvents.at(-1)?.seq ?? 0 }
+            : {}),
+        }));
+        return;
+      }
+      case "thread/unsubscribe": {
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        if (!threadId) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: "thread/unsubscribe requires threadId",
+          }));
+          return;
+        }
+        const status = unsubscribeJsonRpcThread(ws, threadId);
+        sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, { status }));
+        if (status === "unsubscribed") {
+          sendJsonRpc(ws, {
+            method: "thread/closed",
+            params: { threadId },
+          });
+        }
+        return;
+      }
+      case "turn/start": {
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const text = extractJsonRpcTextInput(params.input);
+        const clientMessageId =
+          typeof params.clientMessageId === "string" && params.clientMessageId.trim()
+            ? params.clientMessageId.trim()
+            : undefined;
+        if (!threadId || !text) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: "turn/start requires threadId and non-empty text input",
+          }));
+          return;
+        }
+        const binding = subscribeJsonRpcThread(ws, threadId);
+        if (!binding?.session) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `Unknown thread: ${threadId}`,
+          }));
+          return;
+        }
+        const outcome = await captureSessionEvent(
+          binding,
+          () => binding.session!.sendUserMessage(text, clientMessageId),
+          (event): event is JsonRpcTurnStartOutcome => (
+            (event.type === "session_busy"
+              && event.sessionId === binding.session!.id
+              && event.busy === true
+              && typeof event.turnId === "string"
+              && event.turnId.trim().length > 0)
+            || isJsonRpcSessionError(event)
+          ),
+        );
+        if (outcome.type === "error") {
+          sendJsonRpcSessionMutationError(ws, message.id, outcome);
+          return;
+        }
+        sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, {
+          turn: {
+            id: outcome.turnId,
+            threadId,
+            status: "inProgress",
+            items: [],
+          },
+        }));
+        return;
+      }
+      case "turn/steer": {
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const text = extractJsonRpcTextInput(params.input);
+        const clientMessageId =
+          typeof params.clientMessageId === "string" && params.clientMessageId.trim()
+            ? params.clientMessageId.trim()
+            : undefined;
+        const expectedTurnId = typeof params.turnId === "string" && params.turnId.trim()
+          ? params.turnId.trim()
+          : sessionBindings.get(threadId)?.session?.activeTurnId ?? "";
+        const session = sessionBindings.get(threadId)?.session;
+        if (!session || !text || !expectedTurnId) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: "turn/steer requires threadId, active turnId, and non-empty text input",
+          }));
+          return;
+        }
+        const binding = sessionBindings.get(threadId);
+        if (!binding) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `Unknown thread: ${threadId}`,
+          }));
+          return;
+        }
+        const outcome = await captureSessionEvent(
+          binding,
+          () => session.sendSteerMessage(text, expectedTurnId, clientMessageId),
+          (event): event is JsonRpcTurnSteerOutcome => (
+            (event.type === "steer_accepted"
+              && event.sessionId === session.id
+              && event.turnId === expectedTurnId)
+            || isJsonRpcSessionError(event)
+          ),
+        );
+        if (outcome.type === "error") {
+          sendJsonRpcSessionMutationError(ws, message.id, outcome);
+          return;
+        }
+        sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, {
+          turnId: outcome.turnId,
+        }));
+        return;
+      }
+      case "turn/interrupt": {
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const session = sessionBindings.get(threadId)?.session;
+        if (!session) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `Unknown thread: ${threadId}`,
+          }));
+          return;
+        }
+        session.cancel();
+        sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, {}));
+        return;
+      }
+      case "cowork/session/title/set": {
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const title = typeof params.title === "string" ? params.title : "";
+        const binding = sessionBindings.get(threadId);
+        const session = binding?.session;
+        if (!session || !title.trim()) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires threadId and title`,
+          }));
+          return;
+        }
+        const event = await captureSessionEvent(
+          binding!,
+          () => session.setSessionTitle(title),
+          (event): event is Extract<ServerEvent, { type: "session_info" }> => event.type === "session_info",
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/session/model/set": {
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const model = typeof params.model === "string" ? params.model : "";
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        const binding = sessionBindings.get(threadId);
+        const session = binding?.session;
+        if (!session || !model.trim()) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires threadId and model`,
+          }));
+          return;
+        }
+        const event = await captureSessionEvent(
+          binding!,
+          async () => await session.setModel(model, provider),
+          (event): event is Extract<ServerEvent, { type: "config_updated" }> => event.type === "config_updated",
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/session/usageBudget/set": {
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const binding = sessionBindings.get(threadId);
+        const session = binding?.session;
+        if (!session) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires threadId`,
+          }));
+          return;
+        }
+        const warnAtUsd = typeof params.warnAtUsd === "number" || params.warnAtUsd === null ? params.warnAtUsd as number | null : undefined;
+        const stopAtUsd = typeof params.stopAtUsd === "number" || params.stopAtUsd === null ? params.stopAtUsd as number | null : undefined;
+        const event = await captureSessionEvent(
+          binding!,
+          () => session.setSessionUsageBudget(warnAtUsd, stopAtUsd),
+          (event): event is Extract<ServerEvent, { type: "session_usage" }> => event.type === "session_usage",
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/session/config/set": {
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const configPatch = params.config as any;
+        const binding = sessionBindings.get(threadId);
+        const session = binding?.session;
+        if (!session || !configPatch || typeof configPatch !== "object") {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires threadId and config`,
+          }));
+          return;
+        }
+        const event = await captureSessionEvent(
+          binding!,
+          async () => await session.setConfig(configPatch),
+          (event): event is Extract<ServerEvent, { type: "session_config" }> => event.type === "session_config",
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/session/defaults/apply": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+        const binding = threadId ? loadThreadBinding(threadId) : getOrCreateWorkspaceControlBinding(cwd);
+        const session = binding?.session;
+        if (!binding || !session) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires a live workspace control session or threadId`,
+          }));
+          return;
+        }
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        const model = typeof params.model === "string" ? params.model : undefined;
+        const enableMcp = typeof params.enableMcp === "boolean" ? params.enableMcp : undefined;
+        const configPatch = params.config as any;
+        const outcome = await captureSessionMutationOutcome(
+          binding,
+          async () => await session.applySessionDefaults({
+            ...(provider !== undefined && model !== undefined ? { provider, model } : {}),
+            ...(enableMcp !== undefined ? { enableMcp } : {}),
+            ...(configPatch && typeof configPatch === "object" ? { config: configPatch } : {}),
+          }),
+          (event): event is Extract<ServerEvent, { type: "session_config" | "config_updated" | "session_settings" | "session_info" | "error" }> => (
+            event.type === "session_config"
+            || event.type === "config_updated"
+            || event.type === "session_settings"
+            || event.type === "session_info"
+            || event.type === "error"
+          ),
+        );
+        emitControlResult(ws, message.id, outcome?.type === "error" ? outcome : session.getSessionConfigEvent());
+        return;
+      }
+      case "cowork/session/delete": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
+        const binding = getOrCreateWorkspaceControlBinding(cwd);
+        const session = binding.session!;
+        const event = await captureSessionEvent(
+          binding,
+          async () => await session.deleteSession(targetSessionId),
+          (event): event is Extract<ServerEvent, { type: "session_deleted" }> => event.type === "session_deleted",
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/catalog/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.emitProviderCatalog(),
+            (event): event is Extract<ServerEvent, { type: "provider_catalog" }> => event.type === "provider_catalog",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/authMethods/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            () => session.emitProviderAuthMethods(),
+            (event): event is Extract<ServerEvent, { type: "provider_auth_methods" }> => event.type === "provider_auth_methods",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/status/refresh": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.refreshProviderStatus(),
+            (event): event is Extract<ServerEvent, { type: "provider_status" }> => event.type === "provider_status",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/auth/authorize": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        const methodId = typeof params.methodId === "string" ? params.methodId.trim() : "";
+        if (!provider || !methodId) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires provider and methodId`,
+          }));
+          return;
+        }
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.authorizeProviderAuth(provider, methodId),
+            (event): event is Extract<ServerEvent, { type: "provider_auth_challenge" | "provider_auth_result" }> =>
+              event.type === "provider_auth_challenge" || event.type === "provider_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/auth/logout": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        if (!provider) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires provider`,
+          }));
+          return;
+        }
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.logoutProviderAuth(provider),
+            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => event.type === "provider_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/auth/callback": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        const methodId = typeof params.methodId === "string" ? params.methodId.trim() : "";
+        const code = typeof params.code === "string" && params.code.trim() ? params.code.trim() : undefined;
+        if (!provider || !methodId) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires provider and methodId`,
+          }));
+          return;
+        }
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.callbackProviderAuth(provider, methodId, code),
+            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => event.type === "provider_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/auth/setApiKey": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        const methodId = typeof params.methodId === "string" ? params.methodId.trim() : "";
+        const apiKey = typeof params.apiKey === "string" ? params.apiKey : "";
+        if (!provider || !methodId || !apiKey) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires provider, methodId, and apiKey`,
+          }));
+          return;
+        }
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.setProviderApiKey(provider, methodId, apiKey),
+            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => event.type === "provider_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/provider/auth/copyApiKey": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const provider = typeof params.provider === "string" ? params.provider as AgentConfig["provider"] : undefined;
+        const sourceProvider = typeof params.sourceProvider === "string" ? params.sourceProvider as AgentConfig["provider"] : undefined;
+        if (!provider || !sourceProvider) {
+          sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+            code: JSONRPC_ERROR_CODES.invalidParams,
+            message: `${message.method} requires provider and sourceProvider`,
+          }));
+          return;
+        }
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.copyProviderApiKey(provider, sourceProvider),
+            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => event.type === "provider_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/servers/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.emitMcpServers(),
+            (event): event is Extract<ServerEvent, { type: "mcp_servers" }> => event.type === "mcp_servers",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/server/upsert": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const server = params.server as any;
+        const previousName = typeof params.previousName === "string" ? params.previousName : undefined;
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              await session.upsertMcpServer(server, previousName);
+              await session.emitMcpServers();
+            },
+            (event): event is Extract<ServerEvent, { type: "mcp_servers" }> => event.type === "mcp_servers",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/server/delete": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const name = typeof params.name === "string" ? params.name.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              await session.deleteMcpServer(name);
+              await session.emitMcpServers();
+            },
+            (event): event is Extract<ServerEvent, { type: "mcp_servers" }> => event.type === "mcp_servers",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/server/validate": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const name = typeof params.name === "string" ? params.name.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.validateMcpServer(name),
+            (event): event is Extract<ServerEvent, { type: "mcp_server_validation" }> => event.type === "mcp_server_validation",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/server/auth/authorize": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const name = typeof params.name === "string" ? params.name.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.authorizeMcpServerAuth(name),
+            (event): event is Extract<ServerEvent, { type: "mcp_server_auth_challenge" | "mcp_server_auth_result" }> =>
+              event.type === "mcp_server_auth_challenge" || event.type === "mcp_server_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/server/auth/callback": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const name = typeof params.name === "string" ? params.name.trim() : "";
+        const code = typeof params.code === "string" && params.code.trim() ? params.code.trim() : undefined;
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.callbackMcpServerAuth(name, code),
+            (event): event is Extract<ServerEvent, { type: "mcp_server_auth_result" }> => event.type === "mcp_server_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/server/auth/setApiKey": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const name = typeof params.name === "string" ? params.name.trim() : "";
+        const apiKey = typeof params.apiKey === "string" ? params.apiKey : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.setMcpServerApiKey(name, apiKey),
+            (event): event is Extract<ServerEvent, { type: "mcp_server_auth_result" }> => event.type === "mcp_server_auth_result",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/mcp/legacy/migrate": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const scope = params.scope === "user" ? "user" : "workspace";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              await session.migrateLegacyMcpServers(scope);
+              await session.emitMcpServers();
+            },
+            (event): event is Extract<ServerEvent, { type: "mcp_servers" }> => event.type === "mcp_servers",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/catalog/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.getSkillsCatalog(),
+            (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/list": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.listSkills(),
+            (event): event is Extract<ServerEvent, { type: "skills_list" }> => event.type === "skills_list",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const skillName = typeof params.skillName === "string" ? params.skillName.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.readSkill(skillName),
+            (event): event is Extract<ServerEvent, { type: "skill_content" }> => event.type === "skill_content",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/disable": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const skillName = typeof params.skillName === "string" ? params.skillName.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              await session.disableSkill(skillName);
+              await session.listSkills();
+            },
+            (event): event is Extract<ServerEvent, { type: "skills_list" }> => event.type === "skills_list",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/enable": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const skillName = typeof params.skillName === "string" ? params.skillName.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              await session.enableSkill(skillName);
+              await session.listSkills();
+            },
+            (event): event is Extract<ServerEvent, { type: "skills_list" }> => event.type === "skills_list",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/delete": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const skillName = typeof params.skillName === "string" ? params.skillName.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              await session.deleteSkill(skillName);
+              await session.listSkills();
+            },
+            (event): event is Extract<ServerEvent, { type: "skills_list" }> => event.type === "skills_list",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/installation/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.getSkillInstallation(installationId),
+            (event): event is Extract<ServerEvent, { type: "skill_installation" }> => event.type === "skill_installation",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/install/preview": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const sourceInput = typeof params.sourceInput === "string" ? params.sourceInput : "";
+        const targetScope = params.targetScope === "global" ? "global" : "project";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.previewSkillInstall(sourceInput, targetScope),
+            (event): event is Extract<ServerEvent, { type: "skill_install_preview" }> => event.type === "skill_install_preview",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/install": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const sourceInput = typeof params.sourceInput === "string" ? params.sourceInput : "";
+        const targetScope = params.targetScope === "global" ? "global" : "project";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.installSkills(sourceInput, targetScope),
+            (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/installation/enable":
+      case "cowork/skills/installation/disable":
+      case "cowork/skills/installation/delete":
+      case "cowork/skills/installation/update": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              if (message.method === "cowork/skills/installation/enable") await session.enableSkillInstallation(installationId);
+              if (message.method === "cowork/skills/installation/disable") await session.disableSkillInstallation(installationId);
+              if (message.method === "cowork/skills/installation/delete") await session.deleteSkillInstallation(installationId);
+              if (message.method === "cowork/skills/installation/update") await session.updateSkillInstallation(installationId);
+            },
+            (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/installation/copy": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+        const targetScope = params.targetScope === "global" ? "global" : "project";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.copySkillInstallation(installationId, targetScope),
+            (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/skills/installation/checkUpdate": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.checkSkillInstallationUpdate(installationId),
+            (event): event is Extract<ServerEvent, { type: "skill_installation_update_check" }> => event.type === "skill_installation_update_check",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/memory/list": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const scope = params.scope === "user" ? "user" : params.scope === "workspace" ? "workspace" : undefined;
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.emitMemories(scope),
+            (event): event is Extract<ServerEvent, { type: "memory_list" }> => event.type === "memory_list",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/memory/upsert": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const scope = params.scope === "user" ? "user" : "workspace";
+        const id = typeof params.id === "string" && params.id.trim() ? params.id.trim() : undefined;
+        const content = typeof params.content === "string" ? params.content : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.upsertMemory(scope, id, content),
+            (event): event is Extract<ServerEvent, { type: "memory_list" }> => event.type === "memory_list",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/memory/delete": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const scope = params.scope === "user" ? "user" : "workspace";
+        const id = typeof params.id === "string" ? params.id.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.deleteMemory(scope, id),
+            (event): event is Extract<ServerEvent, { type: "memory_list" }> => event.type === "memory_list",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/backups/workspace/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.listWorkspaceBackups(),
+            (event): event is Extract<ServerEvent, { type: "workspace_backups" }> => event.type === "workspace_backups",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/backups/workspace/delta/read": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
+        const checkpointId = typeof params.checkpointId === "string" ? params.checkpointId.trim() : "";
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => await session.getWorkspaceBackupDelta(targetSessionId, checkpointId),
+            (event): event is Extract<ServerEvent, { type: "workspace_backup_delta" }> => event.type === "workspace_backup_delta",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      case "cowork/backups/workspace/checkpoint":
+      case "cowork/backups/workspace/restore":
+      case "cowork/backups/workspace/deleteCheckpoint":
+      case "cowork/backups/workspace/deleteEntry": {
+        const cwd = requireWorkspacePath(params, message.method);
+        const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
+        const checkpointId = typeof params.checkpointId === "string" && params.checkpointId.trim()
+          ? params.checkpointId.trim()
+          : undefined;
+        const event = await withWorkspaceControlSession(cwd, async (binding, session) =>
+          await captureSessionEvent(
+            binding,
+            async () => {
+              if (message.method === "cowork/backups/workspace/checkpoint") await session.createWorkspaceBackupCheckpoint(targetSessionId);
+              if (message.method === "cowork/backups/workspace/restore") await session.restoreWorkspaceBackup(targetSessionId, checkpointId);
+              if (message.method === "cowork/backups/workspace/deleteCheckpoint" && checkpointId) {
+                await session.deleteWorkspaceBackupCheckpoint(targetSessionId, checkpointId);
+              }
+              if (message.method === "cowork/backups/workspace/deleteEntry") await session.deleteWorkspaceBackupEntry(targetSessionId);
+            },
+            (event): event is Extract<ServerEvent, { type: "workspace_backups" }> => event.type === "workspace_backups",
+          ),
+        );
+        emitControlResult(ws, message.id, event);
+        return;
+      }
+      default:
+        sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
+          code: JSONRPC_ERROR_CODES.methodNotFound,
+          message: `Unknown method: ${message.method}`,
+        }));
+    }
+  };
+
+  function createServer(port: number): ReturnType<typeof Bun.serve> {
+    return Bun.serve<StartServerSocketData>({
+      hostname,
+      port,
+      fetch(req, srv) {
+        const url = new URL(req.url);
+        if (url.pathname === "/ws") {
+          const resumeSessionIdRaw = url.searchParams.get("resumeSessionId");
+          const resumeSessionId = resumeSessionIdRaw && resumeSessionIdRaw.trim() ? resumeSessionIdRaw.trim() : undefined;
+          const protocolResult = resolveWsProtocol({
+            offeredSubprotocols: splitWebSocketSubprotocolHeader(req.headers.get("sec-websocket-protocol")),
+            requestedProtocol: url.searchParams.get("protocol"),
+            defaultProtocol: wsProtocolDefault,
+          });
+          if (!protocolResult.ok) {
+            return new Response(protocolResult.error, { status: 400 });
+          }
+          const upgraded = srv.upgrade(req, {
+            headers: protocolResult.protocol.selectedSubprotocol
+              ? {
+                  "Sec-WebSocket-Protocol": protocolResult.protocol.selectedSubprotocol,
+                }
+              : undefined,
+            data: {
+              resumeSessionId,
+              protocolMode: protocolResult.protocol.mode,
+              selectedSubprotocol: protocolResult.protocol.selectedSubprotocol,
+              connectionId: crypto.randomUUID(),
+            },
+          });
+          if (upgraded) return;
+          return new Response("WebSocket upgrade failed", { status: 400 });
+        }
+        return new Response("OK", { status: 200 });
+      },
+      websocket: {
+        open(ws) {
+          if (ws.data.protocolMode === "jsonrpc") {
+            openJsonRpcSocket(ws);
+            return;
+          }
+          openLegacySocket(ws);
         },
         message(ws, raw) {
+          if (ws.data.protocolMode === "jsonrpc") {
+            const decoded = decodeJsonRpcMessage(raw);
+            if (!decoded.ok) {
+              ws.send(JSON.stringify(decoded.response));
+              return;
+            }
+            const rpcState = ws.data.rpc;
+            if (
+              rpcState
+              && "id" in decoded.message
+              && "method" in decoded.message
+              && decoded.message.method !== "initialize"
+              && decoded.message.method !== "initialized"
+              && rpcState.pendingRequestCount >= rpcState.maxPendingRequests
+            ) {
+              ws.send(JSON.stringify(buildJsonRpcErrorResponse(decoded.message.id, {
+                code: JSONRPC_ERROR_CODES.serverOverloaded,
+                message: "Server overloaded; retry later.",
+              })));
+              return;
+            }
+            dispatchJsonRpcMessage({
+              ws,
+              message: decoded.message,
+              onRequest: (message) => {
+                if (ws.data.rpc) {
+                  ws.data.rpc.pendingRequestCount += 1;
+                }
+                void routeJsonRpcRequest(ws, message)
+                  .catch((reason) => {
+                    const id = "id" in message ? message.id : undefined;
+                    if (id === undefined || id === null) {
+                      return;
+                    }
+                    const detail = reason instanceof Error
+                      ? reason.message
+                      : typeof reason === "string"
+                        ? reason
+                        : "Internal error";
+                    sendJsonRpc(ws, buildJsonRpcErrorResponse(id, {
+                      code: JSONRPC_ERROR_CODES.internalError,
+                      message: detail,
+                    }));
+                  })
+                  .finally(() => {
+                    if (ws.data.rpc) {
+                      ws.data.rpc.pendingRequestCount = Math.max(0, ws.data.rpc.pendingRequestCount - 1);
+                    }
+                  });
+              },
+              onResponse: (message) => {
+                routeJsonRpcResponse(ws, message);
+              },
+            });
+            return;
+          }
+
           const session = ws.data.session;
           if (!session) return;
 
@@ -745,15 +2377,11 @@ export async function startAgentServer(
           });
         },
         close(ws) {
-          const session = ws.data.session;
-          if (!session) return;
-          const binding = sessionBindings.get(session.id);
-          if (!binding) return;
-
-          if (binding.socket === ws) {
-            binding.socket = null;
-            session.beginDisconnectedReplayBuffer();
+          if (ws.data.protocolMode === "jsonrpc") {
+            cleanupJsonRpcConnection(ws);
+            return;
           }
+          closeLegacySocket(ws);
         },
       },
     });

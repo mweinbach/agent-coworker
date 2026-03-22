@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 
+import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { setupJsdom } from "./jsdomHarness";
 
 const MOCK_SYSTEM_APPEARANCE = {
@@ -69,6 +70,7 @@ mock.module("../src/lib/agentSocket", () => ({
     }
     close() {}
   },
+  JsonRpcSocket: NoopJsonRpcSocket,
 }));
 
 mock.module("../src/ui/skills/HeaderAndFilters", () => ({

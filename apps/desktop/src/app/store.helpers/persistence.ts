@@ -34,10 +34,14 @@ function buildPersistedState(state: AppStoreState): PersistedState {
   });
   const providerUiState = normalizePersistedProviderUiState(state.providerUiState);
   const threads = buildPersistableThreads(state);
+  const workspaces = state.workspaces.map((workspace) => ({
+    ...workspace,
+    wsProtocol: "jsonrpc" as const,
+  }));
 
   return {
     version: 2,
-    workspaces: state.workspaces,
+    workspaces,
     threads,
     developerMode: state.developerMode,
     showHiddenFiles: state.showHiddenFiles,

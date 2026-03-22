@@ -34,7 +34,10 @@ jobs:
         run: bun run docs:check
 
       - name: Unit tests
+        run: bun test
+
+      - name: Remote MCP smoke
         env:
           RUN_REMOTE_MCP_TESTS: "1"
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-        run: bun test
+        run: bun test test/mcp.remote.grep.test.ts

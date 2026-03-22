@@ -93,6 +93,7 @@ describe("desktop persistence state validation", () => {
     const loaded = await persistence.loadState();
     expect(loaded.workspaces).toHaveLength(1);
     expect(loaded.workspaces[0]?.id).toBe("ws_valid");
+    expect(loaded.workspaces[0]?.wsProtocol).toBe("jsonrpc");
     expect(loaded.workspaces[0]?.defaultBackupsEnabled).toBe(false);
     expect(loaded.threads).toHaveLength(1);
     expect(loaded.threads[0]?.id).toBe("thread_valid");
@@ -591,6 +592,7 @@ describe("desktop persistence state validation", () => {
 
     expect(loaded.workspaces).toHaveLength(1);
     expect(loaded.workspaces[0]?.id).toBe("ws_legacy");
+    expect(loaded.workspaces[0]?.wsProtocol).toBe("jsonrpc");
     expect(transcript).toHaveLength(1);
     expect(await fs.readFile(path.join(userDataDir, "state.json"), "utf8")).toContain("\"ws_legacy\"");
     expect(await fs.readFile(path.join(userDataDir, "transcripts", "thread_legacy.jsonl"), "utf8")).toContain("\"thread_legacy\"");

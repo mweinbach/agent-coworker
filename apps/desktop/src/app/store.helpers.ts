@@ -46,6 +46,7 @@ import {
   markPendingThreadSteerAccepted,
   queuePendingThreadMessage,
   rememberPendingThreadSteer,
+  prependPendingThreadMessage,
   shiftPendingThreadMessage,
 } from "./store.helpers/runtimeState";
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
@@ -239,6 +240,7 @@ export type AppStoreState = {
     threadId: string,
     mode?: "auto" | "auto-resume" | "explicit",
     draftModelSelection?: { provider: ProviderName; model: string } | null,
+    opts?: { allowBeforeHydration?: boolean },
   ) => Promise<void>;
   updateWorkspaceDefaults: (workspaceId: string, patch: WorkspaceDefaultsPatch) => Promise<void>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
@@ -336,7 +338,13 @@ function pushNotification(notifications: Notification[], entry: Notification): N
 }
 
 const { appendThreadTranscript } = createTranscriptBuffer({ nowIso });
-const { ensureControlSocket, waitForControlSession, sendControl, requestWorkspaceSessions, requestSessionSnapshot } = createControlSocketHelpers({
+const {
+  ensureControlSocket,
+  waitForControlSession,
+  requestWorkspaceSessions,
+  requestSessionSnapshot,
+  requestJsonRpcControlEvent,
+} = createControlSocketHelpers({
   nowIso,
   makeId,
   persist,
@@ -463,13 +471,14 @@ export {
   waitForControlSession,
   requestWorkspaceSessions,
   requestSessionSnapshot,
+  requestJsonRpcControlEvent,
   ensureThreadSocket,
-  sendControl,
   sendThread,
   appendThreadTranscript,
   pushNotification,
   sendUserMessageToThread,
   queuePendingThreadMessage,
   rememberPendingThreadSteer,
+  prependPendingThreadMessage,
   shiftPendingThreadMessage,
 };

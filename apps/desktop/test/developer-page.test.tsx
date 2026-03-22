@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createElement } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+
+import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { setupJsdom } from "./jsdomHarness";
 
 const MOCK_SYSTEM_APPEARANCE = {
@@ -67,6 +69,7 @@ mock.module("../src/lib/agentSocket", () => ({
     }
     close() {}
   },
+  JsonRpcSocket: NoopJsonRpcSocket,
 }));
 
 const { useAppStore } = await import("../src/app/store");

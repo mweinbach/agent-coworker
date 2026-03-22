@@ -43,7 +43,6 @@ const updater = new DesktopUpdaterService({
     showUpdateReadyNotification(state);
   },
 });
-let unregisterIpc = () => {};
 let unregisterAppearanceListener = () => {};
 let mainWindow: BrowserWindow | null = null;
 const WINDOW_SHOW_FALLBACK_TIMEOUT_MS = 2_000;
@@ -369,7 +368,7 @@ if (!gotSingleInstanceLock) {
       return;
     }
 
-    unregisterIpc = registerDesktopIpc({
+    registerDesktopIpc({
       persistence,
       serverManager,
       updater,
@@ -405,7 +404,6 @@ if (!gotSingleInstanceLock) {
   app.on(
     "before-quit",
     createBeforeQuitHandler({
-      unregisterIpc: () => unregisterIpc(),
       unregisterAppearanceListener: () => unregisterAppearanceListener(),
       stopUpdater: () => updater.dispose(),
       stopAllServers: () => serverManager.stopAll(),

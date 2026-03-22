@@ -212,6 +212,7 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       path: workspacePath,
       createdAt,
       lastOpenedAt,
+      wsProtocol: "jsonrpc",
       defaultProvider: asOptionalString(item.defaultProvider) as WorkspaceRecord["defaultProvider"],
       defaultModel: asOptionalString(item.defaultModel),
       defaultPreferredChildModel: asOptionalString(item.defaultPreferredChildModel) ?? asLegacyPreferredChildModel(item),

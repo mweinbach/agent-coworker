@@ -2,11 +2,238 @@
 
 Canonical protocol contract for `agent-coworker` WebSocket clients.
 
+Cowork now supports **two WebSocket protocols** on the same `/ws` endpoint:
+
+- **Legacy Cowork event protocol** — default today on the server; fully backward compatible with existing CLI / TUI / custom clients.
+- **Codex-style JSON-RPC-lite protocol** — additive protocol for multiplexed thread control, thread replay, and server-initiated requests.
+
+The Electron desktop app now uses the JSON-RPC mode exclusively for live workspace control and thread traffic. Existing persisted desktop workspaces are normalized to `jsonrpc` on load, but the harness still keeps the legacy protocol available for non-desktop clients.
+
 ## Connection
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.28`
+- Current protocol version: `7.29`
+- Legacy protocol version: `7.29`
+- Default WebSocket protocol mode: `legacy` unless overridden by `COWORK_WS_DEFAULT_PROTOCOL` or `--ws-protocol-default`
+
+## Protocol negotiation
+
+Cowork chooses the WebSocket protocol mode in this order:
+
+1. WebSocket subprotocol
+2. `?protocol=` query param
+3. Server default (`legacy` today)
+
+When multiple subprotocols are offered, the server selects the first supported value in the list.
+
+### Supported WebSocket subprotocols
+
+- `cowork.legacy.v1`
+- `cowork.jsonrpc.v1`
+
+### Supported query params
+
+- `?protocol=legacy`
+- `?protocol=jsonrpc`
+
+### Server-side default selection
+
+- env: `COWORK_WS_DEFAULT_PROTOCOL=legacy|jsonrpc`
+- server CLI: `--ws-protocol-default legacy|jsonrpc`
+
+### Example: legacy mode
+
+```ts
+const ws = new WebSocket("ws://127.0.0.1:7337/ws");
+```
+
+### Example: JSON-RPC mode via subprotocol
+
+```ts
+const ws = new WebSocket("ws://127.0.0.1:7337/ws", "cowork.jsonrpc.v1");
+```
+
+### Example: JSON-RPC mode via query param
+
+```ts
+const ws = new WebSocket("ws://127.0.0.1:7337/ws?protocol=jsonrpc");
+```
+
+## JSON-RPC-lite overview
+
+The JSON-RPC mode follows the Codex-style wire shape:
+
+- request: `{ "id": 1, "method": "thread/start", "params": { ... } }`
+- response: `{ "id": 1, "result": { ... } }`
+- error: `{ "id": 1, "error": { "code": -32601, "message": "..." } }`
+- notification: `{ "method": "turn/started", "params": { ... } }`
+- server request: `{ "id": "req-123", "method": "item/commandExecution/requestApproval", "params": { ... } }`
+
+`"jsonrpc": "2.0"` is intentionally omitted on the wire. Each WebSocket text frame carries exactly one JSON-RPC-lite message.
+
+### JSON-RPC handshake
+
+JSON-RPC connections do **not** receive an immediate `server_hello`.
+
+Clients must:
+
+1. send `initialize`
+2. wait for the `initialize` result
+3. send the `initialized` notification
+4. only then call `thread/*`, `turn/*`, or `cowork/*` methods
+
+Any request before the handshake completes is rejected with a JSON-RPC error:
+
+```json
+{ "id": 1, "error": { "code": -32002, "message": "Not initialized" } }
+```
+
+### JSON-RPC capabilities
+
+`initialize.params.capabilities` currently supports:
+
+- `experimentalApi: boolean`
+- `optOutNotificationMethods: string[]`
+
+### Core JSON-RPC methods currently available
+
+- `thread/start`
+- `thread/resume`
+- `thread/list`
+- `thread/read`
+- `thread/unsubscribe`
+- `turn/start`
+- `turn/steer`
+- `turn/interrupt`
+
+`turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream.
+
+### Cowork JSON-RPC control namespace
+
+Cowork also exposes a workspace-scoped control namespace over the same JSON-RPC connection. These methods return a legacy-compatible event payload inside `{ "event": ... }` so existing UI reducers can adapt incrementally while the transport modernizes.
+
+Currently implemented `cowork/*` methods include:
+
+- session/thread controls
+  - `cowork/session/title/set`
+  - `cowork/session/model/set`
+  - `cowork/session/usageBudget/set`
+  - `cowork/session/config/set`
+  - `cowork/session/defaults/apply`
+  - `cowork/session/delete`
+- provider controls
+  - `cowork/provider/catalog/read`
+  - `cowork/provider/authMethods/read`
+  - `cowork/provider/status/refresh`
+  - `cowork/provider/auth/authorize`
+  - `cowork/provider/auth/logout`
+  - `cowork/provider/auth/callback`
+  - `cowork/provider/auth/setApiKey`
+  - `cowork/provider/auth/copyApiKey`
+- MCP controls
+  - `cowork/mcp/servers/read`
+  - `cowork/mcp/server/upsert`
+  - `cowork/mcp/server/delete`
+  - `cowork/mcp/server/validate`
+  - `cowork/mcp/server/auth/authorize`
+  - `cowork/mcp/server/auth/callback`
+  - `cowork/mcp/server/auth/setApiKey`
+  - `cowork/mcp/legacy/migrate`
+- skills controls
+  - `cowork/skills/catalog/read`
+  - `cowork/skills/list`
+  - `cowork/skills/read`
+  - `cowork/skills/disable`
+  - `cowork/skills/enable`
+  - `cowork/skills/delete`
+  - `cowork/skills/installation/read`
+  - `cowork/skills/install/preview`
+  - `cowork/skills/install`
+  - `cowork/skills/installation/enable`
+  - `cowork/skills/installation/disable`
+  - `cowork/skills/installation/delete`
+  - `cowork/skills/installation/update`
+  - `cowork/skills/installation/copy`
+  - `cowork/skills/installation/checkUpdate`
+- memory controls
+  - `cowork/memory/list`
+  - `cowork/memory/upsert`
+  - `cowork/memory/delete`
+- workspace backup controls
+  - `cowork/backups/workspace/read`
+  - `cowork/backups/workspace/delta/read`
+  - `cowork/backups/workspace/checkpoint`
+  - `cowork/backups/workspace/restore`
+  - `cowork/backups/workspace/deleteCheckpoint`
+  - `cowork/backups/workspace/deleteEntry`
+
+The desktop JSON-RPC path now uses this namespace so one workspace connection can drive:
+
+- thread lifecycle
+- message turns
+- approvals / asks
+- provider panels
+- skills management
+- MCP management
+- memories
+- workspace backups
+
+`cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session.
+
+### Core JSON-RPC notifications currently available
+
+- `thread/started`
+- `turn/started`
+- `item/started`
+- `item/agentMessage/delta`
+- `item/completed`
+- `turn/completed`
+- `serverRequest/resolved`
+- `cowork/session/settings`
+- `cowork/session/info`
+- `cowork/session/configUpdated`
+- `cowork/session/config`
+- `cowork/session/usage`
+- `cowork/session/steerAccepted`
+- `cowork/session/turnUsage`
+- `cowork/session/budgetWarning`
+- `cowork/session/budgetExceeded`
+- `cowork/session/backupState`
+- `cowork/session/harnessContext`
+- `cowork/session/agentList`
+- `cowork/session/agentSpawned`
+- `cowork/session/agentStatus`
+- `cowork/session/agentWaitResult`
+- `cowork/log`
+- `cowork/todos`
+- `error`
+
+### Server-initiated JSON-RPC requests currently available
+
+- `item/tool/requestUserInput`
+- `item/commandExecution/requestApproval`
+
+### JSON-RPC replay and read model
+
+- `thread/list` now returns `messageCount` and `lastEventSeq` on every thread summary
+- `thread/read` can return a journal-projected `turns` array when `includeTurns: true`
+- `thread/resume` accepts `afterSeq` to replay journaled notifications after a known cursor, then reattaches the live thread sink so reconnecting clients do not receive the same journaled events twice
+- Cowork persists canonical thread journal events in sqlite so reconnect / restart replay is no longer limited to an in-memory socket buffer
+
+### JSON-RPC overload behavior
+
+Cowork reserves JSON-RPC error code `-32001` for bounded-queue overload handling:
+
+```json
+{ "id": 42, "error": { "code": -32001, "message": "Server overloaded; retry later." } }
+```
+
+Clients should treat this as retryable and use backoff with jitter.
+
+## Legacy protocol reference
+
+The remainder of this document describes the **legacy Cowork protocol**, which remains available for non-desktop clients and still defaults on the server unless explicitly overridden.
 
 ## Table of Contents
 
@@ -54,6 +281,11 @@ Changes in `7.28`:
 - New client message: `apply_session_defaults`.
 - Clients can now apply provider/model, editable session defaults, and MCP enablement in one composite write instead of replaying `set_model`, `set_config`, and `set_enable_mcp` separately.
 - The harness now serializes session-db bootstrap and write mutations across processes so desktop and CLI instances can safely share the same per-user SQLite database.
+
+Changes in `7.29`:
+
+- `thread/list`, `thread/start`, `thread/resume`, and `thread/read` thread payloads now include `messageCount` and `lastEventSeq` directly on the wire.
+- Desktop clients should treat the thread list payload as authoritative for list badges and counters instead of backfilling from renderer cache.
 
 Changes in `7.27`:
 

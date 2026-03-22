@@ -1,6 +1,7 @@
 # Lessons
 
 - For desktop warm-start work in this repo, keep renderer-local cache strictly local and treat harness-owned `.cowork` or other shared config/session state as authoritative; never let desktop-only cache or shell state overwrite cross-client defaults just because it loaded first.
+- When the user upgrades a review comment into a contract change, implement the stronger wire contract end-to-end: server payload, schema, generated artifacts, and consumer preference for wire data all need to move together.
 - When a desktop visual fix is meant to preserve a native top-bar look, improve contrast first and avoid adding pill or capsule chrome unless the user explicitly asks for it.
 - When the user asks to remove a retired model, delete the full support surface in one pass: registry entries, config files, prompt-template paths, fixtures, raw-loop cases, and tests. Do not leave the retired model ID behind as a shared filename or example value.
 - For Gemini built-in tools, do not assume individually supported tools can be sent together in one request; verify the exact combination against current docs and backend behavior, and route one tool family per request when the API rejects the combination.
@@ -13,6 +14,7 @@
 - When the user expands a bugfix to include verification failures found during the lane, treat every concrete error you surfaced as in-scope work instead of stopping after the original fix.
 - When a bugfix run exposes both a touched-area coverage gap and unrelated red tests in the repo verification lane, do not stop at the local fix; add the missing regression and clear the full failing lane before closing the task.
 - For expensive environment-backed CI in this repo, never leave the heavy job gated only on `event_name != 'pull_request'`; explicitly scope it to the intended branch or manual dispatch so ordinary `main` pushes do not burn the testing environment.
+- For default remote MCP CI in this repo, keep the smoke test in the default lane, but add transient upstream 5xx retry around the live tool call; the heavier `runTurn + remote MCP` path must stay behind `RUN_REMOTE_MCP_AGENT_TESTS`.
 - For automated PR review bots in this repo, optimize for unresolved findings only: cancel in-flight review runs when a PR closes, skip drafts, disable public session-share noise, and never post long “everything looks good now” summaries.
 - When finishing PR review work in this repo, do not stop at local code/test changes; reply on each completed GitHub review thread and resolve it in the PR in the same pass.
 - Before telling the user a review comment is already fixed, re-check the exact current branch code path the comment points at; unresolved PR findings can stay live even when nearby related work landed earlier in the branch.
@@ -144,6 +146,8 @@
 - When adding a provider without local pricing metadata, never assume `model.cost` exists in runtime projection paths; cost calculation must be optional so unsupported pricing data does not crash the agent.
 - When a tool requires session-only runtime control, hide it from non-session tool registries and update any raw-loop prompt fixtures in the same pass; otherwise scripted coverage drifts from the live `spawnAgent` contract.
 - When the user broadens PR follow-up scope from specific review threads to "every comment that needs work," sweep both unresolved review threads and newer top-level review/comment bodies on the latest commit before declaring PR feedback handled.
+- When the user asks to "check again" on an open PR, do not report only CI and mergeability; re-scan the latest SHA for unresolved review threads and top-level review bodies before answering.
+- When review cleanup flips into PR babysitting, immediately inspect the latest GitHub Actions run too; a flaky remote MCP smoke lane can still be the real blocker after comments are resolved.
 - When the user explicitly asks for subagent verification first, spawn the requested subagents before editing, use their issue-by-issue findings to drive the fix plan, and then confirm the same conclusions locally before patching.
 - When making a live-session control read-only in desktop chat, verify whether draft threads still need that control to seed the first session config; do not remove draft-only setup selectors just because active sessions should be locked.
 - For draft-thread first sends in desktop chat, never flush the queued first message while `pendingWorkspaceDefaultApplyByThread` still holds the selected draft model; send the first `user_message` only after the draft override has been pushed with `apply_session_defaults`, or the session will start on the workspace default model.
@@ -161,10 +165,12 @@
 - For collapsible settings sections backed by live workspace state, seed the open state from the current workspace or routing mode and do not let the selected-item count drive `open` on every rerender; otherwise a checkbox click can immediately collapse the section the user is editing.
 - For desktop thread reconnect in this repo, never replay workspace `set_model` defaults onto a resumed session; reconnect-time default sync may still apply safe config like backups or MCP, but provider/model must stay pinned to the session that already started.
 - For desktop thread creation in this repo, treat an untouched "new thread" as a renderer-local draft only: do not open a socket, start a workspace session, reconnect, or persist the thread until the user has actually sent a non-empty message.
+- For desktop optimistic chat sends over JSON-RPC, always preserve `clientMessageId` through `turn/start` or `turn/steer` and the projected `item/userMessage` notifications; otherwise the reducer cannot reconcile the echoed `user_message` and the UI will render duplicate user bubbles.
 - For desktop React/JSDOM tests in this repo, never mutate `globalThis` test DOM globals with `Object.assign(...)` or plain assignment; Bun/CI can expose properties like `navigator` as getter-only, so use a shared descriptor-safe helper that installs/restores globals with `Object.defineProperty`.
 - For shared workspace/session path comparisons, never rely on raw resolved-string equality across platforms; Windows workspace identity must case-fold after lexical normalization, and the helper should expose deterministic test coverage for `win32` semantics from non-Windows CI.
 - When the user asks to fix CI or review feedback in this repo, keep verification scoped to the failing checks unless they explicitly ask for build/package validation; do not default to the desktop build matrix.
 - When a CI failure only reproduces on GitHub Actions, treat the runner environment as authoritative: compare the workflow OS/runtime to the local machine immediately and harden the failing test against environment-sensitive module/mock behavior instead of waiting for a local repro.
+- When the default CI lane hits transient `mcp.grep.app` 5xxs, keep `RUN_REMOTE_MCP_TESTS` on connect/discover smoke only and require `RUN_REMOTE_MCP_AGENT_TESTS` for live remote tool execution.
 - When a desktop Linux smoke run shows a blank renderer or `Render frame was disposed` errors, do not treat native window chrome or menu interactivity alone as proof the UI is healthy; debug the renderer failure and visible content before signing off.
 
 ## 2026-03-18 Tool Output Overflow Audit

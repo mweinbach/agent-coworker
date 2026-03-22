@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 
+import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
+
 // ── Pure helper tests (no DOM needed) ──
 
 import {
@@ -234,6 +236,7 @@ mock.module("../src/lib/agentSocket", () => ({
     send() { return true; }
     close() {}
   },
+  JsonRpcSocket: NoopJsonRpcSocket,
 }));
 
 const { useAppStore } = await import("../src/app/store");

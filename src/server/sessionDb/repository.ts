@@ -2,7 +2,12 @@ import type { Database } from "bun:sqlite";
 import { z } from "zod";
 
 import type { PersistentAgentSummary } from "../../shared/agents";
-import type { PersistedModelStreamChunk, PersistedSessionMutation, PersistedSessionRecord } from "../sessionDb";
+import type {
+  PersistedModelStreamChunk,
+  PersistedSessionMutation,
+  PersistedSessionRecord,
+  PersistedThreadJournalEvent,
+} from "../sessionDb";
 import type { PersistedSessionSnapshot, PersistedSessionSummary } from "../sessionStore";
 import type { ModelMessage } from "../../types";
 import { sessionSnapshotSchema, type SessionSnapshot } from "../../shared/sessionSnapshot";
@@ -486,6 +491,98 @@ export class SessionDbRepository {
     }));
   }
 
+  appendThreadJournalEvent(opts: Omit<PersistedThreadJournalEvent, "seq">): number {
+    const run = this.db.transaction((input: Omit<PersistedThreadJournalEvent, "seq">) => {
+      const row = this.db
+        .query("SELECT COALESCE(MAX(seq), 0) AS seq FROM thread_journal_events WHERE thread_id = ?")
+        .get(input.threadId) as Record<string, unknown> | null;
+      const nextSeq = parseNonNegativeInteger(row?.seq ?? 0, "thread_journal_events.seq") + 1;
+      const ts = parseRequiredIsoTimestamp(input.ts, "thread_journal_events.ts");
+      this.db
+        .query(
+          `INSERT INTO thread_journal_events (
+             thread_id,
+             seq,
+             ts,
+             event_type,
+             turn_id,
+             item_id,
+             request_id,
+             payload_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.threadId,
+          nextSeq,
+          ts,
+          input.eventType,
+          input.turnId ?? null,
+          input.itemId ?? null,
+          input.requestId ?? null,
+          toJsonString(input.payload),
+        );
+      return nextSeq;
+    });
+
+    return run(opts);
+  }
+
+  listThreadJournalEvents(
+    threadId: string,
+    opts?: { afterSeq?: number; limit?: number },
+  ): PersistedThreadJournalEvent[] {
+    const afterSeq = Math.max(0, Math.floor(opts?.afterSeq ?? 0));
+    const limit = opts?.limit === undefined ? null : Math.max(1, Math.floor(opts.limit));
+    const query = limit === null
+      ? this.db.query(
+          `SELECT
+             thread_id,
+             seq,
+             ts,
+             event_type,
+             turn_id,
+             item_id,
+             request_id,
+             payload_json
+           FROM thread_journal_events
+           WHERE thread_id = ?
+             AND seq > ?
+           ORDER BY seq ASC`,
+        )
+      : this.db.query(
+          `SELECT
+             thread_id,
+             seq,
+             ts,
+             event_type,
+             turn_id,
+             item_id,
+             request_id,
+             payload_json
+           FROM thread_journal_events
+           WHERE thread_id = ?
+             AND seq > ?
+           ORDER BY seq ASC
+           LIMIT ?`,
+        );
+    const rows = (
+      limit === null
+        ? query.all(threadId, afterSeq)
+        : query.all(threadId, afterSeq, limit)
+    ) as Array<Record<string, unknown>>;
+
+    return rows.map((row) => ({
+      threadId: String(row.thread_id),
+      seq: parseNonNegativeInteger(row.seq, "thread_journal_events.seq"),
+      ts: parseRequiredIsoTimestamp(row.ts, "thread_journal_events.ts"),
+      eventType: String(row.event_type),
+      turnId: typeof row.turn_id === "string" ? row.turn_id : null,
+      itemId: typeof row.item_id === "string" ? row.item_id : null,
+      requestId: typeof row.request_id === "string" ? row.request_id : null,
+      payload: parseJsonStringWithSchema(row.payload_json, z.unknown(), "thread_journal_events.payload_json"),
+    }));
+  }
+
   createBaseSchema(): void {
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS sessions (
@@ -571,6 +668,20 @@ export class SessionDbRepository {
        )`,
     );
 
+    this.db.exec(
+      `CREATE TABLE IF NOT EXISTS thread_journal_events (
+         thread_id TEXT NOT NULL,
+         seq INTEGER NOT NULL,
+         ts TEXT NOT NULL,
+         event_type TEXT NOT NULL,
+         turn_id TEXT NULL,
+         item_id TEXT NULL,
+         request_id TEXT NULL,
+         payload_json TEXT NOT NULL,
+         PRIMARY KEY(thread_id, seq)
+       )`,
+    );
+
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_session_events_seq_desc ON session_events(session_id, seq DESC)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_status_updated ON sessions(status, updated_at DESC)");
@@ -578,6 +689,7 @@ export class SessionDbRepository {
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_session_model_stream_chunks_session_turn ON session_model_stream_chunks(session_id, turn_id, chunk_index)",
     );
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_thread_journal_events_thread_seq ON thread_journal_events(thread_id, seq)");
   }
 
   markMigration(version: number): void {
@@ -716,6 +828,23 @@ export class SessionDbRepository {
          snapshot_json TEXT NOT NULL
        )`,
     );
+  }
+
+  addThreadJournalEventsTable(): void {
+    this.db.exec(
+      `CREATE TABLE IF NOT EXISTS thread_journal_events (
+         thread_id TEXT NOT NULL,
+         seq INTEGER NOT NULL,
+         ts TEXT NOT NULL,
+         event_type TEXT NOT NULL,
+         turn_id TEXT NULL,
+         item_id TEXT NULL,
+         request_id TEXT NULL,
+         payload_json TEXT NOT NULL,
+         PRIMARY KEY(thread_id, seq)
+       )`,
+    );
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_thread_journal_events_thread_seq ON thread_journal_events(thread_id, seq)");
   }
 
   importLegacySnapshot(snapshot: PersistedSessionSnapshot): void {

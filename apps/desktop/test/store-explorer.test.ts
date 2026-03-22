@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
+import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
+
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
   themeSource: "system",
@@ -71,6 +73,7 @@ mock.module("../src/lib/agentSocket", () => ({
     }
     close() {}
   },
+  JsonRpcSocket: NoopJsonRpcSocket,
 }));
 
 const { useAppStore } = await import("../src/app/store");

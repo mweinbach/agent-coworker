@@ -271,6 +271,35 @@ mock.module("../src/lib/agentSocket", () => ({
     }
     close() {}
   },
+  JsonRpcSocket: class {
+    readonly readyPromise = Promise.resolve();
+
+    connect() {}
+    async request(method: string) {
+      if (method === "thread/list") {
+        return { threads: [] };
+      }
+      if (method === "thread/start") {
+        return {
+          thread: {
+            id: "thread-live",
+            title: "Live Thread",
+            modelProvider: "google",
+            model: "gemini-3.1-pro-preview",
+            cwd: "/tmp/workspace-live",
+            createdAt: "2026-03-20T00:00:00.000Z",
+            updatedAt: "2026-03-20T00:00:00.000Z",
+            status: { type: "loaded" },
+          },
+        };
+      }
+      return {};
+    }
+    respond() {
+      return true;
+    }
+    close() {}
+  },
 }));
 
 localStorageMock.setItem(DESKTOP_STATE_CACHE_KEY, JSON.stringify(cachedState));
@@ -393,6 +422,7 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.selectedWorkspaceId).toBe("ws-cached");
     expect(seed?.selectedThreadId).toBe("thread-cached");
     expect(seed?.view).toBe("skills");
+    expect(seed?.workspaces?.[0]?.wsProtocol).toBe("jsonrpc");
   });
 
   test("buildCachedDesktopStateSeed marks a cached chat thread as hydrating", () => {

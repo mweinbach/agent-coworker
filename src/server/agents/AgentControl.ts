@@ -37,7 +37,7 @@ export class AgentControl {
       throw new Error(`Unknown child agent: ${agentId}`);
     }
 
-    const binding: SessionBinding = { session: null, socket: null };
+    const binding: SessionBinding = { session: null, socket: null, sinks: new Map() };
     const built = this.deps.buildSession(binding, agentId);
     binding.session = built.session;
     built.session.beginDisconnectedReplayBuffer();
@@ -138,7 +138,7 @@ export class AgentControl {
       this.deps.emitParentLog(opts.parentSessionId, routed.fallbackLine);
     }
     const childSystem = await this.deps.loadAgentPrompt(routed.config, role);
-    const binding: SessionBinding = { session: null, socket: null };
+    const binding: SessionBinding = { session: null, socket: null, sinks: new Map() };
     const built = this.deps.buildSession(binding, undefined, {
       config: routed.config,
       system: childSystem,

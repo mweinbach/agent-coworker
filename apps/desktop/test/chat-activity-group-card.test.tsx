@@ -3,6 +3,8 @@ import { JSDOM } from "jsdom";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
+
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
   themeSource: "system",
@@ -66,6 +68,7 @@ mock.module("../src/lib/agentSocket", () => ({
     }
     close() {}
   },
+  JsonRpcSocket: NoopJsonRpcSocket,
 }));
 
 const { ActivityGroupCard } = await import("../src/ui/chat/ActivityGroupCard");

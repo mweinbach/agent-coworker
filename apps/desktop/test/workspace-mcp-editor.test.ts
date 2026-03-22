@@ -1,32 +1,10 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
-type MockSocketOpts = {
-  client: string;
-  onEvent?: (evt: any) => void;
-};
+import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
 
-class MockAgentSocket {
-  sent: any[] = [];
+const jsonRpcRequests: Array<{ method: string; params?: unknown }> = [];
+const jsonRpcHandlers = new Map<string, (params?: unknown) => unknown | Promise<unknown>>();
 
-  constructor(public readonly opts: MockSocketOpts) {
-    MOCK_SOCKETS.push(this);
-  }
-
-  connect() {}
-
-  send(message?: any) {
-    this.sent.push(message);
-    return true;
-  }
-
-  close() {}
-
-  emit(evt: any) {
-    this.opts.onEvent?.(evt);
-  }
-}
-
-const MOCK_SOCKETS: MockAgentSocket[] = [];
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
   themeSource: "system",
@@ -45,6 +23,36 @@ const MOCK_UPDATE_STATE = {
   progress: null,
   error: null,
 };
+
+class MockJsonRpcSocket {
+  static instances: MockJsonRpcSocket[] = [];
+  readonly readyPromise = Promise.resolve();
+
+  constructor(public readonly opts: { onOpen?: () => void; onClose?: () => void }) {
+    MockJsonRpcSocket.instances.push(this);
+  }
+
+  connect() {
+    this.opts.onOpen?.();
+  }
+
+  async request(method: string, params?: unknown) {
+    jsonRpcRequests.push({ method, params });
+    const handler = jsonRpcHandlers.get(method);
+    if (!handler) {
+      return {};
+    }
+    return await handler(params);
+  }
+
+  respond() {
+    return true;
+  }
+
+  close() {
+    this.opts.onClose?.();
+  }
+}
 
 mock.module("../src/lib/desktopCommands", () => ({
   appendTranscriptBatch: async () => {},
@@ -83,37 +91,84 @@ mock.module("../src/lib/desktopCommands", () => ({
 }));
 
 mock.module("../src/lib/agentSocket", () => ({
-  AgentSocket: MockAgentSocket,
+  AgentSocket: class {},
+  JsonRpcSocket: MockJsonRpcSocket,
 }));
 
 const { useAppStore } = await import("../src/app/store");
+const { RUNTIME } = await import("../src/app/store.helpers");
 
-function socketByClient(client: string): MockAgentSocket {
-  const socket = [...MOCK_SOCKETS].reverse().find((entry) => entry.opts.client === client);
-  if (!socket) throw new Error(`Missing mock socket for client=${client}`);
-  return socket;
-}
-
-function emitServerHello(socket: MockAgentSocket, sessionId: string) {
-  socket.emit({
-    type: "server_hello",
-    sessionId,
-    protocolVersion: "6.0",
-    config: {
-      provider: "openai",
-      model: "gpt-5.2",
-      workingDirectory: "/tmp/workspace",
-      outputDirectory: "/tmp/workspace/output",
+function setDefaultHandlers(workspacePath = "/tmp/workspace") {
+  jsonRpcHandlers.set("thread/list", async () => ({ threads: [] }));
+  jsonRpcHandlers.set("cowork/provider/catalog/read", async () => ({
+    event: { type: "provider_catalog", sessionId: "jsonrpc-control", all: [], default: {}, connected: [] },
+  }));
+  jsonRpcHandlers.set("cowork/provider/authMethods/read", async () => ({
+    event: { type: "provider_auth_methods", sessionId: "jsonrpc-control", methods: {} },
+  }));
+  jsonRpcHandlers.set("cowork/provider/status/refresh", async () => ({
+    event: { type: "provider_status", sessionId: "jsonrpc-control", providers: [] },
+  }));
+  jsonRpcHandlers.set("cowork/memory/list", async () => ({
+    event: { type: "memory_list", sessionId: "jsonrpc-control", memories: [] },
+  }));
+  jsonRpcHandlers.set("cowork/skills/catalog/read", async () => ({
+    event: {
+      type: "skills_catalog",
+      sessionId: "jsonrpc-control",
+      catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+      mutationBlocked: false,
     },
-  });
+  }));
+  jsonRpcHandlers.set("cowork/skills/list", async () => ({
+    event: { type: "skills_list", sessionId: "jsonrpc-control", skills: [] },
+  }));
+  jsonRpcHandlers.set("cowork/mcp/servers/read", async () => ({
+    event: {
+      type: "mcp_servers",
+      sessionId: "jsonrpc-control",
+      servers: [
+        {
+          name: "grep",
+          transport: { type: "http", url: "https://mcp.grep.app" },
+          source: "workspace",
+          inherited: false,
+          authMode: "missing",
+          authScope: "workspace",
+          authMessage: "OAuth required.",
+        },
+      ],
+      legacy: {
+        workspace: { path: `${workspacePath}/.agent/mcp-servers.json`, exists: true },
+        user: { path: "/tmp/home/.agent/mcp-servers.json", exists: false },
+      },
+      files: [
+        {
+          source: "workspace",
+          path: `${workspacePath}/.cowork/mcp-servers.json`,
+          exists: true,
+          editable: true,
+          legacy: false,
+          serverCount: 1,
+        },
+      ],
+      warnings: ["workspace_legacy: invalid JSON"],
+    },
+  }));
 }
 
 describe("workspace MCP editor flow", () => {
   let workspaceId = "";
 
   beforeEach(() => {
+    setJsonRpcSocketOverride(MockJsonRpcSocket);
     workspaceId = `ws-${crypto.randomUUID()}`;
-    MOCK_SOCKETS.length = 0;
+    jsonRpcRequests.length = 0;
+    jsonRpcHandlers.clear();
+    MockJsonRpcSocket.instances.length = 0;
+    RUNTIME.jsonRpcSockets.clear();
+    RUNTIME.sessionSnapshots.clear();
+    setDefaultHandlers();
 
     useAppStore.setState({
       ready: true,
@@ -132,6 +187,7 @@ describe("workspace MCP editor flow", () => {
           defaultModel: "gpt-5.2",
           defaultPreferredChildModel: "gpt-5.2",
           defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
           yolo: false,
         },
       ],
@@ -162,47 +218,18 @@ describe("workspace MCP editor flow", () => {
       contextSidebarWidth: 300,
       messageBarHeight: 120,
       sidebarWidth: 280,
-    });
+    } as any);
   });
 
-  test("requests MCP servers on control connect and hydrates runtime from mcp_servers", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
+  afterEach(() => {
+    clearJsonRpcSocketOverride();
+  });
 
-    const sentTypes = controlSocket.sent.map((message) => message?.type).filter(Boolean);
-    expect(sentTypes).toContain("mcp_servers_get");
+  test("requestWorkspaceMcpServers hydrates runtime from the shared JsonRpcSocket", async () => {
+    await useAppStore.getState().requestWorkspaceMcpServers(workspaceId);
 
-    controlSocket.emit({
-      type: "mcp_servers",
-      sessionId: "control-session",
-      servers: [
-        {
-          name: "grep",
-          transport: { type: "http", url: "https://mcp.grep.app" },
-          source: "workspace",
-          inherited: false,
-          authMode: "missing",
-          authScope: "workspace",
-          authMessage: "OAuth required.",
-        },
-      ],
-      legacy: {
-        workspace: { path: "/tmp/workspace/.agent/mcp-servers.json", exists: true },
-        user: { path: "/tmp/home/.agent/mcp-servers.json", exists: false },
-      },
-      files: [
-        {
-          source: "workspace",
-          path: "/tmp/workspace/.cowork/mcp-servers.json",
-          exists: true,
-          editable: true,
-          legacy: false,
-          serverCount: 1,
-        },
-      ],
-      warnings: ["workspace_legacy: invalid JSON"],
-    });
+    expect(MockJsonRpcSocket.instances).toHaveLength(1);
+    expect(jsonRpcRequests.map((entry) => entry.method)).toContain("cowork/mcp/servers/read");
 
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(runtime?.mcpServers).toHaveLength(1);
@@ -211,11 +238,40 @@ describe("workspace MCP editor flow", () => {
     expect(runtime?.mcpWarnings[0]).toContain("invalid JSON");
   });
 
-  test("upsertWorkspaceMcpServer sends mcp_server_upsert and accepts refreshed snapshot", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.sent = [];
+  test("upsertWorkspaceMcpServer sends cowork/mcp/server/upsert and applies the returned snapshot", async () => {
+    jsonRpcHandlers.set("cowork/mcp/server/upsert", async (params) => ({
+      event: {
+        type: "mcp_servers",
+        sessionId: "jsonrpc-control",
+        servers: [
+          {
+            name: "local",
+            transport: { type: "stdio", command: "echo", args: ["ok"] },
+            source: "workspace",
+            inherited: false,
+            authMode: "none",
+            authScope: "workspace",
+            authMessage: null,
+          },
+        ],
+        legacy: {
+          workspace: { path: "/tmp/workspace/.agent/mcp-servers.json", exists: false },
+          user: { path: "/tmp/home/.agent/mcp-servers.json", exists: false },
+        },
+        files: [
+          {
+            source: "workspace",
+            path: "/tmp/workspace/.cowork/mcp-servers.json",
+            exists: true,
+            editable: true,
+            legacy: false,
+            serverCount: 1,
+          },
+        ],
+        warnings: [],
+        received: params,
+      },
+    }));
 
     await useAppStore.getState().upsertWorkspaceMcpServer(workspaceId, {
       name: "local",
@@ -223,45 +279,53 @@ describe("workspace MCP editor flow", () => {
       auth: { type: "none" },
     });
 
-    const sentSet = controlSocket.sent.find((message) => message?.type === "mcp_server_upsert");
-    expect(sentSet).toBeDefined();
-    expect(sentSet?.server?.name).toBe("local");
-
-    controlSocket.emit({
-      type: "mcp_servers",
-      sessionId: "control-session",
-      servers: [
-        {
-          name: "local",
-          transport: { type: "stdio", command: "echo", args: ["ok"] },
-          auth: { type: "none" },
-          source: "workspace",
-          inherited: false,
-          authMode: "none",
-          authScope: "workspace",
-          authMessage: "No authentication required.",
-        },
-      ],
-      legacy: {
-        workspace: { path: "/tmp/workspace/.agent/mcp-servers.json", exists: false },
-        user: { path: "/tmp/home/.agent/mcp-servers.json", exists: false },
+    const request = jsonRpcRequests.find((entry) => entry.method === "cowork/mcp/server/upsert");
+    expect(request?.params).toMatchObject({
+      cwd: "/tmp/workspace",
+      server: {
+        name: "local",
       },
-      files: [],
     });
 
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
+    expect(runtime?.mcpServers).toHaveLength(1);
     expect(runtime?.mcpServers[0]?.name).toBe("local");
   });
 
-  test("requestWorkspaceMcpServers sends mcp_servers_get", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.sent = [];
+  test("migrateWorkspaceMcpLegacy routes through cowork/mcp/legacy/migrate and refreshes editor metadata", async () => {
+    jsonRpcHandlers.set("cowork/mcp/legacy/migrate", async () => ({
+      event: {
+        type: "mcp_servers",
+        sessionId: "jsonrpc-control",
+        servers: [],
+        legacy: {
+          workspace: { path: "/tmp/workspace/.agent/mcp-servers.json", exists: false },
+          user: { path: "/tmp/home/.agent/mcp-servers.json", exists: false },
+        },
+        files: [
+          {
+            source: "workspace",
+            path: "/tmp/workspace/.cowork/mcp-servers.json",
+            exists: true,
+            editable: true,
+            legacy: false,
+            serverCount: 0,
+          },
+        ],
+        warnings: [],
+      },
+    }));
 
-    await useAppStore.getState().requestWorkspaceMcpServers(workspaceId);
+    await useAppStore.getState().migrateWorkspaceMcpLegacy(workspaceId, "workspace");
 
-    const sent = controlSocket.sent.find((message) => message?.type === "mcp_servers_get");
-    expect(sent).toBeDefined();
+    const request = jsonRpcRequests.find((entry) => entry.method === "cowork/mcp/legacy/migrate");
+    expect(request?.params).toMatchObject({
+      cwd: "/tmp/workspace",
+      scope: "workspace",
+    });
+
+    const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
+    expect(runtime?.mcpFiles[0]?.legacy).toBe(false);
+    expect(runtime?.mcpWarnings).toEqual([]);
   });
 });

@@ -1,55 +1,10 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
-type MockSocketOpts = {
-  client: string;
-  url?: string;
-  onClose?: (reason: string) => void;
-  onEvent?: (evt: any) => void;
-};
+import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
 
-class MockAgentSocket {
-  sent: any[] = [];
-  url?: string;
+const jsonRpcRequests: Array<{ method: string; params?: unknown }> = [];
+const jsonRpcHandlers = new Map<string, (params?: unknown) => unknown | Promise<unknown>>();
 
-  constructor(public readonly opts: MockSocketOpts) {
-    this.url = opts.url;
-    MOCK_SOCKETS.push(this);
-  }
-
-  connect() {}
-
-  send(message?: any) {
-    this.sent.push(message);
-    return true;
-  }
-
-  close() {
-    this.opts.onClose?.("closed");
-  }
-
-  emit(evt: any) {
-    this.opts.onEvent?.(evt);
-  }
-}
-
-const MOCK_SOCKETS: MockAgentSocket[] = [];
-const DESKTOP_STATE_CACHE_KEY = "cowork.desktop.state-cache.v2";
-const storage = new Map<string, string>();
-const localStorageMock = {
-  getItem(key: string) {
-    return storage.has(key) ? storage.get(key)! : null;
-  },
-  setItem(key: string, value: string) {
-    storage.set(key, value);
-  },
-  removeItem(key: string) {
-    storage.delete(key);
-  },
-  clear() {
-    storage.clear();
-  },
-};
-const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
   themeSource: "system",
@@ -68,6 +23,53 @@ const MOCK_UPDATE_STATE = {
   progress: null,
   error: null,
 };
+
+class MockJsonRpcSocket {
+  static instances: MockJsonRpcSocket[] = [];
+  readonly readyPromise = Promise.resolve();
+  readonly responses: Array<{ id: string | number; result: unknown }> = [];
+
+  constructor(
+    public readonly opts: {
+      onOpen?: () => void;
+      onClose?: () => void;
+      onNotification?: (message: any) => void;
+      onServerRequest?: (message: any) => void;
+    },
+  ) {
+    MockJsonRpcSocket.instances.push(this);
+  }
+
+  connect() {
+    this.opts.onOpen?.();
+  }
+
+  async request(method: string, params?: unknown) {
+    jsonRpcRequests.push({ method, params });
+    const handler = jsonRpcHandlers.get(method);
+    if (!handler) {
+      return {};
+    }
+    return await handler(params);
+  }
+
+  respond(id: string | number, result: unknown) {
+    this.responses.push({ id, result });
+    return true;
+  }
+
+  close() {
+    this.opts.onClose?.();
+  }
+
+  notify(method: string, params?: unknown) {
+    this.opts.onNotification?.({ method, params });
+  }
+
+  requestFromServer(id: string | number, method: string, params?: unknown) {
+    this.opts.onServerRequest?.({ id, method, params });
+  }
+}
 
 mock.module("../src/lib/desktopCommands", () => ({
   appendTranscriptBatch: async () => {},
@@ -106,83 +108,141 @@ mock.module("../src/lib/desktopCommands", () => ({
 }));
 
 mock.module("../src/lib/agentSocket", () => ({
-  AgentSocket: MockAgentSocket,
+  AgentSocket: class {},
+  JsonRpcSocket: MockJsonRpcSocket,
 }));
 
 const { useAppStore } = await import("../src/app/store");
-const { RUNTIME } = await import("../src/app/store.helpers");
+const { RUNTIME, defaultThreadRuntime } = await import("../src/app/store.helpers");
 
-function installWindowMock() {
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: { localStorage: localStorageMock },
-  });
+function threadMeta(sessionId = "thread-session") {
+  return {
+    id: sessionId,
+    title: "Recovered thread",
+    modelProvider: "openai",
+    model: "gpt-5.2",
+    cwd: "/tmp/workspace",
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:02.000Z",
+    status: { type: "loaded" },
+  };
 }
 
-function restoreWindowMock() {
-  if (originalWindowDescriptor) {
-    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-    return;
-  }
-  delete (globalThis as Record<string, unknown>).window;
-}
-
-function socketByClient(client: string): MockAgentSocket {
-  const socket = [...MOCK_SOCKETS].reverse().find((s) => s.opts.client === client);
-  if (!socket) throw new Error(`Missing mock socket for client=${client}`);
-  return socket;
-}
-
-function emitServerHello(socket: MockAgentSocket, sessionId: string) {
-  socket.emit({
-    type: "server_hello",
+function threadSnapshot(sessionId = "thread-session") {
+  return {
     sessionId,
-    protocolVersion: "2.0",
-    config: {
-      provider: "openai",
-      model: "gpt-5.2",
-      workingDirectory: "/tmp/workspace",
-      outputDirectory: "/tmp/workspace/output",
-    },
-  });
+    title: "Recovered thread",
+    titleSource: "model",
+    titleModel: "gpt-5.2",
+    provider: "openai",
+    model: "gpt-5.2",
+    sessionKind: "root",
+    parentSessionId: null,
+    role: null,
+    mode: null,
+    depth: 0,
+    nickname: null,
+    requestedModel: "gpt-5.2",
+    effectiveModel: "gpt-5.2",
+    requestedReasoningEffort: null,
+    effectiveReasoningEffort: null,
+    executionState: null,
+    lastMessagePreview: null,
+    createdAt: "2024-01-01T00:00:00.000Z",
+    updatedAt: "2024-01-01T00:00:02.000Z",
+    messageCount: 0,
+    lastEventSeq: 0,
+    feed: [],
+    agents: [],
+    todos: [],
+    sessionUsage: null,
+    lastTurnUsage: null,
+    hasPendingAsk: false,
+    hasPendingApproval: false,
+  };
 }
 
-function canonicalThreadId(sessionId: string, fallbackThreadId?: string): string {
-  const state = useAppStore.getState();
-  const thread = state.threads.find((item) =>
-    item.id === sessionId
-    || item.sessionId === sessionId
-    || (fallbackThreadId ? item.legacyTranscriptId === fallbackThreadId : false),
-  );
-  return thread?.id ?? state.selectedThreadId ?? fallbackThreadId ?? sessionId;
+function setDefaultHandlers(sessionId = "thread-session") {
+  jsonRpcHandlers.set("thread/list", async () => ({
+    threads: [threadMeta(sessionId)],
+  }));
+  jsonRpcHandlers.set("thread/read", async () => ({
+    coworkSnapshot: threadSnapshot(sessionId),
+  }));
+  jsonRpcHandlers.set("thread/resume", async () => ({
+    thread: threadMeta(sessionId),
+  }));
+  jsonRpcHandlers.set("cowork/provider/catalog/read", async () => ({
+    event: { type: "provider_catalog", sessionId: "jsonrpc-control", all: [], default: {}, connected: [] },
+  }));
+  jsonRpcHandlers.set("cowork/provider/authMethods/read", async () => ({
+    event: { type: "provider_auth_methods", sessionId: "jsonrpc-control", methods: {} },
+  }));
+  jsonRpcHandlers.set("cowork/provider/status/refresh", async () => ({
+    event: { type: "provider_status", sessionId: "jsonrpc-control", providers: [] },
+  }));
+  jsonRpcHandlers.set("cowork/mcp/servers/read", async () => ({
+    event: {
+      type: "mcp_servers",
+      sessionId: "jsonrpc-control",
+      servers: [],
+      legacy: {
+        workspace: { path: "/tmp/workspace/.agent/mcp-servers.json", exists: false },
+        user: { path: "/tmp/home/.agent/mcp-servers.json", exists: false },
+      },
+      files: [],
+    },
+  }));
+  jsonRpcHandlers.set("cowork/memory/list", async () => ({
+    event: { type: "memory_list", sessionId: "jsonrpc-control", memories: [] },
+  }));
+  jsonRpcHandlers.set("cowork/skills/catalog/read", async () => ({
+    event: {
+      type: "skills_catalog",
+      sessionId: "jsonrpc-control",
+      catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+      mutationBlocked: false,
+    },
+  }));
+  jsonRpcHandlers.set("cowork/skills/list", async () => ({
+    event: { type: "skills_list", sessionId: "jsonrpc-control", skills: [] },
+  }));
 }
 
 async function flushAsyncWork() {
   await Promise.resolve();
   await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-describe("desktop protocol v2 mapping", () => {
+describe("desktop JSON-RPC event mapping", () => {
   let workspaceId = "";
+  let threadId = "";
+  let sessionId = "";
 
   beforeEach(() => {
-    installWindowMock();
+    setJsonRpcSocketOverride(MockJsonRpcSocket);
     workspaceId = `ws-${crypto.randomUUID()}`;
-    MOCK_SOCKETS.length = 0;
-    localStorageMock.clear();
-    RUNTIME.controlSockets.clear();
-    RUNTIME.threadSockets.clear();
-    RUNTIME.optimisticUserMessageIds.clear();
+    threadId = `thread-${crypto.randomUUID()}`;
+    sessionId = `session-${crypto.randomUUID()}`;
+
+    jsonRpcRequests.length = 0;
+    jsonRpcHandlers.clear();
+    MockJsonRpcSocket.instances.length = 0;
+    RUNTIME.jsonRpcSockets.clear();
+    RUNTIME.sessionSnapshots.clear();
     RUNTIME.pendingThreadMessages.clear();
     RUNTIME.pendingThreadSteers.clear();
-    RUNTIME.threadSelectionRequests.clear();
     RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
-    RUNTIME.workspaceStartPromises.clear();
-    RUNTIME.workspaceStartGenerations.clear();
+    RUNTIME.threadSelectionRequests.clear();
     RUNTIME.modelStreamByThread.clear();
-    RUNTIME.sessionSnapshots.clear();
+    RUNTIME.optimisticUserMessageIds.clear();
+    setDefaultHandlers(sessionId);
 
     useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
       workspaces: [
         {
           id: workspaceId,
@@ -196,10 +256,74 @@ describe("desktop protocol v2 mapping", () => {
         },
       ],
       selectedWorkspaceId: workspaceId,
-      selectedThreadId: null,
-      threads: [],
-      threadRuntimeById: {},
-      workspaceRuntimeById: {},
+      selectedThreadId: threadId,
+      threads: [
+        {
+          id: threadId,
+          workspaceId,
+          title: "Recovered thread",
+          titleSource: "manual",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          lastMessageAt: "2024-01-01T00:00:02.000Z",
+          status: "disconnected",
+          sessionId,
+          messageCount: 0,
+          lastEventSeq: 0,
+          draft: false,
+          legacyTranscriptId: null,
+        },
+      ],
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          serverUrl: "ws://mock",
+          starting: false,
+          error: null,
+          controlSessionId: null,
+          controlConfig: null,
+          controlSessionConfig: null,
+          controlEnableMcp: null,
+          mcpServers: [],
+          mcpLegacy: null,
+          mcpFiles: [],
+          mcpWarnings: [],
+          mcpValidationByName: {},
+          mcpLastAuthChallenge: null,
+          mcpLastAuthResult: null,
+          skills: [],
+          skillsCatalog: null,
+          selectedSkillName: null,
+          selectedSkillContent: null,
+          selectedSkillInstallationId: null,
+          selectedSkillInstallation: null,
+          selectedSkillPreview: null,
+          skillUpdateChecksByInstallationId: {},
+          skillCatalogLoading: false,
+          skillCatalogError: null,
+          skillsMutationBlocked: false,
+          skillsMutationBlockedReason: null,
+          skillMutationPendingKeys: {},
+          skillMutationError: null,
+          memories: [],
+          memoriesLoading: false,
+          workspaceBackupsPath: null,
+          workspaceBackups: [],
+          workspaceBackupsLoading: false,
+          workspaceBackupsError: null,
+          workspaceBackupPendingActionKeys: {},
+          workspaceBackupDelta: null,
+          workspaceBackupDeltaLoading: false,
+          workspaceBackupDeltaError: null,
+        },
+      },
+      threadRuntimeById: {
+        [threadId]: {
+          ...defaultThreadRuntime(),
+          wsUrl: "ws://mock",
+          sessionId,
+        },
+      },
+      latestTodosByThreadId: {},
+      workspaceExplorerById: {},
       promptModal: null,
       notifications: [],
       providerStatusByName: {},
@@ -211,1837 +335,370 @@ describe("desktop protocol v2 mapping", () => {
       providerAuthMethodsByProvider: {},
       providerLastAuthChallenge: null,
       providerLastAuthResult: null,
-      view: "chat",
-      startupError: null,
-      ready: true,
-    });
+      composerText: "",
+      injectContext: false,
+      developerMode: false,
+      showHiddenFiles: false,
+    } as any);
   });
 
-  afterAll(() => {
-    restoreWindowMock();
+  afterEach(() => {
+    clearJsonRpcSocketOverride();
   });
 
-  test("control hello requests provider catalog/auth methods/status", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-
-    emitServerHello(controlSocket, "control-session");
-
-    const sentTypes = controlSocket.sent.map((msg) => msg?.type).filter(Boolean);
-    expect(sentTypes).toContain("provider_catalog_get");
-    expect(sentTypes).toContain("provider_auth_methods_get");
-    expect(sentTypes).toContain("refresh_provider_status");
-    expect(sentTypes).toContain("mcp_servers_get");
-  });
-
-  test("requestWorkspaceMemories waits for the initial control hello before surfacing not connected", async () => {
-    const requestPromise = useAppStore.getState().requestWorkspaceMemories(workspaceId);
+  test("shared JSON-RPC notifications stream assistant output and clear busy state", async () => {
+    await useAppStore.getState().reconnectThread(threadId);
     await flushAsyncWork();
-    const controlSocket = socketByClient("desktop-control");
-
-    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.memoriesLoading).toBe(true);
-    expect(useAppStore.getState().notifications).toHaveLength(0);
-
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "memory_list",
-      sessionId: "control-session",
-      memories: [
-        {
-          id: "hot",
-          scope: "workspace",
-          content: "remember this",
-          createdAt: "2024-01-01T00:00:00.000Z",
-          updatedAt: "2024-01-01T00:00:00.000Z",
-        },
-      ],
-    });
-    await requestPromise;
-
-    const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    expect(runtime?.memoriesLoading).toBe(false);
-    expect(runtime?.memories).toHaveLength(1);
-    expect(useAppStore.getState().notifications).toHaveLength(0);
-
-    const memoryListMessages = controlSocket.sent.filter((msg) => msg?.type === "memory_list");
-    expect(memoryListMessages).toHaveLength(1);
-  });
-
-  test("closing a pending initial control connection clears memory loading and reports not connected", async () => {
-    const requestPromise = useAppStore.getState().requestWorkspaceMemories(workspaceId);
-    await flushAsyncWork();
-    const controlSocket = socketByClient("desktop-control");
-
-    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.memoriesLoading).toBe(true);
-
-    controlSocket.close();
-    await requestPromise;
-
-    const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    expect(runtime?.memoriesLoading).toBe(false);
-
-    const notification = useAppStore.getState().notifications.at(-1);
-    expect(notification?.title).toBe("Not connected");
-    expect(notification?.detail).toBe("Unable to request memories.");
-  });
-
-  test("sessions events reconcile legacy desktop thread ids to harness session ids", async () => {
-    useAppStore.setState((state) => ({
-      ...state,
-      threads: [
-        {
-          id: "local-thread-id",
-          workspaceId,
-          title: "Legacy Thread",
-          titleSource: "manual",
-          createdAt: "2024-01-01T00:00:00.000Z",
-          lastMessageAt: "2024-01-01T00:00:00.000Z",
-          status: "disconnected",
-          sessionId: null,
-          messageCount: 0,
-          lastEventSeq: 0,
-        },
-      ],
-      selectedThreadId: "local-thread-id",
-      threadRuntimeById: {
-        "local-thread-id": {
-          sessionId: "thread-session",
-          connected: false,
-        } as any,
-      },
-    }));
-
-    await useAppStore.getState().selectWorkspace(workspaceId);
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "sessions",
-      sessionId: "control-session",
-      sessions: [
-        {
-          sessionId: "thread-session",
-          title: "Harness Thread",
-          titleSource: "model",
-          titleModel: "gpt-5.2",
-          createdAt: "2024-01-01T00:00:00.000Z",
-          updatedAt: "2024-01-01T00:00:10.000Z",
-          messageCount: 5,
-          lastEventSeq: 9,
-          hasPendingAsk: false,
-          hasPendingApproval: false,
-        },
-      ],
-    });
-
-    const thread = useAppStore.getState().threads.find((item) => item.id === "thread-session");
-    expect(thread).toBeDefined();
-    expect(thread?.legacyTranscriptId).toBe("local-thread-id");
-    expect(useAppStore.getState().selectedThreadId).toBe("thread-session");
-  });
-
-  test("sessions events preserve drafts when a server thread claims the same legacy transcript id", async () => {
-    useAppStore.setState((state) => ({
-      ...state,
-      threads: [
-        {
-          id: "thread-session",
-          workspaceId,
-          title: "Server Thread",
-          titleSource: "model",
-          createdAt: "2024-01-01T00:00:00.000Z",
-          lastMessageAt: "2024-01-01T00:00:10.000Z",
-          status: "disconnected",
-          sessionId: "thread-session",
-          messageCount: 5,
-          lastEventSeq: 9,
-          legacyTranscriptId: "draft-thread-id",
-          draft: false,
-        },
-        {
-          id: "draft-thread-id",
-          workspaceId,
-          title: "Draft Thread",
-          titleSource: "default",
-          createdAt: "2024-01-01T00:00:05.000Z",
-          lastMessageAt: "2024-01-01T00:00:05.000Z",
-          status: "disconnected",
-          sessionId: null,
-          messageCount: 0,
-          lastEventSeq: 0,
-          draft: true,
-        },
-      ],
-      selectedThreadId: "draft-thread-id",
-    }));
-
-    await useAppStore.getState().selectWorkspace(workspaceId);
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "sessions",
-      sessionId: "control-session",
-      sessions: [
-        {
-          sessionId: "thread-session",
-          title: "Server Thread",
-          titleSource: "model",
-          titleModel: "gpt-5.2",
-          createdAt: "2024-01-01T00:00:00.000Z",
-          updatedAt: "2024-01-01T00:00:10.000Z",
-          messageCount: 5,
-          lastEventSeq: 9,
-          hasPendingAsk: false,
-          hasPendingApproval: false,
-        },
-      ],
-    });
-
-    const threads = useAppStore.getState().threads;
-    expect(threads.find((thread) => thread.id === "draft-thread-id")?.draft).toBe(true);
-    expect(threads.find((thread) => thread.id === "thread-session")?.legacyTranscriptId).toBe("draft-thread-id");
-    expect(useAppStore.getState().selectedThreadId).toBe("draft-thread-id");
-  });
-
-  test("draft threads stay local until the first message promotes them into a real session", async () => {
-    await useAppStore.getState().newThread();
-    const draftThreadId = useAppStore.getState().selectedThreadId!;
-
-    expect(MOCK_SOCKETS).toHaveLength(0);
-    expect(useAppStore.getState().threads.find((thread) => thread.id === draftThreadId)?.draft).toBe(true);
-
-    await useAppStore.getState().sendMessage("hello from draft");
     await flushAsyncWork();
 
-    const controlSocket = socketByClient("desktop-control");
-    expect(controlSocket).toBeDefined();
+    const socket = MockJsonRpcSocket.instances[0];
+    expect(socket).toBeDefined();
 
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(threadSocket, "thread-session");
-
-    const sentMessages = threadSocket.sent.filter((msg) => msg?.type === "user_message");
-    expect(sentMessages).toHaveLength(1);
-    expect(sentMessages[0]?.text).toBe("hello from draft");
-
-    const threadId = canonicalThreadId("thread-session", draftThreadId);
-    const thread = useAppStore.getState().threads.find((item) => item.id === threadId);
-    expect(thread?.draft).toBe(false);
-    expect(thread?.sessionId).toBe("thread-session");
-  });
-
-  test("stores activeTurnId from resumed busy hello and live session_busy events", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId!;
-    const threadSocket = socketByClient("desktop");
-
-    threadSocket.emit({
-      type: "server_hello",
-      sessionId: "thread-session",
-      isResume: true,
-      busy: true,
-      turnId: "turn-resume",
-      protocolVersion: "2.0",
-      config: {
-        provider: "openai",
-        model: "gpt-5.2",
-        workingDirectory: "/tmp/workspace",
-        outputDirectory: "/tmp/workspace/output",
-      },
+    socket.notify("turn/started", {
+      threadId: sessionId,
+      turn: { id: "turn-1", status: "inProgress", items: [] },
     });
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    expect(useAppStore.getState().threadRuntimeById[threadId]?.activeTurnId).toBe("turn-resume");
-
-    threadSocket.emit({
-      type: "session_busy",
-      sessionId: "thread-session",
-      busy: true,
-      turnId: "turn-live",
-      cause: "user_message",
-    });
-    expect(useAppStore.getState().threadRuntimeById[threadId]?.activeTurnId).toBe("turn-live");
-
-    threadSocket.emit({
-      type: "session_busy",
-      sessionId: "thread-session",
-      busy: false,
-      turnId: "turn-live",
-      outcome: "completed",
-    });
-    expect(useAppStore.getState().threadRuntimeById[threadId]?.activeTurnId).toBeNull();
-  });
-
-  test("queues exactly one next-turn message per session_busy false transition", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const threadId = useAppStore.getState().selectedThreadId!;
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(threadSocket, "thread-session");
-
-    threadSocket.emit({
-      type: "session_busy",
-      sessionId: "thread-session",
-      busy: true,
+    socket.notify("item/agentMessage/delta", {
+      threadId: sessionId,
       turnId: "turn-1",
-      cause: "user_message",
+      itemId: "assistant-1",
+      delta: "Hello from JSON-RPC",
     });
-
-    await useAppStore.getState().sendMessage("queued one", "queue");
-    await useAppStore.getState().sendMessage("queued two", "queue");
-
-    expect(threadSocket.sent.filter((msg) => msg?.type === "user_message")).toHaveLength(0);
-
-    threadSocket.emit({
-      type: "session_busy",
-      sessionId: "thread-session",
-      busy: false,
+    socket.notify("item/completed", {
+      threadId: sessionId,
       turnId: "turn-1",
-      outcome: "completed",
+      item: { type: "agentMessage", text: "Hello from JSON-RPC" },
     });
-
-    const firstFlush = threadSocket.sent.filter((msg) => msg?.type === "user_message");
-    expect(firstFlush).toHaveLength(1);
-    expect(firstFlush[0]?.text).toBe("queued one");
-
-    threadSocket.emit({
-      type: "session_busy",
-      sessionId: "thread-session",
-      busy: true,
-      turnId: "turn-2",
-      cause: "user_message",
+    socket.notify("turn/completed", {
+      threadId: sessionId,
+      turn: { id: "turn-1", status: "completed" },
     });
-    threadSocket.emit({
-      type: "session_busy",
-      sessionId: "thread-session",
-      busy: false,
-      turnId: "turn-2",
-      outcome: "completed",
-    });
-
-    const secondFlush = threadSocket.sent.filter((msg) => msg?.type === "user_message");
-    expect(secondFlush).toHaveLength(2);
-    expect(secondFlush[1]?.text).toBe("queued two");
-  });
-
-  test("busy steer sends steer_message with activeTurnId and tracks acceptance separately from queued messages", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId!;
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "session_busy",
-      sessionId: "thread-session",
-      busy: true,
-      turnId: "turn-1",
-      cause: "user_message",
-    });
-
-    useAppStore.setState({ composerText: "tighten the answer" });
-    await useAppStore.getState().sendMessage("tighten the answer", "steer");
-
-    const steerMessage = threadSocket.sent.find((msg) => msg?.type === "steer_message");
-    expect(steerMessage).toBeDefined();
-    expect(steerMessage?.expectedTurnId).toBe("turn-1");
-    expect(steerMessage?.clientMessageId).toBeTruthy();
-    expect(useAppStore.getState().composerText).toBe("tighten the answer");
-    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toEqual({
-      clientMessageId: steerMessage!.clientMessageId,
-      text: "tighten the answer",
-      status: "sending",
-    });
-    expect(RUNTIME.pendingThreadMessages.get(threadId)?.length ?? 0).toBe(0);
-    expect(RUNTIME.pendingThreadSteers.get(threadId)?.get(steerMessage.clientMessageId)?.accepted).toBe(false);
-
-    threadSocket.emit({
-      type: "steer_accepted",
-      sessionId: "thread-session",
-      turnId: "turn-1",
-      text: "tighten the answer",
-      clientMessageId: steerMessage.clientMessageId,
-    });
-    expect(RUNTIME.pendingThreadSteers.get(threadId)?.get(steerMessage.clientMessageId)?.accepted).toBe(true);
-    expect(useAppStore.getState().composerText).toBe("");
-    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer?.status).toBe("accepted");
-
-    threadSocket.emit({
-      type: "user_message",
-      sessionId: "thread-session",
-      text: "tighten the answer",
-      clientMessageId: steerMessage.clientMessageId,
-    });
-    expect(RUNTIME.pendingThreadSteers.get(threadId)?.has(steerMessage.clientMessageId) ?? false).toBe(false);
-    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toBeNull();
-  });
-
-  test("busy steer keeps the composer text when the server rejects the steer", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId!;
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "session_busy",
-      sessionId: "thread-session",
-      busy: true,
-      turnId: "turn-1",
-      cause: "user_message",
-    });
-
-    useAppStore.setState({ composerText: "tighten the answer" });
-    await useAppStore.getState().sendMessage("tighten the answer", "steer");
-
-    expect(useAppStore.getState().composerText).toBe("tighten the answer");
-
-    threadSocket.emit({
-      type: "error",
-      sessionId: "thread-session",
-      message: "Active turn mismatch.",
-      code: "validation_failed",
-      source: "session",
-    });
-
-    expect(useAppStore.getState().composerText).toBe("tighten the answer");
-    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toBeNull();
-  });
-
-  test("busy steer ignores duplicate submits while the same draft is still pending", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId!;
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "session_busy",
-      sessionId: "thread-session",
-      busy: true,
-      turnId: "turn-1",
-      cause: "user_message",
-    });
-
-    useAppStore.setState({ composerText: "tighten the answer" });
-    await useAppStore.getState().sendMessage("tighten the answer", "steer");
-    await useAppStore.getState().sendMessage("tighten the answer", "steer");
-
-    const steerMessages = threadSocket.sent.filter((msg) => msg?.type === "steer_message");
-    expect(steerMessages).toHaveLength(1);
-    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toEqual({
-      clientMessageId: steerMessages[0]!.clientMessageId,
-      text: "tighten the answer",
-      status: "sending",
-    });
-  });
-
-  test("requestWorkspaceMemories replaces a stale control socket when the workspace server URL changes", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const originalSocket = socketByClient("desktop-control");
-    emitServerHello(originalSocket, "old-control-session");
-
-    useAppStore.setState((state) => ({
-      workspaceRuntimeById: {
-        ...state.workspaceRuntimeById,
-        [workspaceId]: {
-          ...state.workspaceRuntimeById[workspaceId],
-          serverUrl: "ws://replacement",
-        },
-      },
-    }));
-
-    const requestPromise = useAppStore.getState().requestWorkspaceMemories(workspaceId);
+    await flushAsyncWork();
     await flushAsyncWork();
 
-    const replacementSocket = socketByClient("desktop-control");
-    expect(replacementSocket).not.toBe(originalSocket);
-    expect(originalSocket.opts.url).toBe("ws://mock");
-    expect(replacementSocket.opts.url).toBe("ws://replacement");
+    const runtime = useAppStore.getState().threadRuntimeById[threadId];
+    expect(runtime?.busy).toBe(false);
+    expect(runtime?.activeTurnId).toBeNull();
+    expect(runtime?.feed.some((item) => "text" in item && typeof item.text === "string" && item.text.includes("Hello from JSON-RPC"))).toBe(true);
+  });
 
-    const runtimeWhileConnecting = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    expect(runtimeWhileConnecting?.controlSessionId).toBeNull();
-    expect(runtimeWhileConnecting?.memoriesLoading).toBe(true);
-    expect(replacementSocket.sent.filter((msg) => msg?.type === "memory_list")).toHaveLength(0);
+  test("shared JSON-RPC reasoning notifications land in the reasoning feed before the assistant reply", async () => {
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+    await flushAsyncWork();
 
-    emitServerHello(replacementSocket, "replacement-session");
-    replacementSocket.emit({
-      type: "memory_list",
-      sessionId: "replacement-session",
-      memories: [],
+    const socket = MockJsonRpcSocket.instances[0];
+    expect(socket).toBeDefined();
+
+    socket.notify("turn/started", {
+      threadId: sessionId,
+      turn: { id: "turn-1", status: "inProgress", items: [] },
     });
-    await requestPromise;
-
-    const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    expect(runtime?.controlSessionId).toBe("replacement-session");
-    expect(runtime?.memoriesLoading).toBe(false);
-    expect(useAppStore.getState().notifications).toHaveLength(0);
-    expect(replacementSocket.sent.filter((msg) => msg?.type === "memory_list")).toHaveLength(1);
-  });
-
-  test("mcp events update runtime slices and notifications", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    controlSocket.emit({
-      type: "mcp_servers",
-      sessionId: "control-session",
-      servers: [
-        {
-          name: "grep",
-          transport: { type: "http", url: "https://mcp.grep.app" },
-          source: "workspace",
-          inherited: false,
-          authMode: "missing",
-          authScope: "workspace",
-          authMessage: "OAuth required.",
-        },
-      ],
-      legacy: {
-        workspace: { path: "/tmp/workspace/.agent/mcp-servers.json", exists: false },
-        user: { path: "/tmp/home/.agent/mcp-servers.json", exists: false },
-      },
-      files: [],
-    });
-    controlSocket.emit({
-      type: "mcp_server_validation",
-      sessionId: "control-session",
-      name: "grep",
-      ok: false,
-      mode: "missing",
-      message: "OAuth required.",
-    });
-    controlSocket.emit({
-      type: "mcp_server_auth_result",
-      sessionId: "control-session",
-      name: "grep",
-      ok: false,
-      mode: "error",
-      message: "Auth failed.",
-    });
-
-    const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    expect(runtime?.mcpServers[0]?.name).toBe("grep");
-    expect(runtime?.mcpValidationByName.grep?.ok).toBe(false);
-    expect(runtime?.mcpLastAuthResult?.name).toBe("grep");
-
-    const notification = useAppStore.getState().notifications.at(-1);
-    expect(notification?.title).toBe("MCP auth failed: grep");
-  });
-
-  test("workspace_backups event hydrates the workspace runtime slice", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    controlSocket.emit({
-      type: "workspace_backups",
-      sessionId: "control-session",
-      workspacePath: "/tmp/workspace",
-      backups: [
-        {
-          targetSessionId: "thread-session",
-          title: "Deleted session",
-          provider: "openai",
-          model: "gpt-5.2",
-          lifecycle: "deleted",
-          status: "ready",
-          workingDirectory: "/tmp/workspace",
-          backupDirectory: "/tmp/home/.cowork/session-backups/thread-session",
-          originalSnapshotKind: "directory",
-          originalSnapshotBytes: 4096,
-          checkpointBytesTotal: 2048,
-          totalBytes: 6144,
-          checkpoints: [
-            {
-              id: "cp-0001",
-              index: 1,
-              createdAt: "2026-03-10T00:01:00.000Z",
-              trigger: "manual",
-              changed: true,
-              patchBytes: 2048,
-            },
-          ],
-          createdAt: "2026-03-10T00:00:00.000Z",
-          updatedAt: "2026-03-10T00:02:00.000Z",
-        },
-      ],
-    });
-
-    const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    expect(runtime?.workspaceBackupsPath).toBe("/tmp/workspace");
-    expect(runtime?.workspaceBackups).toHaveLength(1);
-    expect(runtime?.workspaceBackups[0]?.targetSessionId).toBe("thread-session");
-    expect(runtime?.workspaceBackups[0]?.checkpoints[0]?.id).toBe("cp-0001");
-  });
-
-  test("workspace_backup_delta event hydrates the workspace delta slice", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    controlSocket.emit({
-      type: "workspace_backup_delta",
-      sessionId: "control-session",
-      targetSessionId: "thread-session",
-      checkpointId: "cp-0001",
-      baselineLabel: "Original snapshot",
-      currentLabel: "cp-0001",
-      counts: {
-        added: 1,
-        modified: 1,
-        deleted: 0,
-      },
-      files: [
-        { path: "src/new.ts", change: "added", kind: "file" },
-        { path: "README.md", change: "modified", kind: "file" },
-      ],
-      truncated: false,
-    });
-
-    const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    expect(runtime?.workspaceBackupDelta?.checkpointId).toBe("cp-0001");
-    expect(runtime?.workspaceBackupDelta?.counts.modified).toBe(1);
-    expect(runtime?.workspaceBackupDelta?.files[0]?.path).toBe("src/new.ts");
-  });
-
-  test("workspace backup actions send control-session messages", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(threadSocket, "thread-session");
-    controlSocket.sent = [];
-    threadSocket.sent = [];
-
-    await useAppStore.getState().requestWorkspaceBackups(workspaceId);
-    await useAppStore.getState().requestWorkspaceBackupDelta(workspaceId, "thread-session", "cp-0001");
-    await useAppStore.getState().createWorkspaceBackupCheckpoint(workspaceId, "thread-session");
-    await useAppStore.getState().restoreWorkspaceBackupOriginal(workspaceId, "thread-session");
-    await useAppStore.getState().restoreWorkspaceBackupCheckpoint(workspaceId, "thread-session", "cp-0001");
-    await useAppStore.getState().deleteWorkspaceBackupCheckpoint(workspaceId, "thread-session", "cp-0001");
-    await useAppStore.getState().deleteWorkspaceBackupEntry(workspaceId, "thread-session");
-    await useAppStore.getState().setWorkspaceBackupSessionEnabled(workspaceId, "thread-session", false);
-
-    const sentTypes = controlSocket.sent.map((msg) => msg?.type).filter(Boolean);
-    expect(sentTypes).toContain("workspace_backups_get");
-    expect(sentTypes).toContain("workspace_backup_delta_get");
-    expect(sentTypes).toContain("workspace_backup_checkpoint");
-    expect(sentTypes).toContain("workspace_backup_restore");
-    expect(sentTypes).toContain("workspace_backup_delete_checkpoint");
-    expect(sentTypes).toContain("workspace_backup_delete_entry");
-
-    const checkpointRestore = controlSocket.sent.find(
-      (msg) => msg?.type === "workspace_backup_restore" && msg?.checkpointId === "cp-0001",
-    );
-    expect(checkpointRestore?.targetSessionId).toBe("thread-session");
-
-    const checkpointDelta = controlSocket.sent.find(
-      (msg) => msg?.type === "workspace_backup_delta_get" && msg?.checkpointId === "cp-0001",
-    );
-    expect(checkpointDelta?.targetSessionId).toBe("thread-session");
-
-    const deleteEntry = controlSocket.sent.find((msg) => msg?.type === "workspace_backup_delete_entry");
-    expect(deleteEntry?.targetSessionId).toBe("thread-session");
-
-    const toggleBackups = threadSocket.sent.find((msg) => msg?.type === "set_config");
-    expect(toggleBackups).toMatchObject({
-      type: "set_config",
-      config: {
-        backupsEnabled: false,
-      },
-    });
-  });
-
-  test("control errors clear memory loading when memory_list fails", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    await useAppStore.getState().requestWorkspaceMemories(workspaceId);
-    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.memoriesLoading).toBe(true);
-
-    controlSocket.emit({
-      type: "error",
-      sessionId: "control-session",
-      message: "Failed to list memories: SQLITE_CORRUPT",
-      code: "internal_error",
-      source: "session",
-    });
-
-    const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    expect(runtime?.memoriesLoading).toBe(false);
-
-    const notification = useAppStore.getState().notifications.at(-1);
-    expect(notification?.title).toBe("Control session error");
-    expect(notification?.detail).toContain("session/internal_error");
-  });
-
-  test("connectProvider sends provider_auth_set_api_key for keyed providers", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.sent = [];
-
-    await useAppStore.getState().connectProvider("openai", "sk-test");
-
-    const sent = controlSocket.sent.find((msg) => msg?.type === "provider_auth_set_api_key");
-    expect(sent).toBeDefined();
-    expect(sent?.provider).toBe("openai");
-    expect(sent?.methodId).toBe("api_key");
-    expect(sent?.apiKey).toBe("sk-test");
-  });
-
-  test("copyProviderApiKey sends provider_auth_copy_api_key", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.sent = [];
-
-    await useAppStore.getState().copyProviderApiKey("opencode-zen", "opencode-go");
-
-    const sent = controlSocket.sent.find((msg) => msg?.type === "provider_auth_copy_api_key");
-    expect(sent).toBeDefined();
-    expect(sent?.provider).toBe("opencode-zen");
-    expect(sent?.sourceProvider).toBe("opencode-go");
-  });
-
-  test("connectProvider sends oauth authorize+callback for oauth providers", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.sent = [];
-
-    await useAppStore.getState().connectProvider("codex-cli");
-
-    const sentTypes = controlSocket.sent.map((msg) => msg?.type).filter(Boolean);
-    expect(sentTypes).toContain("provider_auth_authorize");
-    expect(sentTypes).toContain("provider_auth_callback");
-  });
-
-  test("logoutProviderAuth sends provider_auth_logout", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.sent = [];
-
-    await useAppStore.getState().logoutProviderAuth("codex-cli");
-
-    const sent = controlSocket.sent.find((msg) => msg?.type === "provider_auth_logout");
-    expect(sent).toBeDefined();
-    expect(sent?.provider).toBe("codex-cli");
-  });
-
-  test("provider auth challenge keeps command metadata for desktop UI", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    controlSocket.emit({
-      type: "provider_auth_challenge",
-      sessionId: "control-session",
-      provider: "codex-cli",
-      methodId: "oauth_cli",
-      challenge: {
-        method: "auto",
-        instructions: "The app will open Cowork's Codex sign-in URL automatically.",
-        url: "https://auth.openai.com/oauth/authorize",
-        command: "optional-command",
-      },
-    });
-
-    const challenge = useAppStore.getState().providerLastAuthChallenge;
-    expect(challenge).toBeDefined();
-    expect(challenge?.challenge.url).toBeUndefined();
-    expect(challenge?.challenge.command).toBe("optional-command");
-
-    const notification = useAppStore.getState().notifications.at(-1);
-    expect(notification?.title).toBe("Auth challenge: codex-cli");
-    expect(notification?.detail).toContain("Command: optional-command");
-  });
-
-  test("provider auth result with oauth_pending uses pending notification title", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    controlSocket.emit({
-      type: "provider_auth_result",
-      sessionId: "control-session",
-      provider: "codex-cli",
-      methodId: "oauth_cli",
-      ok: true,
-      mode: "oauth_pending",
-      message: "Complete sign-in in terminal.",
-    });
-
-    const notification = useAppStore.getState().notifications.at(-1);
-    expect(notification?.title).toBe("Provider auth pending: codex-cli");
-    expect(notification?.detail).toBe("Complete sign-in in terminal.");
-  });
-
-  test("provider auth logout result uses disconnected notification title", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-    emitServerHello(controlSocket, "control-session");
-
-    controlSocket.emit({
-      type: "provider_auth_result",
-      sessionId: "control-session",
-      provider: "codex-cli",
-      methodId: "logout",
-      ok: true,
-      message: "Codex OAuth credentials cleared.",
-    });
-
-    const notification = useAppStore.getState().notifications.at(-1);
-    expect(notification?.title).toBe("Provider disconnected: codex-cli");
-    expect(notification?.detail).toBe("Codex OAuth credentials cleared.");
-  });
-
-  test("approval prompt keeps required reasonCode", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const threadId = useAppStore.getState().selectedThreadId;
-    if (!threadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-
-    threadSocket.emit({
-      type: "approval",
-      sessionId: "thread-session",
-      requestId: "req-1",
-      command: "cat /etc/passwd",
-      dangerous: false,
-      reasonCode: "outside_allowed_scope",
-    });
-
-    const modal = useAppStore.getState().promptModal;
-    expect(modal?.kind).toBe("approval");
-    if (!modal || modal.kind !== "approval") throw new Error("Expected approval modal");
-    expect(modal.prompt.reasonCode).toBe("outside_allowed_scope");
-  });
-
-  test("session_info updates canonical thread title", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "session_info",
-      sessionId: "thread-session",
-      title: "Session title from server",
-      titleSource: "model",
-      titleModel: "gpt-5-mini",
-      createdAt: "2026-02-19T00:00:00.000Z",
-      updatedAt: "2026-02-19T00:00:01.000Z",
-      provider: "openai",
-      model: "gpt-5.2",
-    });
-
-    const thread = useAppStore.getState().threads.find((item) => item.id === threadId);
-    expect(thread?.title).toBe("Session title from server");
-  });
-
-  test("non-manual session_info titles are applied once", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "session_info",
-      sessionId: "thread-session",
-      title: "First generated title",
-      titleSource: "model",
-      titleModel: "gpt-5-mini",
-      createdAt: "2026-02-19T00:00:00.000Z",
-      updatedAt: "2026-02-19T00:00:01.000Z",
-      provider: "openai",
-      model: "gpt-5.2",
-    });
-
-    threadSocket.emit({
-      type: "session_info",
-      sessionId: "thread-session",
-      title: "Second generated title",
-      titleSource: "heuristic",
-      titleModel: null,
-      createdAt: "2026-02-19T00:00:00.000Z",
-      updatedAt: "2026-02-19T00:00:02.000Z",
-      provider: "openai",
-      model: "gpt-5.2",
-    });
-
-    const thread = useAppStore.getState().threads.find((item) => item.id === threadId);
-    expect(thread?.title).toBe("First generated title");
-    expect(thread?.titleSource).toBe("model");
-  });
-
-  test("manual local rename is not overwritten by non-manual session_info", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    useAppStore.getState().renameThread(initialThreadId, "My Manual Title");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "session_info",
-      sessionId: "thread-session",
-      title: "Generated Title",
-      titleSource: "model",
-      titleModel: "gpt-5-mini",
-      createdAt: "2026-02-19T00:00:00.000Z",
-      updatedAt: "2026-02-19T00:00:01.000Z",
-      provider: "openai",
-      model: "gpt-5.2",
-    });
-
-    const thread = useAppStore.getState().threads.find((item) => item.id === threadId);
-    expect(thread?.title).toBe("My Manual Title");
-    expect(thread?.titleSource).toBe("manual");
-  });
-
-  test("error feed + notification keep required source/code", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "error",
-      sessionId: "thread-session",
-      message: "Blocked: path is outside allowed roots",
-      code: "permission_denied",
-      source: "permissions",
-    });
-
-    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
-    const last = feed.at(-1);
-    expect(last?.kind).toBe("error");
-    if (!last || last.kind !== "error") throw new Error("Expected error feed item");
-    expect(last.code).toBe("permission_denied");
-    expect(last.source).toBe("permissions");
-
-    const notif = useAppStore.getState().notifications.at(-1);
-    expect(notif?.title).toBe("Agent error");
-    expect(notif?.detail).toContain("permissions/permission_denied");
-  });
-
-  test("model_stream_chunk updates assistant/reasoning/tool feed and dedupes legacy finals", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
+    socket.notify("item/started", {
+      threadId: sessionId,
       turnId: "turn-1",
-      index: 0,
-      provider: "openai",
-      model: "gpt-5.2",
-      partType: "text_delta",
-      part: { id: "txt_1", text: "Hel" },
+      item: {
+        id: "reasoning-1",
+        type: "reasoning",
+        mode: "summary",
+        text: "Inspecting the reports.",
+      },
     });
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
+    socket.notify("item/completed", {
+      threadId: sessionId,
       turnId: "turn-1",
-      index: 1,
-      provider: "openai",
-      model: "gpt-5.2",
-      partType: "text_delta",
-      part: { id: "txt_1", text: "lo" },
+      item: {
+        id: "reasoning-1",
+        type: "reasoning",
+        mode: "summary",
+        text: "Inspecting the reports.",
+      },
     });
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
+    socket.notify("item/agentMessage/delta", {
+      threadId: sessionId,
       turnId: "turn-1",
-      index: 2,
-      provider: "openai",
-      model: "gpt-5.2",
-      partType: "reasoning_delta",
-      part: { id: "r1", mode: "summary", text: "thinking" },
+      itemId: "assistant-1",
+      delta: "Final answer",
     });
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
+    socket.notify("item/completed", {
+      threadId: sessionId,
       turnId: "turn-1",
-      index: 3,
-      provider: "openai",
-      model: "gpt-5.2",
-      partType: "tool_call",
-      part: { toolCallId: "tool-1", toolName: "read", input: { path: "README.md" } },
+      item: { id: "assistant-1", type: "agentMessage", text: "Final answer" },
     });
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
-      turnId: "turn-1",
-      index: 4,
-      provider: "openai",
-      model: "gpt-5.2",
-      partType: "tool_result",
-      part: { toolCallId: "tool-1", toolName: "read", output: { chars: 42 } },
-    });
+    await flushAsyncWork();
+    await flushAsyncWork();
 
-    // Legacy compatibility events still arrive; these should be deduped.
-    threadSocket.emit({
-      type: "reasoning",
-      sessionId: "thread-session",
-      kind: "summary",
-      text: "thinking",
-    });
-    threadSocket.emit({
-      type: "assistant_message",
-      sessionId: "thread-session",
-      text: "Hello",
-    });
-
-    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
-    const assistant = feed.filter((item) => item.kind === "message" && item.role === "assistant");
-    expect(assistant).toHaveLength(1);
-    expect(assistant[0]?.text).toBe("Hello");
-
-    const reasoning = feed.filter((item) => item.kind === "reasoning");
-    expect(reasoning).toHaveLength(1);
-    expect(reasoning[0]?.mode).toBe("summary");
-    expect(reasoning[0]?.text).toBe("thinking");
-
-    expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "tool"]);
-
-    const tool = feed.find((item) => item.kind === "tool");
-    expect(tool?.kind).toBe("tool");
-    if (!tool || tool.kind !== "tool") throw new Error("Expected tool feed item");
-    expect(tool.name).toBe("read");
-    expect(tool.state).toBe("output-available");
-    expect(tool.result).toEqual({ chars: 42 });
-  });
-
-  test("repeated same-turn start chunks do not re-enable legacy reasoning duplicates", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
-      turnId: "turn-google-1",
-      index: 0,
-      provider: "google",
-      model: "gemini-3.1-pro-preview-customtools",
-      partType: "start",
-      part: {},
-    });
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
-      turnId: "turn-google-1",
-      index: 1,
-      provider: "google",
-      model: "gemini-3.1-pro-preview-customtools",
-      partType: "reasoning_delta",
-      part: { id: "s0", mode: "reasoning", text: "Searching for the latest GTC details." },
-    });
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
-      turnId: "turn-google-1",
-      index: 2,
-      provider: "google",
-      model: "gemini-3.1-pro-preview-customtools",
-      partType: "tool_call",
-      part: { toolCallId: "tool-1", toolName: "webSearch", input: { query: "NVIDIA GTC 2026" } },
-    });
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
-      turnId: "turn-google-1",
-      index: 3,
-      provider: "google",
-      model: "gemini-3.1-pro-preview-customtools",
-      partType: "tool_result",
-      part: { toolCallId: "tool-1", toolName: "webSearch", output: "result" },
-    });
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
-      turnId: "turn-google-1",
-      index: 4,
-      provider: "google",
-      model: "gemini-3.1-pro-preview-customtools",
-      partType: "start",
-      part: {},
-    });
-
-    threadSocket.emit({
-      type: "reasoning",
-      sessionId: "thread-session",
-      kind: "reasoning",
-      text: "Searching for the latest GTC details.",
-    });
-    threadSocket.emit({
-      type: "assistant_message",
-      sessionId: "thread-session",
-      text: "Here is the summary.",
-    });
-
-    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
-    const reasoning = feed.filter((item) => item.kind === "reasoning");
-
-    expect(reasoning).toHaveLength(1);
-    expect(reasoning[0]?.text).toBe("Searching for the latest GTC details.");
-    expect(feed.map((item) => item.kind)).toEqual(["reasoning", "tool", "message"]);
-  });
-
-  test("model_stream_raw drives live feed replay and suppresses stale normalized reasoning chunks", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "model_stream_raw",
-      sessionId: "thread-session",
-      turnId: "turn-raw",
-      index: 0,
-      provider: "openai",
-      model: "gpt-5.2",
-      format: "openai-responses-v1",
-      normalizerVersion: 1,
-      event: {
-        type: "response.output_item.added",
-        item: { type: "reasoning", id: "rs_live", summary: [] },
-      },
-    });
-    threadSocket.emit({
-      type: "model_stream_raw",
-      sessionId: "thread-session",
-      turnId: "turn-raw",
-      index: 1,
-      provider: "openai",
-      model: "gpt-5.2",
-      format: "openai-responses-v1",
-      normalizerVersion: 1,
-      event: {
-        type: "response.reasoning_summary_part.added",
-        part: { text: "" },
-      },
-    });
-    threadSocket.emit({
-      type: "model_stream_raw",
-      sessionId: "thread-session",
-      turnId: "turn-raw",
-      index: 2,
-      provider: "openai",
-      model: "gpt-5.2",
-      format: "openai-responses-v1",
-      normalizerVersion: 1,
-      event: {
-        type: "response.reasoning_summary_text.delta",
-        delta: "live raw reasoning",
-      },
-    });
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
-      turnId: "turn-raw",
-      index: 3,
-      provider: "openai",
-      model: "gpt-5.2",
-      partType: "reasoning_delta",
-      part: { id: "stale-r1", mode: "summary", text: "stale normalized reasoning" },
-    });
-
-    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
-    const reasoning = feed.filter((item) => item.kind === "reasoning");
-    expect(reasoning).toHaveLength(1);
-    expect(reasoning[0]?.text).toBe("live raw reasoning");
-  });
-
-  test("late reasoning summaries stay ahead of the raw-backed final assistant message", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "model_stream_raw",
-      sessionId: "thread-session",
-      turnId: "turn-late-reasoning",
-      index: 0,
-      provider: "codex-cli",
-      model: "gpt-5.2",
-      format: "openai-responses-v1",
-      normalizerVersion: 1,
-      event: {
-        type: "response.output_item.added",
-        item: { type: "message", id: "msg_final", phase: "final_answer", content: [] },
-      },
-    });
-    threadSocket.emit({
-      type: "model_stream_raw",
-      sessionId: "thread-session",
-      turnId: "turn-late-reasoning",
-      index: 1,
-      provider: "codex-cli",
-      model: "gpt-5.2",
-      format: "openai-responses-v1",
-      normalizerVersion: 1,
-      event: {
-        type: "response.content_part.added",
-        item_id: "msg_final",
-        part: { type: "output_text", text: "" },
-      },
-    });
-    threadSocket.emit({
-      type: "model_stream_raw",
-      sessionId: "thread-session",
-      turnId: "turn-late-reasoning",
-      index: 2,
-      provider: "codex-cli",
-      model: "gpt-5.2",
-      format: "openai-responses-v1",
-      normalizerVersion: 1,
-      event: {
-        type: "response.output_text.delta",
-        item_id: "msg_final",
-        delta: "final answer",
-      },
-    });
-
-    threadSocket.emit({
-      type: "reasoning",
-      sessionId: "thread-session",
-      kind: "summary",
-      text: "late summary",
-    });
-    threadSocket.emit({
-      type: "assistant_message",
-      sessionId: "thread-session",
-      text: "final answer",
-    });
-
-    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
+    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed.filter((item) =>
+      item.kind === "reasoning" || item.kind === "message",
+    ) ?? [];
     expect(feed.map((item) => item.kind)).toEqual(["reasoning", "message"]);
-    expect(feed[0]?.kind).toBe("reasoning");
-    expect(feed[1]?.kind).toBe("message");
-    if (feed[0]?.kind !== "reasoning") throw new Error("Expected reasoning first");
-    if (feed[1]?.kind !== "message") throw new Error("Expected assistant message second");
-    expect(feed[0].text).toBe("late summary");
-    expect(feed[1].text).toBe("final answer");
-  });
-
-  test("model stream approval parts render as tool cards while source/file/unknown parts stay in system items", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
-      turnId: "turn-2",
-      index: 0,
-      provider: "openai",
-      model: "gpt-5.2",
-      partType: "tool_approval_request",
-      part: { approvalId: "ap-1", toolCall: { toolName: "bash" } },
+    expect(feed[0]).toMatchObject({
+      kind: "reasoning",
+      mode: "summary",
+      text: "Inspecting the reports.",
     });
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
-      turnId: "turn-2",
-      index: 1,
-      provider: "openai",
-      model: "gpt-5.2",
-      partType: "source",
-      part: { source: { type: "url", url: "https://example.com" } },
-    });
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
-      turnId: "turn-2",
-      index: 2,
-      provider: "openai",
-      model: "gpt-5.2",
-      partType: "file",
-      part: { file: { path: "/tmp/a.txt" } },
-    });
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
-      turnId: "turn-2",
-      index: 3,
-      provider: "openai",
-      model: "gpt-5.2",
-      partType: "raw",
-      part: { raw: { type: "provider_event" } },
-    });
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
-      turnId: "turn-2",
-      index: 4,
-      provider: "openai",
-      model: "gpt-5.2",
-      partType: "future_part",
-      part: { payload: true },
-    } as any);
-
-    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
-    const tool = feed.find((item) => item.kind === "tool");
-    expect(tool?.kind).toBe("tool");
-    if (!tool || tool.kind !== "tool") throw new Error("Expected tool feed item");
-    expect(tool.name).toBe("bash");
-    expect(tool.state).toBe("approval-requested");
-    expect(tool.approval).toEqual({
-      approvalId: "ap-1",
-      toolCall: { toolName: "bash" },
-    });
-
-    const systemLines = feed
-      .filter((item) => item.kind === "system")
-      .map((item) => (item.kind === "system" ? item.line : ""));
-
-    expect(systemLines.some((line) => line.includes("Source:"))).toBe(true);
-    expect(systemLines.some((line) => line.includes("File:"))).toBe(true);
-    expect(systemLines.some((line) => line.includes("Unhandled stream part (future_part)"))).toBe(true);
-  });
-
-  test("raw function-call argument deltas become readable tool args and names", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
-      turnId: "turn-3",
-      index: 0,
-      provider: "openai",
-      model: "gpt-5.2",
-      partType: "raw",
-      part: {
-        raw: {
-          type: "response.function_call_arguments.delta",
-          item_id: "fc_ask_1",
-          delta: "{\"question\":\"What next?\",\"options\":[\"Ship fix\",\"Run tests\"]}",
-        },
-      },
-    });
-
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "thread-session",
-      turnId: "turn-3",
-      index: 1,
-      provider: "openai",
-      model: "gpt-5.2",
-      partType: "raw",
-      part: {
-        raw: {
-          type: "response.function_call_arguments.done",
-          item_id: "fc_ask_1",
-          tool_name: "ask",
-        },
-      },
-    });
-
-    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
-    const tool = feed.find((item) => item.kind === "tool");
-    expect(tool?.kind).toBe("tool");
-    if (!tool || tool.kind !== "tool") throw new Error("Expected tool feed item");
-    expect(tool.name).toBe("ask");
-    expect(tool.args).toEqual({
-      question: "What next?",
-      options: ["Ship fix", "Run tests"],
+    expect(feed[1]).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      text: "Final answer",
     });
   });
 
-  test("ignores stale session events for control and thread sockets", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const threadId = useAppStore.getState().selectedThreadId;
-    if (!threadId) throw new Error("Expected selected thread");
+  test("shared JSON-RPC notifications hydrate live session metadata immediately", async () => {
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+    await flushAsyncWork();
 
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
+    const socket = MockJsonRpcSocket.instances[0];
+    expect(socket).toBeDefined();
 
-    const feedBefore = useAppStore.getState().threadRuntimeById[threadId]?.feed.length ?? 0;
-
-    threadSocket.emit({
-      type: "assistant_message",
-      sessionId: "stale-thread-session",
-      text: "should be ignored",
-    });
-    threadSocket.emit({
-      type: "model_stream_chunk",
-      sessionId: "stale-thread-session",
-      turnId: "stale-turn",
-      index: 0,
+    socket.notify("cowork/session/info", {
+      type: "session_info",
+      sessionId,
+      title: "Renamed over JSON-RPC",
+      titleSource: "manual",
+      titleModel: null,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:03.000Z",
       provider: "openai",
-      model: "gpt-5.2",
-      partType: "text_delta",
-      part: { id: "txt_1", text: "ignored" },
+      model: "gpt-5.4-mini",
     });
-
-    const feedAfter = useAppStore.getState().threadRuntimeById[threadId]?.feed.length ?? 0;
-    expect(feedAfter).toBe(feedBefore);
-
-    controlSocket.emit({
-      type: "provider_status",
-      sessionId: "stale-control-session",
-      providers: [
-        {
-          provider: "openai",
-          connected: true,
-          authorized: true,
-          authMode: "api_key",
-          accountLabel: "user@example.com",
-          modelCount: 1,
-          source: "env",
-        },
-      ],
-    } as any);
-
-    expect(useAppStore.getState().providerConnected).toEqual([]);
-  });
-
-  test("verified-only local providers stay in providerConnected", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const controlSocket = socketByClient("desktop-control");
-
-    emitServerHello(controlSocket, "control-session");
-    controlSocket.emit({
-      type: "provider_status",
-      sessionId: "control-session",
-      providers: [
-        {
-          provider: "lmstudio",
-          authorized: false,
-          verified: true,
-          mode: "local",
-          account: null,
-          message: "LM Studio reachable",
-          checkedAt: new Date().toISOString(),
-        },
-      ],
-    } as any);
-
-    expect(useAppStore.getState().providerConnected).toEqual(["lmstudio"]);
-  });
-
-  test("legacy log events still map to log feed items when no model stream exists", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "log",
-      sessionId: "thread-session",
-      line: "tool> read {\"path\":\"README.md\"}",
-    });
-
-    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
-    const last = feed.at(-1);
-    expect(last?.kind).toBe("log");
-    if (!last || last.kind !== "log") throw new Error("Expected log feed item");
-    expect(last.line).toContain("tool> read");
-  });
-
-  test("suppresses raw provider debug log lines", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const threadId = useAppStore.getState().selectedThreadId;
-    if (!threadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-
-    threadSocket.emit({
-      type: "log",
-      sessionId: "thread-session",
-      line: "raw stream part: {\"type\":\"response.function_call_arguments.delta\"}",
-    });
-
-    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
-    expect(feed.some((item) => item.kind === "log")).toBe(false);
-  });
-
-  test("developer diagnostics server events become readable system notices", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-
-    threadSocket.emit({
-      type: "observability_status",
-      sessionId: "thread-session",
-      enabled: true,
-      health: { status: "ready", reason: "runtime_ready" },
+    socket.notify("cowork/session/configUpdated", {
+      type: "config_updated",
+      sessionId,
       config: {
-        provider: "langfuse",
-        baseUrl: "https://example.com",
-        otelEndpoint: "https://example.com/otel",
-        hasPublicKey: true,
-        hasSecretKey: true,
-        configured: true,
-      },
-    });
-    threadSocket.emit({
-      type: "session_backup_state",
-      sessionId: "thread-session",
-      reason: "auto_checkpoint",
-      backup: {
-        status: "ready",
-        checkpoints: [{ id: "cp-1" }],
-      },
-    });
-    threadSocket.emit({
-      type: "harness_context",
-      sessionId: "thread-session",
-      context: {
-        taskId: "task-1",
-        runId: "run-1",
-        objective: "Ship it.",
-        acceptanceCriteria: ["a"],
-        constraints: ["b", "c"],
-      },
-    });
-
-    const systemLines = (useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [])
-      .filter((item) => item.kind === "system")
-      .map((item) => (item.kind === "system" ? item.line : ""));
-
-    expect(systemLines).toContain("Observability: enabled=yes, configured=yes, health=ready (runtime_ready)");
-    expect(systemLines).toContain("Session backup (auto checkpoint): status=ready, checkpoints=1");
-    expect(systemLines).toContain(
-      "Harness context updated: taskId=task-1, runId=run-1, objective=Ship it., acceptanceCriteria=1, constraints=2",
-    );
-  });
-
-  test("manual cancel sends cancel only and does not auto-reset busy state", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-    threadSocket.sent = [];
-
-    threadSocket.emit({
-      type: "session_busy",
-      sessionId: "thread-session",
-      busy: true,
-      turnId: "turn-1",
-      cause: "user_message",
-    });
-
-    useAppStore.getState().cancelThread(threadId);
-
-    expect(threadSocket.sent.some((msg) => msg?.type === "cancel")).toBe(true);
-    expect(threadSocket.sent.some((msg) => msg?.type === "session_close")).toBe(false);
-    expect(useAppStore.getState().threadRuntimeById[threadId]?.busy).toBe(true);
-  });
-
-  test("manual cancel can request stopping subagents too", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-    threadSocket.sent = [];
-
-    threadSocket.emit({
-      type: "session_busy",
-      sessionId: "thread-session",
-      busy: true,
-      turnId: "turn-1",
-      cause: "user_message",
-    });
-
-    useAppStore.getState().cancelThread(threadId, { includeSubagents: true });
-
-    expect(threadSocket.sent).toContainEqual({
-      type: "cancel",
-      sessionId: "thread-session",
-      includeSubagents: true,
-    });
-  });
-
-  test("session_busy does not trigger automatic cancel", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const threadId = useAppStore.getState().selectedThreadId;
-    if (!threadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    threadSocket.sent = [];
-
-    threadSocket.emit({
-      type: "session_busy",
-      sessionId: "thread-session",
-      busy: true,
-      turnId: "turn-2",
-      cause: "user_message",
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 5));
-
-    expect(threadSocket.sent.some((msg) => msg?.type === "cancel")).toBe(false);
-    expect(
-      useAppStore
-        .getState()
-        .notifications.some((n) => n.detail?.includes("Attempting automatic cancel"))
-    ).toBe(false);
-  });
-
-  test("removeThread sends session_close for connected thread sessions", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-    threadSocket.sent = [];
-
-    await useAppStore.getState().removeThread(threadId);
-
-    expect(
-      threadSocket.sent.some((msg) => msg?.type === "session_close" && msg?.sessionId === "thread-session")
-    ).toBe(true);
-  });
-
-  test("removeThread purges cached session snapshots from desktop state cache", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
-
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-    RUNTIME.sessionSnapshots.set("thread-session", {
-      fingerprint: {
-        updatedAt: "2024-01-01T00:00:02.000Z",
-        messageCount: 2,
-        lastEventSeq: 4,
-      },
-      snapshot: {
-        sessionId: "thread-session",
-        title: "Cached Thread",
-        titleSource: "model",
-        titleModel: "gpt-5.2",
         provider: "openai",
-        model: "gpt-5.2",
-        sessionKind: "root",
-        parentSessionId: null,
-        role: null,
-        mode: null,
-        depth: 0,
-        nickname: null,
-        requestedModel: "gpt-5.2",
-        effectiveModel: "gpt-5.2",
-        requestedReasoningEffort: null,
-        effectiveReasoningEffort: null,
-        executionState: null,
-        lastMessagePreview: "Hello from cache",
-        createdAt: "2024-01-01T00:00:00.000Z",
-        updatedAt: "2024-01-01T00:00:02.000Z",
-        messageCount: 2,
-        lastEventSeq: 4,
-        feed: [],
-        agents: [],
-        todos: [],
-        sessionUsage: null,
-        lastTurnUsage: null,
-        hasPendingAsk: false,
-        hasPendingApproval: false,
+        model: "gpt-5.4-mini",
+        workingDirectory: "/tmp/workspace",
       },
     });
-    threadSocket.sent = [];
+    socket.notify("cowork/session/settings", {
+      type: "session_settings",
+      sessionId,
+      enableMcp: false,
+      enableMemory: true,
+      memoryRequireApproval: false,
+    });
+    socket.notify("cowork/session/config", {
+      type: "session_config",
+      sessionId,
+      config: {
+        yolo: false,
+        observabilityEnabled: false,
+        backupsEnabled: true,
+        defaultBackupsEnabled: true,
+        enableMemory: true,
+        memoryRequireApproval: false,
+        preferredChildModel: "gpt-5.4-mini",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "openai:gpt-5.4-mini",
+        allowedChildModelRefs: [],
+        maxSteps: 100,
+        toolOutputOverflowChars: 25000,
+      },
+    });
+    await flushAsyncWork();
+    await flushAsyncWork();
 
-    await useAppStore.getState().removeThread(threadId);
-
-    expect(
-      threadSocket.sent.some((msg) => msg?.type === "session_close" && msg?.sessionId === "thread-session")
-    ).toBe(true);
-    expect(RUNTIME.sessionSnapshots.has("thread-session")).toBe(false);
-    const cachedState = localStorageMock.getItem(DESKTOP_STATE_CACHE_KEY);
-    expect(cachedState).not.toBeNull();
-    expect(JSON.parse(cachedState!).sessionSnapshots?.["thread-session"]).toBeUndefined();
+    const runtime = useAppStore.getState().threadRuntimeById[threadId];
+    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.title).toBe("Renamed over JSON-RPC");
+    expect(runtime?.config?.model).toBe("gpt-5.4-mini");
+    expect(runtime?.enableMcp).toBe(false);
+    expect(runtime?.sessionConfig?.preferredChildModel).toBe("gpt-5.4-mini");
   });
 
-  test("deleteThreadHistory sends delete_session via control socket after closing thread session", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const initialThreadId = useAppStore.getState().selectedThreadId;
-    if (!initialThreadId) throw new Error("Expected selected thread");
+  test("shared JSON-RPC notifications map remaining live thread events", async () => {
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+    await flushAsyncWork();
 
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    const threadId = canonicalThreadId("thread-session", initialThreadId);
-    RUNTIME.sessionSnapshots.set("thread-session", {
-      fingerprint: {
-        updatedAt: "2024-01-01T00:00:02.000Z",
-        messageCount: 2,
-        lastEventSeq: 4,
+    RUNTIME.pendingThreadSteers.set(threadId, new Map([
+      ["steer-1", {
+        clientMessageId: "steer-1",
+        text: "tighten scope",
+        expectedTurnId: "turn-1",
+        accepted: false,
+      }],
+    ]));
+    useAppStore.setState((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId]!,
+          busy: true,
+          activeTurnId: "turn-1",
+          pendingSteer: {
+            clientMessageId: "steer-1",
+            text: "tighten scope",
+            status: "sending",
+          },
+        },
       },
-      snapshot: {
-        sessionId: "thread-session",
-        title: "Cached Thread",
-        titleSource: "model",
-        titleModel: "gpt-5.2",
+    }));
+
+    const socket = MockJsonRpcSocket.instances[0];
+    expect(socket).toBeDefined();
+
+    socket.notify("cowork/session/steerAccepted", {
+      type: "steer_accepted",
+      sessionId,
+      turnId: "turn-1",
+      text: "tighten scope",
+      clientMessageId: "steer-1",
+    });
+    socket.notify("cowork/session/agentList", {
+      type: "agent_list",
+      sessionId,
+      agents: [{
+        agentId: "agent-1",
+        parentSessionId: sessionId,
+        role: "research",
+        mode: "delegate",
+        depth: 1,
+        title: "Research worker",
         provider: "openai",
-        model: "gpt-5.2",
-        sessionKind: "root",
-        parentSessionId: null,
-        role: null,
-        mode: null,
-        depth: 0,
-        nickname: null,
-        requestedModel: "gpt-5.2",
-        effectiveModel: "gpt-5.2",
-        requestedReasoningEffort: null,
-        effectiveReasoningEffort: null,
-        executionState: null,
-        lastMessagePreview: "Hello from cache",
-        createdAt: "2024-01-01T00:00:00.000Z",
+        effectiveModel: "gpt-5.4-mini",
+        createdAt: "2024-01-01T00:00:01.000Z",
         updatedAt: "2024-01-01T00:00:02.000Z",
-        messageCount: 2,
-        lastEventSeq: 4,
-        feed: [],
-        agents: [],
-        todos: [],
-        sessionUsage: null,
-        lastTurnUsage: null,
-        hasPendingAsk: false,
-        hasPendingApproval: false,
-      },
+        lifecycleState: "active",
+        executionState: "running",
+        busy: true,
+      }],
     });
-    controlSocket.sent = [];
-    threadSocket.sent = [];
+    socket.notify("cowork/todos", {
+      type: "todos",
+      sessionId,
+      todos: [{ id: "todo-1", content: "Ship the fix", status: "pending" }],
+    });
+    socket.notify("cowork/log", {
+      type: "log",
+      sessionId,
+      line: "live log line",
+    });
+    socket.notify("error", {
+      type: "error",
+      sessionId,
+      source: "session",
+      code: "internal_error",
+      message: "boom",
+    });
+    await flushAsyncWork();
+    await flushAsyncWork();
 
-    await useAppStore.getState().deleteThreadHistory(threadId);
-
-    expect(
-      threadSocket.sent.some((msg) => msg?.type === "session_close" && msg?.sessionId === "thread-session")
-    ).toBe(true);
-    expect(
-      controlSocket.sent.some(
-        (msg) =>
-          msg?.type === "delete_session"
-          && msg?.sessionId === "control-session"
-          && msg?.targetSessionId === "thread-session"
-      )
-    ).toBe(true);
-    expect(RUNTIME.sessionSnapshots.has("thread-session")).toBe(false);
-    const cachedState = localStorageMock.getItem(DESKTOP_STATE_CACHE_KEY);
-    expect(cachedState).not.toBeNull();
-    expect(JSON.parse(cachedState!).sessionSnapshots?.["thread-session"]).toBeUndefined();
+    const state = useAppStore.getState();
+    const runtime = state.threadRuntimeById[threadId];
+    expect(runtime?.pendingSteer?.status).toBe("accepted");
+    expect(runtime?.agents).toHaveLength(1);
+    expect(state.latestTodosByThreadId[threadId]).toEqual([{ id: "todo-1", content: "Ship the fix", status: "pending" }]);
+    expect(runtime?.feed.some((item) => item.kind === "log" && item.line === "live log line")).toBe(true);
+    expect(runtime?.feed.some((item) => item.kind === "error" && item.message === "boom")).toBe(true);
+    expect(state.notifications.some((entry) => entry.detail === "session/internal_error: boom")).toBe(true);
   });
 
-  test("removeWorkspace sends session_close for control and thread sessions", async () => {
-    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
-    const threadId = useAppStore.getState().selectedThreadId;
-    if (!threadId) throw new Error("Expected selected thread");
+  test("server ask requests open a prompt and answerAsk responds on the shared socket", async () => {
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+    await flushAsyncWork();
 
-    const controlSocket = socketByClient("desktop-control");
-    const threadSocket = socketByClient("desktop");
-    emitServerHello(controlSocket, "control-session");
-    emitServerHello(threadSocket, "thread-session");
-    controlSocket.sent = [];
-    threadSocket.sent = [];
+    const socket = MockJsonRpcSocket.instances[0];
+    socket.requestFromServer("ask-1", "item/tool/requestUserInput", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-1",
+      question: "Continue?",
+      options: ["Yes", "No"],
+    });
+    await flushAsyncWork();
+    await flushAsyncWork();
 
-    await useAppStore.getState().removeWorkspace(workspaceId);
+    expect(useAppStore.getState().promptModal).toMatchObject({
+      kind: "ask",
+      threadId,
+      prompt: {
+        requestId: "ask-1",
+        question: "Continue?",
+        options: ["Yes", "No"],
+      },
+    });
 
-    expect(
-      controlSocket.sent.some((msg) => msg?.type === "session_close" && msg?.sessionId === "control-session")
-    ).toBe(true);
-    expect(
-      threadSocket.sent.some((msg) => msg?.type === "session_close" && msg?.sessionId === "thread-session")
-    ).toBe(true);
+    useAppStore.getState().answerAsk(threadId, "ask-1", "Yes");
+
+    expect(socket.responses).toEqual([{ id: "ask-1", result: { answer: "Yes" } }]);
+    expect(useAppStore.getState().promptModal).toBeNull();
+  });
+
+  test("server approval requests open a prompt and answerApproval responds on the shared socket", async () => {
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances[0];
+    socket.requestFromServer("approval-1", "item/commandExecution/requestApproval", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "item-2",
+      command: "rm -rf build",
+      dangerous: true,
+      reason: "requires_manual_review",
+    });
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(useAppStore.getState().promptModal).toMatchObject({
+      kind: "approval",
+      threadId,
+      prompt: {
+        requestId: "approval-1",
+        command: "rm -rf build",
+        dangerous: true,
+        reasonCode: "requires_manual_review",
+      },
+    });
+
+    useAppStore.getState().answerApproval(threadId, "approval-1", true);
+
+    expect(socket.responses).toEqual([{ id: "approval-1", result: { decision: "accept" } }]);
+    expect(useAppStore.getState().promptModal).toBeNull();
+  });
+
+  test("shared JSON-RPC user message notifications reconcile optimistic sends", async () => {
+    await useAppStore.getState().reconnectThread(threadId);
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    await useAppStore.getState().sendMessage("hello once");
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances[0];
+    expect(socket).toBeDefined();
+
+    const turnStartParams = jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params as
+      | { clientMessageId?: string }
+      | undefined;
+    expect(turnStartParams?.clientMessageId).toEqual(expect.any(String));
+
+    socket.notify("turn/started", {
+      threadId: sessionId,
+      turn: { id: "turn-1", status: "inProgress", items: [] },
+    });
+    socket.notify("item/started", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      item: {
+        id: "user-item-1",
+        type: "userMessage",
+        clientMessageId: turnStartParams?.clientMessageId,
+        content: [{ type: "text", text: "hello once" }],
+      },
+    });
+    await flushAsyncWork();
+
+    const runtime = useAppStore.getState().threadRuntimeById[threadId];
+    const userMessages = runtime?.feed.filter((item) => item.kind === "message" && item.role === "user") ?? [];
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]).toMatchObject({
+      id: turnStartParams?.clientMessageId,
+      text: "hello once",
+    });
   });
 });

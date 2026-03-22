@@ -826,6 +826,10 @@ export class AgentSession {
     this.disconnectedReplayEvents = [];
   }
 
+  ensureDisconnectedReplayBuffer() {
+    this.bufferDisconnectedEvents = true;
+  }
+
   drainDisconnectedReplayEvents(): ServerEvent[] {
     this.bufferDisconnectedEvents = false;
     const drained = this.disconnectedReplayEvents;

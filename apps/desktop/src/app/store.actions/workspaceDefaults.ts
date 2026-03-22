@@ -37,20 +37,23 @@ import {
   persistNow,
   providerAuthMethodsFor,
   pushNotification,
-  queuePendingThreadMessage,
-  sendControl,
+  prependPendingThreadMessage,
+  requestJsonRpcControlEvent,
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,
   truncateTitle,
   waitForControlSession,
+  shiftPendingThreadMessage,
 } from "../store.helpers";
+import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { mergeWorkspaceProviderOptions, normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import type { DraftModelSelection } from "../store.helpers/runtimeState";
 import { normalizeWorkspaceUserProfile } from "../types";
 import type { ThreadRecord, WorkspaceDefaultsPatch, WorkspaceRecord } from "../types";
 
 export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "applyWorkspaceDefaultsToThread" | "updateWorkspaceDefaults"> {
+  type ApplySessionDefaultsMessage = Extract<ClientMessage, { type: "apply_session_defaults" }>;
   type DefaultsTargetState = {
     config: { provider?: unknown; model?: unknown } | null | undefined;
     sessionConfig: any;
@@ -78,7 +81,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
   const buildApplySessionDefaultsMessage = (opts: {
     sessionId: string;
     current: DefaultsTargetState;
-    desired: {
+      desired: {
       provider?: ProviderName;
       model?: string;
       enableMcp?: boolean;
@@ -89,11 +92,11 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       preferredChildModelRef?: string;
       allowedChildModelRefs?: string[];
       providerOptions?: WorkspaceRecord["providerOptions"];
-      userName?: string;
-      userProfile?: WorkspaceRecord["userProfile"];
-    };
-  }): ClientMessage | null => {
-    const configPatch: NonNullable<Extract<ClientMessage, { type: "apply_session_defaults" }>["config"]> = {};
+        userName?: string;
+        userProfile?: WorkspaceRecord["userProfile"];
+      };
+  }): ApplySessionDefaultsMessage | null => {
+    const configPatch: NonNullable<ApplySessionDefaultsMessage["config"]> = {};
     const currentProvider =
       opts.current.config?.provider && isProviderName(opts.current.config.provider)
         ? opts.current.config.provider
@@ -261,11 +264,32 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     };
   };
 
+  const hasPendingWorkspaceDefaultApply = (threadId: string): boolean =>
+    Boolean(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId));
+
+  const flushQueuedThreadMessageIfReady = (threadId: string): boolean => {
+    if (hasPendingWorkspaceDefaultApply(threadId) || get().threadRuntimeById[threadId]?.busy) {
+      return false;
+    }
+
+    const next = shiftPendingThreadMessage(threadId)?.trim();
+    if (!next) {
+      return false;
+    }
+
+    const ok = sendUserMessageToThread(get, set, threadId, next);
+    if (!ok) {
+      prependPendingThreadMessage(threadId, next);
+    }
+    return ok;
+  };
+
   return {
     applyWorkspaceDefaultsToThread: async (
       threadId: string,
       mode: "auto" | "auto-resume" | "explicit" = "explicit",
       draftModelSelection: { provider: ProviderName; model: string } | null = null,
+      opts?: { allowBeforeHydration?: boolean },
     ) => {
       const thread = get().threads.find((t) => t.id === threadId);
       if (!thread) return;
@@ -279,14 +303,24 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       if (!rt?.sessionId) return;
       const workspaceRuntime = get().workspaceRuntimeById[thread.workspaceId];
       const pendingApply = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId) ?? null;
+      if (pendingApply?.inFlight) {
+        return;
+      }
+      const allowBeforeHydration = opts?.allowBeforeHydration === true || pendingApply?.allowBeforeHydration === true;
       const effectiveDraftModelSelection: DraftModelSelection | null =
         mode === "auto-resume"
           ? null
           : draftModelSelection ?? pendingApply?.draftModelSelection ?? null;
-      if (mode !== "explicit" && (!rt.sessionConfig || rt.enableMcp === null)) {
+      if (
+        mode !== "explicit"
+        && !allowBeforeHydration
+        && (rt.sessionConfig == null || typeof rt.enableMcp !== "boolean")
+      ) {
         RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
           mode,
           draftModelSelection: effectiveDraftModelSelection,
+          ...(allowBeforeHydration ? { allowBeforeHydration: true } : {}),
+          inFlight: false,
         });
         return;
       }
@@ -299,10 +333,11 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
           mode,
           draftModelSelection: effectiveDraftModelSelection,
+          ...(allowBeforeHydration ? { allowBeforeHydration: true } : {}),
+          inFlight: false,
         });
         return;
       }
-      RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
 
       const preserveSessionModel = mode === "auto-resume";
 
@@ -386,13 +421,44 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           ...(userProfile !== undefined ? { userProfile } : {}),
         },
       });
-      if (!message) {
+      if (!message || message.type !== "apply_session_defaults") {
+        RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
+        flushQueuedThreadMessageIfReady(threadId);
         return;
       }
 
-      const ok = sendThread(get, threadId, () => message);
-      if (ok) {
-        appendThreadTranscript(threadId, "client", message);
+      RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
+        mode,
+        draftModelSelection: effectiveDraftModelSelection,
+        ...(allowBeforeHydration ? { allowBeforeHydration: true } : {}),
+        inFlight: true,
+      });
+      appendThreadTranscript(threadId, "client", message);
+      try {
+        await requestJsonRpc(get, set, thread.workspaceId, "cowork/session/defaults/apply", {
+          threadId: rt.sessionId,
+          cwd: ws.path,
+          ...(message.provider !== undefined ? { provider: message.provider } : {}),
+          ...(message.model !== undefined ? { model: message.model } : {}),
+          ...(message.enableMcp !== undefined ? { enableMcp: message.enableMcp } : {}),
+          ...(message.config !== undefined ? { config: message.config } : {}),
+        });
+      } catch {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to apply workspace defaults to the active thread.",
+          }),
+        }));
+      } finally {
+        const currentPending = RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId);
+        if (currentPending?.inFlight) {
+          RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
+        }
+        flushQueuedThreadMessageIfReady(threadId);
       }
     },
   
@@ -434,7 +500,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
 
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
-      const controlReady = await waitForControlSession(get, workspaceId);
+      const controlReady = await waitForControlSession(get, set, workspaceId);
       const workspace = controlReady
         ? resolveWorkspaceDefaults(workspaceId)
         : get().workspaces.find((w) => w.id === workspaceId);
@@ -490,7 +556,13 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         : null;
 
       const persisted = controlReady
-        ? (!controlMessage || sendControl(get, workspaceId, () => controlMessage))
+        ? (!controlMessage || await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/session/defaults/apply", {
+            cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+            ...(controlMessage.provider !== undefined ? { provider: controlMessage.provider } : {}),
+            ...(controlMessage.model !== undefined ? { model: controlMessage.model } : {}),
+            ...(controlMessage.enableMcp !== undefined ? { enableMcp: controlMessage.enableMcp } : {}),
+            ...(controlMessage.config !== undefined ? { config: controlMessage.config } : {}),
+          }))
         : false;
 
       if (!persisted) {

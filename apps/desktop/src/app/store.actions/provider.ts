@@ -46,35 +46,39 @@ import {
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
-type RefreshProviderStatusDeps = {
-  get: StoreGet;
-  set: StoreSet;
-  makeId: typeof makeId;
-  nowIso: typeof nowIso;
-  pushNotification: typeof pushNotification;
-  requestJsonRpcControlEvent: typeof requestJsonRpcControlEvent;
+type RefreshProviderStatusHelperOverrides = {
+  makeId?: typeof makeId;
+  nowIso?: typeof nowIso;
+  pushNotification?: typeof pushNotification;
+  requestJsonRpcControlEvent?: typeof requestJsonRpcControlEvent;
 };
 
 export async function refreshProviderStatusForWorkspace(
-  deps: RefreshProviderStatusDeps,
+  get: StoreGet,
+  set: StoreSet,
   workspaceId: string,
   path: string | undefined,
+  overrides: RefreshProviderStatusHelperOverrides = {},
 ): Promise<void> {
+  const createId = overrides.makeId ?? makeId;
+  const getNowIso = overrides.nowIso ?? nowIso;
+  const addNotification = overrides.pushNotification ?? pushNotification;
+  const sendControlEvent = overrides.requestJsonRpcControlEvent ?? requestJsonRpcControlEvent;
   const refreshGeneration = ++RUNTIME.providerStatusRefreshGeneration;
-  deps.set({ providerStatusRefreshing: true });
+  set({ providerStatusRefreshing: true });
   const results = await Promise.allSettled([
-    deps.requestJsonRpcControlEvent(deps.get, deps.set, workspaceId, "cowork/provider/status/refresh", { cwd: path }),
-    deps.requestJsonRpcControlEvent(deps.get, deps.set, workspaceId, "cowork/provider/catalog/read", { cwd: path }),
-    deps.requestJsonRpcControlEvent(deps.get, deps.set, workspaceId, "cowork/provider/authMethods/read", { cwd: path }),
+    sendControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", { cwd: path }),
+    sendControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", { cwd: path }),
+    sendControlEvent(get, set, workspaceId, "cowork/provider/authMethods/read", { cwd: path }),
   ]);
   const allSucceeded = results.every((result) => result.status === "fulfilled" && result.value);
-  deps.set((s) => ({
+  set((s) => ({
     ...(refreshGeneration === RUNTIME.providerStatusRefreshGeneration ? { providerStatusRefreshing: false } : {}),
     ...(!allSucceeded
       ? {
-          notifications: deps.pushNotification(s.notifications, {
-            id: deps.makeId(),
-            ts: deps.nowIso(),
+          notifications: addNotification(s.notifications, {
+            id: createId(),
+            ts: getNowIso(),
             kind: "error",
             title: "Not connected",
             detail: "Unable to refresh provider status.",
@@ -430,14 +434,7 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
       if (!workspaceId) return;
 
       const path = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
-      await refreshProviderStatusForWorkspace({
-        get,
-        set,
-        makeId,
-        nowIso,
-        pushNotification,
-        requestJsonRpcControlEvent,
-      }, workspaceId, path);
+      await refreshProviderStatusForWorkspace(get, set, workspaceId, path);
     },
 
     setLmStudioEnabled: async (enabled) => {

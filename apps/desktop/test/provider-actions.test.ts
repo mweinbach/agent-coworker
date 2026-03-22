@@ -38,20 +38,24 @@ describe("provider actions", () => {
     const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
     const harness = createHarness();
 
-    await refreshProviderStatusForWorkspace({
-      get: harness.get as any,
-      set: harness.set as any,
-      makeId: () => "note-1",
-      nowIso: () => "2026-03-21T00:00:00.000Z",
-      pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
-      requestJsonRpcControlEvent: ((...args: any[]) => {
-        calls.push({
-          method: String(args[3]),
-          params: args[4] as Record<string, unknown>,
-        });
-        return Promise.resolve(true);
-      }) as any,
-    }, "ws-1", "/tmp/ws-1");
+    await refreshProviderStatusForWorkspace(
+      harness.get as any,
+      harness.set as any,
+      "ws-1",
+      "/tmp/ws-1",
+      {
+        makeId: () => "note-1",
+        nowIso: () => "2026-03-21T00:00:00.000Z",
+        pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
+        requestJsonRpcControlEvent: ((...args: any[]) => {
+          calls.push({
+            method: String(args[3]),
+            params: args[4] as Record<string, unknown>,
+          });
+          return Promise.resolve(true);
+        }) as any,
+      },
+    );
 
     expect(calls).toEqual([
       { method: "cowork/provider/status/refresh", params: { cwd: "/tmp/ws-1" } },
@@ -83,14 +87,18 @@ describe("provider actions", () => {
 
     const harness = createHarness();
 
-    const refreshPromise = refreshProviderStatusForWorkspace({
-      get: harness.get as any,
-      set: harness.set as any,
-      makeId: () => "note-1",
-      nowIso: () => "2026-03-21T00:00:00.000Z",
-      pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
-      requestJsonRpcControlEvent: requestJsonRpcControlEvent as any,
-    }, "ws-1", "/tmp/ws-1");
+    const refreshPromise = refreshProviderStatusForWorkspace(
+      harness.get as any,
+      harness.set as any,
+      "ws-1",
+      "/tmp/ws-1",
+      {
+        makeId: () => "note-1",
+        nowIso: () => "2026-03-21T00:00:00.000Z",
+        pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
+        requestJsonRpcControlEvent: requestJsonRpcControlEvent as any,
+      },
+    );
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(calls).toEqual([

@@ -694,17 +694,17 @@ describe("control socket helpers over JSON-RPC", () => {
 
     const { refreshProviderStatusForWorkspace } = await import("../src/app/store.actions/provider");
     await refreshProviderStatusForWorkspace(
+      get as any,
+      set as any,
+      workspaceId,
+      "/tmp/workspace",
       {
-        get: get as any,
-        set: set as any,
         makeId: () => "note-2",
         nowIso: () => "2026-03-21T00:00:01.000Z",
         pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
         requestJsonRpcControlEvent: ((...args: any[]) =>
           helpers.requestJsonRpcControlEvent(args[0], args[1], args[2], args[3], args[4])) as any,
       },
-      workspaceId,
-      "/tmp/workspace",
     );
     expect(state.providerStatusRefreshing).toBe(false);
 
@@ -791,17 +791,17 @@ describe("control socket helpers over JSON-RPC", () => {
 
     const { refreshProviderStatusForWorkspace } = await import("../src/app/store.actions/provider");
     const manualRefreshPromise = refreshProviderStatusForWorkspace(
+      get as any,
+      set as any,
+      workspaceId,
+      "/tmp/workspace",
       {
-        get: get as any,
-        set: set as any,
         makeId: () => "note-2",
         nowIso: () => "2026-03-21T00:00:01.000Z",
         pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
         requestJsonRpcControlEvent: ((...args: any[]) =>
           helpers.requestJsonRpcControlEvent(args[0], args[1], args[2], args[3], args[4])) as any,
       },
-      workspaceId,
-      "/tmp/workspace",
     );
     await flushAsyncWork();
     expect(state.providerStatusRefreshing).toBe(true);
@@ -860,17 +860,17 @@ describe("control socket helpers over JSON-RPC", () => {
 
     const { refreshProviderStatusForWorkspace } = await import("../src/app/store.actions/provider");
     const manualRefreshPromise = refreshProviderStatusForWorkspace(
+      get as any,
+      set as any,
+      workspaceId,
+      "/tmp/workspace",
       {
-        get: get as any,
-        set: set as any,
         makeId: () => "note-3",
         nowIso: () => "2026-03-21T00:00:02.000Z",
         pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
         requestJsonRpcControlEvent: ((...args: any[]) =>
           helpers.requestJsonRpcControlEvent(args[0], args[1], args[2], args[3], args[4])) as any,
       },
-      workspaceId,
-      "/tmp/workspace",
     );
     await flushAsyncWork();
     expect(state.providerStatusRefreshing).toBe(true);

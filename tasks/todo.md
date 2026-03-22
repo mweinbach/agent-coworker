@@ -194,3 +194,17 @@
 - The same handlers now treat emitted `error` events as terminal JSON-RPC outcomes across provider auth, skill mutations, skill-installation update checks, memory controls, and workspace backup controls, instead of waiting for a timeout when the session already reported a concrete failure.
 - `test/jsonrpc.routes.review-fixes.test.ts` adds extracted-route regressions for the review fixes, including realistic provider- and backup-sourced error events plus installation-check failures, and `test/server.jsonrpc.control.test.ts` covers the live server behavior for provider auth, skill mutation failures, installation-check failures, memory failures, and workspace backup failures.
 - Verification passed with `bun test test/jsonrpc.routes.review-fixes.test.ts`, `bun test test/server.jsonrpc.control.test.ts`, and `bun run typecheck`.
+
+## Full Test Lane Cleanup
+
+- [x] Reproduce the 7 `bun run test` failures in focused server and desktop slices before changing code.
+- [x] Port the extracted JSON-RPC pending-prompt replay logic into the live `startServer.ts` thread resume/read path and remove the journal-write bottleneck that kept the >1000-event read test over the timeout budget.
+- [x] Restore chronological mixed reasoning/tool activity grouping in the desktop chat summary helpers without regressing adjacent tool merge behavior.
+- [x] Re-run the focused failing slices, `bun run typecheck`, and the full `bun run test` lane.
+
+## Full Test Lane Cleanup Review
+
+- `src/server/startServer.ts` now replays pending ask/approval prompts on `thread/resume`, dedupes them against journal replay and disconnected-buffer replay, batches thread-journal SQLite writes with `appendThreadJournalEvents()`, and compacts consecutive assistant snapshot fragments in `thread/read` responses so the heavy reconnect/read flow no longer times out on large journals.
+- `src/server/session/AgentSession.ts`, `src/server/session/SessionSnapshotProjector.ts`, and `src/server/jsonrpc/routes/shared.ts` now expose a non-cloning live snapshot read path for JSON-RPC/session summary callers, avoiding redundant deep copies of large live snapshots during server reads.
+- `apps/desktop/src/ui/chat/activityGroups.ts` now preserves feed chronology when mixing reasoning and tool entries, while still deduping adjacent identical reasoning notes and merging only truly adjacent compatible tool lifecycle rows.
+- Verification passed with `bun test test/server.jsonrpc.flow.test.ts --test-name-pattern "thread/resume replays a pending user input request after reconnect|thread/resume replays a pending approval request after reconnect|thread/read and thread/resume replay journals beyond 1000 events"`, `bun test apps/desktop/test/chat-activity-group-card.test.tsx apps/desktop/test/chat-activity-groups.test.ts`, `bun run typecheck`, and `bun run test`.

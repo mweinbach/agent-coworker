@@ -1068,6 +1068,7 @@ export async function startAgentServer(
     opts?: {
       initialActiveTurnId?: string | null;
       initialAgentText?: string | null;
+      drainDisconnectedReplayBuffer?: boolean;
     },
   ): SessionBinding | null => {
     const connectionId = ws.data.connectionId;
@@ -1085,7 +1086,8 @@ export async function startAgentServer(
       return binding;
     }
 
-    const shouldReplayBufferedEvents = !binding.socket && countLiveConnectionSinks(binding) === 0;
+    const shouldReplayBufferedEvents =
+      opts?.drainDisconnectedReplayBuffer || (!binding.socket && countLiveConnectionSinks(binding) === 0);
     const sinkId = `jsonrpc:${connectionId}:${threadId}`;
     const projector = createJsonRpcLegacyEventProjector({
       threadId,
@@ -1417,12 +1419,15 @@ export async function startAgentServer(
         subscribeJsonRpcThread(
           ws,
           threadId,
-          binding.session.activeTurnId
-            ? {
-                initialActiveTurnId: binding.session.activeTurnId,
-                initialAgentText: binding.session.getLatestAssistantText() ?? "",
-              }
-            : undefined,
+          {
+            ...(binding.session.activeTurnId
+              ? {
+                  initialActiveTurnId: binding.session.activeTurnId,
+                  initialAgentText: binding.session.getLatestAssistantText() ?? "",
+                }
+              : {}),
+            ...(afterSeq > 0 ? { drainDisconnectedReplayBuffer: true } : {}),
+          },
         );
         sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, { thread }));
         sendJsonRpc(ws, { method: "thread/started", params: { thread } });
@@ -1807,7 +1812,8 @@ export async function startAgentServer(
             binding,
             async () => await session.authorizeProviderAuth(provider, methodId),
             (event): event is Extract<ServerEvent, { type: "provider_auth_challenge" | "provider_auth_result" }> =>
-              event.type === "provider_auth_challenge" || event.type === "provider_auth_result",
+              (event.type === "provider_auth_challenge" || event.type === "provider_auth_result") &&
+              event.provider === provider && event.methodId === methodId,
           ),
         );
         emitControlResult(ws, message.id, event);
@@ -1827,7 +1833,8 @@ export async function startAgentServer(
           await captureSessionEvent(
             binding,
             async () => await session.logoutProviderAuth(provider),
-            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => event.type === "provider_auth_result",
+            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> =>
+              event.type === "provider_auth_result" && event.provider === provider,
           ),
         );
         emitControlResult(ws, message.id, event);
@@ -1849,7 +1856,8 @@ export async function startAgentServer(
           await captureSessionEvent(
             binding,
             async () => await session.callbackProviderAuth(provider, methodId, code),
-            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => event.type === "provider_auth_result",
+            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> =>
+              event.type === "provider_auth_result" && event.provider === provider && event.methodId === methodId,
           ),
         );
         emitControlResult(ws, message.id, event);
@@ -1871,7 +1879,8 @@ export async function startAgentServer(
           await captureSessionEvent(
             binding,
             async () => await session.setProviderApiKey(provider, methodId, apiKey),
-            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => event.type === "provider_auth_result",
+            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> =>
+              event.type === "provider_auth_result" && event.provider === provider && event.methodId === methodId,
           ),
         );
         emitControlResult(ws, message.id, event);
@@ -1892,7 +1901,8 @@ export async function startAgentServer(
           await captureSessionEvent(
             binding,
             async () => await session.copyProviderApiKey(provider, sourceProvider),
-            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => event.type === "provider_auth_result",
+            (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> =>
+              event.type === "provider_auth_result" && event.provider === provider,
           ),
         );
         emitControlResult(ws, message.id, event);

@@ -2,12 +2,26 @@ import { describe, expect, test } from "bun:test";
 
 import type { TranscriptEvent } from "../src/app/types";
 import {
+  createThreadModelStreamRuntime,
   extractAgentStateFromTranscript,
   extractUsageStateFromTranscript,
   mapTranscriptToFeed,
+  reasoningInsertBeforeAssistantAfterStreamReplay,
 } from "../src/app/store.feedMapping";
 
 describe("desktop transcript feed mapping", () => {
+  test("does not move live reasoning ahead of assistant output", () => {
+    const runtime = createThreadModelStreamRuntime();
+    runtime.lastAssistantTurnId = "turn-live";
+    runtime.lastAssistantStreamKeyByTurn.set("turn-live", "assistant:turn-live");
+    runtime.assistantItemIdByStream.set("assistant:turn-live", "assistant-item-1");
+
+    expect(reasoningInsertBeforeAssistantAfterStreamReplay(runtime)).toBeNull();
+
+    runtime.replay.rawBackedTurns.add("turn-live");
+    expect(reasoningInsertBeforeAssistantAfterStreamReplay(runtime)).toBe("assistant-item-1");
+  });
+
   test("dedupes streamed reasoning against legacy reasoning finals while preserving trace order", () => {
     const transcript: TranscriptEvent[] = [
       {

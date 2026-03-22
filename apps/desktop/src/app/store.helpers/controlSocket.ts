@@ -51,6 +51,7 @@ export function createControlSocketHelpers(
   const requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   const jsonRpcLifecycleCleanupByWorkspace = new Map<string, () => void>();
   const jsonRpcBootstrapPromises = new Map<string, Promise<void>>();
+  const jsonRpcBootstrapQueuedByWorkspace = new Set<string>();
   const controlStoreGettersByWorkspace = new Map<string, StoreGet>();
   const controlStoreSettersByWorkspace = new Map<string, StoreSet>();
   const controlSessionWaiters = new Set<symbol>();
@@ -302,6 +303,7 @@ export function createControlSocketHelpers(
     });
 
     jsonRpcBootstrapPromises.delete(workspaceId);
+    jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
     void deps.persist(get);
   }
 
@@ -578,15 +580,7 @@ export function createControlSocketHelpers(
     }
   }
 
-  function bootstrapJsonRpcControlStateOnce(get: StoreGet, set: StoreSet, workspaceId: string): Promise<void> {
-    if (isWorkspaceDisposed(workspaceId)) {
-      return Promise.resolve();
-    }
-    const existing = jsonRpcBootstrapPromises.get(workspaceId);
-    if (existing) {
-      return existing;
-    }
-
+  function startJsonRpcControlBootstrap(get: StoreGet, set: StoreSet, workspaceId: string): Promise<void> {
     const promise = bootstrapJsonRpcControlState(get, set, workspaceId).finally(() => {
       if (jsonRpcBootstrapPromises.get(workspaceId) === promise) {
         jsonRpcBootstrapPromises.delete(workspaceId);
@@ -594,6 +588,37 @@ export function createControlSocketHelpers(
     });
     jsonRpcBootstrapPromises.set(workspaceId, promise);
     return promise;
+  }
+
+  function bootstrapJsonRpcControlStateOnce(get: StoreGet, set: StoreSet, workspaceId: string): Promise<void> {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return Promise.resolve();
+    }
+    const existing = jsonRpcBootstrapPromises.get(workspaceId);
+    if (existing) {
+      if (jsonRpcBootstrapQueuedByWorkspace.has(workspaceId)) {
+        return existing;
+      }
+
+      // Re-run bootstrap after the current pass if the socket re-opens mid-bootstrap.
+      jsonRpcBootstrapQueuedByWorkspace.add(workspaceId);
+      const rerun = existing.finally(async () => {
+        jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
+        if (isWorkspaceDisposed(workspaceId)) {
+          return;
+        }
+        const currentGet = getControlStoreGet(workspaceId);
+        const currentSet = getControlStoreSet(workspaceId);
+        if (!currentGet || !currentSet) {
+          return;
+        }
+        await startJsonRpcControlBootstrap(currentGet, currentSet, workspaceId);
+      });
+      jsonRpcBootstrapPromises.set(workspaceId, rerun);
+      return rerun;
+    }
+
+    return startJsonRpcControlBootstrap(get, set, workspaceId);
   }
 
   function applyJsonRpcControlEvent(get: StoreGet, set: StoreSet, workspaceId: string, evt: ServerEvent) {
@@ -1205,6 +1230,7 @@ export function createControlSocketHelpers(
     cleanup?.();
     jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
     jsonRpcBootstrapPromises.delete(workspaceId);
+    jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
     controlStoreGettersByWorkspace.delete(workspaceId);
     controlStoreSettersByWorkspace.delete(workspaceId);
   }
@@ -1243,6 +1269,7 @@ export function createControlSocketHelpers(
           cleanup?.();
           jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
           jsonRpcBootstrapPromises.delete(workspaceId);
+          jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
           controlStoreGettersByWorkspace.delete(workspaceId);
           controlStoreSettersByWorkspace.delete(workspaceId);
           return;
@@ -1252,6 +1279,7 @@ export function createControlSocketHelpers(
         }
         jsonRpcLifecycleCleanupByWorkspace.clear();
         jsonRpcBootstrapPromises.clear();
+        jsonRpcBootstrapQueuedByWorkspace.clear();
         controlStoreGettersByWorkspace.clear();
         controlStoreSettersByWorkspace.clear();
         controlSessionWaiters.clear();

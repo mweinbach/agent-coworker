@@ -377,6 +377,50 @@ describe("control socket helpers over JSON-RPC", () => {
     });
   });
 
+  test("re-runs control bootstrap after reconnect when the previous bootstrap is still in flight", async () => {
+    const workspaceId = "ws-bootstrap-reconnect";
+    const { get, set } = createState(workspaceId);
+    const firstProviderRefresh = Promise.withResolvers<any>();
+    let providerRefreshCalls = 0;
+
+    jsonRpcHandlers.set("thread/list", async () => ({ threads: [] }));
+    jsonRpcHandlers.set("cowork/session/state/read", async () => ({}));
+    jsonRpcHandlers.set("cowork/provider/catalog/read", async () => ({}));
+    jsonRpcHandlers.set("cowork/provider/authMethods/read", async () => ({}));
+    jsonRpcHandlers.set("cowork/provider/status/refresh", async () => {
+      providerRefreshCalls += 1;
+      if (providerRefreshCalls === 1) {
+        return await firstProviderRefresh.promise;
+      }
+      return {};
+    });
+    jsonRpcHandlers.set("cowork/mcp/servers/read", async () => ({}));
+    jsonRpcHandlers.set("cowork/memory/list", async () => ({}));
+    jsonRpcHandlers.set("cowork/skills/catalog/read", async () => ({}));
+    jsonRpcHandlers.set("cowork/skills/list", async () => ({}));
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+    await flushAsyncWork();
+
+    expect(providerRefreshCalls).toBe(1);
+
+    const socket = MockJsonRpcSocket.instances[0];
+    expect(socket).toBeDefined();
+    socket.connect();
+    await flushAsyncWork();
+
+    expect(providerRefreshCalls).toBe(1);
+    expect(helpers.__internal.getWorkspaceStateSnapshot(workspaceId).hasBootstrapPromise).toBe(true);
+
+    firstProviderRefresh.resolve({});
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushAsyncWork();
+
+    expect(providerRefreshCalls).toBe(2);
+    expect(jsonRpcRequests.filter((entry) => entry.method === "cowork/session/state/read")).toHaveLength(2);
+  });
+
   test("disposeWorkspaceControlState clears workspace-scoped lifecycle and bootstrap state", async () => {
     const workspaceId = "ws-dispose";
     const { state, get, set } = createState(workspaceId);

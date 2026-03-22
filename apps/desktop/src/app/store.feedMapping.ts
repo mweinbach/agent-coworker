@@ -501,7 +501,6 @@ export function reasoningInsertBeforeAssistantAfterStreamReplay(
 ): string | null {
   const turnId = stream.lastAssistantTurnId;
   if (!turnId) return null;
-  if (!stream.replay.rawBackedTurns.has(turnId)) return null;
 
   const assistantKey = stream.lastAssistantStreamKeyByTurn.get(turnId);
   if (!assistantKey) return null;

@@ -133,6 +133,7 @@ export class JsonRpcSocket {
   private reconnectAttempt = 0;
   private reconnectTimer: unknown = null;
   private intentionalClose = false;
+  private reconnectExhausted = false;
   private nextId = 0;
   private pendingRequests = new Map<string | number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private queuedOperations: QueuedOperation[] = [];
@@ -171,15 +172,18 @@ export class JsonRpcSocket {
   connect() {
     if (this.ws) return;
     this.intentionalClose = false;
+    this.reconnectExhausted = false;
     this.doConnect();
   }
 
   close() {
     this.intentionalClose = true;
+    this.reconnectExhausted = false;
     this.cancelReconnect();
     this.initialized = false;
-    this.queuedOperations = [];
-    this.rejectPendingRequests(new Error("socket closed"));
+    const closedError = new Error("socket closed");
+    this.rejectQueuedRequests(closedError);
+    this.rejectPendingRequests(closedError);
     try {
       this.ws?.close();
     } catch {
@@ -190,6 +194,9 @@ export class JsonRpcSocket {
 
   async request(method: string, params?: unknown, opts?: { retryable?: boolean }): Promise<unknown> {
     if (!this.initialized || !this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) {
+      if (this.reconnectExhausted) {
+        throw new Error("max reconnect attempts exceeded");
+      }
       if (opts?.retryable === true && this.autoReconnect && !this.intentionalClose) {
         return await this.enqueueOperation({
           kind: "request",
@@ -204,6 +211,9 @@ export class JsonRpcSocket {
 
   notify(method: string, params?: unknown, opts?: { retryable?: boolean }): boolean {
     if (!this.initialized || !this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) {
+      if (this.reconnectExhausted) {
+        return false;
+      }
       if (opts?.retryable === true && this.autoReconnect && !this.intentionalClose) {
         this.enqueueNotification({ kind: "notification", method, params });
         return true;
@@ -252,6 +262,7 @@ export class JsonRpcSocket {
 
   private doConnect() {
     this.initialized = false;
+    this.reconnectExhausted = false;
     this.ready = Promise.withResolvers<void>();
     void this.ready.promise.catch(() => {
       // prevent unhandled rejection noise for callers that never await readiness
@@ -263,8 +274,14 @@ export class JsonRpcSocket {
       this.reconnectAttempt = 0;
       void this.performHandshake().catch((error) => {
         const formatted = error instanceof Error ? error : new Error(String(error));
+        this.ready.reject(formatted);
         this.rejectPendingRequests(formatted);
         this.rejectQueuedRequests(formatted);
+        try {
+          this.ws?.close();
+        } catch {
+          // ignore
+        }
       });
     });
 
@@ -398,7 +415,10 @@ export class JsonRpcSocket {
 
   private scheduleReconnect() {
     if (this.reconnectAttempt >= this.maxReconnectAttempts) {
-      this.onClose?.("max reconnect attempts exceeded");
+      this.reconnectExhausted = true;
+      const exhaustedError = new Error("max reconnect attempts exceeded");
+      this.rejectQueuedRequests(exhaustedError);
+      this.onClose?.(exhaustedError.message);
       return;
     }
     const delay = Math.min(

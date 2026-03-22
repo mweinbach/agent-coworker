@@ -46,6 +46,56 @@ class FakeWebSocket {
   }
 }
 
+class ExhaustingReconnectWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+  static instances: ExhaustingReconnectWebSocket[] = [];
+
+  url: string;
+  protocols?: string | string[];
+  protocol = "";
+  readyState = ExhaustingReconnectWebSocket.CONNECTING;
+  sent: string[] = [];
+
+  onopen: null | (() => void) = null;
+  onerror: null | (() => void) = null;
+  onmessage: null | ((ev: { data: unknown }) => void | Promise<void>) = null;
+  onclose: null | (() => void) = null;
+
+  constructor(url: string, protocols?: string | string[]) {
+    this.url = url;
+    this.protocols = protocols;
+    this.protocol = typeof protocols === "string" ? protocols : protocols?.[0] ?? "";
+    ExhaustingReconnectWebSocket.instances.push(this);
+    const instanceNumber = ExhaustingReconnectWebSocket.instances.length;
+    queueMicrotask(() => {
+      if (instanceNumber === 1) {
+        this.readyState = ExhaustingReconnectWebSocket.OPEN;
+        this.onopen?.();
+        return;
+      }
+      this.readyState = ExhaustingReconnectWebSocket.CLOSED;
+      this.onclose?.();
+    });
+  }
+
+  send(data: string) {
+    this.sent.push(String(data));
+  }
+
+  close() {
+    this.readyState = ExhaustingReconnectWebSocket.CLOSED;
+    this.onclose?.();
+  }
+
+  async emitMessage(data: unknown) {
+    if (!this.onmessage) throw new Error("onmessage handler is not set");
+    await this.onmessage({ data });
+  }
+}
+
 async function flushMicrotasks() {
   await new Promise<void>((resolve) => queueMicrotask(resolve));
 }
@@ -235,5 +285,66 @@ describe("JsonRpcSocket runtime", () => {
       "JSON-RPC socket is not ready for request: thread/list",
     );
     expect(socket.notify("turn/interrupt", { threadId: "thr-1" })).toBe(false);
+  });
+
+  test("rejects queued retryable requests once reconnect attempts are exhausted", async () => {
+    ExhaustingReconnectWebSocket.instances = [];
+    const timers = createManualTimers();
+    const socket = new JsonRpcSocket({
+      url: "ws://example.test/socket",
+      clientInfo: { name: "desktop" },
+      WebSocketImpl: ExhaustingReconnectWebSocket as any,
+      autoReconnect: true,
+      maxReconnectAttempts: 1,
+      timers: timers.scheduler as any,
+    });
+
+    socket.connect();
+    await flushMicrotasks();
+
+    const ws1 = ExhaustingReconnectWebSocket.instances[0]!;
+    await ws1.emitMessage(JSON.stringify({ id: 1, result: { protocolVersion: "0.1" } }));
+    await flushMicrotasks();
+    ws1.close();
+
+    const queued = socket.request("thread/list", { cwd: "/workspace" }, { retryable: true });
+    timers.timeoutCallbacks[0]!();
+    await flushMicrotasks();
+
+    await expect(queued).rejects.toThrow("max reconnect attempts exceeded");
+    await expect(socket.request("thread/read", { threadId: "thr-1" }, { retryable: true })).rejects.toThrow(
+      "max reconnect attempts exceeded",
+    );
+  });
+
+  test("rejects readyPromise and closes the socket when initialize fails", async () => {
+    FakeWebSocket.instances = [];
+    const timers = createManualTimers();
+    const socket = new JsonRpcSocket({
+      url: "ws://example.test/socket",
+      clientInfo: { name: "desktop" },
+      WebSocketImpl: FakeWebSocket as any,
+      autoReconnect: true,
+      timers: timers.scheduler as any,
+    });
+
+    socket.connect();
+    const ready = socket.readyPromise;
+    const queued = socket.request("thread/list", { cwd: "/workspace" }, { retryable: true });
+    await flushMicrotasks();
+
+    const ws = FakeWebSocket.instances[0]!;
+    await ws.emitMessage(JSON.stringify({
+      id: 1,
+      error: {
+        code: -32000,
+        message: "initialize failed",
+      },
+    }));
+    await flushMicrotasks();
+
+    await expect(ready).rejects.toThrow("initialize failed");
+    await expect(queued).rejects.toThrow("initialize failed");
+    expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
   });
 });

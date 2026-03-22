@@ -30,6 +30,7 @@ import {
   clearPendingThreadSteers,
   clearWorkspaceJsonRpcSocketGeneration,
   clearWorkspaceStartState,
+  disposeWorkspaceJsonRpcState,
   ensureControlSocket,
   ensureServerRunning,
   ensureThreadRuntime,
@@ -131,6 +132,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       }
       RUNTIME.jsonRpcSockets.delete(workspaceId);
       clearWorkspaceJsonRpcSocketGeneration(workspaceId);
+      disposeWorkspaceJsonRpcState(workspaceId);
 
       try {
         await stopWorkspaceServer({ workspaceId });

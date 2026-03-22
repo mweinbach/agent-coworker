@@ -21,6 +21,7 @@ type WorkspaceLifecycleListener = {
 const workspaceRouters = new Map<string, Set<WorkspaceNotificationRouter>>();
 const workspaceLifecycleListeners = new Map<string, Set<WorkspaceLifecycleListener>>();
 const workspaceStoreSetters = new Map<string, StoreSet>();
+const disposedWorkspaceIds = new Set<string>();
 const noopSet: StoreSet = () => {};
 const DESKTOP_JSONRPC_OPEN_TIMEOUT_MS = 1_500;
 const DESKTOP_JSONRPC_HANDSHAKE_TIMEOUT_MS = 1_500;
@@ -45,8 +46,12 @@ function getWorkspaceById(get: StoreGet, workspaceId: string): WorkspaceRecord |
   return state.workspaces?.find((workspace) => workspace.id === workspaceId);
 }
 
+function isWorkspaceDisposed(workspaceId: string): boolean {
+  return disposedWorkspaceIds.has(workspaceId);
+}
+
 function rememberWorkspaceStoreSet(workspaceId: string, set: StoreSet | undefined) {
-  if (set) {
+  if (set && !isWorkspaceDisposed(workspaceId)) {
     workspaceStoreSetters.set(workspaceId, set);
   }
 }
@@ -61,6 +66,7 @@ function getWorkspaceUrl(get: StoreGet, workspaceId: string): string | null {
 }
 
 function emitToWorkspaceRouters(workspaceId: string, message: JsonRpcNotification) {
+  if (isWorkspaceDisposed(workspaceId)) return;
   const routers = workspaceRouters.get(workspaceId);
   if (!routers) return;
   for (const router of routers) {
@@ -69,6 +75,7 @@ function emitToWorkspaceRouters(workspaceId: string, message: JsonRpcNotificatio
 }
 
 function emitWorkspaceLifecycle(workspaceId: string, event: "open" | "close") {
+  if (isWorkspaceDisposed(workspaceId)) return;
   const listeners = workspaceLifecycleListeners.get(workspaceId);
   if (!listeners) return;
   for (const listener of listeners) {
@@ -101,6 +108,9 @@ function isActiveWorkspaceJsonRpcSocketGeneration(
 }
 
 export function registerWorkspaceJsonRpcRouter(workspaceId: string, router: WorkspaceNotificationRouter): () => void {
+  if (isWorkspaceDisposed(workspaceId)) {
+    return () => {};
+  }
   const routers = workspaceRouters.get(workspaceId) ?? new Set<WorkspaceNotificationRouter>();
   routers.add(router);
   workspaceRouters.set(workspaceId, routers);
@@ -115,6 +125,9 @@ export function registerWorkspaceJsonRpcRouter(workspaceId: string, router: Work
 }
 
 export function registerWorkspaceJsonRpcLifecycle(workspaceId: string, listener: WorkspaceLifecycleListener): () => void {
+  if (isWorkspaceDisposed(workspaceId)) {
+    return () => {};
+  }
   const listeners = workspaceLifecycleListeners.get(workspaceId) ?? new Set<WorkspaceLifecycleListener>();
   listeners.add(listener);
   workspaceLifecycleListeners.set(workspaceId, listeners);
@@ -128,11 +141,21 @@ export function registerWorkspaceJsonRpcLifecycle(workspaceId: string, listener:
   };
 }
 
+export function disposeWorkspaceJsonRpcSocketState(workspaceId: string): void {
+  disposedWorkspaceIds.add(workspaceId);
+  workspaceRouters.delete(workspaceId);
+  workspaceLifecycleListeners.delete(workspaceId);
+  workspaceStoreSetters.delete(workspaceId);
+}
+
 export function ensureWorkspaceJsonRpcSocket(
   get: StoreGet,
   set: StoreSet | undefined,
   workspaceId: string,
 ): any | null {
+  if (isWorkspaceDisposed(workspaceId)) {
+    return null;
+  }
   rememberWorkspaceStoreSet(workspaceId, set);
   const url = getWorkspaceUrl(get, workspaceId);
   if (!url) return null;
@@ -396,3 +419,25 @@ export function buildSyntheticSessionSettings(
     memoryRequireApproval: false,
   };
 }
+
+export const __internal = {
+  getWorkspaceStateSnapshot: (workspaceId: string) => ({
+    isDisposed: isWorkspaceDisposed(workspaceId),
+    hasStoreSetter: workspaceStoreSetters.has(workspaceId),
+    routerCount: workspaceRouters.get(workspaceId)?.size ?? 0,
+    lifecycleListenerCount: workspaceLifecycleListeners.get(workspaceId)?.size ?? 0,
+  }),
+  reset: (workspaceId?: string) => {
+    if (workspaceId) {
+      disposedWorkspaceIds.delete(workspaceId);
+      workspaceStoreSetters.delete(workspaceId);
+      workspaceRouters.delete(workspaceId);
+      workspaceLifecycleListeners.delete(workspaceId);
+      return;
+    }
+    disposedWorkspaceIds.clear();
+    workspaceStoreSetters.clear();
+    workspaceRouters.clear();
+    workspaceLifecycleListeners.clear();
+  },
+};

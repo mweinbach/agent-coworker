@@ -27,6 +27,7 @@ import {
   mapTranscriptToFeed,
 } from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
+import { disposeWorkspaceJsonRpcSocketState } from "./store.helpers/jsonRpcSocket";
 import { persist, persistNow, syncDesktopStateCache, syncDesktopStateCacheNow } from "./store.helpers/persistence";
 import {
   RUNTIME,
@@ -343,10 +344,12 @@ function pushNotification(notifications: Notification[], entry: Notification): N
 const { appendThreadTranscript } = createTranscriptBuffer({ nowIso });
 const {
   ensureControlSocket,
+  disposeWorkspaceControlState,
   waitForControlSession,
   requestWorkspaceSessions,
   requestSessionSnapshot,
   requestJsonRpcControlEvent,
+  __internal: __controlSocketInternal,
 } = createControlSocketHelpers({
   nowIso,
   makeId,
@@ -354,7 +357,13 @@ const {
   pushNotification,
   isProviderName,
 });
-const { ensureThreadSocket, sendThread, sendUserMessageToThread } = createThreadEventReducer({
+const {
+  disposeWorkspaceThreadEventState,
+  ensureThreadSocket,
+  sendThread,
+  sendUserMessageToThread,
+  __internal: __threadEventReducerInternal,
+} = createThreadEventReducer({
   nowIso,
   makeId,
   persist,
@@ -363,6 +372,12 @@ const { ensureThreadSocket, sendThread, sendUserMessageToThread } = createThread
   normalizeThreadTitleSource,
   shouldAdoptServerTitle,
 });
+
+function disposeWorkspaceJsonRpcState(workspaceId: string) {
+  disposeWorkspaceControlState(workspaceId);
+  disposeWorkspaceThreadEventState(workspaceId);
+  disposeWorkspaceJsonRpcSocketState(workspaceId);
+}
 
 async function ensureServerRunning(
   get: () => AppStoreState,
@@ -473,13 +488,16 @@ export {
   syncDesktopStateCache,
   syncDesktopStateCacheNow,
   ensureServerRunning,
+  disposeWorkspaceJsonRpcState,
   ensureControlSocket,
   waitForControlSession,
   requestWorkspaceSessions,
   requestSessionSnapshot,
   requestJsonRpcControlEvent,
+  __controlSocketInternal,
   ensureThreadSocket,
   sendThread,
+  __threadEventReducerInternal,
   appendThreadTranscript,
   pushNotification,
   sendUserMessageToThread,

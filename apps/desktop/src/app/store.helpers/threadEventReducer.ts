@@ -114,6 +114,11 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   const jsonRpcLifecycleCleanupByWorkspace = new Map<string, () => void>();
   const jsonRpcReconnectThreadsByWorkspace = new Map<string, Set<string>>();
   const jsonRpcThreadConnectPromises = new Map<string, Promise<void>>();
+  const disposedWorkspaces = new Set<string>();
+
+  function isWorkspaceDisposed(workspaceId: string): boolean {
+    return disposedWorkspaces.has(workspaceId);
+  }
 
   function hasPendingWorkspaceDefaultApply(threadId: string): boolean {
     return Boolean(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId));
@@ -145,6 +150,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   }
 
   function rememberThreadForReconnect(workspaceId: string, threadId: string) {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return;
+    }
     const threadIds = jsonRpcReconnectThreadsByWorkspace.get(workspaceId) ?? new Set<string>();
     threadIds.add(threadId);
     jsonRpcReconnectThreadsByWorkspace.set(workspaceId, threadIds);
@@ -167,10 +175,16 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   }
 
   function ensureWorkspaceJsonRpcRouter(get: StoreGet, set: StoreSet, workspaceId: string) {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return;
+    }
     if (jsonRpcRouterCleanupByWorkspace.has(workspaceId)) {
       return;
     }
     const cleanup = registerWorkspaceJsonRpcRouter(workspaceId, (message) => {
+      if (isWorkspaceDisposed(workspaceId)) {
+        return;
+      }
       if (message.kind === "request") {
         const threadId = findThreadIdForJsonRpcNotification(get, workspaceId, message.params?.threadId ?? message.params?.thread_id ?? null);
         if (!threadId) return;
@@ -361,6 +375,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   }
 
   function markWorkspaceThreadsDisconnected(get: StoreGet, set: StoreSet, workspaceId: string) {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return;
+    }
     const reconnectIds = new Set<string>([
       ...(jsonRpcReconnectThreadsByWorkspace.get(workspaceId) ?? []),
       ...connectedThreadIdsForWorkspace(get, workspaceId),
@@ -417,6 +434,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   }
 
   function reconnectWorkspaceThreads(get: StoreGet, set: StoreSet, workspaceId: string) {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return;
+    }
     const reconnectIds = [...(jsonRpcReconnectThreadsByWorkspace.get(workspaceId) ?? [])];
     if (reconnectIds.length === 0) {
       return;
@@ -433,6 +453,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   }
 
   function ensureWorkspaceJsonRpcLifecycle(get: StoreGet, set: StoreSet, workspaceId: string) {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return;
+    }
     if (jsonRpcLifecycleCleanupByWorkspace.has(workspaceId)) {
       return;
     }
@@ -1598,6 +1621,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     if (!workspaceId) {
       return;
     }
+    if (isWorkspaceDisposed(workspaceId)) {
+      return;
+    }
 
     const existingConnect = jsonRpcThreadConnectPromises.get(threadId);
     if (existingConnect) {
@@ -1624,11 +1650,17 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     const connectKeys = new Set([threadId]);
     let connectPromise!: Promise<void>;
     connectPromise = (async () => {
+      if (isWorkspaceDisposed(workspaceId)) {
+        return;
+      }
       let activeThreadId = threadId;
       try {
         const result = existingSessionId
           ? await resumeJsonRpcThread(get, set, workspaceId, existingSessionId)
           : await startJsonRpcThread(get, set, workspaceId);
+        if (isWorkspaceDisposed(workspaceId)) {
+          return;
+        }
         const thread = (result as any)?.thread;
         if (!thread) return;
 
@@ -1639,6 +1671,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         }
 
         rememberThreadForReconnect(workspaceId, activeThreadId);
+        if (isWorkspaceDisposed(workspaceId)) {
+          return;
+        }
         handleThreadEvent(
           get,
           set,
@@ -1664,10 +1699,16 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           { ...buildSyntheticSessionInfoFromJsonRpcThread(thread), sessionId: thread.id } as any,
         );
         const snapshot = await requestJsonRpcThreadRead(get, set, workspaceId, thread.id);
+        if (isWorkspaceDisposed(workspaceId)) {
+          return;
+        }
         if (snapshot) {
           applyJsonRpcThreadSnapshot(get, set, activeThreadId, snapshot);
         }
       } catch {
+        if (isWorkspaceDisposed(workspaceId)) {
+          return;
+        }
         forgetThreadForReconnect(workspaceId, activeThreadId);
         set((s) => {
           const runtime = s.threadRuntimeById[activeThreadId];
@@ -1703,9 +1744,65 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     jsonRpcThreadConnectPromises.set(threadId, connectPromise);
   }
 
+  function disposeWorkspaceThreadEventState(workspaceId: string) {
+    disposedWorkspaces.add(workspaceId);
+    const routerCleanup = jsonRpcRouterCleanupByWorkspace.get(workspaceId);
+    routerCleanup?.();
+    jsonRpcRouterCleanupByWorkspace.delete(workspaceId);
+    const lifecycleCleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
+    lifecycleCleanup?.();
+    jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
+    const reconnectIds = jsonRpcReconnectThreadsByWorkspace.get(workspaceId);
+    if (reconnectIds) {
+      for (const threadId of reconnectIds) {
+        jsonRpcThreadConnectPromises.delete(threadId);
+      }
+    }
+    jsonRpcReconnectThreadsByWorkspace.delete(workspaceId);
+  }
+
   return {
+    disposeWorkspaceThreadEventState,
     ensureThreadSocket,
     sendThread,
     sendUserMessageToThread,
+    __internal: {
+      getWorkspaceStateSnapshot: (workspaceId: string) => ({
+        isDisposed: isWorkspaceDisposed(workspaceId),
+        hasRouterCleanup: jsonRpcRouterCleanupByWorkspace.has(workspaceId),
+        hasLifecycleCleanup: jsonRpcLifecycleCleanupByWorkspace.has(workspaceId),
+        reconnectThreadIds: [...(jsonRpcReconnectThreadsByWorkspace.get(workspaceId) ?? [])],
+      }),
+      reset: (workspaceId?: string) => {
+        if (workspaceId) {
+          disposedWorkspaces.delete(workspaceId);
+          const routerCleanup = jsonRpcRouterCleanupByWorkspace.get(workspaceId);
+          routerCleanup?.();
+          jsonRpcRouterCleanupByWorkspace.delete(workspaceId);
+          const lifecycleCleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
+          lifecycleCleanup?.();
+          jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
+          const reconnectIds = jsonRpcReconnectThreadsByWorkspace.get(workspaceId);
+          if (reconnectIds) {
+            for (const threadId of reconnectIds) {
+              jsonRpcThreadConnectPromises.delete(threadId);
+            }
+          }
+          jsonRpcReconnectThreadsByWorkspace.delete(workspaceId);
+          return;
+        }
+        for (const cleanup of jsonRpcRouterCleanupByWorkspace.values()) {
+          cleanup();
+        }
+        for (const cleanup of jsonRpcLifecycleCleanupByWorkspace.values()) {
+          cleanup();
+        }
+        jsonRpcRouterCleanupByWorkspace.clear();
+        jsonRpcLifecycleCleanupByWorkspace.clear();
+        jsonRpcReconnectThreadsByWorkspace.clear();
+        jsonRpcThreadConnectPromises.clear();
+        disposedWorkspaces.clear();
+      },
+    },
   };
 }

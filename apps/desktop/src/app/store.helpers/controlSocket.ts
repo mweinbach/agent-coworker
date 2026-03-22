@@ -56,6 +56,11 @@ export function createControlSocketHelpers(
   const controlSessionWaiters = new Set<symbol>();
   const workspaceSessionWaiters = new Set<symbol>();
   const sessionSnapshotWaiters = new Set<symbol>();
+  const disposedWorkspaces = new Set<string>();
+
+  function isWorkspaceDisposed(workspaceId: string): boolean {
+    return disposedWorkspaces.has(workspaceId);
+  }
 
   function upsertWorkspaceThreads(
     allThreads: ThreadRecord[],
@@ -249,6 +254,9 @@ export function createControlSocketHelpers(
   }
 
   function clearWorkspaceControlRuntime(get: StoreGet, set: StoreSet, workspaceId: string) {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return;
+    }
     const installWaiter = RUNTIME.skillInstallWaiters.get(workspaceId);
     if (installWaiter) {
       RUNTIME.skillInstallWaiters.delete(workspaceId);
@@ -298,10 +306,16 @@ export function createControlSocketHelpers(
   }
 
   function rememberControlStoreSet(workspaceId: string, set: StoreSet) {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return;
+    }
     controlStoreSettersByWorkspace.set(workspaceId, set);
   }
 
   function rememberControlStoreGet(workspaceId: string, get: StoreGet) {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return;
+    }
     controlStoreGettersByWorkspace.set(workspaceId, get);
   }
 
@@ -314,6 +328,9 @@ export function createControlSocketHelpers(
   }
 
   function ensureJsonRpcControlLifecycle(get: StoreGet, set: StoreSet, workspaceId: string) {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return;
+    }
     rememberControlStoreGet(workspaceId, get);
     rememberControlStoreSet(workspaceId, set);
     if (jsonRpcLifecycleCleanupByWorkspace.has(workspaceId)) {
@@ -337,6 +354,9 @@ export function createControlSocketHelpers(
   }
 
   function ensureControlSocket(get: StoreGet, set: StoreSet, workspaceId: string) {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return null;
+    }
     rememberControlStoreGet(workspaceId, get);
     rememberControlStoreSet(workspaceId, set);
     ensureJsonRpcControlLifecycle(get, set, workspaceId);
@@ -344,7 +364,13 @@ export function createControlSocketHelpers(
   }
 
   async function waitForControlSession(get: StoreGet, set: StoreSet, workspaceId: string, timeoutMs = 3_000): Promise<boolean> {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return false;
+    }
     return await withPendingWaiterCount(controlSessionWaiters, async () => {
+      if (isWorkspaceDisposed(workspaceId)) {
+        return false;
+      }
       const socket = RUNTIME.jsonRpcSockets.get(workspaceId) ?? ensureControlSocket(get, set, workspaceId);
       if (!socket) {
         return false;
@@ -352,6 +378,9 @@ export function createControlSocketHelpers(
       const startedAt = Date.now();
       const ready = await waitForReady(socket, timeoutMs);
       if (!ready) {
+        return false;
+      }
+      if (isWorkspaceDisposed(workspaceId)) {
         return false;
       }
       const bootstrap = jsonRpcBootstrapPromises.get(workspaceId);
@@ -372,16 +401,28 @@ export function createControlSocketHelpers(
     set: StoreSet,
     workspaceId: string,
   ): Promise<Extract<ServerEvent, { type: "sessions" }>["sessions"] | null> {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return null;
+    }
     return await withPendingWaiterCount(workspaceSessionWaiters, async () => {
+      if (isWorkspaceDisposed(workspaceId)) {
+        return null;
+      }
       const socket = RUNTIME.jsonRpcSockets.get(workspaceId) ?? ensureControlSocket(get, set, workspaceId);
       if (!socket) {
         return null;
       }
       await waitForReady(socket);
+      if (isWorkspaceDisposed(workspaceId)) {
+        return null;
+      }
       let threads: any[] = [];
       try {
         threads = await requestJsonRpcThreadList(get, set, workspaceId);
       } catch {
+        return null;
+      }
+      if (isWorkspaceDisposed(workspaceId)) {
         return null;
       }
       const sessions = threads.map((thread) => {
@@ -444,7 +485,13 @@ export function createControlSocketHelpers(
     workspaceId: string,
     targetSessionId: string,
   ): Promise<SessionSnapshot | null> {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return null;
+    }
     return await withPendingWaiterCount(sessionSnapshotWaiters, async () => {
+      if (isWorkspaceDisposed(workspaceId)) {
+        return null;
+      }
       try {
         return await requestJsonRpcThreadRead(get, set, workspaceId, targetSessionId);
       } catch {
@@ -454,6 +501,9 @@ export function createControlSocketHelpers(
   }
 
   async function bootstrapJsonRpcControlState(get: StoreGet, set: StoreSet, workspaceId: string): Promise<void> {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return;
+    }
     const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
     const refreshGeneration = ++RUNTIME.providerStatusRefreshGeneration;
     set((s) => ({
@@ -484,6 +534,9 @@ export function createControlSocketHelpers(
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/catalog/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/list", { cwd }),
     ]);
+    if (isWorkspaceDisposed(workspaceId)) {
+      return;
+    }
     if (refreshGeneration === RUNTIME.providerStatusRefreshGeneration) {
       set(() => ({ providerStatusRefreshing: false }));
     }
@@ -506,6 +559,9 @@ export function createControlSocketHelpers(
   }
 
   function bootstrapJsonRpcControlStateOnce(get: StoreGet, set: StoreSet, workspaceId: string): Promise<void> {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return Promise.resolve();
+    }
     const existing = jsonRpcBootstrapPromises.get(workspaceId);
     if (existing) {
       return existing;
@@ -521,6 +577,9 @@ export function createControlSocketHelpers(
   }
 
   function applyJsonRpcControlEvent(get: StoreGet, set: StoreSet, workspaceId: string, evt: ServerEvent) {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return;
+    }
     if (evt.type === "config_updated") {
       set((s) => ({
         workspaceRuntimeById: {
@@ -1049,6 +1108,9 @@ export function createControlSocketHelpers(
     method: string,
     params: Record<string, unknown>,
   ): Promise<boolean> {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return false;
+    }
     try {
       const result = await requestJsonRpc(get, set, workspaceId, method, params);
       const events = Array.isArray((result as { events?: ServerEvent[] }).events)
@@ -1060,6 +1122,9 @@ export function createControlSocketHelpers(
         : event
           ? [event]
           : [];
+      if (isWorkspaceDisposed(workspaceId)) {
+        return false;
+      }
       if (normalizedEvents.length === 0) {
         return true;
       }
@@ -1076,18 +1141,70 @@ export function createControlSocketHelpers(
     }
   }
 
+  function disposeWorkspaceControlState(workspaceId: string) {
+    const currentGet = getControlStoreGet(workspaceId);
+    const currentSet = getControlStoreSet(workspaceId);
+    if (currentGet && currentSet) {
+      clearWorkspaceControlRuntime(currentGet, currentSet, workspaceId);
+    } else {
+      const installWaiter = RUNTIME.skillInstallWaiters.get(workspaceId);
+      if (installWaiter) {
+        RUNTIME.skillInstallWaiters.delete(workspaceId);
+        installWaiter.reject(new Error("Control connection closed"));
+      }
+    }
+    disposedWorkspaces.add(workspaceId);
+    const cleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
+    cleanup?.();
+    jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
+    jsonRpcBootstrapPromises.delete(workspaceId);
+    controlStoreGettersByWorkspace.delete(workspaceId);
+    controlStoreSettersByWorkspace.delete(workspaceId);
+  }
+
   return {
     ensureControlSocket,
+    disposeWorkspaceControlState,
     waitForControlSession,
     requestWorkspaceSessions,
     requestSessionSnapshot,
     requestJsonRpcControlEvent,
     __internal: {
+      getWorkspaceStateSnapshot: (workspaceId: string) => ({
+        isDisposed: isWorkspaceDisposed(workspaceId),
+        hasLifecycleCleanup: jsonRpcLifecycleCleanupByWorkspace.has(workspaceId),
+        hasBootstrapPromise: jsonRpcBootstrapPromises.has(workspaceId),
+        hasStoreGetter: controlStoreGettersByWorkspace.has(workspaceId),
+        hasStoreSetter: controlStoreSettersByWorkspace.has(workspaceId),
+      }),
       getPendingWaiterCounts: () => ({
         controlSessionWaiters: controlSessionWaiters.size,
         workspaceSessionWaiters: workspaceSessionWaiters.size,
         sessionSnapshotWaiters: sessionSnapshotWaiters.size,
       }),
+      reset: (workspaceId?: string) => {
+        if (workspaceId) {
+          disposedWorkspaces.delete(workspaceId);
+          const cleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
+          cleanup?.();
+          jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
+          jsonRpcBootstrapPromises.delete(workspaceId);
+          controlStoreGettersByWorkspace.delete(workspaceId);
+          controlStoreSettersByWorkspace.delete(workspaceId);
+          return;
+        }
+        for (const cleanup of jsonRpcLifecycleCleanupByWorkspace.values()) {
+          cleanup();
+        }
+        jsonRpcLifecycleCleanupByWorkspace.clear();
+        jsonRpcBootstrapPromises.clear();
+        controlStoreGettersByWorkspace.clear();
+        controlStoreSettersByWorkspace.clear();
+        controlSessionWaiters.clear();
+        workspaceSessionWaiters.clear();
+        sessionSnapshotWaiters.clear();
+        disposedWorkspaces.clear();
+      },
     },
   };
 }

@@ -37,13 +37,14 @@ import {
   persistNow,
   providerAuthMethodsFor,
   pushNotification,
-  queuePendingThreadMessage,
+  prependPendingThreadMessage,
   requestJsonRpcControlEvent,
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,
   truncateTitle,
   waitForControlSession,
+  shiftPendingThreadMessage,
 } from "../store.helpers";
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
 import { mergeWorkspaceProviderOptions, normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
@@ -270,27 +271,14 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       return false;
     }
 
-    const queued = RUNTIME.pendingThreadMessages.get(threadId);
-    const next = queued?.shift()?.trim();
+    const next = shiftPendingThreadMessage(threadId)?.trim();
     if (!next) {
-      if (queued && queued.length === 0) {
-        RUNTIME.pendingThreadMessages.delete(threadId);
-      }
       return false;
-    }
-
-    if (!queued || queued.length === 0) {
-      RUNTIME.pendingThreadMessages.delete(threadId);
-    } else {
-      RUNTIME.pendingThreadMessages.set(threadId, queued);
     }
 
     const ok = sendUserMessageToThread(get, set, threadId, next);
     if (!ok) {
-      RUNTIME.pendingThreadMessages.set(threadId, [
-        next,
-        ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
-      ]);
+      prependPendingThreadMessage(threadId, next);
     }
     return ok;
   };

@@ -393,10 +393,12 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
 
       set({ providerStatusRefreshing: true });
       const path = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", { cwd: path });
-      const okCatalog = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", { cwd: path });
-      const okMethods = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/authMethods/read", { cwd: path });
-      if (!(ok && okCatalog && okMethods)) {
+      const results = await Promise.allSettled([
+        requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", { cwd: path }),
+        requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", { cwd: path }),
+        requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/authMethods/read", { cwd: path }),
+      ]);
+      if (!results.every((result) => result.status === "fulfilled" && result.value)) {
         set((s) => ({
           providerStatusRefreshing: false,
           notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to refresh provider status." }),

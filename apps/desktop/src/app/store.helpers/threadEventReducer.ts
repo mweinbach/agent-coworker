@@ -33,6 +33,8 @@ import {
   getModelStreamRuntime,
   hasPendingThreadSteer,
   markPendingThreadSteerAccepted,
+  prependPendingThreadMessage,
+  queuePendingThreadMessage,
   rememberPendingThreadSteer,
   rekeyThreadRuntimeMaps,
   resetModelStreamRuntime,
@@ -626,10 +628,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
 
     if (rt.busy) {
       if (busyPolicy === "queue") {
-        RUNTIME.pendingThreadMessages.set(threadId, [
-          ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
-          trimmed,
-        ]);
+        queuePendingThreadMessage(threadId, trimmed);
         return true;
       }
 
@@ -719,10 +718,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     if (!next) return false;
     const ok = sendUserMessageToThread(get, set, threadId, next);
     if (!ok) {
-      RUNTIME.pendingThreadMessages.set(threadId, [
-        next,
-        ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
-      ]);
+      prependPendingThreadMessage(threadId, next);
     }
     return ok;
   }
@@ -899,17 +895,11 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       if (pendingFirstMessage && pendingFirstMessage.trim()) {
         if (resumedBusy) {
           if (!pendingFirstMessageQueued) {
-            RUNTIME.pendingThreadMessages.set(threadId, [
-              pendingFirstMessage.trim(),
-              ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
-            ]);
+            prependPendingThreadMessage(threadId, pendingFirstMessage);
           }
         } else if (hasPendingWorkspaceDefaultApply(threadId)) {
           if (!pendingFirstMessageQueued) {
-            RUNTIME.pendingThreadMessages.set(threadId, [
-              pendingFirstMessage.trim(),
-              ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
-            ]);
+            prependPendingThreadMessage(threadId, pendingFirstMessage);
           }
         } else {
           sentPendingFirstMessage = pendingFirstMessageQueued

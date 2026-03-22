@@ -1170,6 +1170,23 @@ describe("workspace settings sync", () => {
     });
   });
 
+  test("applyWorkspaceDefaultsToThread flushes the oldest queued message after defaults apply", async () => {
+    primeWorkspaceConnection();
+    const { threadId, sessionId } = seedConnectedThread();
+    RUNTIME.pendingThreadMessages.set(threadId, ["first queued", "second queued"]);
+    jsonRpcRequests.length = 0;
+
+    await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
+    await flushAsyncWork();
+
+    expect(requestsFor("turn/start")).toHaveLength(1);
+    expect(latestRequest("turn/start")?.params).toMatchObject({
+      threadId: sessionId,
+      input: [{ type: "text", text: "first queued" }],
+    });
+    expect(RUNTIME.pendingThreadMessages.get(threadId)).toEqual(["second queued"]);
+  });
+
   test("applyWorkspaceDefaultsToThread preserves a baseten workspace provider", async () => {
     primeWorkspaceConnection();
     useAppStore.setState((state) => ({

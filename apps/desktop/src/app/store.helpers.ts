@@ -46,6 +46,7 @@ import {
   markPendingThreadSteerAccepted,
   queuePendingThreadMessage,
   rememberPendingThreadSteer,
+  prependPendingThreadMessage,
   shiftPendingThreadMessage,
 } from "./store.helpers/runtimeState";
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
@@ -479,5 +480,6 @@ export {
   sendUserMessageToThread,
   queuePendingThreadMessage,
   rememberPendingThreadSteer,
+  prependPendingThreadMessage,
   shiftPendingThreadMessage,
 };

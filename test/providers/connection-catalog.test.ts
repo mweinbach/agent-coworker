@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +6,13 @@ import path from "node:path";
 import { getProviderCatalog, listProviderCatalogEntries } from "../../src/providers/connectionCatalog";
 import { getAiCoworkerPaths } from "../../src/connect";
 import { PROVIDER_NAMES } from "../../src/types";
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 describe("providers/connectionCatalog", () => {
   test("catalog entries stay aligned with provider names and default-model map", async () => {
@@ -19,7 +26,13 @@ describe("providers/connectionCatalog", () => {
 
     const entryIds = payload.all.map((entry) => entry.id);
     expect(entryIds).toEqual(PROVIDER_NAMES);
-    expect(payload.all).toEqual(await listProviderCatalogEntries());
+    const staticEntries = await listProviderCatalogEntries();
+    const payloadWithoutAws = payload.all.filter((entry) => entry.id !== "aws-bedrock-proxy");
+    const staticWithoutAws = staticEntries.filter((entry) => entry.id !== "aws-bedrock-proxy");
+    expect(payloadWithoutAws).toEqual(staticWithoutAws);
+    const awsEntry = payload.all.find((entry) => entry.id === "aws-bedrock-proxy");
+    expect(awsEntry?.state).toBe("unreachable");
+    expect(awsEntry?.message).toBe("Set the AWS Bedrock Proxy URL before saving a proxy token.");
     expect(Object.keys(payload.default)).toEqual(PROVIDER_NAMES);
     for (const entry of payload.all) {
       expect(payload.default[entry.id]).toBe(entry.defaultModel);
@@ -204,6 +217,258 @@ describe("providers/connectionCatalog", () => {
       ],
       defaultModel: "nvidia/nemotron-3-super-120b-a12b",
     });
+  });
+
+  test("uses discovered AWS Bedrock Proxy models and ignores wildcard placeholders", async () => {
+    const fetchImpl = mock(async () => jsonResponse({
+      object: "list",
+      data: [
+        { id: "*", object: "model" },
+        { id: "openai.gpt-oss-120b-1:0", object: "model" },
+        { id: "router", object: "model" },
+        { id: "router1", object: "model" },
+        { id: "us.anthropic.claude-sonnet-4-6", object: "model" },
+      ],
+    }));
+
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          "aws-bedrock-proxy": {
+            service: "aws-bedrock-proxy",
+            mode: "api_key",
+            apiKey: "proxy-token",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.example.com",
+        },
+      },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const entry = payload.all.find((provider) => provider.id === "aws-bedrock-proxy");
+    expect(entry?.models.map((model) => model.id)).toEqual([
+      "openai.gpt-oss-120b-1:0",
+      "router",
+      "router1",
+      "us.anthropic.claude-sonnet-4-6",
+    ]);
+    expect(entry?.defaultModel).toBe("openai.gpt-oss-120b-1:0");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  test("retains the active AWS Bedrock Proxy model when discovery omits it", async () => {
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          "aws-bedrock-proxy": {
+            service: "aws-bedrock-proxy",
+            mode: "api_key",
+            apiKey: "proxy-token",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.example.com",
+        },
+      },
+      activeProvider: "aws-bedrock-proxy",
+      activeModel: "router-shadow",
+      fetchImpl: (async () => jsonResponse({
+        object: "list",
+        data: [
+          { id: "router", object: "model" },
+          { id: "us.anthropic.claude-sonnet-4-6", object: "model" },
+        ],
+      })) as unknown as typeof fetch,
+    });
+
+    const entry = payload.all.find((provider) => provider.id === "aws-bedrock-proxy");
+    expect(entry?.models.map((model) => model.id)).toEqual([
+      "router-shadow",
+      "router",
+      "us.anthropic.claude-sonnet-4-6",
+    ]);
+    expect(entry?.defaultModel).toBe("router-shadow");
+  });
+
+  test("AWS Bedrock Proxy discovery honors workspace providerOptions baseUrl over global config", async () => {
+    const fetchImpl = mock(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("https://proxy.workspace.example.com/v1/models")) {
+        return jsonResponse({
+          object: "list",
+          data: [{ id: "workspace-router", object: "model" }],
+        });
+      }
+      if (url.startsWith("https://proxy.global.example.com/v1/models")) {
+        return jsonResponse({
+          object: "list",
+          data: [{ id: "global-router", object: "model" }],
+        });
+      }
+      return new Response("unexpected url", { status: 500 });
+    });
+
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          "aws-bedrock-proxy": {
+            service: "aws-bedrock-proxy",
+            mode: "api_key",
+            apiKey: "proxy-token",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+      config: {
+        provider: "aws-bedrock-proxy",
+        model: "workspace-router",
+        preferredChildModel: "workspace-router",
+        workingDirectory: "/tmp/workspace",
+        projectAgentDir: "/tmp/workspace/.agent",
+        userAgentDir: "/tmp/workspace/.agent-user",
+        builtInDir: "/tmp/built-in",
+        builtInConfigDir: "/tmp/built-in/config",
+        skillsDirs: [],
+        memoryDirs: [],
+        configDirs: [],
+        userName: "",
+        knowledgeCutoff: "Unknown",
+        awsBedrockProxyBaseUrl: "https://proxy.global.example.com/v1",
+        providerOptions: {
+          "aws-bedrock-proxy": {
+            baseUrl: "https://proxy.workspace.example.com/v1",
+          },
+        },
+      } as any,
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.workspace.example.com/v1",
+        },
+      },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const entry = payload.all.find((provider) => provider.id === "aws-bedrock-proxy");
+    expect(entry?.models.map((model) => model.id)).toEqual(["workspace-router"]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe("https://proxy.workspace.example.com/v1/models");
+  });
+
+  test("AWS Bedrock Proxy discovery falls back to global config baseUrl when no workspace override exists", async () => {
+    const fetchImpl = mock(async () => jsonResponse({
+      object: "list",
+      data: [{ id: "global-router", object: "model" }],
+    }));
+
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          "aws-bedrock-proxy": {
+            service: "aws-bedrock-proxy",
+            mode: "api_key",
+            apiKey: "proxy-token",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+      config: {
+        provider: "aws-bedrock-proxy",
+        model: "global-router",
+        preferredChildModel: "global-router",
+        workingDirectory: "/tmp/workspace",
+        projectAgentDir: "/tmp/workspace/.agent",
+        userAgentDir: "/tmp/workspace/.agent-user",
+        builtInDir: "/tmp/built-in",
+        builtInConfigDir: "/tmp/built-in/config",
+        skillsDirs: [],
+        memoryDirs: [],
+        configDirs: [],
+        userName: "",
+        knowledgeCutoff: "Unknown",
+        awsBedrockProxyBaseUrl: "https://proxy.global.example.com/v1/",
+      } as any,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const entry = payload.all.find((provider) => provider.id === "aws-bedrock-proxy");
+    expect(entry?.models.map((model) => model.id)).toEqual(["global-router"]);
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe("https://proxy.global.example.com/v1/models");
+  });
+
+  test("marks AWS Bedrock Proxy as unreachable when discovery fails", async () => {
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          "aws-bedrock-proxy": {
+            service: "aws-bedrock-proxy",
+            mode: "api_key",
+            apiKey: "proxy-token",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.example.com",
+        },
+      },
+      fetchImpl: (async () => new Response("temporary outage", { status: 503 })) as unknown as typeof fetch,
+    });
+
+    const entry = payload.all.find((provider) => provider.id === "aws-bedrock-proxy");
+    expect(entry?.models).toEqual([]);
+    expect(entry?.defaultModel).toBe("");
+    expect(entry?.state).toBe("unreachable");
+    expect(entry?.message).toBe("Proxy /models request failed (503): temporary outage");
+  });
+
+  test("retains active AWS Bedrock Proxy model when discovery fails", async () => {
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          "aws-bedrock-proxy": {
+            service: "aws-bedrock-proxy",
+            mode: "api_key",
+            apiKey: "proxy-token",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.example.com",
+        },
+      },
+      activeProvider: "aws-bedrock-proxy",
+      activeModel: "router-shadow",
+      fetchImpl: (async () => new Response("temporary outage", { status: 503 })) as unknown as typeof fetch,
+    });
+
+    const entry = payload.all.find((provider) => provider.id === "aws-bedrock-proxy");
+    expect(entry?.models.map((model) => model.id)).toEqual(["router-shadow"]);
+    expect(entry?.defaultModel).toBe("router-shadow");
+    expect(entry?.state).toBe("unreachable");
+    expect(entry?.message).toBe("Proxy /models request failed (503): temporary outage");
   });
 
   test("connected providers exclude oauth_pending entries", async () => {

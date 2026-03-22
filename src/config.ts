@@ -21,6 +21,7 @@ import { defaultSupportedModel, getSupportedModel } from "./models/registry";
 import { normalizeChildRoutingConfig } from "./models/childModelRouting";
 import {
   getResolvedModelMetadataSync,
+  isDynamicModelProvider,
   normalizeModelIdForProvider,
   resolveDefaultModelMetadata,
   resolveModelMetadata,
@@ -117,9 +118,9 @@ async function resolveConfiguredModelMetadata(
   providerOptions: Record<string, unknown> | undefined,
   env: Record<string, string | undefined>,
 ) {
-  if (provider === "lmstudio") {
+  if (isDynamicModelProvider(provider)) {
     return await resolveModelMetadata(provider, modelId, {
-      allowPlaceholder: true,
+      allowPlaceholder: provider === "lmstudio",
       providerOptions,
       env,
       source,
@@ -336,10 +337,26 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const runtime = normalizeRuntimeNameForProvider(provider, rawRuntime);
 
   const workingDirectory = env.AGENT_WORKING_DIR || cwd;
+  const awsBedrockProxyBaseUrl =
+    asNonEmptyString(env.AWS_BEDROCK_PROXY_BASE_URL) ||
+    asNonEmptyString(env.OPENAI_PROXY_BASE_URL) ||
+    asNonEmptyString(projectConfig.awsBedrockProxyBaseUrl) ||
+    asNonEmptyString(projectConfig.openaiProxyBaseUrl) ||
+    asNonEmptyString(userConfig.awsBedrockProxyBaseUrl) ||
+    asNonEmptyString(userConfig.openaiProxyBaseUrl) ||
+    asNonEmptyString(builtInDefaults.awsBedrockProxyBaseUrl) ||
+    asNonEmptyString(builtInDefaults.openaiProxyBaseUrl);
 
   const providerOptions = isPlainObject((merged as Record<string, unknown>).providerOptions)
     ? (deepMerge({}, (merged as Record<string, unknown>).providerOptions as Record<string, unknown>) as Record<string, unknown>)
     : undefined;
+  if (providerOptions) {
+    const legacyAwsOptions = providerOptions["openai-proxy"];
+    if (legacyAwsOptions !== undefined && providerOptions["aws-bedrock-proxy"] === undefined) {
+      providerOptions["aws-bedrock-proxy"] = legacyAwsOptions;
+    }
+    delete providerOptions["openai-proxy"];
+  }
 
   const configuredModel =
     asNonEmptyString(env.AGENT_MODEL) ||
@@ -572,6 +589,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     observability,
     harness,
     command,
+    ...(awsBedrockProxyBaseUrl ? { awsBedrockProxyBaseUrl, openaiProxyBaseUrl: awsBedrockProxyBaseUrl } : {}),
     ...(normalizedProviderOptions ? { providerOptions: normalizedProviderOptions } : {}),
     ...(normalizedModelSettings ? { modelSettings: normalizedModelSettings } : {}),
   };

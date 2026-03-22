@@ -42,6 +42,10 @@ const STATIC_PROVIDER_MODEL_CATALOG = {
     defaultModel: defaultModelIdForProvider("codex-cli"),
     availableModels: listSupportedModelIds("codex-cli"),
   },
+  "aws-bedrock-proxy": {
+    defaultModel: defaultModelIdForProvider("aws-bedrock-proxy"),
+    availableModels: listSupportedModelIds("aws-bedrock-proxy"),
+  },
   google: {
     defaultModel: defaultModelIdForProvider("google"),
     availableModels: listSupportedModelIds("google"),
@@ -81,6 +85,7 @@ export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
   "opencode-go": PROVIDER_MODEL_CATALOG["opencode-go"].availableModels,
   "opencode-zen": PROVIDER_MODEL_CATALOG["opencode-zen"].availableModels,
   "codex-cli": PROVIDER_MODEL_CATALOG["codex-cli"].availableModels,
+  "aws-bedrock-proxy": PROVIDER_MODEL_CATALOG["aws-bedrock-proxy"].availableModels,
   google: PROVIDER_MODEL_CATALOG.google.availableModels,
   openai: PROVIDER_MODEL_CATALOG.openai.availableModels,
 };

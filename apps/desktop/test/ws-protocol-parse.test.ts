@@ -88,12 +88,46 @@ describe("desktop ws protocol parser", () => {
         code: "internal_error",
         source: "session",
       },
+      {
+        type: "user_config",
+        sessionId: "desktop-s1",
+        config: {
+          awsBedrockProxyBaseUrl: "https://proxy.example.com/v1",
+        },
+      },
+      {
+        type: "user_config_result",
+        sessionId: "desktop-s1",
+        ok: true,
+        message: "Saved globally",
+        config: {
+          awsBedrockProxyBaseUrl: "https://proxy.example.com/v1",
+        },
+      },
     ];
 
     for (const fixture of fixtures) {
       const parsed = safeParseServerEvent(JSON.stringify(fixture));
       expect(parsed?.type).toBe(fixture.type);
       expect(parsed?.sessionId).toBe("desktop-s1");
+    }
+  });
+
+  test("safeParseServerEvent normalizes legacy openaiProxyBaseUrl payloads", () => {
+    const parsed = safeParseServerEvent(
+      JSON.stringify({
+        type: "user_config",
+        sessionId: "desktop-s1",
+        config: {
+          openaiProxyBaseUrl: "https://legacy.proxy.example.com/v1/",
+        },
+      }),
+    );
+
+    expect(parsed?.type).toBe("user_config");
+    if (parsed?.type === "user_config") {
+      expect(parsed.config.awsBedrockProxyBaseUrl).toBe("https://legacy.proxy.example.com/v1/");
+      expect((parsed.config as any).openaiProxyBaseUrl).toBeUndefined();
     }
   });
 

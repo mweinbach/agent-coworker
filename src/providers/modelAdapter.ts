@@ -12,6 +12,11 @@ import {
   refreshCodexAuthMaterialCoalesced,
 } from "./codex-auth";
 import { resolveAuthHomeDir } from "../utils/authHome";
+import {
+  awsBedrockProxyForcedHeaders,
+  resolveAwsBedrockProxyApiKey,
+  resolveAwsBedrockProxyBaseUrl,
+} from "./awsBedrockProxyShared";
 
 type HeaderMap = Record<string, string>;
 type HeaderResolver = () => Promise<HeaderMap>;
@@ -123,6 +128,31 @@ export function createNvidiaModelAdapter(modelId: string, savedKey?: string): Pr
     }
     return headers;
   });
+}
+
+export function createAwsBedrockProxyModelAdapter(
+  config: AgentConfig,
+  modelId: string,
+  savedKey?: string,
+): ProviderModelAdapter {
+  const baseUrl = resolveAwsBedrockProxyBaseUrl({
+    config,
+    providerOptions: config.providerOptions,
+    env: process.env,
+  });
+  return createModelAdapter(modelId, "aws-bedrock-proxy.completions", async () => {
+    const key = resolveAwsBedrockProxyApiKey({
+      savedKey,
+      env: process.env,
+    });
+    const headers: HeaderMap = {
+      ...awsBedrockProxyForcedHeaders(),
+    };
+    if (key) {
+      headers.authorization = `Bearer ${key}`;
+    }
+    return headers;
+  }, baseUrl);
 }
 
 function createOpenCodeModelAdapter(

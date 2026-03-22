@@ -1,5 +1,5 @@
 import { getAiCoworkerPaths, readConnectionStore, type AiCoworkerPaths } from "../connect";
-import { PROVIDER_NAMES, type ProviderName } from "../types";
+import { PROVIDER_NAMES, type AgentConfig, type ProviderName } from "../types";
 import { defaultSupportedModel, listSupportedModels, type SupportedModel } from "../models/registry";
 import { readCodexAuthMaterial } from "./codex-auth";
 import {
@@ -11,6 +11,11 @@ import {
 import { isLmStudioError, listLmStudioModels, resolveLmStudioProviderOptions } from "./lmstudio/client";
 import { getOpenCodeDisplayName } from "./opencodeShared";
 import { resolveAuthHomeDir } from "../utils/authHome";
+import {
+  discoverAwsBedrockProxyModelsDetailed,
+  formatAwsBedrockProxyDiscoveryFailure,
+  resolveAwsBedrockProxyBaseUrl,
+} from "./awsBedrockProxyShared";
 
 function storedProviderApiKey(store: Awaited<ReturnType<typeof readConnectionStore>>, provider: ProviderName): string | undefined {
   const entry = store.services[provider];
@@ -41,6 +46,7 @@ export type ProviderCatalogPayload = {
 const PROVIDER_LABELS: Record<ProviderName, string> = {
   google: "Google",
   openai: "OpenAI",
+  "aws-bedrock-proxy": "AWS Bedrock Proxy",
   anthropic: "Anthropic",
   baseten: "Baseten",
   together: "Together AI",
@@ -147,9 +153,13 @@ export async function getProviderCatalog(opts: {
   paths?: AiCoworkerPaths;
   readStore?: typeof readConnectionStore;
   readCodexAuthMaterialImpl?: typeof readCodexAuthMaterial;
+  config?: AgentConfig;
   providerOptions?: unknown;
   env?: NodeJS.ProcessEnv;
   lmstudioFetchImpl?: typeof fetch;
+  activeProvider?: ProviderName;
+  activeModel?: string;
+  fetchImpl?: typeof fetch;
 } = {}): Promise<ProviderCatalogPayload> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const readStore = opts.readStore ?? readConnectionStore;
@@ -165,6 +175,47 @@ export async function getProviderCatalog(opts: {
     if (provider === "lmstudio") return lmstudio.entry;
     return staticCatalogEntry(provider);
   });
+
+  const awsBedrockProxyIndex = all.findIndex((entry) => entry.id === "aws-bedrock-proxy");
+  if (awsBedrockProxyIndex >= 0) {
+    const proxyEntry = all[awsBedrockProxyIndex];
+    const savedKey = store.services["aws-bedrock-proxy"]?.mode === "api_key"
+      ? store.services["aws-bedrock-proxy"].apiKey
+      : undefined;
+    const baseUrl = resolveAwsBedrockProxyBaseUrl({
+      config: opts.config,
+      providerOptions: opts.providerOptions ?? opts.config?.providerOptions,
+      env: opts.env,
+    });
+    const discovery = await discoverAwsBedrockProxyModelsDetailed({
+      baseUrl,
+      apiKey: savedKey,
+      fetchImpl: opts.fetchImpl,
+    });
+    const discoveredModels = discovery.ok ? discovery.models : [];
+    const activeProvider = opts.activeProvider ?? opts.config?.provider;
+    const activeModel = opts.activeModel ?? opts.config?.model;
+    const activeProxyModel = activeProvider === "aws-bedrock-proxy" ? activeModel?.trim() : undefined;
+    const hasActiveModel = Boolean(activeProxyModel && discoveredModels.some((model) => model.id === activeProxyModel));
+    const models = activeProxyModel && !hasActiveModel
+      ? [
+          {
+            id: activeProxyModel,
+            displayName: activeProxyModel,
+            knowledgeCutoff: "Unknown",
+            supportsImageInput: false,
+          },
+          ...discoveredModels,
+        ]
+      : discoveredModels;
+    all[awsBedrockProxyIndex] = {
+      ...proxyEntry,
+      models,
+      defaultModel: models[0]?.id ?? (discovery.ok ? proxyEntry.defaultModel : ""),
+      ...(discovery.ok ? {} : { state: "unreachable" as const, message: formatAwsBedrockProxyDiscoveryFailure(discovery) }),
+    };
+  }
+
   const defaults: Record<string, string> = {};
   for (const entry of all) defaults[entry.id] = entry.defaultModel;
   const hasCodexOauth = Boolean((await readCodexAuthMaterialImpl(paths))?.accessToken);

@@ -38,7 +38,9 @@ export type ReplCommandContext = {
   resumeSession: (targetSessionId: string) => Promise<void>;
 };
 
-function currentOpenAiCompatibleProvider(ctx: ReplCommandContext): "openai" | "codex-cli" | null {
+function currentOpenAiCompatibleProvider(
+  ctx: ReplCommandContext,
+): "openai" | "codex-cli" | "aws-bedrock-proxy" | null {
   const provider = ctx.getSelectedProvider() ?? ctx.getConfig()?.provider;
   return isOpenAiCompatibleProviderName(provider) ? provider : null;
 }
@@ -141,7 +143,9 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   if (cmd === "verbosity") {
     const provider = currentOpenAiCompatibleProvider(ctx);
     if (!provider) {
-      console.log("current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first");
+      console.log(
+        "current provider must be openai, codex-cli, or aws-bedrock-proxy; use /provider <name> first",
+      );
       ctx.activateNextPrompt();
       return true;
     }
@@ -179,7 +183,9 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   if (cmd === "reasoning-effort" || cmd === "effort") {
     const provider = currentOpenAiCompatibleProvider(ctx);
     if (!provider) {
-      console.log("current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first");
+      console.log(
+        "current provider must be openai, codex-cli, or aws-bedrock-proxy; use /provider <name> first",
+      );
       ctx.activateNextPrompt();
       return true;
     }
@@ -217,7 +223,9 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   if (cmd === "reasoning-summary") {
     const provider = currentOpenAiCompatibleProvider(ctx);
     if (!provider) {
-      console.log("current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first");
+      console.log(
+        "current provider must be openai, codex-cli, or aws-bedrock-proxy; use /provider <name> first",
+      );
       ctx.activateNextPrompt();
       return true;
     }

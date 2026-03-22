@@ -87,6 +87,18 @@ export type SessionConfigState = {
   };
 };
 
+export type UserConfigPatch = {
+  awsBedrockProxyBaseUrl?: string | null;
+  /** @deprecated Legacy alias accepted for backward compatibility. */
+  openaiProxyBaseUrl?: string | null;
+};
+
+export type UserConfigState = {
+  awsBedrockProxyBaseUrl?: string;
+  /** @deprecated Legacy alias accepted for backward compatibility. */
+  openaiProxyBaseUrl?: string;
+};
+
 export type ClientMessage =
   | { type: "client_hello"; client: "tui" | "cli" | string; version?: string }
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
@@ -111,6 +123,8 @@ export type ClientMessage =
   | { type: "refresh_provider_status"; sessionId: string }
   | { type: "provider_catalog_get"; sessionId: string }
   | { type: "provider_auth_methods_get"; sessionId: string }
+  | { type: "user_config_get"; sessionId: string }
+  | { type: "user_config_set"; sessionId: string; config: UserConfigPatch }
   | { type: "provider_auth_authorize"; sessionId: string; provider: AgentConfig["provider"]; methodId: string }
   | { type: "provider_auth_logout"; sessionId: string; provider: AgentConfig["provider"] }
   | {
@@ -330,6 +344,8 @@ export type ServerEvent =
   }
   | { type: "provider_catalog"; sessionId: string; all: ProviderCatalogEntry[]; default: Record<string, string>; connected: string[] }
   | { type: "provider_auth_methods"; sessionId: string; methods: Record<string, ProviderAuthMethod[]> }
+  | { type: "user_config"; sessionId: string; config: UserConfigState }
+  | { type: "user_config_result"; sessionId: string; ok: boolean; message: string; config?: UserConfigState }
   | {
     type: "provider_auth_challenge";
     sessionId: string;
@@ -531,7 +547,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.28";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.29";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -544,6 +560,8 @@ export const CLIENT_MESSAGE_TYPES = [
   "refresh_provider_status",
   "provider_catalog_get",
   "provider_auth_methods_get",
+  "user_config_get",
+  "user_config_set",
   "provider_auth_authorize",
   "provider_auth_logout",
   "provider_auth_callback",
@@ -622,6 +640,8 @@ export const SERVER_EVENT_TYPES = [
   "mcp_server_auth_result",
   "provider_catalog",
   "provider_auth_methods",
+  "user_config",
+  "user_config_result",
   "provider_auth_challenge",
   "provider_auth_result",
   "provider_status",

@@ -60,6 +60,10 @@ export function dispatchClientMessage({
       return void session.emitProviderCatalog();
     case "provider_auth_methods_get":
       return session.emitProviderAuthMethods();
+    case "user_config_get":
+      return void session.emitUserConfig();
+    case "user_config_set":
+      return void session.setUserConfig(message.config);
     case "provider_auth_authorize":
       return void session.authorizeProviderAuth(message.provider, message.methodId);
     case "provider_auth_logout":

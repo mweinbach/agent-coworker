@@ -43,21 +43,39 @@ import {
   sendUserMessageToThread,
   normalizeThreadTitleSource,
   truncateTitle,
+  waitForControlSession,
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
-export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "connectProvider" | "setProviderApiKey" | "copyProviderApiKey" | "authorizeProviderAuth" | "logoutProviderAuth" | "callbackProviderAuth" | "requestProviderCatalog" | "requestProviderAuthMethods" | "refreshProviderStatus" | "setLmStudioEnabled" | "setLmStudioModelVisible"> {
+export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "connectProvider" | "setProviderApiKey" | "copyProviderApiKey" | "authorizeProviderAuth" | "logoutProviderAuth" | "callbackProviderAuth" | "requestProviderCatalog" | "requestProviderAuthMethods" | "refreshProviderStatus" | "requestUserConfig" | "setGlobalOpenAiProxyBaseUrl" | "setLmStudioEnabled" | "setLmStudioModelVisible"> {
   const resolveProviderWorkspaceId = (): string | null =>
     get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
 
-  const ensureProviderControlReady = async (): Promise<string | null> => {
+  const notifyProviderControlUnavailable = (detail: string) => {
+    set((s) => ({
+      notifications: pushNotification(s.notifications, {
+        id: makeId(),
+        ts: nowIso(),
+        kind: "error",
+        title: "Not connected",
+        detail,
+      }),
+    }));
+  };
+
+  const ensureProviderControlReady = async (opts?: { notifyDetail?: string }): Promise<string | null> => {
     const workspaceId = resolveProviderWorkspaceId();
-    if (!workspaceId) return null;
+    if (!workspaceId) {
+      if (opts?.notifyDetail) notifyProviderControlUnavailable(opts.notifyDetail);
+      return null;
+    }
 
     await ensureServerRunning(get, set, workspaceId);
     const socket = ensureControlSocket(get, set, workspaceId);
+    const ready = await waitForControlSession(get, workspaceId);
     const sessionId = get().workspaceRuntimeById[workspaceId]?.controlSessionId;
-    if (!socket || !sessionId) {
+    if (!socket || !ready || !sessionId) {
+      if (opts?.notifyDetail) notifyProviderControlUnavailable(opts.notifyDetail);
       return null;
     }
 
@@ -387,10 +405,30 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
         }));
       }
     },
-  
 
-    refreshProviderStatus: async () => {
+    requestUserConfig: async () => {
       const workspaceId = await ensureProviderControlReady();
+      if (!workspaceId) return;
+
+      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "user_config_get", sessionId }));
+      if (!ok) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to request global user config.",
+          }),
+        }));
+      }
+    },
+
+  
+    refreshProviderStatus: async () => {
+      const workspaceId = await ensureProviderControlReady({
+        notifyDetail: "Unable to refresh provider status.",
+      });
       if (!workspaceId) return;
 
       set({ providerStatusRefreshing: true });
@@ -405,7 +443,9 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
         sock.send({ type: "refresh_provider_status", sessionId: sid });
         sock.send({ type: "provider_catalog_get", sessionId: sid });
         sock.send({ type: "provider_auth_methods_get", sessionId: sid });
-      } catch {
+        sock.send({ type: "user_config_get", sessionId: sid });
+      } catch (error) {
+        console.error("Failed to refresh provider status", error);
         set((s) => ({
           providerStatusRefreshing: false,
           notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to refresh provider status." }),
@@ -413,7 +453,59 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
       }
     },
 
+    setGlobalOpenAiProxyBaseUrl: async (baseUrl) => {
+      const workspaceId = await ensureProviderControlReady({
+        notifyDetail: "Unable to update global user config.",
+      });
+      if (!workspaceId) {
+        set(() => ({
+          pendingUserConfigSave: false,
+          userConfigLastResult: {
+            type: "user_config_result",
+            sessionId: "",
+            ok: false,
+            message: "Unable to update global user config.",
+          },
+        }));
+        return;
+      }
+
+      const normalizedBaseUrl = typeof baseUrl === "string" ? baseUrl.trim() : "";
+      set(() => ({
+        pendingUserConfigSave: true,
+        userConfigLastResult: null,
+      }));
+
+      const ok = sendControl(get, workspaceId, (sessionId) => ({
+        type: "user_config_set",
+        sessionId,
+        config: {
+          awsBedrockProxyBaseUrl: normalizedBaseUrl ? normalizedBaseUrl : null,
+        },
+      }));
+      if (!ok) {
+        const sessionId = get().workspaceRuntimeById[workspaceId]?.controlSessionId ?? "";
+        set((s) => ({
+          pendingUserConfigSave: false,
+          userConfigLastResult: {
+            type: "user_config_result",
+            sessionId,
+            ok: false,
+            message: "Unable to update global user config.",
+          },
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to update global user config.",
+          }),
+        }));
+      }
+    },
+
     setLmStudioEnabled: async (enabled) => {
+      const previousEnabled = get().providerUiState.lmstudio.enabled;
       set((s) => ({
         providerUiState: {
           ...s.providerUiState,
@@ -423,7 +515,28 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
           },
         },
       }));
-      await persistNow(get);
+      try {
+        await persistNow(get);
+      } catch (error) {
+        console.error("Failed to persist LM Studio enabled state", error);
+        set((s) => ({
+          providerUiState: {
+            ...s.providerUiState,
+            lmstudio: {
+              ...s.providerUiState.lmstudio,
+              enabled: previousEnabled,
+            },
+          },
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Save failed",
+            detail: "Unable to save LM Studio settings.",
+          }),
+        }));
+        return;
+      }
       if (enabled) {
         await get().refreshProviderStatus();
       }
@@ -432,6 +545,7 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
     setLmStudioModelVisible: async (modelId, visible) => {
       const normalizedModelId = modelId.trim();
       if (!normalizedModelId) return;
+      const previousHiddenModels = get().providerUiState.lmstudio.hiddenModels;
       set((s) => {
         const hiddenModels = new Set(s.providerUiState.lmstudio.hiddenModels);
         if (visible) {
@@ -449,7 +563,27 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
           },
         };
       });
-      await persistNow(get);
+      try {
+        await persistNow(get);
+      } catch (error) {
+        console.error("Failed to persist LM Studio model visibility", error);
+        set((s) => ({
+          providerUiState: {
+            ...s.providerUiState,
+            lmstudio: {
+              ...s.providerUiState.lmstudio,
+              hiddenModels: previousHiddenModels,
+            },
+          },
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Save failed",
+            detail: "Unable to save LM Studio model visibility.",
+          }),
+        }));
+      }
     },
   
   };

@@ -18,6 +18,7 @@ import {
 import { ensureDefaultGlobalSkillsReady } from "../skills/defaultGlobalSkills";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 import { getProviderCatalog } from "../providers/connectionCatalog";
+import { resolveAwsBedrockProxyBaseUrl } from "../providers/awsBedrockProxyShared";
 import { resolveAuthHomeDir } from "../utils/authHome";
 
 import { AgentControl } from "./agents/AgentControl";
@@ -32,7 +33,13 @@ import {
 import { decodeClientMessage } from "./startServer/decodeClientMessage";
 import { dispatchClientMessage } from "./startServer/dispatchClientMessage";
 import { type SessionBinding, type StartServerSocketData } from "./startServer/types";
-import type { SeededSessionContext, SessionDependencies, SessionInfoState } from "./session/SessionContext";
+import type {
+  PersistedUserConfigPatch,
+  PersistedUserConfigState,
+  SeededSessionContext,
+  SessionDependencies,
+  SessionInfoState,
+} from "./session/SessionContext";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const errorWithCodeSchema = z.object({
@@ -131,11 +138,23 @@ async function persistProjectConfigPatch(
         //   sectionPatch    — the incoming patch from this set_config call
         // Launch-time options are intentionally overridable by persisted config and new patches so
         // that user changes made via the UI/CLI survive server restarts.
-        currentProviderOptions[provider] = {
+        const merged: Record<string, unknown> = {
           ...runtimeSection,
           ...currentSection,
           ...sectionPatch,
         };
+
+        // Deep-merge promptCaching so that patching { enabled: false } doesn't drop ttl
+        const patchAsRecord = sectionPatch as Record<string, unknown>;
+        if (isPlainObject(patchAsRecord.promptCaching)) {
+          const basePromptCaching = {
+            ...(isPlainObject(runtimeSection.promptCaching) ? runtimeSection.promptCaching : {}),
+            ...(isPlainObject(currentSection.promptCaching) ? currentSection.promptCaching : {}),
+          };
+          merged.promptCaching = { ...basePromptCaching, ...patchAsRecord.promptCaching };
+        }
+
+        currentProviderOptions[provider] = merged;
       }
       next[key] = Object.keys(currentProviderOptions).length > 0 ? currentProviderOptions : undefined;
       continue;
@@ -156,6 +175,51 @@ async function persistProjectConfigPatch(
   await fs.mkdir(projectAgentDir, { recursive: true });
   const payload = `${JSON.stringify(next, null, 2)}\n`;
   await writeTextFileAtomic(configPath, payload);
+}
+
+async function readUserConfigState(userAgentDir: string): Promise<PersistedUserConfigState> {
+  const configPath = path.join(userAgentDir, "config.json");
+  const current = await loadJsonObjectSafe(configPath);
+  const normalizedBaseUrl = resolveAwsBedrockProxyBaseUrl({
+    baseUrl: typeof current.awsBedrockProxyBaseUrl === "string"
+      ? current.awsBedrockProxyBaseUrl
+      : typeof current.openaiProxyBaseUrl === "string"
+        ? current.openaiProxyBaseUrl
+        : undefined,
+    env: {},
+  });
+  return normalizedBaseUrl ? { awsBedrockProxyBaseUrl: normalizedBaseUrl } : {};
+}
+
+async function persistUserConfigPatch(
+  userAgentDir: string,
+  patch: PersistedUserConfigPatch,
+): Promise<PersistedUserConfigState> {
+  const rawBaseUrlPatch =
+    patch.awsBedrockProxyBaseUrl !== undefined ? patch.awsBedrockProxyBaseUrl : patch.openaiProxyBaseUrl;
+  if (rawBaseUrlPatch === undefined) {
+    return await readUserConfigState(userAgentDir);
+  }
+
+  const configPath = path.join(userAgentDir, "config.json");
+  const current = await loadJsonObjectSafe(configPath);
+  const next: Record<string, unknown> = { ...current };
+  if (rawBaseUrlPatch === null || (typeof rawBaseUrlPatch === "string" && rawBaseUrlPatch.trim().length === 0)) {
+    delete next.awsBedrockProxyBaseUrl;
+    delete next.openaiProxyBaseUrl;
+  } else if (typeof rawBaseUrlPatch === "string") {
+    const normalized = resolveAwsBedrockProxyBaseUrl({ baseUrl: rawBaseUrlPatch, env: {} });
+    if (!normalized) {
+      throw new Error("awsBedrockProxyBaseUrl must be a valid http(s) URL.");
+    }
+    next.awsBedrockProxyBaseUrl = normalized;
+    delete next.openaiProxyBaseUrl;
+  }
+
+  await fs.mkdir(userAgentDir, { recursive: true });
+  const payload = `${JSON.stringify(next, null, 2)}\n`;
+  await writeTextFileAtomic(configPath, payload);
+  return await readUserConfigState(userAgentDir);
 }
 
 function mergeConfigPatch(
@@ -367,6 +431,9 @@ export async function startAgentServer(
             config = mergeConfigPatch(config, patch);
           }
         : undefined,
+      readUserConfigImpl: async () => await readUserConfigState(config.userAgentDir),
+      persistUserConfigPatchImpl: async (patch: PersistedUserConfigPatch) =>
+        await persistUserConfigPatch(config.userAgentDir, patch),
       sessionDb,
       emit,
       createAgentSessionImpl: async (
@@ -549,7 +616,11 @@ export async function startAgentServer(
   };
 
   const getConnectedProviders = async (parentConfig: AgentConfig): Promise<AgentConfig["provider"][]> => (
-    await getProviderCatalog({ homedir: resolveAuthHomeDir(parentConfig, opts.homedir) })
+    await getProviderCatalog({
+      homedir: resolveAuthHomeDir(parentConfig, opts.homedir),
+      config: parentConfig,
+      providerOptions: parentConfig.providerOptions,
+    })
   ).connected as AgentConfig["provider"][];
 
   agentControl = new AgentControl({

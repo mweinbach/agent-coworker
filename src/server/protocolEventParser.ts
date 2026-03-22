@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  AWS_BEDROCK_PROXY_PROMPT_CACHING_TTL_VALUES,
   CODEX_WEB_SEARCH_BACKEND_VALUES,
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
@@ -53,6 +54,13 @@ const codexCliProviderOptionsSchema = openAiCompatibleProviderOptionsSchema.exte
   webSearchMode: z.enum(CODEX_WEB_SEARCH_MODE_VALUES).optional(),
   webSearch: codexWebSearchSchema.optional(),
 }).strict();
+const awsBedrockProxyProviderOptionsSchema = openAiCompatibleProviderOptionsSchema.extend({
+  baseUrl: z.string().trim().min(1).optional(),
+  promptCaching: z.object({
+    enabled: z.boolean().optional(),
+    ttl: z.enum(AWS_BEDROCK_PROXY_PROMPT_CACHING_TTL_VALUES).optional(),
+  }).strict().optional(),
+}).strict();
 const googleProviderOptionsSchema = z.object({
   nativeWebSearch: z.boolean().optional(),
   thinkingConfig: z.object({
@@ -62,6 +70,7 @@ const googleProviderOptionsSchema = z.object({
 const editableOpenAiProviderOptionsByProviderSchema = z.object({
   openai: openAiCompatibleProviderOptionsSchema.optional(),
   "codex-cli": codexCliProviderOptionsSchema.optional(),
+  "aws-bedrock-proxy": awsBedrockProxyProviderOptionsSchema.optional(),
   google: googleProviderOptionsSchema.optional(),
   lmstudio: z.object({
     baseUrl: z.string().trim().min(1).optional(),
@@ -70,6 +79,15 @@ const editableOpenAiProviderOptionsByProviderSchema = z.object({
     reloadOnContextMismatch: z.boolean().optional(),
   }).strict().optional(),
 }).strict();
+const userConfigStateSchema = z.object({
+  awsBedrockProxyBaseUrl: z.string().optional(),
+  openaiProxyBaseUrl: z.string().optional(),
+}).passthrough().transform((config) => {
+  const awsBedrockProxyBaseUrl = config.awsBedrockProxyBaseUrl ?? config.openaiProxyBaseUrl;
+  return {
+    ...(awsBedrockProxyBaseUrl ? { awsBedrockProxyBaseUrl } : {}),
+  };
+});
 const childModelRoutingModeSchema = z.enum(CHILD_MODEL_ROUTING_MODES);
 const persistedSessionSummarySchema = z.object({
   sessionId: nonEmptyTrimmedStringSchema,
@@ -259,6 +277,18 @@ const serverEventSchema = z.discriminatedUnion("type", [
     type: z.literal("provider_auth_methods"),
     sessionId: nonEmptyTrimmedStringSchema,
     methods: recordUnknownSchema,
+  }).passthrough(),
+  z.object({
+    type: z.literal("user_config"),
+    sessionId: nonEmptyTrimmedStringSchema,
+    config: userConfigStateSchema,
+  }).passthrough(),
+  z.object({
+    type: z.literal("user_config_result"),
+    sessionId: nonEmptyTrimmedStringSchema,
+    ok: z.boolean(),
+    message: z.string(),
+    config: userConfigStateSchema.optional(),
   }).passthrough(),
   z.object({
     type: z.literal("provider_auth_challenge"),
@@ -582,6 +612,8 @@ const KNOWN_SERVER_EVENT_TYPES = new Set<string>([
   "mcp_server_auth_result",
   "provider_catalog",
   "provider_auth_methods",
+  "user_config",
+  "user_config_result",
   "provider_auth_challenge",
   "provider_auth_result",
   "provider_status",

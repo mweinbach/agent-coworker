@@ -82,9 +82,10 @@
 
 - [x] Fix the unresolved workspace-defaults persistence review thread in `apps/desktop/src/app/store.actions/workspaceDefaults.ts`.
 - [x] Re-verify the workspace-defaults desktop tests and typecheck after the review fix.
-- [ ] Resolve the actionable PR thread and close the stale unused-exports thread with evidence instead of code churn.
+- [x] Resolve the actionable PR thread and close the stale unused-exports thread with evidence instead of code churn.
 
 ## PR Comment Cleanup Review
 
 - `apps/desktop/src/app/store.actions/workspaceDefaults.ts` now narrows `buildApplySessionDefaultsMessage()` to the exact `apply_session_defaults` client message shape and removes the redundant runtime discriminator before `requestJsonRpcControlEvent()`, so the control path cannot silently skip persistence if that builder evolves later.
 - Verification passed with `bun test --cwd apps/desktop test/workspace-settings-sync.test.ts` and `bun run typecheck`.
+- Resolved PR thread `PRRT_kwDORLLhvs518ZN3` with the fix in commit `420c3969`, and closed stale thread `PRRT_kwDORLLhvs518ZN4` after revalidating the current `threadEventReducer.ts` call sites via `rg`.

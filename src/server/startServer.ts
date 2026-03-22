@@ -1201,6 +1201,9 @@ export async function startAgentServer(
         });
         continue;
       }
+      if (!shouldSendJsonRpcNotification(ws, event.eventType)) {
+        continue;
+      }
       sendJsonRpc(ws, {
         method: event.eventType,
         params: event.payload,

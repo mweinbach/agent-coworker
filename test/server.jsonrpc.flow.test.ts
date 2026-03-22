@@ -11,7 +11,13 @@ type JsonRpcConnection = {
   close: () => void;
 };
 
-async function connectJsonRpc(url: string, opts?: { protocol?: "query" | "subprotocol" }): Promise<JsonRpcConnection> {
+async function connectJsonRpc(
+  url: string,
+  opts?: {
+    protocol?: "query" | "subprotocol";
+    optOutNotificationMethods?: string[];
+  },
+): Promise<JsonRpcConnection> {
   const endpoint = opts?.protocol === "subprotocol" ? url : `${url}?protocol=jsonrpc`;
   const ws = opts?.protocol === "subprotocol"
     ? new WebSocket(endpoint, "cowork.jsonrpc.v1")
@@ -87,6 +93,13 @@ async function connectJsonRpc(url: string, opts?: { protocol?: "query" | "subpro
       name: "test-jsonrpc-client",
       version: "1.0.0",
     },
+    ...(opts?.optOutNotificationMethods?.length
+      ? {
+          capabilities: {
+            optOutNotificationMethods: opts.optOutNotificationMethods,
+          },
+        }
+      : {}),
   });
   expect(initializeResponse.result.protocolVersion).toBe("0.1");
   ws.send(JSON.stringify({ method: "initialized" }));
@@ -381,6 +394,55 @@ describe("server JSON-RPC flows", () => {
       );
       expect(replayedTurnStarted.params.threadId).toBe(started.result.thread.id);
       expect(replayedAgentCompleted.params.item.text).toBe("journal reply");
+
+      replayRpc.close();
+      rpc.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("thread/resume honors notification opt-outs while replaying journal events", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async (params: any) => {
+        await params.onModelStreamPart?.({ type: "start" });
+        await params.onModelStreamPart?.({ type: "text-delta", id: "txt_optout", text: "journal delta" });
+        await params.onModelStreamPart?.({ type: "finish", finishReason: "stop" });
+        return {
+          text: "journal delta",
+          responseMessages: [],
+        };
+      }) as any,
+    }));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+      await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "build the journal" }],
+      });
+      await rpc.waitFor((message) => message.method === "turn/completed");
+
+      const replayRpc = await connectJsonRpc(url, {
+        optOutNotificationMethods: ["item/agentMessage/delta"],
+      });
+      await replayRpc.sendRequest("thread/resume", {
+        threadId: started.result.thread.id,
+        afterSeq: 1,
+      });
+      const replayedTurnStarted = await replayRpc.waitFor((message) => message.method === "turn/started");
+      const replayedAgentCompleted = await replayRpc.waitFor((message) =>
+        message.method === "item/completed" && message.params.item.type === "agentMessage",
+      );
+
+      expect(replayedTurnStarted.params.threadId).toBe(started.result.thread.id);
+      expect(replayedAgentCompleted.params.item.text).toBe("journal delta");
+      await expect(
+        replayRpc.waitFor((message) => message.method === "item/agentMessage/delta", 250),
+      ).rejects.toThrow(/Timed out waiting for JSON-RPC message/);
 
       replayRpc.close();
       rpc.close();

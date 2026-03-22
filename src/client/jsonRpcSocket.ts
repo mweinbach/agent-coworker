@@ -275,7 +275,9 @@ export class JsonRpcSocket {
         const formatted = error instanceof Error ? error : new Error(String(error));
         this.ready.reject(formatted);
         this.rejectPendingRequests(formatted);
-        this.rejectQueuedRequests(formatted);
+        if (!this.autoReconnect || this.intentionalClose) {
+          this.rejectQueuedRequests(formatted);
+        }
         try {
           this.ws?.close();
         } catch {

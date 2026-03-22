@@ -890,7 +890,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         clearPendingThreadSteers(threadId);
       }
 
-      void get().applyWorkspaceDefaultsToThread(threadId, evt.isResume ? "auto-resume" : "auto", draftModelSelection);
+      void get().applyWorkspaceDefaultsToThread(
+        threadId,
+        evt.isResume ? "auto-resume" : "auto",
+        draftModelSelection,
+        { allowBeforeHydration: !evt.isResume },
+      );
       let sentPendingFirstMessage = false;
       if (pendingFirstMessage && pendingFirstMessage.trim()) {
         if (resumedBusy) {

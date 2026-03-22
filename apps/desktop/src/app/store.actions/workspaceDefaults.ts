@@ -288,6 +288,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       threadId: string,
       mode: "auto" | "auto-resume" | "explicit" = "explicit",
       draftModelSelection: { provider: ProviderName; model: string } | null = null,
+      opts?: { allowBeforeHydration?: boolean },
     ) => {
       const thread = get().threads.find((t) => t.id === threadId);
       if (!thread) return;
@@ -304,14 +305,20 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       if (pendingApply?.inFlight) {
         return;
       }
+      const allowBeforeHydration = opts?.allowBeforeHydration === true || pendingApply?.allowBeforeHydration === true;
       const effectiveDraftModelSelection: DraftModelSelection | null =
         mode === "auto-resume"
           ? null
           : draftModelSelection ?? pendingApply?.draftModelSelection ?? null;
-      if (mode !== "explicit" && (rt.sessionConfig == null || typeof rt.enableMcp !== "boolean")) {
+      if (
+        mode !== "explicit"
+        && !allowBeforeHydration
+        && (rt.sessionConfig == null || typeof rt.enableMcp !== "boolean")
+      ) {
         RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
           mode,
           draftModelSelection: effectiveDraftModelSelection,
+          ...(allowBeforeHydration ? { allowBeforeHydration: true } : {}),
           inFlight: false,
         });
         return;
@@ -421,6 +428,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       RUNTIME.pendingWorkspaceDefaultApplyByThread.set(threadId, {
         mode,
         draftModelSelection: effectiveDraftModelSelection,
+        ...(allowBeforeHydration ? { allowBeforeHydration: true } : {}),
         inFlight: true,
       });
       appendThreadTranscript(threadId, "client", message);

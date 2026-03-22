@@ -240,6 +240,7 @@ export type AppStoreState = {
     threadId: string,
     mode?: "auto" | "auto-resume" | "explicit",
     draftModelSelection?: { provider: ProviderName; model: string } | null,
+    opts?: { allowBeforeHydration?: boolean },
   ) => Promise<void>;
   updateWorkspaceDefaults: (workspaceId: string, patch: WorkspaceDefaultsPatch) => Promise<void>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;

@@ -25,6 +25,7 @@ export type DraftModelSelection = {
 export type PendingWorkspaceDefaultApply = {
   mode: WorkspaceDefaultApplyMode;
   draftModelSelection: DraftModelSelection | null;
+  allowBeforeHydration?: boolean;
   inFlight?: boolean;
 };
 

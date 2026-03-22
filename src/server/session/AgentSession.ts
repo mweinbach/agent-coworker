@@ -591,9 +591,10 @@ export class AgentSession {
     const { persisted } = opts;
     const dynamicProvider = isDynamicModelProvider(persisted.provider);
     const supportedPersistedModel = dynamicProvider ? null : getSupportedModel(persisted.provider, persisted.model);
-    const resumedModel = supportedPersistedModel ?? defaultSupportedModel(persisted.provider);
-    const resumedModelId = dynamicProvider ? persisted.model : resumedModel.id;
-    const migratedLegacyModel = !dynamicProvider && supportedPersistedModel === null;
+    const resumedModelId = dynamicProvider
+      ? persisted.model
+      : (supportedPersistedModel ?? defaultSupportedModel(persisted.provider)).id;
+    const migratedLegacyModel = dynamicProvider ? false : supportedPersistedModel === null;
     const clearedContinuationState = migratedLegacyModel && persisted.providerState !== null;
     const config: AgentConfig = {
       ...opts.baseConfig,
@@ -683,7 +684,7 @@ export class AgentSession {
       opts.emit({
         type: "log",
         sessionId: persisted.sessionId,
-        line: `[session] Resumed legacy session using unsupported model "${persisted.model}" for provider ${persisted.provider}; migrated to "${resumedModel.id}".${clearedContinuationState ? " Cleared saved continuation state for the old model." : ""}`,
+        line: `[session] Resumed legacy session using unsupported model "${persisted.model}" for provider ${persisted.provider}; migrated to "${resumedModelId}".${clearedContinuationState ? " Cleared saved continuation state for the old model." : ""}`,
       });
     }
 

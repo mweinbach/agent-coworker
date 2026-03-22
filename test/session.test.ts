@@ -5461,6 +5461,88 @@ describe("AgentSession", () => {
       expect(call.config.providerOptions).toEqual(providerOptions);
     });
 
+    test("rehydrates persisted lmstudio sessions without a static fallback model", () => {
+      const { emit } = makeEmit();
+
+      const session = AgentSession.fromPersisted({
+        persisted: {
+          sessionId: "persisted-lmstudio",
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          title: "Persisted LM Studio",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "lmstudio",
+          model: "local/qwen-2.5-coder",
+          workingDirectory: "/tmp/persisted",
+          enableMcp: true,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          updatedAt: "2026-03-09T00:00:01.000Z",
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          messageCount: 1,
+          lastEventSeq: 1,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello" }] as any,
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+        baseConfig: makeConfig("/tmp/persisted"),
+        emit,
+        sessionBackupFactory: makeSessionBackupFactory(),
+        getProviderStatusesImpl: async () => [],
+      });
+
+      expect(session.getPublicConfig().provider).toBe("lmstudio");
+      expect(session.getPublicConfig().model).toBe("local/qwen-2.5-coder");
+      expect(session.getSessionInfoEvent().model).toBe("local/qwen-2.5-coder");
+    });
+
+    test("rehydrates persisted aws-bedrock-proxy sessions without a static fallback model", () => {
+      const { emit } = makeEmit();
+
+      const session = AgentSession.fromPersisted({
+        persisted: {
+          sessionId: "persisted-aws-bedrock-proxy",
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          title: "Persisted AWS Bedrock Proxy",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "aws-bedrock-proxy",
+          model: "anthropic.claude-sonnet-4-5",
+          workingDirectory: "/tmp/persisted",
+          enableMcp: true,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          updatedAt: "2026-03-09T00:00:01.000Z",
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          messageCount: 1,
+          lastEventSeq: 1,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello" }] as any,
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+        baseConfig: makeConfig("/tmp/persisted"),
+        emit,
+        sessionBackupFactory: makeSessionBackupFactory(),
+        getProviderStatusesImpl: async () => [],
+      });
+
+      expect(session.getPublicConfig().provider).toBe("aws-bedrock-proxy");
+      expect(session.getPublicConfig().model).toBe("anthropic.claude-sonnet-4-5");
+      expect(session.getSessionInfoEvent().model).toBe("anthropic.claude-sonnet-4-5");
+    });
+
     test("migrates unsupported persisted models to provider default and persists the upgraded snapshot", async () => {
       const { emit, events } = makeEmit();
       const writePersistedSessionSnapshotImpl = mock(async () => "/tmp/mock-home/.cowork/sessions/persisted-upgraded.json");

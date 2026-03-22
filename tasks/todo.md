@@ -137,3 +137,15 @@
 - `apps/desktop/src/app/store.helpers/jsonRpcSocket.ts` now checks that a lifecycle callback belongs to the current `RUNTIME.jsonRpcSockets` entry before syncing workspace open/close state, so a stale socket cannot null out `controlSessionId` or trigger workspace control cleanup after a replacement socket has already taken over.
 - `apps/desktop/test/control-socket.test.ts` now simulates a deferred close on the old socket after a `serverUrl` change and asserts that the active replacement socket keeps its control session state.
 - Verification passed with `bun test --cwd apps/desktop test/control-socket.test.ts test/thread-reconnect.test.ts` and `bun run typecheck`.
+
+## Final PR Review Sweep
+
+- [x] Revalidate the remaining unresolved JSON-RPC server subprotocol thread on current `HEAD` before changing transport code.
+- [x] Re-run the focused server JSON-RPC transport tests, desktop shared-socket tests, and `bun run typecheck` before resolving the last review threads.
+
+## Final PR Review Sweep Review
+
+- `src/server/startServer.ts` already returns the negotiated `Sec-WebSocket-Protocol` value from the WebSocket upgrade path, and current `HEAD` preserves that on the wire for both browser-style and multi-offer `ws` clients.
+- Revalidated transport coverage passed with `bun test test/server.jsonrpc.test.ts` and `bun test test/server.jsonrpc.flow.test.ts`.
+- Revalidated desktop/socket coverage passed with `bun test --cwd apps/desktop test/control-socket.test.ts test/thread-reconnect.test.ts`.
+- Typecheck passed with `bun run typecheck`.

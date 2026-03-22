@@ -1,5 +1,20 @@
 # Task Plan
 
+## Stream Reasoning Before First Tool Call
+
+- [x] Confirm the missing live reasoning was caused by JSON-RPC projector buffering rather than the desktop chat renderer.
+- [x] Add a dedicated JSON-RPC `item/reasoning/delta` notification and stream reasoning start/delta/completed through the live and journal projectors.
+- [x] Update JSON-RPC journal read/replay handling so reasoning deltas can rebuild reasoning items before completion.
+- [x] Route desktop shared-socket reasoning notifications through the existing model-stream pipeline, with final completed-text reconciliation.
+- [x] Regenerate the JSON-RPC schema artifacts and add regression coverage for the live server, journal replay, thread/read projection, and desktop feed mapping paths.
+
+## Stream Reasoning Before First Tool Call Review
+
+- `src/server/jsonrpc/legacyEventProjector.ts` and `src/server/jsonrpc/journalProjector.ts` now emit `item/started`, `item/reasoning/delta`, and `item/completed` for streamed reasoning with a stable reasoning item id, instead of collapsing the whole summary into one late completed item.
+- `src/server/jsonrpc/threadReadProjector.ts` now rebuilds reasoning text from journal delta events, and the JSON-RPC schema/docs advertise the new notification method.
+- `apps/desktop/src/app/store.helpers/threadEventReducer.ts` now converts JSON-RPC reasoning notifications into synthetic `model_stream_chunk` events so the desktop reuses the same incremental reasoning feed path as native model streaming, while still reconciling against the completed reasoning text.
+- Verification passed with `bun test test/jsonrpc.projectors.test.ts test/jsonrpc.thread-read-projector.test.ts test/server.jsonrpc.flow.test.ts`, `bun test --cwd apps/desktop test/protocol-v2-events.test.ts test/chat-reasoning-ui.test.ts`, and `bun run typecheck`.
+
 ## Skill Update Missing-Name Regression
 
 - [x] Confirm the current update path falls back to an unrelated valid candidate when the original skill name is absent.

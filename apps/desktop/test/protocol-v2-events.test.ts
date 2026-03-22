@@ -382,7 +382,7 @@ describe("desktop JSON-RPC event mapping", () => {
     expect(runtime?.feed.some((item) => "text" in item && typeof item.text === "string" && item.text.includes("Hello from JSON-RPC"))).toBe(true);
   });
 
-  test("shared JSON-RPC reasoning notifications land in the reasoning feed before the assistant reply", async () => {
+  test("shared JSON-RPC reasoning deltas render before the assistant reply", async () => {
     await useAppStore.getState().reconnectThread(threadId);
     await flushAsyncWork();
     await flushAsyncWork();
@@ -401,9 +401,29 @@ describe("desktop JSON-RPC event mapping", () => {
         id: "reasoning-1",
         type: "reasoning",
         mode: "summary",
-        text: "Inspecting the reports.",
+        text: "",
       },
     });
+    socket.notify("item/reasoning/delta", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "reasoning-1",
+      mode: "summary",
+      delta: "Inspecting the reports.",
+    });
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    const reasoningOnlyFeed = useAppStore.getState().threadRuntimeById[threadId]?.feed.filter((item) =>
+      item.kind === "reasoning" || item.kind === "message",
+    ) ?? [];
+    expect(reasoningOnlyFeed).toHaveLength(1);
+    expect(reasoningOnlyFeed[0]).toMatchObject({
+      kind: "reasoning",
+      mode: "summary",
+      text: "Inspecting the reports.",
+    });
+
     socket.notify("item/completed", {
       threadId: sessionId,
       turnId: "turn-1",

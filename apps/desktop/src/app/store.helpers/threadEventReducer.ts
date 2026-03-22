@@ -119,6 +119,27 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     return Boolean(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId));
   }
 
+  function buildJsonRpcModelStreamChunk(
+    get: StoreGet,
+    threadId: string,
+    sessionId: string,
+    turnId: string,
+    partType: Extract<ServerEvent, { type: "model_stream_chunk" }>["partType"],
+    part: Record<string, unknown>,
+  ): Extract<ServerEvent, { type: "model_stream_chunk" }> {
+    const runtime = get().threadRuntimeById[threadId];
+    return {
+      type: "model_stream_chunk",
+      sessionId,
+      turnId,
+      index: 0,
+      provider: (runtime?.config?.provider ?? "google") as any,
+      model: runtime?.config?.model ?? "unknown",
+      partType,
+      part,
+    };
+  }
+
   function workspaceIdForThread(get: StoreGet, threadId: string): string | null {
     return get().threads.find((thread) => thread.id === threadId)?.workspaceId ?? null;
   }
@@ -249,26 +270,81 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       }
 
       if (message.method === "item/started" && params.item?.type === "reasoning") {
+        const turnId = String(params.turnId ?? "jsonrpc-turn");
+        const streamId = String(params.item?.id ?? `jsonrpc-reasoning:${turnId}`);
+        const mode = params.item?.mode === "summary" ? "summary" : "reasoning";
+        handleThreadEvent(get, set, mappedThreadId, buildJsonRpcModelStreamChunk(
+          get,
+          mappedThreadId,
+          mappedSessionId,
+          turnId,
+          "reasoning_start",
+          { id: streamId, mode },
+        ));
+        const initialText = String(params.item?.text ?? "");
+        if (initialText) {
+          handleThreadEvent(get, set, mappedThreadId, buildJsonRpcModelStreamChunk(
+            get,
+            mappedThreadId,
+            mappedSessionId,
+            turnId,
+            "reasoning_delta",
+            { id: streamId, mode, text: initialText },
+          ));
+        }
+        return;
+      }
+
+      if (message.method === "item/reasoning/delta") {
+        const turnId = String(params.turnId ?? "jsonrpc-turn");
+        const streamId = String(params.itemId ?? `jsonrpc-reasoning:${turnId}`);
+        const mode = params.mode === "summary" ? "summary" : "reasoning";
         handleThreadEvent(get, set, mappedThreadId, {
-          type: "reasoning",
-          sessionId: mappedSessionId,
-          kind: params.item.mode === "summary" ? "summary" : "reasoning",
-          text: String(params.item.text ?? ""),
+          ...buildJsonRpcModelStreamChunk(
+            get,
+            mappedThreadId,
+            mappedSessionId,
+            turnId,
+            "reasoning_delta",
+            { id: streamId, mode, text: String(params.delta ?? "") },
+          ),
         });
         return;
       }
 
       if (message.method === "item/agentMessage/delta") {
-        handleThreadEvent(get, set, mappedThreadId, {
-          type: "model_stream_chunk",
-          sessionId: mappedSessionId,
-          turnId: String(params.turnId ?? "jsonrpc-turn"),
-          index: 0,
-          provider: (get().threadRuntimeById[mappedThreadId]?.config?.provider ?? "google") as any,
-          model: get().threadRuntimeById[mappedThreadId]?.config?.model ?? "unknown",
-          partType: "text_delta",
-          part: { text: String(params.delta ?? "") },
-        } as any);
+        handleThreadEvent(get, set, mappedThreadId, buildJsonRpcModelStreamChunk(
+          get,
+          mappedThreadId,
+          mappedSessionId,
+          String(params.turnId ?? "jsonrpc-turn"),
+          "text_delta",
+          { text: String(params.delta ?? "") },
+        ));
+        return;
+      }
+
+      if (message.method === "item/completed" && params.item?.type === "reasoning") {
+        const turnId = String(params.turnId ?? "jsonrpc-turn");
+        const streamId = String(params.item?.id ?? `jsonrpc-reasoning:${turnId}`);
+        const mode = params.item?.mode === "summary" ? "summary" : "reasoning";
+        handleThreadEvent(get, set, mappedThreadId, buildJsonRpcModelStreamChunk(
+          get,
+          mappedThreadId,
+          mappedSessionId,
+          turnId,
+          "reasoning_end",
+          { id: streamId, mode },
+        ));
+        const finalText = String(params.item?.text ?? "");
+        if (finalText) {
+          handleThreadEvent(get, set, mappedThreadId, {
+            type: "reasoning",
+            sessionId: mappedSessionId,
+            kind: mode,
+            text: finalText,
+          });
+        }
         return;
       }
 

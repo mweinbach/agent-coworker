@@ -60,3 +60,20 @@
 - `apps/desktop/src/lib/reactGrabDevTools.ts` now skips React Grab only for Linux Electron development while leaving other development environments unchanged.
 - `apps/desktop/test/react-grab-dev-tools.test.ts` covers the new Linux Electron skip path and the helper predicate directly.
 - Verification passed with `bun test apps/desktop/test/react-grab-dev-tools.test.ts`, `bun run typecheck`, and a manual Linux Electron smoke run showing the populated desktop UI plus a responsive composer.
+
+## Fix Live OpenAI Reasoning Handshake
+
+- [x] Suppress commentary-only assistant `text_delta` chunks in the JSON-RPC live projectors.
+- [x] Emit completed reasoning items from `reasoning_start` / `reasoning_delta` / `reasoning_end` live chunks so desktop thought bubbles match replay.
+- [x] Prevent delayed `thread/read` hydration from overwriting fresher live feed items or the optimistic first user bubble.
+- [x] Refresh `controlSocket.ts` lifecycle callbacks to dereference the latest store helpers.
+- [x] Add focused regressions and run the desktop JSON-RPC verification slice plus `bun run typecheck`.
+
+## Fix Live OpenAI Reasoning Handshake Review
+
+- `src/server/jsonrpc/legacyEventProjector.ts` and `src/server/jsonrpc/journalProjector.ts` now drop commentary-phase `text_delta` chunks from the live assistant-message path, accumulate `reasoning_*` stream parts into one completed reasoning item, and suppress duplicate legacy reasoning finals when they match the just-emitted streamed summary.
+- `apps/desktop/src/app/store.helpers/threadEventReducer.ts` now preserves the current live feed when a delayed `thread/read` snapshot would erase the optimistic first user bubble or when an actively running thread receives a snapshot that is behind the live event sequence; metadata still updates without letting counts/sequences move backward.
+- `apps/desktop/src/app/store.helpers/controlSocket.ts` now re-reads the latest store getter and setter inside JSON-RPC lifecycle callbacks, so reconnect bootstrap uses the current workspace state instead of the first captured store instance.
+- Focused projector coverage passed with `bun test test/jsonrpc.projectors.test.ts`.
+- Desktop JSON-RPC parity and reconnect coverage passed with `bun test --cwd apps/desktop test/store-feed-mapping.test.ts test/protocol-v2-events.test.ts test/chat-reasoning-ui.test.ts test/control-socket.test.ts test/jsonrpc-single-connection.test.ts test/thread-reconnect.test.ts`.
+- Typecheck passed with `bun run typecheck`.

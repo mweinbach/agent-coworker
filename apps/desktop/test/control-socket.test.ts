@@ -142,6 +142,12 @@ function installFakeSocket(workspaceId: string, request: (method: string, params
   } as any);
 }
 
+async function flushAsyncWork() {
+  for (let i = 0; i < 6; i += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("control socket helpers over JSON-RPC", () => {
   beforeEach(() => {
     setJsonRpcSocketOverride(MockJsonRpcSocket);
@@ -298,6 +304,37 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(firstSocket).not.toBe(secondSocket);
     expect((firstSocket as MockJsonRpcSocket).closed).toBe(true);
     expect((secondSocket as MockJsonRpcSocket).opts.url).toBe("ws://changed");
+  });
+
+  test("ensureControlSocket lifecycle callbacks use the latest get closure after reconnect", async () => {
+    const workspaceId = "ws-lifecycle";
+    const first = createState(workspaceId);
+    first.state.workspaces[0].path = "/tmp/workspace-first";
+    const helpers = createControlSocketHelpers(deps);
+
+    helpers.ensureControlSocket(first.get as any, first.set as any, workspaceId);
+    await flushAsyncWork();
+
+    jsonRpcRequests.length = 0;
+
+    const second = createState(workspaceId);
+    second.state.workspaces[0].path = "/tmp/workspace-second";
+    helpers.ensureControlSocket(second.get as any, second.set as any, workspaceId);
+
+    const socket = MockJsonRpcSocket.instances[0];
+    expect(socket).toBeDefined();
+
+    socket.close();
+    jsonRpcRequests.length = 0;
+    socket.connect();
+    await flushAsyncWork();
+
+    expect(jsonRpcRequests.find((entry) => entry.method === "thread/list")?.params).toEqual({
+      cwd: "/tmp/workspace-second",
+    });
+    expect(jsonRpcRequests.find((entry) => entry.method === "cowork/provider/catalog/read")?.params).toEqual({
+      cwd: "/tmp/workspace-second",
+    });
   });
 
   test("requestJsonRpcControlEvent resolves matching skill install waiters", async () => {

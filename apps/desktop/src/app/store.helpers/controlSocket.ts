@@ -51,6 +51,7 @@ export function createControlSocketHelpers(
   const requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   const jsonRpcLifecycleCleanupByWorkspace = new Map<string, () => void>();
   const jsonRpcBootstrapPromises = new Map<string, Promise<void>>();
+  const controlStoreGettersByWorkspace = new Map<string, StoreGet>();
   const controlStoreSettersByWorkspace = new Map<string, StoreSet>();
 
   function upsertWorkspaceThreads(
@@ -261,31 +262,43 @@ export function createControlSocketHelpers(
     controlStoreSettersByWorkspace.set(workspaceId, set);
   }
 
+  function rememberControlStoreGet(workspaceId: string, get: StoreGet) {
+    controlStoreGettersByWorkspace.set(workspaceId, get);
+  }
+
+  function getControlStoreGet(workspaceId: string): StoreGet | null {
+    return controlStoreGettersByWorkspace.get(workspaceId) ?? null;
+  }
+
   function getControlStoreSet(workspaceId: string): StoreSet | null {
     return controlStoreSettersByWorkspace.get(workspaceId) ?? null;
   }
 
   function ensureJsonRpcControlLifecycle(get: StoreGet, set: StoreSet, workspaceId: string) {
+    rememberControlStoreGet(workspaceId, get);
     rememberControlStoreSet(workspaceId, set);
     if (jsonRpcLifecycleCleanupByWorkspace.has(workspaceId)) {
       return;
     }
     const cleanup = registerWorkspaceJsonRpcLifecycle(workspaceId, {
       onOpen: () => {
+        const currentGet = getControlStoreGet(workspaceId);
         const currentSet = getControlStoreSet(workspaceId);
-        if (!currentSet) return;
-        void bootstrapJsonRpcControlStateOnce(get, currentSet, workspaceId);
+        if (!currentGet || !currentSet) return;
+        void bootstrapJsonRpcControlStateOnce(currentGet, currentSet, workspaceId);
       },
       onClose: () => {
+        const currentGet = getControlStoreGet(workspaceId);
         const currentSet = getControlStoreSet(workspaceId);
-        if (!currentSet) return;
-        clearWorkspaceControlRuntime(get, currentSet, workspaceId);
+        if (!currentGet || !currentSet) return;
+        clearWorkspaceControlRuntime(currentGet, currentSet, workspaceId);
       },
     });
     jsonRpcLifecycleCleanupByWorkspace.set(workspaceId, cleanup);
   }
 
   function ensureControlSocket(get: StoreGet, set: StoreSet, workspaceId: string) {
+    rememberControlStoreGet(workspaceId, get);
     rememberControlStoreSet(workspaceId, set);
     ensureJsonRpcControlLifecycle(get, set, workspaceId);
     return ensureWorkspaceJsonRpcSocket(get, set, workspaceId);

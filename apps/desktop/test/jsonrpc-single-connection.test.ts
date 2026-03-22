@@ -5,6 +5,7 @@ import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/
 const startCalls: Array<{ workspaceId: string; workspacePath: string; yolo: boolean }> = [];
 const savedStates: any[] = [];
 const jsonRpcRequests: Array<{ method: string; params?: unknown }> = [];
+const jsonRpcRequestHandlers = new Map<string, (params?: unknown) => unknown | Promise<unknown>>();
 const jsonRpcRequestFailures = new Map<string, string>();
 
 const MOCK_SYSTEM_APPEARANCE = {
@@ -58,6 +59,10 @@ class MockJsonRpcSocket {
     const failure = jsonRpcRequestFailures.get(method);
     if (failure) {
       throw new Error(failure);
+    }
+    const handler = jsonRpcRequestHandlers.get(method);
+    if (handler) {
+      return await handler(params);
     }
     if (method === "thread/list") {
       return {
@@ -397,6 +402,7 @@ describe("desktop JSON-RPC single connection path", () => {
     startCalls.length = 0;
     savedStates.length = 0;
     jsonRpcRequests.length = 0;
+    jsonRpcRequestHandlers.clear();
     jsonRpcRequestFailures.clear();
     MockJsonRpcSocket.instances.length = 0;
     RUNTIME.jsonRpcSockets.clear();
@@ -673,5 +679,104 @@ describe("desktop JSON-RPC single connection path", () => {
     });
     expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.config?.model).toBe("gpt-5.4-mini");
     expect(useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"]?.config?.provider).toBe("openai");
+  });
+
+  test("delayed thread/read does not clobber optimistic first-message feed items", async () => {
+    let resolveThreadRead: ((value: unknown) => void) | null = null;
+    jsonRpcRequestHandlers.set("thread/read", async () => await new Promise((resolve) => {
+      resolveThreadRead = resolve;
+    }));
+
+    const newThreadPromise = useAppStore.getState().newThread({
+      workspaceId: "ws-jsonrpc",
+      titleHint: "Draft",
+      firstMessage: "hello over jsonrpc",
+    });
+
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances[0];
+    expect(socket).toBeDefined();
+
+    const turnStartParams = jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params as
+      | { clientMessageId?: string }
+      | undefined;
+    expect(turnStartParams?.clientMessageId).toEqual(expect.any(String));
+
+    const optimisticRuntime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
+    expect(optimisticRuntime?.feed).toContainEqual(expect.objectContaining({
+      id: turnStartParams?.clientMessageId,
+      kind: "message",
+      role: "user",
+      text: "hello over jsonrpc",
+    }));
+
+    socket.notify("turn/started", {
+      threadId: "jsonrpc-thread-1",
+      turn: { id: "turn-1", status: "inProgress", items: [] },
+    });
+    socket.notify("item/agentMessage/delta", {
+      threadId: "jsonrpc-thread-1",
+      turnId: "turn-1",
+      itemId: "assistant-1",
+      delta: "Live answer",
+    });
+    socket.notify("item/completed", {
+      threadId: "jsonrpc-thread-1",
+      turnId: "turn-1",
+      item: { id: "assistant-1", type: "agentMessage", text: "Live answer" },
+    });
+    await flushAsyncWork();
+
+    resolveThreadRead?.({
+      coworkSnapshot: {
+        sessionId: "jsonrpc-thread-1",
+        title: "New session",
+        titleSource: "default",
+        titleModel: null,
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        sessionKind: "root",
+        parentSessionId: null,
+        role: null,
+        mode: null,
+        depth: null,
+        nickname: null,
+        requestedModel: null,
+        effectiveModel: null,
+        requestedReasoningEffort: null,
+        effectiveReasoningEffort: null,
+        executionState: null,
+        lastMessagePreview: null,
+        createdAt: "2026-03-21T00:00:00.000Z",
+        updatedAt: "2026-03-21T00:00:00.000Z",
+        messageCount: 0,
+        lastEventSeq: 0,
+        feed: [],
+        agents: [],
+        todos: [],
+        sessionUsage: null,
+        lastTurnUsage: null,
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+      },
+    });
+
+    await newThreadPromise;
+    await flushAsyncWork();
+
+    const runtime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
+    expect(runtime?.feed).toContainEqual(expect.objectContaining({
+      id: turnStartParams?.clientMessageId,
+      kind: "message",
+      role: "user",
+      text: "hello over jsonrpc",
+    }));
+    expect(runtime?.feed).toContainEqual(expect.objectContaining({
+      kind: "message",
+      role: "assistant",
+      text: "Live answer",
+    }));
   });
 });

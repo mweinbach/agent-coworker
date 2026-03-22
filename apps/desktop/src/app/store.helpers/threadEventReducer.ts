@@ -755,6 +755,53 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     });
   }
 
+  function normalizeEventSeq(value: unknown): number {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
+  }
+
+  function snapshotMissesCurrentOptimisticUserItems(
+    threadId: string,
+    currentFeed: FeedItem[],
+    snapshotFeed: FeedItem[],
+  ): boolean {
+    const optimisticIds = RUNTIME.optimisticUserMessageIds.get(threadId);
+    if (!optimisticIds || optimisticIds.size === 0 || currentFeed.length === 0) {
+      return false;
+    }
+
+    const snapshotFeedIds = new Set(snapshotFeed.map((item) => item.id));
+    return currentFeed.some((item) =>
+      item.kind === "message"
+      && item.role === "user"
+      && optimisticIds.has(item.id)
+      && !snapshotFeedIds.has(item.id),
+    );
+  }
+
+  function shouldPreserveCurrentFeed(
+    threadId: string,
+    runtimeBusy: boolean,
+    threadLastEventSeq: number,
+    currentFeed: FeedItem[],
+    snapshot: any,
+  ): boolean {
+    if (currentFeed.length === 0) {
+      return false;
+    }
+
+    const snapshotFeed = Array.isArray(snapshot.feed) ? snapshot.feed : [];
+    if (snapshotMissesCurrentOptimisticUserItems(threadId, currentFeed, snapshotFeed)) {
+      return true;
+    }
+
+    if (!runtimeBusy) {
+      return false;
+    }
+
+    return normalizeEventSeq(snapshot.lastEventSeq) < normalizeEventSeq(threadLastEventSeq);
+  }
+
   function applyJsonRpcThreadSnapshot(
     get: StoreGet,
     set: StoreSet,
@@ -767,6 +814,16 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       if (!runtime || !thread) {
         return {};
       }
+      const preserveCurrentFeed = shouldPreserveCurrentFeed(threadId, runtime.busy, thread.lastEventSeq, runtime.feed, snapshot);
+      const nextLastEventSeq = preserveCurrentFeed
+        ? Math.max(normalizeEventSeq(thread.lastEventSeq), normalizeEventSeq(snapshot.lastEventSeq))
+        : normalizeEventSeq(snapshot.lastEventSeq);
+      const nextMessageCount = preserveCurrentFeed
+        ? Math.max(thread.messageCount ?? 0, normalizeEventSeq(snapshot.messageCount))
+        : normalizeEventSeq(snapshot.messageCount);
+      const nextLastMessageAt = preserveCurrentFeed && typeof thread.lastMessageAt === "string" && thread.lastMessageAt > snapshot.updatedAt
+        ? thread.lastMessageAt
+        : snapshot.updatedAt;
       return {
         threads: s.threads.map((entry) =>
           entry.id === threadId
@@ -774,10 +831,10 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
                 ...entry,
                 title: snapshot.title,
                 titleSource: deps.normalizeThreadTitleSource(snapshot.titleSource, snapshot.title),
-                lastMessageAt: snapshot.updatedAt,
+                lastMessageAt: nextLastMessageAt,
                 sessionId: snapshot.sessionId,
-                messageCount: snapshot.messageCount,
-                lastEventSeq: snapshot.lastEventSeq,
+                messageCount: nextMessageCount,
+                lastEventSeq: nextLastEventSeq,
               }
             : entry,
         ),
@@ -801,7 +858,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             agents: snapshot.agents,
             sessionUsage: snapshot.sessionUsage,
             lastTurnUsage: snapshot.lastTurnUsage,
-            feed: snapshot.feed,
+            feed: preserveCurrentFeed ? runtime.feed : snapshot.feed,
             hydrating: false,
             transcriptOnly: false,
           },

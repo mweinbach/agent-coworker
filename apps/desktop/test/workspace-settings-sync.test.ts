@@ -416,7 +416,7 @@ function seedConnectedThread(overrides: Partial<Record<string, unknown>> = {}) {
   const threadId = `thread-${crypto.randomUUID()}`;
   const sessionId = String(overrides.sessionId ?? `session-${crypto.randomUUID()}`);
   useAppStore.setState((state) => ({
-    ...state,
+    ...(state as any),
     threads: [
       ...state.threads,
       {
@@ -1566,7 +1566,7 @@ describe("workspace settings sync", () => {
   test("updateWorkspaceDefaults clears the persisted overflow override on the control session", async () => {
     primeWorkspaceConnection();
     useAppStore.setState((state) => ({
-      ...state,
+      ...(state as any),
       workspaces: state.workspaces.map((workspace) =>
         workspace.id === workspaceId
           ? {
@@ -1665,7 +1665,7 @@ describe("workspace settings sync", () => {
   test("updateWorkspaceDefaults keeps control runtime in sync after a workspace control apply", async () => {
     primeWorkspaceConnection();
     useAppStore.setState((state) => ({
-      ...state,
+      ...(state as any),
       workspaceRuntimeById: {
         ...state.workspaceRuntimeById,
         [workspaceId]: {

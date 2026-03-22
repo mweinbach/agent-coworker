@@ -6,6 +6,7 @@ import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
 
 import { useAppStore } from "../app/store";
 import type { FeedItem, ThreadAgentSummary, ThreadPendingSteer, ThreadStatus } from "../app/types";
+import { hiddenProviderNamesFromUiState } from "../app/providerUiState";
 import {
   Conversation,
   ConversationContent,
@@ -461,7 +462,7 @@ function DraftThreadModelSelector({
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerUiState = useAppStore((s) => s.providerUiState);
   const chatCatalogVisibility = useMemo<CatalogVisibilityOptions>(() => ({
-    hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
+    hiddenProviders: hiddenProviderNamesFromUiState(providerUiState),
     hiddenModelsByProvider: {
       lmstudio: providerUiState.lmstudio.hiddenModels,
     },

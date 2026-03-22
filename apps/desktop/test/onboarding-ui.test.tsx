@@ -239,6 +239,9 @@ describe("DeveloperPage rerun onboarding button", () => {
           } as any,
           providerConnected: [],
           providerUiState: {
+            awsBedrockProxy: {
+              enabled: true,
+            },
             lmstudio: {
               enabled: false,
               hiddenModels: [],

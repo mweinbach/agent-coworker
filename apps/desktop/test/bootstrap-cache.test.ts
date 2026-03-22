@@ -334,7 +334,10 @@ function resetStoreToCachedSeed(value: unknown = cachedState) {
     providerAuthMethodsByProvider: {},
     providerLastAuthChallenge: null,
     providerLastAuthResult: null,
-    providerUiState: { lmstudio: { enabled: false, hiddenModels: [] } },
+    providerUiState: {
+      awsBedrockProxy: { enabled: true },
+      lmstudio: { enabled: false, hiddenModels: [] },
+    },
     composerText: "",
     injectContext: false,
     developerMode: false,

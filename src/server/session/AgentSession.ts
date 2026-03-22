@@ -714,6 +714,42 @@ export class AgentSession {
     return snapshot;
   }
 
+  peekSessionSnapshot(): SessionSnapshot {
+    const snapshot = this.sessionSnapshotProjector.peekSnapshot();
+    snapshot.title = this.state.sessionInfo.title;
+    snapshot.titleSource = this.state.sessionInfo.titleSource;
+    snapshot.titleModel = this.state.sessionInfo.titleModel;
+    snapshot.provider = this.state.sessionInfo.provider;
+    snapshot.model = this.state.sessionInfo.model;
+    snapshot.sessionKind = this.state.sessionInfo.sessionKind ?? "root";
+    snapshot.parentSessionId = this.state.sessionInfo.parentSessionId ?? null;
+    snapshot.role = this.state.sessionInfo.role ?? null;
+    snapshot.mode = this.state.sessionInfo.mode ?? null;
+    snapshot.depth = typeof this.state.sessionInfo.depth === "number" ? this.state.sessionInfo.depth : null;
+    snapshot.nickname = this.state.sessionInfo.nickname ?? null;
+    snapshot.requestedModel = this.state.sessionInfo.requestedModel ?? null;
+    snapshot.effectiveModel = this.state.sessionInfo.effectiveModel ?? null;
+    snapshot.requestedReasoningEffort = this.state.sessionInfo.requestedReasoningEffort ?? null;
+    snapshot.effectiveReasoningEffort = this.state.sessionInfo.effectiveReasoningEffort ?? null;
+    snapshot.executionState = this.state.sessionInfo.executionState ?? null;
+    snapshot.lastMessagePreview = this.state.sessionInfo.lastMessagePreview ?? null;
+    snapshot.createdAt = this.state.sessionInfo.createdAt;
+    snapshot.updatedAt = this.state.sessionInfo.updatedAt;
+    snapshot.messageCount = this.state.allMessages.length;
+    snapshot.lastEventSeq = this.persistenceManager.getProjectedLastEventSeq(this.persistedLastEventSeq);
+    snapshot.todos = structuredClone(this.state.todos);
+    snapshot.sessionUsage = this.state.costTracker?.getSnapshot() ?? null;
+    snapshot.lastTurnUsage = snapshot.sessionUsage?.turns?.length
+      ? {
+          turnId: snapshot.sessionUsage.turns[snapshot.sessionUsage.turns.length - 1]!.turnId,
+          usage: { ...snapshot.sessionUsage.turns[snapshot.sessionUsage.turns.length - 1]!.usage },
+        }
+      : snapshot.lastTurnUsage;
+    snapshot.hasPendingAsk = this.hasPendingAsk;
+    snapshot.hasPendingApproval = this.hasPendingApproval;
+    return snapshot;
+  }
+
   getPublicConfig() {
     return this.metadataManager.getPublicConfig();
   }

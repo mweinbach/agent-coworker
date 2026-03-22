@@ -10,6 +10,7 @@ import { loadConfig } from "../config";
 import { emitObservabilityEvent } from "../observability/otel";
 import { loadAgentPrompt, loadSystemPromptWithSkills } from "../prompt";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
+import type { SessionFeedItem, SessionSnapshot } from "../shared/sessionSnapshot";
 import type { SessionKind } from "../shared/agents";
 import {
   EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES,
@@ -33,7 +34,7 @@ import { decodeJsonRpcMessage } from "./jsonrpc/decodeJsonRpcMessage";
 import { dispatchJsonRpcMessage } from "./jsonrpc/dispatchJsonRpcMessage";
 import { createThreadJournalProjector } from "./jsonrpc/journalProjector";
 import { createJsonRpcLegacyEventProjector } from "./jsonrpc/legacyEventProjector";
-import { projectThreadTurnsFromJournal } from "./jsonrpc/threadReadProjector";
+import { createThreadTurnProjector } from "./jsonrpc/threadReadProjector";
 import {
   buildJsonRpcErrorResponse,
   buildJsonRpcResultResponse,
@@ -54,6 +55,8 @@ const jsonObjectSchema = z.record(z.string(), z.unknown());
 const errorWithCodeSchema = z.object({
   code: z.string().optional(),
 }).passthrough();
+
+const THREAD_READ_JOURNAL_BATCH_SIZE = 250;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return jsonObjectSchema.safeParse(v).success;
@@ -680,7 +683,7 @@ export async function startAgentServer(
         checkpointId: string;
       }) =>
         await workspaceBackupService.getCheckpointDelta(opts.workingDirectory, opts.targetSessionId, opts.checkpointId),
-      getLiveSessionSnapshotImpl: (sessionId: string) => sessionBindings.get(sessionId)?.session?.buildSessionSnapshot() ?? null,
+      getLiveSessionSnapshotImpl: (sessionId: string) => sessionBindings.get(sessionId)?.session?.peekSessionSnapshot() ?? null,
       getLiveSessionWorkingDirectoryImpl: (sessionId: string) =>
         sessionBindings.get(sessionId)?.session?.getWorkingDirectory() ?? null,
       buildLegacySessionSnapshotImpl: (record: import("./sessionDb").PersistedSessionRecord) =>
@@ -987,6 +990,16 @@ export async function startAgentServer(
 
   const jsonRpcSubscriptionsByConnectionId = new Map<string, Map<string, { sinkId: string }>>();
   const threadJournalWriteQueues = new Map<string, Promise<void>>();
+  const pendingThreadJournalEvents = new Map<string, Array<{
+    threadId: string;
+    ts: string;
+    eventType: string;
+    turnId: string | null;
+    itemId: string | null;
+    requestId: string | null;
+    payload: unknown;
+  }>>();
+  const scheduledThreadJournalFlushes = new Set<string>();
 
   const sendJsonRpc = (ws: Bun.ServerWebSocket<StartServerSocketData>, payload: unknown) => {
     try {
@@ -1009,13 +1022,31 @@ export async function startAgentServer(
     requestId: string | null;
     payload: unknown;
   }) => {
+    const pending = pendingThreadJournalEvents.get(event.threadId) ?? [];
+    pending.push(event);
+    pendingThreadJournalEvents.set(event.threadId, pending);
+
+    if (scheduledThreadJournalFlushes.has(event.threadId)) {
+      return threadJournalWriteQueues.get(event.threadId) ?? Promise.resolve();
+    }
+
+    scheduledThreadJournalFlushes.add(event.threadId);
     const previous = threadJournalWriteQueues.get(event.threadId) ?? Promise.resolve();
     const next = previous
       .catch(() => {
         // keep queue alive after prior failure
       })
       .then(async () => {
-        await sessionDb.appendThreadJournalEvent(event);
+        while (true) {
+          const batch = pendingThreadJournalEvents.get(event.threadId) ?? [];
+          if (batch.length === 0) {
+            pendingThreadJournalEvents.delete(event.threadId);
+            scheduledThreadJournalFlushes.delete(event.threadId);
+            return;
+          }
+          pendingThreadJournalEvents.set(event.threadId, []);
+          await sessionDb.appendThreadJournalEvents(batch);
+        }
       });
     threadJournalWriteQueues.set(event.threadId, next);
     return next;
@@ -1029,7 +1060,7 @@ export async function startAgentServer(
 
   const buildJsonRpcThreadFromSession = (session: AgentSession) => {
     const info = session.getSessionInfoEvent();
-    const snapshot = session.buildSessionSnapshot();
+    const snapshot = session.peekSessionSnapshot();
     return {
       id: session.id,
       title: info.title,
@@ -1110,6 +1141,11 @@ export async function startAgentServer(
       initialActiveTurnId?: string | null;
       initialAgentText?: string | null;
       drainDisconnectedReplayBuffer?: boolean;
+      pendingPromptEvents?: ReadonlyArray<
+        Extract<ServerEvent, { type: "ask" }>
+        | Extract<ServerEvent, { type: "approval" }>
+      >;
+      skipPendingPromptRequestIds?: ReadonlySet<string>;
     },
   ): SessionBinding | null => {
     const connectionId = ws.data.connectionId;
@@ -1156,10 +1192,20 @@ export async function startAgentServer(
 
     addBindingSink(binding, sinkId, (event) => projector.handle(event));
     subscriptions.set(threadId, { sinkId });
+    const replayedPromptRequestIds = new Set(opts?.skipPendingPromptRequestIds ?? []);
     if (shouldReplayBufferedEvents) {
       for (const event of binding.session.drainDisconnectedReplayEvents()) {
+        if (event.type === "ask" || event.type === "approval") {
+          replayedPromptRequestIds.add(event.requestId);
+        }
         projector.handle(event);
       }
+    }
+    for (const event of opts?.pendingPromptEvents ?? []) {
+      if (replayedPromptRequestIds.has(event.requestId)) {
+        continue;
+      }
+      projector.handle(event);
     }
     return binding;
   };
@@ -1235,11 +1281,52 @@ export async function startAgentServer(
   };
 
   const readThreadSnapshot = (threadId: string) => {
-    const liveSnapshot = sessionBindings.get(threadId)?.session?.buildSessionSnapshot() ?? null;
+    const liveSnapshot = sessionBindings.get(threadId)?.session?.peekSessionSnapshot() ?? null;
     if (liveSnapshot) return liveSnapshot;
     const persisted = sessionDb.getSessionRecord(threadId);
     if (!persisted) return null;
     return loadInitialSessionSnapshot(persisted);
+  };
+
+  const compactSnapshotFeedForThreadRead = (snapshot: SessionSnapshot): SessionSnapshot => {
+    if (snapshot.feed.length < 2) {
+      return snapshot;
+    }
+
+    const compactedFeed: SessionFeedItem[] = [];
+    let changed = false;
+
+    for (const item of snapshot.feed) {
+      const previous = compactedFeed[compactedFeed.length - 1];
+      if (
+        previous?.kind === "message"
+        && previous.role === "assistant"
+        && !previous.annotations?.length
+        && item.kind === "message"
+        && item.role === "assistant"
+        && !item.annotations?.length
+      ) {
+        previous.text = `${previous.text}${item.text}`;
+        previous.ts = item.ts;
+        changed = true;
+        continue;
+      }
+
+      compactedFeed.push(
+        item.kind === "message" && item.annotations
+          ? { ...item, annotations: [...item.annotations] }
+          : { ...item }
+      );
+    }
+
+    if (!changed) {
+      return snapshot;
+    }
+
+    return {
+      ...snapshot,
+      feed: compactedFeed,
+    };
   };
 
   const replayThreadJournalEvents = (
@@ -1248,6 +1335,7 @@ export async function startAgentServer(
     afterSeq = 0,
     limit?: number,
   ) => {
+    const replayedRequestIds = new Set<string>();
     const journalEvents = limit === undefined
       ? sessionDb.listThreadJournalEvents(threadId, { afterSeq })
       : sessionDb.listThreadJournalEvents(threadId, { afterSeq, limit });
@@ -1255,6 +1343,7 @@ export async function startAgentServer(
       if (event.eventType.startsWith("request:")) {
         const method = event.eventType.slice("request:".length);
         if (event.requestId) {
+          replayedRequestIds.add(event.requestId);
           ws.data.rpc?.pendingServerRequests.set(event.requestId, {
             threadId,
             type: method === "item/commandExecution/requestApproval" ? "approval" : "ask",
@@ -1276,6 +1365,7 @@ export async function startAgentServer(
         params: event.payload,
       });
     }
+    return replayedRequestIds;
   };
 
   const withWorkspaceControlSession = async <T>(
@@ -1452,6 +1542,7 @@ export async function startAgentServer(
           return;
         }
         const thread = buildJsonRpcThreadFromSession(binding.session);
+        let replayedRequestIds: ReadonlySet<string> | undefined;
         if (afterSeq > 0) {
           await waitForThreadJournalIdle(threadId);
           // Reset the buffer so it only captures events that occur *after* the
@@ -1459,8 +1550,9 @@ export async function startAgentServer(
           // events that accumulated since the client disconnected, which are
           // already covered by the journal replay and would be sent twice.
           binding.session.beginDisconnectedReplayBuffer();
-          replayThreadJournalEvents(ws, threadId, afterSeq);
+          replayedRequestIds = replayThreadJournalEvents(ws, threadId, afterSeq);
         }
+        const pendingPromptEvents = binding.session.getPendingPromptEventsForReplay();
         subscribeJsonRpcThread(
           ws,
           threadId,
@@ -1472,6 +1564,8 @@ export async function startAgentServer(
                 }
               : {}),
             ...(afterSeq > 0 ? { drainDisconnectedReplayBuffer: true } : {}),
+            pendingPromptEvents,
+            ...(replayedRequestIds?.size ? { skipPendingPromptRequestIds: replayedRequestIds } : {}),
           },
         );
         sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, { thread }));
@@ -1528,17 +1622,38 @@ export async function startAgentServer(
           ? buildJsonRpcThreadFromSession(binding.session)
           : buildJsonRpcThreadFromRecord(sessionDb.getSessionRecord(threadId)!);
         await waitForThreadJournalIdle(threadId);
-        const journalEvents = params.includeTurns === true
-          ? sessionDb.listThreadJournalEvents(threadId)
-          : [];
+        let journalTailSeq = 0;
+        let turns: ReturnType<ReturnType<typeof createThreadTurnProjector>["build"]> | undefined;
+        if (params.includeTurns === true) {
+          const projector = createThreadTurnProjector();
+          let afterSeq = 0;
+          while (true) {
+            const batch = sessionDb.listThreadJournalEvents(threadId, {
+              afterSeq,
+              limit: THREAD_READ_JOURNAL_BATCH_SIZE,
+            });
+            if (batch.length === 0) {
+              break;
+            }
+            for (const event of batch) {
+              projector.handle(event);
+            }
+            journalTailSeq = batch.at(-1)?.seq ?? journalTailSeq;
+            if (batch.length < THREAD_READ_JOURNAL_BATCH_SIZE) {
+              break;
+            }
+            afterSeq = journalTailSeq;
+          }
+          turns = projector.build();
+        }
         sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, {
           thread: {
             ...thread,
-            ...(params.includeTurns === true ? { turns: projectThreadTurnsFromJournal(journalEvents) } : {}),
+            ...(params.includeTurns === true ? { turns } : {}),
           },
-          coworkSnapshot: snapshot,
+          coworkSnapshot: compactSnapshotFeedForThreadRead(snapshot),
           ...(params.includeTurns === true
-            ? { journalTailSeq: journalEvents.at(-1)?.seq ?? 0 }
+            ? { journalTailSeq }
             : {}),
         }));
         return;

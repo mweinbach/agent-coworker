@@ -44,7 +44,7 @@ export function extractJsonRpcTextInput(input: unknown): string {
 
 export function buildJsonRpcThreadFromSession(session: AgentSession): JsonRpcThread {
   const info = session.getSessionInfoEvent();
-  const snapshot = session.buildSessionSnapshot();
+  const snapshot = session.peekSessionSnapshot();
   return {
     id: session.id,
     title: info.title,

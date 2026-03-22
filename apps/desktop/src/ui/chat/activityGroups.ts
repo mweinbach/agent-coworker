@@ -236,35 +236,39 @@ function mergeToolTraceItems(toolItems: Extract<FeedItem, { kind: "tool" }>[]): 
 }
 
 function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntry[] {
-  // Reasoning always precedes tool calls in the trace, regardless of feed arrival order.
-  // (Tool events can land in the feed before the reasoning item is flushed during streaming.)
-  const reasoningItems: Extract<FeedItem, { kind: "reasoning" }>[] = [];
-  const toolItems: Extract<FeedItem, { kind: "tool" }>[] = [];
-
-  for (const item of items) {
-    if (item.kind === "reasoning") {
-      reasoningItems.push(item);
-    } else {
-      toolItems.push(item);
-    }
-  }
-
   const entries: ActivityTraceEntry[] = [];
 
-  for (const item of reasoningItems) {
+  for (const item of items) {
     const previous = entries[entries.length - 1];
-    if (
-      previous?.kind === "reasoning" &&
-      previous.item.mode === item.mode &&
-      normalizedReasoningText(previous.item.text) === normalizedReasoningText(item.text)
-    ) {
+    if (item.kind === "reasoning") {
+      if (
+        previous?.kind === "reasoning" &&
+        previous.item.mode === item.mode &&
+        normalizedReasoningText(previous.item.text) === normalizedReasoningText(item.text)
+      ) {
+        continue;
+      }
+      entries.push({ kind: "reasoning", item });
       continue;
     }
-    entries.push({ kind: "reasoning", item });
-  }
 
-  for (const item of mergeToolTraceItems(toolItems)) {
-    entries.push({ kind: "tool", item });
+    if (previous?.kind === "tool" && shouldMergeToolTraceItems(previous.item, item)) {
+      entries[entries.length - 1] = {
+        kind: "tool",
+        item: {
+          ...previous.item,
+          ts: item.ts,
+          state: item.state,
+          args: item.args ?? previous.item.args,
+          result: item.result ?? previous.item.result,
+          approval: item.approval ?? previous.item.approval,
+          sourceIds: [...previous.item.sourceIds, item.id],
+        },
+      };
+      continue;
+    }
+
+    entries.push({ kind: "tool", item: { ...item, sourceIds: [item.id] } });
   }
 
   return entries;

@@ -148,6 +148,22 @@ export function disposeWorkspaceJsonRpcSocketState(workspaceId: string): void {
   workspaceStoreSetters.delete(workspaceId);
 }
 
+export function disposeAllJsonRpcSocketState(): void {
+  const workspaceIds = new Set<string>();
+  for (const workspaceId of workspaceRouters.keys()) {
+    workspaceIds.add(workspaceId);
+  }
+  for (const workspaceId of workspaceLifecycleListeners.keys()) {
+    workspaceIds.add(workspaceId);
+  }
+  for (const workspaceId of workspaceStoreSetters.keys()) {
+    workspaceIds.add(workspaceId);
+  }
+  for (const workspaceId of workspaceIds) {
+    disposeWorkspaceJsonRpcSocketState(workspaceId);
+  }
+}
+
 export function ensureWorkspaceJsonRpcSocket(
   get: StoreGet,
   set: StoreSet | undefined,

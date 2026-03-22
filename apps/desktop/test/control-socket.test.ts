@@ -377,6 +377,39 @@ describe("control socket helpers over JSON-RPC", () => {
     });
   });
 
+  test("disposeWorkspaceControlState clears workspace-scoped lifecycle and bootstrap state", async () => {
+    const workspaceId = "ws-dispose";
+    const { state, get, set } = createState(workspaceId);
+    const blockedProviderStatus = Promise.withResolvers<any>();
+    jsonRpcHandlers.set("cowork/provider/status/refresh", async () => await blockedProviderStatus.promise);
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+    await flushAsyncWork();
+
+    expect(helpers.__internal.getWorkspaceStateSnapshot(workspaceId)).toEqual({
+      isDisposed: false,
+      hasLifecycleCleanup: true,
+      hasBootstrapPromise: true,
+      hasStoreGetter: true,
+      hasStoreSetter: true,
+    });
+
+    helpers.disposeWorkspaceControlState(workspaceId);
+
+    expect(helpers.__internal.getWorkspaceStateSnapshot(workspaceId)).toEqual({
+      isDisposed: true,
+      hasLifecycleCleanup: false,
+      hasBootstrapPromise: false,
+      hasStoreGetter: false,
+      hasStoreSetter: false,
+    });
+    expect(state.workspaceRuntimeById[workspaceId]?.controlSessionId).toBeNull();
+
+    blockedProviderStatus.resolve({});
+    await flushAsyncWork();
+  });
+
   test("waitForControlSession waits for JSON-RPC control bootstrap to hydrate control state", async () => {
     const workspaceId = "ws-control-state";
     const { state, get, set } = createState(workspaceId);

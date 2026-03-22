@@ -27,7 +27,7 @@ import {
   mapTranscriptToFeed,
 } from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
-import { disposeWorkspaceJsonRpcSocketState } from "./store.helpers/jsonRpcSocket";
+import { disposeAllJsonRpcSocketState, disposeWorkspaceJsonRpcSocketState } from "./store.helpers/jsonRpcSocket";
 import { persist, persistNow, syncDesktopStateCache, syncDesktopStateCacheNow } from "./store.helpers/persistence";
 import {
   RUNTIME,
@@ -344,6 +344,7 @@ function pushNotification(notifications: Notification[], entry: Notification): N
 const { appendThreadTranscript } = createTranscriptBuffer({ nowIso });
 const {
   ensureControlSocket,
+  disposeAllControlState,
   disposeWorkspaceControlState,
   waitForControlSession,
   requestWorkspaceSessions,
@@ -358,6 +359,7 @@ const {
   isProviderName,
 });
 const {
+  disposeAllThreadEventState,
   disposeWorkspaceThreadEventState,
   ensureThreadSocket,
   sendThread,
@@ -373,10 +375,27 @@ const {
   shouldAdoptServerTitle,
 });
 
-function disposeWorkspaceJsonRpcState(workspaceId: string) {
+function disposeWorkspaceJsonRpcState(get: StoreGet, workspaceId: string) {
   disposeWorkspaceControlState(workspaceId);
-  disposeWorkspaceThreadEventState(workspaceId);
+  disposeWorkspaceThreadEventState(workspaceId, get);
   disposeWorkspaceJsonRpcSocketState(workspaceId);
+}
+
+function disposeAllJsonRpcState() {
+  for (const socket of [...RUNTIME.jsonRpcSockets.values()]) {
+    try {
+      socket.close?.();
+    } catch {
+      // ignore shutdown cleanup failures
+    }
+  }
+  RUNTIME.jsonRpcSockets.clear();
+  for (const workspaceId of [...RUNTIME.workspaceJsonRpcSocketGenerations.keys()]) {
+    clearWorkspaceJsonRpcSocketGeneration(workspaceId);
+  }
+  disposeAllControlState();
+  disposeAllThreadEventState();
+  disposeAllJsonRpcSocketState();
 }
 
 async function ensureServerRunning(
@@ -489,6 +508,7 @@ export {
   syncDesktopStateCacheNow,
   ensureServerRunning,
   disposeWorkspaceJsonRpcState,
+  disposeAllJsonRpcState,
   ensureControlSocket,
   waitForControlSession,
   requestWorkspaceSessions,

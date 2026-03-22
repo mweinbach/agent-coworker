@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
 
 const jsonRpcRequests: Array<{ method: string; params?: unknown }> = [];
+const jsonRpcActivityLog: string[] = [];
 const jsonRpcResponseOverrides = new Map<string, (params?: unknown) => unknown | Promise<unknown>>();
 const transcriptBatches: Array<Array<{
   ts: string;
@@ -60,6 +61,7 @@ class MockJsonRpcSocket {
 
   async request(method: string, params?: unknown) {
     jsonRpcRequests.push({ method, params });
+    jsonRpcActivityLog.push(`request:${method}`);
     const override = jsonRpcResponseOverrides.get(method);
     if (override) {
       return await override(params);
@@ -281,6 +283,7 @@ class MockJsonRpcSocket {
   }
 
   close() {
+    jsonRpcActivityLog.push("close");
     this.opts.onClose?.();
   }
 
@@ -552,6 +555,7 @@ describe("workspace settings sync", () => {
     workspaceId = `ws-${crypto.randomUUID()}`;
     MockJsonRpcSocket.instances.length = 0;
     jsonRpcRequests.length = 0;
+    jsonRpcActivityLog.length = 0;
     jsonRpcResponseOverrides.clear();
     transcriptBatches.length = 0;
     mockedLoadedState = { version: 2, workspaces: [], threads: [] };
@@ -1347,6 +1351,12 @@ describe("workspace settings sync", () => {
         params: { threadId: sessionId },
       }),
     ]));
+    const unsubscribeIndexes = jsonRpcActivityLog
+      .map((entry, index) => (entry === "request:thread/unsubscribe" ? index : -1))
+      .filter((index) => index >= 0);
+    expect(unsubscribeIndexes.length).toBeGreaterThan(0);
+    const closeIndex = jsonRpcActivityLog.indexOf("close");
+    expect(closeIndex).toBeGreaterThan(Math.max(...unsubscribeIndexes));
     const helperStateAfter = getWorkspaceJsonRpcHelperState(workspaceId);
     expect(helperStateAfter.socket).toEqual({
       isDisposed: true,

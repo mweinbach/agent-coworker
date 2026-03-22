@@ -327,6 +327,26 @@ export function createControlSocketHelpers(
     return controlStoreSettersByWorkspace.get(workspaceId) ?? null;
   }
 
+  function trackedWorkspaceIds(): string[] {
+    const workspaceIds = new Set<string>();
+    for (const workspaceId of jsonRpcLifecycleCleanupByWorkspace.keys()) {
+      workspaceIds.add(workspaceId);
+    }
+    for (const workspaceId of jsonRpcBootstrapPromises.keys()) {
+      workspaceIds.add(workspaceId);
+    }
+    for (const workspaceId of controlStoreGettersByWorkspace.keys()) {
+      workspaceIds.add(workspaceId);
+    }
+    for (const workspaceId of controlStoreSettersByWorkspace.keys()) {
+      workspaceIds.add(workspaceId);
+    }
+    for (const workspaceId of RUNTIME.skillInstallWaiters.keys()) {
+      workspaceIds.add(workspaceId);
+    }
+    return [...workspaceIds];
+  }
+
   function ensureJsonRpcControlLifecycle(get: StoreGet, set: StoreSet, workspaceId: string) {
     if (isWorkspaceDisposed(workspaceId)) {
       return;
@@ -1162,9 +1182,16 @@ export function createControlSocketHelpers(
     controlStoreSettersByWorkspace.delete(workspaceId);
   }
 
+  function disposeAllControlState() {
+    for (const workspaceId of trackedWorkspaceIds()) {
+      disposeWorkspaceControlState(workspaceId);
+    }
+  }
+
   return {
     ensureControlSocket,
     disposeWorkspaceControlState,
+    disposeAllControlState,
     waitForControlSession,
     requestWorkspaceSessions,
     requestSessionSnapshot,

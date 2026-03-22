@@ -114,6 +114,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
   const jsonRpcLifecycleCleanupByWorkspace = new Map<string, () => void>();
   const jsonRpcReconnectThreadsByWorkspace = new Map<string, Set<string>>();
   const jsonRpcThreadConnectPromises = new Map<string, Promise<void>>();
+  const threadStoreGettersByWorkspace = new Map<string, StoreGet>();
   const disposedWorkspaces = new Set<string>();
 
   function isWorkspaceDisposed(workspaceId: string): boolean {
@@ -147,6 +148,42 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
 
   function workspaceIdForThread(get: StoreGet, threadId: string): string | null {
     return get().threads.find((thread) => thread.id === threadId)?.workspaceId ?? null;
+  }
+
+  function rememberThreadStoreGet(workspaceId: string, get: StoreGet) {
+    if (isWorkspaceDisposed(workspaceId)) {
+      return;
+    }
+    threadStoreGettersByWorkspace.set(workspaceId, get);
+  }
+
+  function trackedThreadIdsForWorkspace(workspaceId: string, getOverride?: StoreGet): string[] {
+    const trackedThreadIds = new Set<string>(jsonRpcReconnectThreadsByWorkspace.get(workspaceId) ?? []);
+    const get = getOverride ?? threadStoreGettersByWorkspace.get(workspaceId);
+    const threads = get?.().threads ?? [];
+    for (const thread of threads) {
+      if (thread.workspaceId === workspaceId) {
+        trackedThreadIds.add(thread.id);
+      }
+    }
+    return [...trackedThreadIds];
+  }
+
+  function trackedWorkspaceIds(): string[] {
+    const workspaceIds = new Set<string>();
+    for (const workspaceId of jsonRpcRouterCleanupByWorkspace.keys()) {
+      workspaceIds.add(workspaceId);
+    }
+    for (const workspaceId of jsonRpcLifecycleCleanupByWorkspace.keys()) {
+      workspaceIds.add(workspaceId);
+    }
+    for (const workspaceId of jsonRpcReconnectThreadsByWorkspace.keys()) {
+      workspaceIds.add(workspaceId);
+    }
+    for (const workspaceId of threadStoreGettersByWorkspace.keys()) {
+      workspaceIds.add(workspaceId);
+    }
+    return [...workspaceIds];
   }
 
   function rememberThreadForReconnect(workspaceId: string, threadId: string) {
@@ -1624,6 +1661,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     if (isWorkspaceDisposed(workspaceId)) {
       return;
     }
+    rememberThreadStoreGet(workspaceId, get);
 
     const existingConnect = jsonRpcThreadConnectPromises.get(threadId);
     if (existingConnect) {
@@ -1744,7 +1782,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     jsonRpcThreadConnectPromises.set(threadId, connectPromise);
   }
 
-  function disposeWorkspaceThreadEventState(workspaceId: string) {
+  function disposeWorkspaceThreadEventState(workspaceId: string, getOverride?: StoreGet) {
     disposedWorkspaces.add(workspaceId);
     const routerCleanup = jsonRpcRouterCleanupByWorkspace.get(workspaceId);
     routerCleanup?.();
@@ -1752,17 +1790,22 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     const lifecycleCleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
     lifecycleCleanup?.();
     jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
-    const reconnectIds = jsonRpcReconnectThreadsByWorkspace.get(workspaceId);
-    if (reconnectIds) {
-      for (const threadId of reconnectIds) {
-        jsonRpcThreadConnectPromises.delete(threadId);
-      }
+    for (const threadId of trackedThreadIdsForWorkspace(workspaceId, getOverride)) {
+      jsonRpcThreadConnectPromises.delete(threadId);
     }
     jsonRpcReconnectThreadsByWorkspace.delete(workspaceId);
+    threadStoreGettersByWorkspace.delete(workspaceId);
+  }
+
+  function disposeAllThreadEventState() {
+    for (const workspaceId of trackedWorkspaceIds()) {
+      disposeWorkspaceThreadEventState(workspaceId);
+    }
   }
 
   return {
     disposeWorkspaceThreadEventState,
+    disposeAllThreadEventState,
     ensureThreadSocket,
     sendThread,
     sendUserMessageToThread,
@@ -1775,32 +1818,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       }),
       reset: (workspaceId?: string) => {
         if (workspaceId) {
+          disposeWorkspaceThreadEventState(workspaceId);
           disposedWorkspaces.delete(workspaceId);
-          const routerCleanup = jsonRpcRouterCleanupByWorkspace.get(workspaceId);
-          routerCleanup?.();
-          jsonRpcRouterCleanupByWorkspace.delete(workspaceId);
-          const lifecycleCleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
-          lifecycleCleanup?.();
-          jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
-          const reconnectIds = jsonRpcReconnectThreadsByWorkspace.get(workspaceId);
-          if (reconnectIds) {
-            for (const threadId of reconnectIds) {
-              jsonRpcThreadConnectPromises.delete(threadId);
-            }
-          }
-          jsonRpcReconnectThreadsByWorkspace.delete(workspaceId);
           return;
         }
-        for (const cleanup of jsonRpcRouterCleanupByWorkspace.values()) {
-          cleanup();
-        }
-        for (const cleanup of jsonRpcLifecycleCleanupByWorkspace.values()) {
-          cleanup();
-        }
-        jsonRpcRouterCleanupByWorkspace.clear();
-        jsonRpcLifecycleCleanupByWorkspace.clear();
-        jsonRpcReconnectThreadsByWorkspace.clear();
+        disposeAllThreadEventState();
         jsonRpcThreadConnectPromises.clear();
+        threadStoreGettersByWorkspace.clear();
         disposedWorkspaces.clear();
       },
     },

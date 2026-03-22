@@ -58,6 +58,10 @@ import {
   splitWebSocketSubprotocolHeader,
   type WsProtocolMode,
 } from "./wsProtocol/negotiation";
+import {
+  enqueueThreadJournalWrite,
+  waitForThreadJournalWriteQueueIdle,
+} from "./startServer/threadJournalWriteQueue";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const errorWithCodeSchema = z.object({
@@ -908,7 +912,11 @@ export async function startAgentServer(
 
   const jsonRpcSubscriptionsByConnectionId = new Map<string, Map<string, { sinkId: string }>>();
   const threadJournalWriteQueues = new Map<string, Promise<void>>();
-  const threadJournalPendingEvents = new Map<string, Array<Omit<PersistedThreadJournalEvent, "seq">>>();
+  const threadJournalPendingBatches = new Map<string, {
+    events: Array<Omit<PersistedThreadJournalEvent, "seq">>;
+    started: boolean;
+    promise: Promise<void>;
+  }>();
   const threadJournalReplayBatchSize = 250;
 
   const sendJsonRpc = (ws: Bun.ServerWebSocket<StartServerSocketData>, payload: unknown) => {
@@ -924,39 +932,32 @@ export async function startAgentServer(
   );
 
   const enqueueThreadJournalEvent = (event: Omit<PersistedThreadJournalEvent, "seq">) => {
-    const pending = threadJournalPendingEvents.get(event.threadId) ?? [];
-    pending.push(event);
-    threadJournalPendingEvents.set(event.threadId, pending);
-
-    const existing = threadJournalWriteQueues.get(event.threadId);
-    if (existing) {
-      return existing;
+    const openBatch = threadJournalPendingBatches.get(event.threadId);
+    if (openBatch && !openBatch.started) {
+      openBatch.events.push(event);
+      return openBatch.promise;
     }
 
-    const flush = (async () => {
-      while (true) {
-        const batch = threadJournalPendingEvents.get(event.threadId);
-        if (!batch || batch.length === 0) {
-          threadJournalPendingEvents.delete(event.threadId);
-          threadJournalWriteQueues.delete(event.threadId);
-          return;
-        }
-        threadJournalPendingEvents.set(event.threadId, []);
-        await sessionDb.appendThreadJournalEvents(batch);
+    const batch = {
+      events: [event],
+      started: false,
+      promise: Promise.resolve(),
+    };
+    const writePromise = enqueueThreadJournalWrite(threadJournalWriteQueues, event.threadId, async () => {
+      batch.started = true;
+      if (threadJournalPendingBatches.get(event.threadId) === batch) {
+        threadJournalPendingBatches.delete(event.threadId);
       }
-    })().catch((error) => {
-      threadJournalWriteQueues.delete(event.threadId);
-      throw error;
+      await sessionDb.appendThreadJournalEvents(batch.events);
     });
 
-    threadJournalWriteQueues.set(event.threadId, flush);
-    return flush;
+    batch.promise = writePromise;
+    threadJournalPendingBatches.set(event.threadId, batch);
+    return writePromise;
   };
 
   const waitForThreadJournalIdle = async (threadId: string) => {
-    await (threadJournalWriteQueues.get(threadId) ?? Promise.resolve()).catch(() => {
-      // best-effort only
-    });
+    await waitForThreadJournalWriteQueueIdle(threadJournalWriteQueues, threadId);
   };
 
   const ensureJsonRpcConnectionSubscriptions = (connectionId: string) => {

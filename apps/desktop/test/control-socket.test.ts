@@ -7,8 +7,10 @@ const jsonRpcHandlers = new Map<string, (params?: any) => any | Promise<any>>();
 
 class MockJsonRpcSocket {
   static instances: MockJsonRpcSocket[] = [];
+  static deferClose = false;
   readonly readyPromise = Promise.resolve();
   closed = false;
+  private closeDeferred = false;
 
   constructor(public readonly opts: { url?: string; onOpen?: () => void; onClose?: () => void }) {
     MockJsonRpcSocket.instances.push(this);
@@ -33,6 +35,16 @@ class MockJsonRpcSocket {
 
   close() {
     this.closed = true;
+    if (MockJsonRpcSocket.deferClose) {
+      this.closeDeferred = true;
+      return;
+    }
+    this.opts.onClose?.();
+  }
+
+  emitDeferredClose() {
+    if (!this.closeDeferred) return;
+    this.closeDeferred = false;
     this.opts.onClose?.();
   }
 }
@@ -154,6 +166,7 @@ describe("control socket helpers over JSON-RPC", () => {
     jsonRpcRequests.length = 0;
     jsonRpcHandlers.clear();
     MockJsonRpcSocket.instances.length = 0;
+    MockJsonRpcSocket.deferClose = false;
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.skillInstallWaiters.clear();
     RUNTIME.sessionSnapshots.clear();
@@ -304,6 +317,31 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(firstSocket).not.toBe(secondSocket);
     expect((firstSocket as MockJsonRpcSocket).closed).toBe(true);
     expect((secondSocket as MockJsonRpcSocket).opts.url).toBe("ws://changed");
+  });
+
+  test("stale socket close after a serverUrl swap does not clear the active control session", async () => {
+    const workspaceId = "ws-stale-close";
+    const { state, get, set } = createState(workspaceId);
+    const helpers = createControlSocketHelpers(deps);
+
+    const firstSocket = helpers.ensureControlSocket(get as any, set as any, workspaceId) as MockJsonRpcSocket;
+    await flushAsyncWork();
+    expect(state.workspaceRuntimeById[workspaceId].controlSessionId).toBe(`jsonrpc:${workspaceId}`);
+
+    MockJsonRpcSocket.deferClose = true;
+    state.workspaceRuntimeById[workspaceId].serverUrl = "ws://changed";
+    const secondSocket = helpers.ensureControlSocket(get as any, set as any, workspaceId) as MockJsonRpcSocket;
+    await flushAsyncWork();
+
+    expect(secondSocket).not.toBe(firstSocket);
+    expect(firstSocket.closed).toBe(true);
+    expect(state.workspaceRuntimeById[workspaceId].controlSessionId).toBe(`jsonrpc:${workspaceId}`);
+
+    firstSocket.emitDeferredClose();
+    await flushAsyncWork();
+
+    expect(RUNTIME.jsonRpcSockets.get(workspaceId)).toBe(secondSocket);
+    expect(state.workspaceRuntimeById[workspaceId].controlSessionId).toBe(`jsonrpc:${workspaceId}`);
   });
 
   test("ensureControlSocket lifecycle callbacks use the latest get closure after reconnect", async () => {

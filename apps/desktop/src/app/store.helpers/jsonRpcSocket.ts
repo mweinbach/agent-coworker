@@ -86,6 +86,10 @@ function syncWorkspaceSocketState(workspaceId: string, isOpen: boolean) {
   emitWorkspaceLifecycle(workspaceId, isOpen ? "open" : "close");
 }
 
+function isCurrentWorkspaceJsonRpcSocket(workspaceId: string, socket: WorkspaceJsonRpcSocket): boolean {
+  return RUNTIME.jsonRpcSockets.get(workspaceId) === socket;
+}
+
 export function registerWorkspaceJsonRpcRouter(workspaceId: string, router: WorkspaceNotificationRouter): () => void {
   const routers = workspaceRouters.get(workspaceId) ?? new Set<WorkspaceNotificationRouter>();
   routers.add(router);
@@ -164,10 +168,16 @@ export function ensureWorkspaceJsonRpcSocket(
     },
     onOpen: () => {
       socket.__coworkOpened = true;
+      if (!isCurrentWorkspaceJsonRpcSocket(workspaceId, socket)) {
+        return;
+      }
       syncWorkspaceSocketState(workspaceId, true);
     },
     onClose: () => {
       socket.__coworkOpened = false;
+      if (!isCurrentWorkspaceJsonRpcSocket(workspaceId, socket)) {
+        return;
+      }
       syncWorkspaceSocketState(workspaceId, false);
     },
   }) as WorkspaceJsonRpcSocket;

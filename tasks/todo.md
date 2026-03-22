@@ -125,3 +125,15 @@
 - `src/server/startServer.ts` now routes JSON-RPC `turn/start` and `turn/steer` through the existing session-event capture helper so request responses reflect the first real session outcome instead of fire-and-forget guesses. `turn/start` only returns success after `session_busy: true` yields a concrete `turnId`, and `turn/steer` only returns success after `steer_accepted`; session-level rejections now become JSON-RPC errors.
 - `test/server.jsonrpc.flow.test.ts` now asserts that accepted `turn/start` responses already carry the concrete `turn.id` with `inProgress` status, and it adds request-level regressions for busy `turn/start`, accepted `turn/steer`, and stale-turn `turn/steer`.
 - Verification passed with `bun test test/server.jsonrpc.flow.test.ts`, `bun test --cwd apps/desktop test/jsonrpc-single-connection.test.ts`, and `bun run typecheck`.
+
+## Socket Close Review Fix
+
+- [x] Guard shared JSON-RPC socket lifecycle callbacks so stale sockets cannot clear active workspace control state after a server URL swap.
+- [x] Add a regression for a deferred old-socket close arriving after the replacement socket has already opened.
+- [x] Re-run the focused desktop socket lifecycle tests plus `bun run typecheck`, then resolve the remaining PR thread.
+
+## Socket Close Review Fix Review
+
+- `apps/desktop/src/app/store.helpers/jsonRpcSocket.ts` now checks that a lifecycle callback belongs to the current `RUNTIME.jsonRpcSockets` entry before syncing workspace open/close state, so a stale socket cannot null out `controlSessionId` or trigger workspace control cleanup after a replacement socket has already taken over.
+- `apps/desktop/test/control-socket.test.ts` now simulates a deferred close on the old socket after a `serverUrl` change and asserts that the active replacement socket keeps its control session state.
+- Verification passed with `bun test --cwd apps/desktop test/control-socket.test.ts test/thread-reconnect.test.ts` and `bun run typecheck`.

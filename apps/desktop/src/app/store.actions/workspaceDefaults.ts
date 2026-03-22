@@ -53,6 +53,7 @@ import { normalizeWorkspaceUserProfile } from "../types";
 import type { ThreadRecord, WorkspaceDefaultsPatch, WorkspaceRecord } from "../types";
 
 export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "applyWorkspaceDefaultsToThread" | "updateWorkspaceDefaults"> {
+  type ApplySessionDefaultsMessage = Extract<ClientMessage, { type: "apply_session_defaults" }>;
   type DefaultsTargetState = {
     config: { provider?: unknown; model?: unknown } | null | undefined;
     sessionConfig: any;
@@ -80,7 +81,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
   const buildApplySessionDefaultsMessage = (opts: {
     sessionId: string;
     current: DefaultsTargetState;
-    desired: {
+      desired: {
       provider?: ProviderName;
       model?: string;
       enableMcp?: boolean;
@@ -91,11 +92,11 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       preferredChildModelRef?: string;
       allowedChildModelRefs?: string[];
       providerOptions?: WorkspaceRecord["providerOptions"];
-      userName?: string;
-      userProfile?: WorkspaceRecord["userProfile"];
-    };
-  }): ClientMessage | null => {
-    const configPatch: NonNullable<Extract<ClientMessage, { type: "apply_session_defaults" }>["config"]> = {};
+        userName?: string;
+        userProfile?: WorkspaceRecord["userProfile"];
+      };
+  }): ApplySessionDefaultsMessage | null => {
+    const configPatch: NonNullable<ApplySessionDefaultsMessage["config"]> = {};
     const currentProvider =
       opts.current.config?.provider && isProviderName(opts.current.config.provider)
         ? opts.current.config.provider
@@ -555,13 +556,13 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         : null;
 
       const persisted = controlReady
-        ? (!controlMessage || (controlMessage.type === "apply_session_defaults" && await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/session/defaults/apply", {
+        ? (!controlMessage || await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/session/defaults/apply", {
             cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
             ...(controlMessage.provider !== undefined ? { provider: controlMessage.provider } : {}),
             ...(controlMessage.model !== undefined ? { model: controlMessage.model } : {}),
             ...(controlMessage.enableMcp !== undefined ? { enableMcp: controlMessage.enableMcp } : {}),
             ...(controlMessage.config !== undefined ? { config: controlMessage.config } : {}),
-          })))
+          }))
         : false;
 
       if (!persisted) {

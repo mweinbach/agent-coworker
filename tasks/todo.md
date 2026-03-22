@@ -77,3 +77,14 @@
 - Focused projector coverage passed with `bun test test/jsonrpc.projectors.test.ts`.
 - Desktop JSON-RPC parity and reconnect coverage passed with `bun test --cwd apps/desktop test/store-feed-mapping.test.ts test/protocol-v2-events.test.ts test/chat-reasoning-ui.test.ts test/control-socket.test.ts test/jsonrpc-single-connection.test.ts test/thread-reconnect.test.ts`.
 - Typecheck passed with `bun run typecheck`.
+
+## PR Comment Cleanup
+
+- [x] Fix the unresolved workspace-defaults persistence review thread in `apps/desktop/src/app/store.actions/workspaceDefaults.ts`.
+- [x] Re-verify the workspace-defaults desktop tests and typecheck after the review fix.
+- [ ] Resolve the actionable PR thread and close the stale unused-exports thread with evidence instead of code churn.
+
+## PR Comment Cleanup Review
+
+- `apps/desktop/src/app/store.actions/workspaceDefaults.ts` now narrows `buildApplySessionDefaultsMessage()` to the exact `apply_session_defaults` client message shape and removes the redundant runtime discriminator before `requestJsonRpcControlEvent()`, so the control path cannot silently skip persistence if that builder evolves later.
+- Verification passed with `bun test --cwd apps/desktop test/workspace-settings-sync.test.ts` and `bun run typecheck`.

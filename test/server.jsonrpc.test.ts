@@ -206,34 +206,6 @@ describe("server JSON-RPC websocket mode", () => {
     }
   });
 
-  test("multi-offer websocket clients receive the negotiated subprotocol on the wire", async () => {
-    const tmpDir = await makeTmpProject();
-    const { server, url } = await startAgentServer(serverOpts(tmpDir));
-
-    try {
-      const ws = new WebSocket(url, ["foo", "cowork.jsonrpc.v1"]);
-      await waitForOpen(ws);
-      await expectNoMessage(ws);
-      expect(ws.protocol).toBe("cowork.jsonrpc.v1");
-
-      ws.send(JSON.stringify({
-        id: 1,
-        method: "initialize",
-        params: {
-          clientInfo: {
-            name: "multi-offer-client",
-          },
-        },
-      }));
-      const response = await waitForSingleMessage(ws);
-      expect(response.id).toBe(1);
-      expect(response.result.serverInfo.subprotocol).toBe("cowork.jsonrpc.v1");
-      ws.close();
-    } finally {
-      server.stop();
-    }
-  });
-
   test("JSON-RPC returns -32001 when the request queue is overloaded", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir, {

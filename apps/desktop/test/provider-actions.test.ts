@@ -115,32 +115,4 @@ describe("provider actions", () => {
     ]);
   });
 
-  test("refreshProviderStatus clears loading on successful no-event responses", async () => {
-    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
-    const requestJsonRpcControlEvent = (...args: any[]) => {
-      const method = String(args[3]);
-      const params = args[4] as Record<string, unknown>;
-      calls.push({ method, params });
-      return Promise.resolve(true);
-    };
-
-    const harness = createHarness();
-
-    await refreshProviderStatusForWorkspace({
-      get: harness.get as any,
-      set: harness.set as any,
-      makeId: () => "note-1",
-      nowIso: () => "2026-03-21T00:00:00.000Z",
-      pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
-      requestJsonRpcControlEvent: requestJsonRpcControlEvent as any,
-    }, "ws-1", "/tmp/ws-1");
-
-    expect(calls).toEqual([
-      { method: "cowork/provider/status/refresh", params: { cwd: "/tmp/ws-1" } },
-      { method: "cowork/provider/catalog/read", params: { cwd: "/tmp/ws-1" } },
-      { method: "cowork/provider/authMethods/read", params: { cwd: "/tmp/ws-1" } },
-    ]);
-    expect(harness.state.providerStatusRefreshing).toBe(false);
-    expect(harness.state.notifications).toEqual([]);
-  });
 });

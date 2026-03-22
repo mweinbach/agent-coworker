@@ -27,7 +27,11 @@ import {
   mapTranscriptToFeed,
 } from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
-import { disposeAllJsonRpcSocketState, disposeWorkspaceJsonRpcSocketState } from "./store.helpers/jsonRpcSocket";
+import {
+  disposeAllJsonRpcSocketState,
+  disposeWorkspaceJsonRpcSocketState,
+  reactivateWorkspaceJsonRpcSocketState,
+} from "./store.helpers/jsonRpcSocket";
 import { persist, persistNow, syncDesktopStateCache, syncDesktopStateCacheNow } from "./store.helpers/persistence";
 import {
   RUNTIME,
@@ -346,6 +350,7 @@ const {
   ensureControlSocket,
   disposeAllControlState,
   disposeWorkspaceControlState,
+  reactivateWorkspaceControlState,
   waitForControlSession,
   requestWorkspaceSessions,
   requestSessionSnapshot,
@@ -361,6 +366,7 @@ const {
 const {
   disposeAllThreadEventState,
   disposeWorkspaceThreadEventState,
+  reactivateWorkspaceThreadEventState,
   ensureThreadSocket,
   sendThread,
   sendUserMessageToThread,
@@ -379,6 +385,12 @@ function disposeWorkspaceJsonRpcState(get: StoreGet, workspaceId: string) {
   disposeWorkspaceControlState(workspaceId);
   disposeWorkspaceThreadEventState(workspaceId, get);
   disposeWorkspaceJsonRpcSocketState(workspaceId);
+}
+
+function reactivateWorkspaceJsonRpcState(workspaceId: string) {
+  reactivateWorkspaceControlState(workspaceId);
+  reactivateWorkspaceThreadEventState(workspaceId);
+  reactivateWorkspaceJsonRpcSocketState(workspaceId);
 }
 
 function disposeAllJsonRpcState() {
@@ -403,7 +415,10 @@ async function ensureServerRunning(
   set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void,
   workspaceId: string,
 ) {
+  const ws = get().workspaces.find((workspace) => workspace.id === workspaceId);
+  if (!ws) return;
   ensureWorkspaceRuntime(get, set, workspaceId);
+  reactivateWorkspaceJsonRpcState(workspaceId);
   const rt = get().workspaceRuntimeById[workspaceId];
   if (!rt) return;
   if (rt.serverUrl && !rt.error) return;
@@ -414,9 +429,6 @@ async function ensureServerRunning(
     await inFlight.promise;
     return;
   }
-
-  const ws = get().workspaces.find((w) => w.id === workspaceId);
-  if (!ws) return;
 
   set((s) => ({
     workspaceRuntimeById: {
@@ -509,6 +521,7 @@ export {
   ensureServerRunning,
   disposeWorkspaceJsonRpcState,
   disposeAllJsonRpcState,
+  reactivateWorkspaceJsonRpcState,
   ensureControlSocket,
   waitForControlSession,
   requestWorkspaceSessions,

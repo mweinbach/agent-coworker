@@ -345,7 +345,9 @@ const {
   RUNTIME,
   __controlSocketInternal,
   __threadEventReducerInternal,
+  disposeWorkspaceJsonRpcState,
   ensureControlSocket,
+  ensureServerRunning,
   ensureThreadSocket,
   requestJsonRpcControlEvent,
 } = await import("../src/app/store.helpers");
@@ -1400,6 +1402,63 @@ describe("workspace settings sync", () => {
     expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
   });
 
+  test("ensureServerRunning reactivates disposed JSON-RPC helper state for an existing workspace", async () => {
+    primeWorkspaceConnection();
+    const { threadId } = seedConnectedThread();
+    syncMockedWorkspaceSessions();
+    ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+    ensureThreadSocket(useAppStore.getState as any, useAppStore.setState as any, threadId, "ws://mock");
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    disposeWorkspaceJsonRpcState(useAppStore.getState as any, workspaceId);
+    expect(getWorkspaceJsonRpcHelperState(workspaceId)).toEqual({
+      socket: {
+        isDisposed: true,
+        hasStoreSetter: false,
+        routerCount: 0,
+        lifecycleListenerCount: 0,
+      },
+      control: {
+        isDisposed: true,
+        hasLifecycleCleanup: false,
+        hasBootstrapPromise: false,
+        hasStoreGetter: false,
+        hasStoreSetter: false,
+      },
+      thread: {
+        isDisposed: true,
+        hasRouterCleanup: false,
+        hasLifecycleCleanup: false,
+        reconnectThreadIds: [],
+      },
+    });
+
+    await ensureServerRunning(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+    ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+    ensureThreadSocket(useAppStore.getState as any, useAppStore.setState as any, threadId, "ws://mock");
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    const helperStateAfter = getWorkspaceJsonRpcHelperState(workspaceId);
+    expect(helperStateAfter.socket.isDisposed).toBe(false);
+    expect(helperStateAfter.socket.hasStoreSetter).toBe(true);
+    expect(helperStateAfter.socket.routerCount).toBeGreaterThan(0);
+    expect(helperStateAfter.socket.lifecycleListenerCount).toBeGreaterThan(0);
+    expect(helperStateAfter.control).toMatchObject({
+      isDisposed: false,
+      hasLifecycleCleanup: true,
+      hasStoreGetter: true,
+      hasStoreSetter: true,
+    });
+    expect(helperStateAfter.thread).toEqual({
+      isDisposed: false,
+      hasRouterCleanup: true,
+      hasLifecycleCleanup: true,
+      reconnectThreadIds: [threadId],
+    });
+  });
+
   test("restartWorkspaceServer preserves JSON-RPC workspace state so control bootstrap and thread reconnect recover", async () => {
     primeWorkspaceConnection();
     const { threadId } = seedConnectedThread();
@@ -1439,6 +1498,46 @@ describe("workspace settings sync", () => {
     expect(requestsFor("thread/resume").length).toBeGreaterThan(0);
     expect(getWorkspaceJsonRpcHelperState(workspaceId).thread.reconnectThreadIds).toEqual([threadId]);
     expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.status).toBe("active");
+  });
+
+  test("restartWorkspaceServer clears stale disposed JSON-RPC helper state before reconnecting", async () => {
+    primeWorkspaceConnection();
+    const { threadId } = seedConnectedThread();
+    syncMockedWorkspaceSessions();
+    ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+    ensureThreadSocket(useAppStore.getState as any, useAppStore.setState as any, threadId, "ws://mock");
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    disposeWorkspaceJsonRpcState(useAppStore.getState as any, workspaceId);
+    jsonRpcRequests.length = 0;
+
+    await useAppStore.getState().restartWorkspaceServer(workspaceId);
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    const helperStateAfter = getWorkspaceJsonRpcHelperState(workspaceId);
+    expect(helperStateAfter.socket.isDisposed).toBe(false);
+    expect(helperStateAfter.control.isDisposed).toBe(false);
+    expect(helperStateAfter.thread).toMatchObject({
+      isDisposed: false,
+      reconnectThreadIds: [],
+    });
+    expect(requestsFor("thread/list").length).toBeGreaterThan(0);
+    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.controlSessionId).toBe("jsonrpc-control");
+
+    jsonRpcRequests.length = 0;
+    ensureThreadSocket(useAppStore.getState as any, useAppStore.setState as any, threadId, "ws://mock");
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(requestsFor("thread/resume").length).toBeGreaterThan(0);
+    expect(getWorkspaceJsonRpcHelperState(workspaceId).thread).toEqual({
+      isDisposed: false,
+      hasRouterCleanup: true,
+      hasLifecycleCleanup: true,
+      reconnectThreadIds: [threadId],
+    });
   });
 
   test("applyWorkspaceDefaultsToThread defers auto apply until session settings hydrate", async () => {

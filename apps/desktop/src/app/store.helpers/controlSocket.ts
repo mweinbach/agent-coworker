@@ -63,6 +63,10 @@ export function createControlSocketHelpers(
     return disposedWorkspaces.has(workspaceId);
   }
 
+  function reactivateWorkspaceControlState(workspaceId: string) {
+    disposedWorkspaces.delete(workspaceId);
+  }
+
   function upsertWorkspaceThreads(
     allThreads: ThreadRecord[],
     threadRuntimeById: ReturnType<StoreGet>["threadRuntimeById"],
@@ -87,6 +91,9 @@ export function createControlSocketHelpers(
       const existing = serverBackedBySessionId.get(session.sessionId);
       const threadId = existing?.id ?? session.sessionId;
       const runtime = threadRuntimeById[threadId];
+      const legacyTranscriptId =
+        existing?.legacyTranscriptId
+        ?? (existing && existing.id !== session.sessionId ? existing.id : null);
       return {
         id: threadId,
         workspaceId,
@@ -99,7 +106,7 @@ export function createControlSocketHelpers(
         messageCount: session.messageCount,
         lastEventSeq: session.lastEventSeq,
         draft: false,
-        legacyTranscriptId: existing?.legacyTranscriptId ?? null,
+        legacyTranscriptId,
       } satisfies ThreadRecord;
     });
     const claimedLegacyThreadIds = new Set(
@@ -107,11 +114,15 @@ export function createControlSocketHelpers(
         .map((thread) => thread.legacyTranscriptId)
         .filter((threadId): threadId is string => typeof threadId === "string" && threadId.trim().length > 0),
     );
+    const claimedServerThreadIds = new Set(nextServerThreads.map((thread) => thread.id));
     return [
       ...allThreads.filter((thread) => thread.workspaceId !== workspaceId),
       ...nextServerThreads.sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt)),
       ...localOnlyThreads
-        .filter((thread) => thread.draft === true || !claimedLegacyThreadIds.has(thread.id))
+        .filter((thread) =>
+          thread.draft === true
+          || (!claimedServerThreadIds.has(thread.id) && !claimedLegacyThreadIds.has(thread.id))
+        )
         .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt)),
     ];
   }
@@ -1244,6 +1255,7 @@ export function createControlSocketHelpers(
   return {
     ensureControlSocket,
     disposeWorkspaceControlState,
+    reactivateWorkspaceControlState,
     disposeAllControlState,
     waitForControlSession,
     requestWorkspaceSessions,

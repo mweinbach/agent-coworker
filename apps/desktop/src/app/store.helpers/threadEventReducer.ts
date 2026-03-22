@@ -121,6 +121,10 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     return disposedWorkspaces.has(workspaceId);
   }
 
+  function reactivateWorkspaceThreadEventState(workspaceId: string) {
+    disposedWorkspaces.delete(workspaceId);
+  }
+
   function hasPendingWorkspaceDefaultApply(threadId: string): boolean {
     return Boolean(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId));
   }
@@ -1812,6 +1816,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
 
   return {
     disposeWorkspaceThreadEventState,
+    reactivateWorkspaceThreadEventState,
     disposeAllThreadEventState,
     ensureThreadSocket,
     sendThread,

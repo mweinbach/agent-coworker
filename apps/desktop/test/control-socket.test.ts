@@ -221,6 +221,80 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(persistCalls).toBe(1);
   });
 
+  test("requestWorkspaceSessions preserves the legacy transcript mapping for runtime-backed local threads", async () => {
+    const workspaceId = "ws-legacy-thread";
+    const localThreadId = "local-thread-1";
+    const { state, get, set } = createState(workspaceId, {
+      threads: [
+        {
+          ...makeThread(localThreadId, workspaceId),
+          sessionId: null,
+        },
+      ],
+      threadRuntimeById: {
+        [localThreadId]: {
+          sessionId: "session-keep",
+        },
+      },
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("session-keep")],
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const sessions = await helpers.requestWorkspaceSessions(get as any, set as any, workspaceId);
+
+    expect(sessions?.map((session) => session.sessionId)).toEqual(["session-keep"]);
+    expect(state.threads.filter((thread: any) => thread.workspaceId === workspaceId)).toEqual([
+      expect.objectContaining({
+        id: localThreadId,
+        sessionId: "session-keep",
+        legacyTranscriptId: localThreadId,
+      }),
+    ]);
+  });
+
+  test("requestWorkspaceSessions does not duplicate runtime-backed local threads that already carry a legacy transcript id", async () => {
+    const workspaceId = "ws-existing-legacy-thread";
+    const localThreadId = "local-thread-2";
+    const { state, get, set } = createState(workspaceId, {
+      threads: [
+        {
+          ...makeThread(localThreadId, workspaceId),
+          sessionId: null,
+          legacyTranscriptId: "legacy-thread-2",
+        },
+      ],
+      threadRuntimeById: {
+        [localThreadId]: {
+          sessionId: "session-keep-2",
+        },
+      },
+    });
+
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("thread/list");
+      return {
+        threads: [makeThreadListEntry("session-keep-2")],
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    await helpers.requestWorkspaceSessions(get as any, set as any, workspaceId);
+
+    expect(state.threads.filter((thread: any) => thread.workspaceId === workspaceId)).toEqual([
+      expect.objectContaining({
+        id: localThreadId,
+        sessionId: "session-keep-2",
+        legacyTranscriptId: "legacy-thread-2",
+      }),
+    ]);
+  });
+
   test("requestSessionSnapshot reads coworkSnapshot from thread/read", async () => {
     const workspaceId = "ws-snapshot";
     const { get, set } = createState(workspaceId);

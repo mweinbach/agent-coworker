@@ -50,6 +50,10 @@ function isWorkspaceDisposed(workspaceId: string): boolean {
   return disposedWorkspaceIds.has(workspaceId);
 }
 
+export function reactivateWorkspaceJsonRpcSocketState(workspaceId: string): void {
+  disposedWorkspaceIds.delete(workspaceId);
+}
+
 function rememberWorkspaceStoreSet(workspaceId: string, set: StoreSet | undefined) {
   if (set && !isWorkspaceDisposed(workspaceId)) {
     workspaceStoreSetters.set(workspaceId, set);

@@ -46,6 +46,40 @@ import {
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
+type RefreshProviderStatusDeps = {
+  get: StoreGet;
+  set: StoreSet;
+  makeId: typeof makeId;
+  nowIso: typeof nowIso;
+  pushNotification: typeof pushNotification;
+  requestJsonRpcControlEvent: typeof requestJsonRpcControlEvent;
+};
+
+export async function refreshProviderStatusForWorkspace(
+  deps: RefreshProviderStatusDeps,
+  workspaceId: string,
+  path: string | undefined,
+): Promise<void> {
+  deps.set({ providerStatusRefreshing: true });
+  const results = await Promise.allSettled([
+    deps.requestJsonRpcControlEvent(deps.get, deps.set, workspaceId, "cowork/provider/status/refresh", { cwd: path }),
+    deps.requestJsonRpcControlEvent(deps.get, deps.set, workspaceId, "cowork/provider/catalog/read", { cwd: path }),
+    deps.requestJsonRpcControlEvent(deps.get, deps.set, workspaceId, "cowork/provider/authMethods/read", { cwd: path }),
+  ]);
+  if (!results.every((result) => result.status === "fulfilled" && result.value)) {
+    deps.set((s) => ({
+      providerStatusRefreshing: false,
+      notifications: deps.pushNotification(s.notifications, {
+        id: deps.makeId(),
+        ts: deps.nowIso(),
+        kind: "error",
+        title: "Not connected",
+        detail: "Unable to refresh provider status.",
+      }),
+    }));
+  }
+}
+
 export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "connectProvider" | "setProviderApiKey" | "copyProviderApiKey" | "authorizeProviderAuth" | "logoutProviderAuth" | "callbackProviderAuth" | "requestProviderCatalog" | "requestProviderAuthMethods" | "refreshProviderStatus" | "setLmStudioEnabled" | "setLmStudioModelVisible"> {
   const resolveProviderWorkspaceId = (): string | null =>
     get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
@@ -391,19 +425,15 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
       const workspaceId = await ensureProviderControlReady();
       if (!workspaceId) return;
 
-      set({ providerStatusRefreshing: true });
       const path = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
-      const results = await Promise.allSettled([
-        requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", { cwd: path }),
-        requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", { cwd: path }),
-        requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/authMethods/read", { cwd: path }),
-      ]);
-      if (!results.every((result) => result.status === "fulfilled" && result.value)) {
-        set((s) => ({
-          providerStatusRefreshing: false,
-          notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to refresh provider status." }),
-        }));
-      }
+      await refreshProviderStatusForWorkspace({
+        get,
+        set,
+        makeId,
+        nowIso,
+        pushNotification,
+        requestJsonRpcControlEvent,
+      }, workspaceId, path);
     },
 
     setLmStudioEnabled: async (enabled) => {

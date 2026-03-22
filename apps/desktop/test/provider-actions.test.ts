@@ -1,54 +1,6 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
-mock.module("../src/lib/desktopCommands", () => ({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
-  openPath: async () => {},
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  renamePath: async () => {},
-  revealPath: async () => {},
-  showContextMenu: async () => null,
-  stopWorkspaceServer: async () => {},
-  trashPath: async () => {},
-  windowClose: async () => {},
-  windowMaximize: async () => {},
-  windowMinimize: async () => {},
-}));
-
-let requestJsonRpcControlEventImpl: (...args: any[]) => Promise<boolean> = async () => true;
-
-mock.module("../src/app/store.helpers", () => ({
-  RUNTIME: {},
-  appendThreadTranscript: () => {},
-  basename: (value: string) => value.split("/").filter(Boolean).at(-1) ?? value,
-  buildContextPreamble: () => "",
-  ensureControlSocket: () => ({}),
-  ensureServerRunning: async () => {},
-  ensureThreadRuntime: () => ({}),
-  ensureThreadSocket: () => ({}),
-  ensureWorkspaceRuntime: () => ({}),
-  isProviderName: () => true,
-  makeId: () => "note-1",
-  mapTranscriptToFeed: () => [],
-  nowIso: () => "2026-03-21T00:00:00.000Z",
-  normalizeThreadTitleSource: (_source: unknown, fallbackTitle: string) => fallbackTitle,
-  persistNow: async () => {},
-  providerAuthMethodsFor: () => [],
-  pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
-  queuePendingThreadMessage: () => {},
-  requestJsonRpcControlEvent: (...args: any[]) => requestJsonRpcControlEventImpl(...args),
-  sendThread: () => {},
-  sendUserMessageToThread: async () => {},
-  truncateTitle: (value: string) => value,
-}));
-
-const { createProviderActions } = await import("../src/app/store.actions/provider");
+const { refreshProviderStatusForWorkspace } = await import("../src/app/store.actions/provider");
 
 type TestState = {
   notifications: any[];
@@ -82,15 +34,11 @@ function createHarness(): { state: TestState; get: () => TestState; set: (update
 }
 
 describe("provider actions", () => {
-  beforeEach(() => {
-    requestJsonRpcControlEventImpl = async () => true;
-  });
-
   test("refreshProviderStatus dispatches all three RPCs before the first settles and preserves failure handling", async () => {
     const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
     let resolveFirstCall: ((value: boolean) => void) | null = null;
     let callCount = 0;
-    requestJsonRpcControlEventImpl = (...args: any[]) => {
+    const requestJsonRpcControlEvent = (...args: any[]) => {
       const method = String(args[3]);
       const params = args[4] as Record<string, unknown>;
       calls.push({ method, params });
@@ -106,9 +54,15 @@ describe("provider actions", () => {
     };
 
     const harness = createHarness();
-    const actions = createProviderActions(harness.set as any, harness.get as any);
 
-    const refreshPromise = actions.refreshProviderStatus();
+    const refreshPromise = refreshProviderStatusForWorkspace({
+      get: harness.get as any,
+      set: harness.set as any,
+      makeId: () => "note-1",
+      nowIso: () => "2026-03-21T00:00:00.000Z",
+      pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
+      requestJsonRpcControlEvent: requestJsonRpcControlEvent as any,
+    }, "ws-1", "/tmp/ws-1");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(calls).toEqual([
@@ -122,11 +76,14 @@ describe("provider actions", () => {
     await refreshPromise;
 
     expect(harness.state.providerStatusRefreshing).toBe(false);
-    expect(harness.state.notifications).toHaveLength(1);
-    expect(harness.state.notifications[0]).toMatchObject({
-      kind: "error",
-      title: "Not connected",
-      detail: "Unable to refresh provider status.",
-    });
+    expect(harness.state.notifications).toEqual([
+      {
+        id: "note-1",
+        ts: "2026-03-21T00:00:00.000Z",
+        kind: "error",
+        title: "Not connected",
+        detail: "Unable to refresh provider status.",
+      },
+    ]);
   });
 });

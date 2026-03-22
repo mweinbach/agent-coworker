@@ -5,6 +5,7 @@ import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/
 const startCalls: Array<{ workspaceId: string; workspacePath: string; yolo: boolean }> = [];
 const savedStates: any[] = [];
 const jsonRpcRequests: Array<{ method: string; params?: unknown }> = [];
+const jsonRpcRequestFailures = new Map<string, string>();
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -54,6 +55,10 @@ class MockJsonRpcSocket {
 
   async request(method: string, params?: unknown) {
     jsonRpcRequests.push({ method, params });
+    const failure = jsonRpcRequestFailures.get(method);
+    if (failure) {
+      throw new Error(failure);
+    }
     if (method === "thread/list") {
       return {
         threads: [],
@@ -330,12 +335,60 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
-const { RUNTIME } = await import("../src/app/store.helpers");
+const { RUNTIME, defaultThreadRuntime, defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
 
 async function flushAsyncWork() {
   for (let i = 0; i < 8; i += 1) {
     await Promise.resolve();
   }
+}
+
+function seedActiveThreadState() {
+  useAppStore.setState({
+    selectedWorkspaceId: "ws-jsonrpc",
+    selectedThreadId: "jsonrpc-thread-1",
+    workspaces: [
+      {
+        id: "ws-jsonrpc",
+        name: "JSON-RPC Workspace",
+        path: "/tmp/jsonrpc-workspace",
+        createdAt: "2026-03-21T00:00:00.000Z",
+        lastOpenedAt: "2026-03-21T00:00:00.000Z",
+        wsProtocol: "jsonrpc",
+        defaultEnableMcp: true,
+        defaultBackupsEnabled: true,
+        yolo: false,
+      },
+    ],
+    threads: [
+      {
+        id: "jsonrpc-thread-1",
+        workspaceId: "ws-jsonrpc",
+        title: "New session",
+        createdAt: "2026-03-21T00:00:00.000Z",
+        lastMessageAt: "2026-03-21T00:00:00.000Z",
+        status: "active",
+        sessionId: "jsonrpc-thread-1",
+        messageCount: 0,
+        lastEventSeq: 0,
+      },
+    ],
+    workspaceRuntimeById: {
+      "ws-jsonrpc": {
+        ...defaultWorkspaceRuntime(),
+        serverUrl: "ws://jsonrpc-workspace",
+      },
+    },
+    threadRuntimeById: {
+      "jsonrpc-thread-1": {
+        ...defaultThreadRuntime(),
+        wsUrl: "ws://jsonrpc-workspace",
+        connected: true,
+        sessionId: "jsonrpc-thread-1",
+      },
+    },
+    composerText: "",
+  } as any);
 }
 
 describe("desktop JSON-RPC single connection path", () => {
@@ -344,6 +397,7 @@ describe("desktop JSON-RPC single connection path", () => {
     startCalls.length = 0;
     savedStates.length = 0;
     jsonRpcRequests.length = 0;
+    jsonRpcRequestFailures.clear();
     MockJsonRpcSocket.instances.length = 0;
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.pendingThreadMessages.clear();
@@ -438,6 +492,57 @@ describe("desktop JSON-RPC single connection path", () => {
       input: [{ type: "text", text: "hello over jsonrpc" }],
       clientMessageId: expect.any(String),
     });
+  });
+
+  test("surfaces turn/start rejection as an error without changing optimistic send semantics", async () => {
+    seedActiveThreadState();
+    jsonRpcRequestFailures.set("turn/start", "turn/start failed");
+
+    await useAppStore.getState().sendMessage("hello over jsonrpc");
+    await flushAsyncWork();
+
+    const runtime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
+    expect(runtime?.feed.map((item) => item.kind)).toEqual(["message", "error"]);
+    expect(runtime?.feed.at(-1)).toMatchObject({
+      kind: "error",
+      message: "Not connected. Reconnect to continue.",
+      code: "internal_error",
+      source: "protocol",
+    });
+    expect(useAppStore.getState().composerText).toBe("");
+    expect(jsonRpcRequests.map((entry) => entry.method)).toContain("turn/start");
+  });
+
+  test("clears pending steer state when turn/steer rejects", async () => {
+    seedActiveThreadState();
+    useAppStore.setState({
+      threadRuntimeById: {
+        ...useAppStore.getState().threadRuntimeById,
+        "jsonrpc-thread-1": {
+          ...defaultThreadRuntime(),
+          wsUrl: "ws://jsonrpc-workspace",
+          connected: true,
+          sessionId: "jsonrpc-thread-1",
+          busy: true,
+          activeTurnId: "turn-1",
+        },
+      },
+    } as any);
+    jsonRpcRequestFailures.set("turn/steer", "turn/steer failed");
+
+    await useAppStore.getState().sendMessage("tighten the scope", "steer");
+    await flushAsyncWork();
+
+    const runtime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
+    expect(runtime?.pendingSteer).toBeNull();
+    expect(RUNTIME.pendingThreadSteers.get("jsonrpc-thread-1")).toBeUndefined();
+    expect(runtime?.feed.at(-1)).toMatchObject({
+      kind: "error",
+      message: "Not connected. Reconnect to continue.",
+      code: "internal_error",
+      source: "protocol",
+    });
+    expect(jsonRpcRequests.map((entry) => entry.method)).toContain("turn/steer");
   });
 
   test("routes provider, memory, and backup control requests over the shared JsonRpcSocket", async () => {

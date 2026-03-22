@@ -457,6 +457,38 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     });
   }
 
+  function surfaceJsonRpcTurnSendFailure(
+    set: StoreSet,
+    threadId: string,
+    opts?: { clientMessageId?: string },
+  ) {
+    if (opts?.clientMessageId) {
+      clearPendingThreadSteer(threadId, opts.clientMessageId);
+      set((s) => {
+        const rt = s.threadRuntimeById[threadId];
+        if (!rt || rt.pendingSteer?.clientMessageId !== opts.clientMessageId) return {};
+        return {
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: {
+              ...rt,
+              pendingSteer: null,
+            },
+          },
+        };
+      });
+    }
+
+    pushFeedItem(set, threadId, {
+      id: deps.makeId(),
+      kind: "error",
+      ts: deps.nowIso(),
+      message: "Not connected. Reconnect to continue.",
+      code: "internal_error",
+      source: "protocol",
+    });
+  }
+
   function updateFeedItem(set: StoreSet, threadId: string, itemId: string, update: (item: FeedItem) => FeedItem) {
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
@@ -640,35 +672,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           clientMessageId,
         });
 
-        void steerJsonRpcTurn(get, set, workspaceId, rt.sessionId, rt.activeTurnId, trimmed, clientMessageId);
-        const ok = true;
-
-        if (!ok) {
-          clearPendingThreadSteer(threadId, clientMessageId);
-          set((s) => {
-            const nextRt = s.threadRuntimeById[threadId];
-            if (!nextRt || nextRt.pendingSteer?.clientMessageId !== clientMessageId) return {};
-            return {
-              threadRuntimeById: {
-                ...s.threadRuntimeById,
-                [threadId]: {
-                  ...nextRt,
-                  pendingSteer: null,
-                },
-              },
-            };
+        void steerJsonRpcTurn(get, set, workspaceId, rt.sessionId, rt.activeTurnId, trimmed, clientMessageId)
+          .catch(() => {
+            surfaceJsonRpcTurnSendFailure(set, threadId, { clientMessageId });
           });
-          pushFeedItem(set, threadId, {
-            id: deps.makeId(),
-            kind: "error",
-            ts: deps.nowIso(),
-            message: "Not connected. Reconnect to continue.",
-            code: "internal_error",
-            source: "protocol",
-          });
-        }
 
-        return ok;
+        return true;
       }
 
       return false;
@@ -694,20 +703,10 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       clientMessageId,
     });
 
-    void startJsonRpcTurn(get, set, workspaceId, rt.sessionId, trimmed, clientMessageId);
-    const ok = true;
-
-    if (!ok) {
-      pushFeedItem(set, threadId, {
-        id: deps.makeId(),
-        kind: "error",
-        ts: deps.nowIso(),
-        message: "Not connected. Reconnect to continue.",
-        code: "internal_error",
-        source: "protocol",
+    void startJsonRpcTurn(get, set, workspaceId, rt.sessionId, trimmed, clientMessageId)
+      .catch(() => {
+        surfaceJsonRpcTurnSendFailure(set, threadId);
       });
-      return false;
-    }
 
     return true;
   }

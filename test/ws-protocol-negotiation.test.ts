@@ -41,6 +41,22 @@ describe("WebSocket protocol negotiation", () => {
     });
   });
 
+  test("selects the first supported subprotocol from an offered list", () => {
+    const resolved = resolveWsProtocol({
+      offeredSubprotocols: ["foo", "cowork.jsonrpc.v1", "cowork.legacy.v1"],
+      requestedProtocol: "legacy",
+      defaultProtocol: "legacy",
+    });
+    expect(resolved).toEqual({
+      ok: true,
+      protocol: {
+        mode: "jsonrpc",
+        selectedSubprotocol: "cowork.jsonrpc.v1",
+        source: "subprotocol",
+      },
+    });
+  });
+
   test("falls back to query param when no subprotocol is offered", () => {
     const resolved = resolveWsProtocol({
       offeredSubprotocols: [],
@@ -90,6 +106,17 @@ describe("WebSocket protocol negotiation", () => {
     })).toEqual({
       ok: false,
       error: "Unsupported WebSocket protocol mode: weird",
+    });
+  });
+
+  test("rejects when no offered subprotocol is supported", () => {
+    expect(resolveWsProtocol({
+      offeredSubprotocols: ["foo", "bar"],
+      requestedProtocol: "jsonrpc",
+      defaultProtocol: "legacy",
+    })).toEqual({
+      ok: false,
+      error: "Unsupported WebSocket subprotocol: foo",
     });
   });
 });

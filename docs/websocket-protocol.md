@@ -25,6 +25,8 @@ Cowork chooses the WebSocket protocol mode in this order:
 2. `?protocol=` query param
 3. Server default (`legacy` today)
 
+When multiple subprotocols are offered, the server selects the first supported value in the list.
+
 ### Supported WebSocket subprotocols
 
 - `cowork.legacy.v1`

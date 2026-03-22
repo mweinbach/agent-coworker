@@ -42,22 +42,24 @@ export function resolveWsProtocol(opts: {
   requestedProtocol: string | null | undefined;
   defaultProtocol: WsProtocolMode;
 }): WsProtocolNegotiationResult {
-  const firstOffered = opts.offeredSubprotocols[0] ?? null;
-  if (firstOffered) {
-    const mode = SUBPROTOCOL_TO_MODE.get(firstOffered);
-    if (!mode) {
+  for (const offeredSubprotocol of opts.offeredSubprotocols) {
+    const mode = SUBPROTOCOL_TO_MODE.get(offeredSubprotocol);
+    if (mode) {
       return {
-        ok: false,
-        error: `Unsupported WebSocket subprotocol: ${firstOffered}`,
+        ok: true,
+        protocol: {
+          mode,
+          selectedSubprotocol: offeredSubprotocol,
+          source: "subprotocol",
+        },
       };
     }
+  }
+
+  if (opts.offeredSubprotocols.length > 0) {
     return {
-      ok: true,
-      protocol: {
-        mode,
-        selectedSubprotocol: firstOffered,
-        source: "subprotocol",
-      },
+      ok: false,
+      error: `Unsupported WebSocket subprotocol: ${opts.offeredSubprotocols[0]}`,
     };
   }
 

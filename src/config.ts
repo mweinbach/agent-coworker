@@ -117,10 +117,19 @@ async function resolveConfiguredModelMetadata(
   source: string,
   providerOptions: Record<string, unknown> | undefined,
   env: Record<string, string | undefined>,
+  awsBedrockProxyResolution?: { awsBedrockProxyBaseUrl?: string; openaiProxyBaseUrl?: string },
 ) {
   if (isDynamicModelProvider(provider)) {
     return await resolveModelMetadata(provider, modelId, {
       allowPlaceholder: provider === "lmstudio",
+      ...(awsBedrockProxyResolution
+        ? {
+            config: {
+              ...awsBedrockProxyResolution,
+              providerOptions,
+            },
+          }
+        : {}),
       providerOptions,
       env,
       source,
@@ -363,8 +372,18 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asNonEmptyString(projectConfig.model) ||
     asNonEmptyString(userConfig.model) ||
     (asProviderName(builtInDefaults.provider) === provider && asNonEmptyString(builtInDefaults.model));
+  const awsBedrockProxyResolution = awsBedrockProxyBaseUrl
+    ? { awsBedrockProxyBaseUrl, openaiProxyBaseUrl: awsBedrockProxyBaseUrl }
+    : undefined;
   const supportedModel = configuredModel
-    ? await resolveConfiguredModelMetadata(provider, configuredModel, "model", providerOptions, env)
+    ? await resolveConfiguredModelMetadata(
+        provider,
+        configuredModel,
+        "model",
+        providerOptions,
+        env,
+        awsBedrockProxyResolution,
+      )
     : await resolveDefaultModelMetadata(provider, { providerOptions, env });
 
   const childModelRoutingMode =

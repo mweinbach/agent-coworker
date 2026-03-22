@@ -2,6 +2,13 @@ import type { AgentConfig } from "../types";
 
 type MaybeEnv = Record<string, string | undefined> | NodeJS.ProcessEnv;
 
+/** Subset of session config used to resolve AWS Bedrock Proxy base URL (global URL + workspace overrides). */
+export type AwsBedrockProxyResolutionConfig = {
+  awsBedrockProxyBaseUrl?: string;
+  openaiProxyBaseUrl?: string;
+  providerOptions?: unknown;
+};
+
 export type AwsBedrockProxyDiscoveredModel = {
   id: string;
   displayName: string;
@@ -198,7 +205,7 @@ export function resolveAwsBedrockProxyApiKey(opts: {
   return envValue || undefined;
 }
 
-function providerOptionsBaseUrl(config: AgentConfig | undefined): string | undefined {
+function providerOptionsBaseUrl(config: AwsBedrockProxyResolutionConfig | AgentConfig | undefined): string | undefined {
   const options = config?.providerOptions;
   if (!options || typeof options !== "object") return undefined;
   const root = options as Record<string, unknown>;
@@ -217,7 +224,7 @@ function providerOptionsBaseUrl(config: AgentConfig | undefined): string | undef
 
 export function resolveAwsBedrockProxyBaseUrl(opts: {
   baseUrl?: string;
-  config?: AgentConfig;
+  config?: AwsBedrockProxyResolutionConfig | AgentConfig;
   providerOptions?: unknown;
   env?: MaybeEnv;
 } = {}): string | undefined {
@@ -242,8 +249,8 @@ export function resolveAwsBedrockProxyBaseUrl(opts: {
   }
 
   const configValue =
-    asNonEmptyString((opts.config as { awsBedrockProxyBaseUrl?: unknown } | undefined)?.awsBedrockProxyBaseUrl)
-    || asNonEmptyString((opts.config as { openaiProxyBaseUrl?: unknown } | undefined)?.openaiProxyBaseUrl)
+    asNonEmptyString(opts.config?.awsBedrockProxyBaseUrl)
+    || asNonEmptyString(opts.config?.openaiProxyBaseUrl)
     || providerOptionsBaseUrl(opts.config);
   if (configValue) {
     const normalized = normalizeBaseUrl(configValue);
@@ -364,6 +371,7 @@ export async function resolveAwsBedrockProxyDiscoveredModel(opts: {
   modelId: string;
   baseUrl?: string;
   apiKey?: string;
+  config?: AwsBedrockProxyResolutionConfig | AgentConfig;
   providerOptions?: unknown;
   env?: MaybeEnv;
   fetchImpl?: typeof fetch;
@@ -375,6 +383,7 @@ export async function resolveAwsBedrockProxyDiscoveredModel(opts: {
   const discovery = await discoverAwsBedrockProxyModelsDetailed({
     baseUrl: resolveAwsBedrockProxyBaseUrl({
       baseUrl: opts.baseUrl,
+      config: opts.config,
       providerOptions: opts.providerOptions,
       env: opts.env,
     }),

@@ -834,6 +834,30 @@ describe("pi runtime regressions", () => {
     expect(resolved.model.input).toEqual(["text", "image"]);
   });
 
+  test("aws-bedrock-proxy runtime preserves discovered image capability when only global awsBedrockProxyBaseUrl is set", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-bedrock-global-url-"));
+    const config = makeConfig(homeDir, {
+      provider: "aws-bedrock-proxy",
+      model: "vision-router",
+      preferredChildModel: "vision-router",
+      awsBedrockProxyBaseUrl: "https://proxy.global.example.com/v1",
+    });
+
+    const resolved = await withMockedFetch(
+      (async () => jsonResponse({
+        object: "list",
+        data: [
+          { id: "vision-router", object: "model", input_modalities: ["text", "image"] },
+        ],
+      })) as typeof fetch,
+      async () => await piRuntimeInternal.resolvePiModel(makeParams(config)),
+    );
+
+    expect(resolved.model.baseUrl).toBe("https://proxy.global.example.com/v1");
+    expect(resolved.model.input).toEqual(["text", "image"]);
+    expect(resolved.model.name).toBe("Vision Router");
+  });
+
   test("aws-bedrock-proxy runtime model resolution falls back to text-only when discovery fails", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-bedrock-fallback-"));
     const config = makeConfig(homeDir, {

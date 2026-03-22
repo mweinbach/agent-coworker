@@ -21,6 +21,7 @@ import type { ProviderName } from "./types";
 async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
   const modelMetadata = await resolveModelMetadata(config.provider, config.model, {
     allowPlaceholder: true,
+    config,
     providerOptions: config.providerOptions,
     source: "model",
     log: (line) => console.warn(line),
@@ -419,6 +420,7 @@ export interface SystemPromptResult {
 export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<SystemPromptResult> {
   const supportedModel = await resolveModelMetadata(config.provider, config.model, {
     allowPlaceholder: true,
+    config,
     providerOptions: config.providerOptions,
     source: "model",
     log: (line) => console.warn(line),

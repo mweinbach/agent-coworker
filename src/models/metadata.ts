@@ -3,8 +3,11 @@ import {
   resolveDefaultLmStudioModelMetadata,
   resolveLmStudioDiscoveredModelMetadata,
 } from "../providers/lmstudio/catalog";
-import { resolveAwsBedrockProxyDiscoveredModel } from "../providers/awsBedrockProxyShared";
-import type { ProviderName } from "../types";
+import {
+  resolveAwsBedrockProxyDiscoveredModel,
+  type AwsBedrockProxyResolutionConfig,
+} from "../providers/awsBedrockProxyShared";
+import type { AgentConfig, ProviderName } from "../types";
 import {
   assertSupportedModel,
   defaultSupportedModel,
@@ -82,6 +85,8 @@ export async function resolveModelMetadata(
   modelId: string,
   opts: {
     allowPlaceholder?: boolean;
+    /** Session/config slice so global `awsBedrockProxyBaseUrl` matches runtime discovery precedence. */
+    config?: AgentConfig | AwsBedrockProxyResolutionConfig;
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
@@ -93,6 +98,7 @@ export async function resolveModelMetadata(
     const normalizedModelId = normalizeModelIdForProvider(provider, modelId, opts.source);
     const discovered = await resolveAwsBedrockProxyDiscoveredModel({
       modelId: normalizedModelId,
+      config: opts.config,
       providerOptions: opts.providerOptions,
       env: opts.env,
       fetchImpl: opts.fetchImpl,

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +10,7 @@ import type { AgentConfig, ModelMessage } from "../src/types";
 import { getAiCoworkerPaths } from "../src/connect";
 import { defaultSupportedModel } from "../src/models/registry";
 import { CODEX_BACKEND_BASE_URL, writeCodexAuthMaterial } from "../src/providers/codex-auth";
+import { __clearAwsBedrockProxyDiscoveryCacheForTests } from "../src/providers/awsBedrockProxyShared";
 import { resolveOpenAiResponsesModel } from "../src/runtime/openaiResponsesModel";
 import { __internal as piRuntimeInternal, createPiRuntime } from "../src/runtime/piRuntime";
 import { MODEL_SCRATCHPAD_DIRNAME, TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS } from "../src/shared/toolOutputOverflow";
@@ -148,6 +149,10 @@ async function parseProxyFetchPayload(
 }
 
 describe("pi runtime regressions", () => {
+  beforeEach(() => {
+    __clearAwsBedrockProxyDiscoveryCacheForTests();
+  });
+
   test("calls onModelAbort exactly once when turn starts with an aborted signal", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-abort-"));
     const runtime = createPiRuntime();
@@ -878,6 +883,62 @@ describe("pi runtime regressions", () => {
 
     expect(resolved.model.name).toBe("vision-router");
     expect(resolved.model.input).toEqual(["text"]);
+  });
+
+  test("aws-bedrock-proxy runtime uses saved connection-store token for /models discovery", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-bedrock-saved-key-"));
+    const paths = getAiCoworkerPaths({ homedir: homeDir });
+    await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
+    await fs.writeFile(
+      paths.connectionsFile,
+      JSON.stringify({
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        services: {
+          "aws-bedrock-proxy": {
+            service: "aws-bedrock-proxy",
+            mode: "api_key",
+            apiKey: "saved-store-token",
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const config = makeConfig(homeDir, {
+      provider: "aws-bedrock-proxy",
+      model: "vision-router",
+      preferredChildModel: "vision-router",
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.example.com/v1",
+        },
+      },
+    });
+
+    const fetchImpl = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.includes("/models")) {
+        return new Response("not found", { status: 404 });
+      }
+      const headers = new Headers(init?.headers as HeadersInit | undefined);
+      const auth = headers.get("authorization") ?? "";
+      if (!auth.includes("Bearer saved-store-token")) {
+        return new Response("unauthorized", { status: 401 });
+      }
+      return jsonResponse({
+        object: "list",
+        data: [{ id: "vision-router", object: "model", input_modalities: ["text", "image"] }],
+      });
+    });
+
+    const resolved = await withMockedFetch(fetchImpl as typeof fetch, async () =>
+      piRuntimeInternal.resolvePiModel(makeParams(config)),
+    );
+
+    expect(resolved.model.input).toEqual(["text", "image"]);
+    expect(resolved.model.name).toBe("Vision Router");
   });
 
   test.serial("nvidia PI runtime tolerates missing local pricing metadata without surfacing model.cost errors", async () => {

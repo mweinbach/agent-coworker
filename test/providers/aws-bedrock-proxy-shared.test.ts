@@ -1,6 +1,7 @@
-import { describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 import {
+  __clearAwsBedrockProxyDiscoveryCacheForTests,
   discoverAwsBedrockProxyModels,
   discoverAwsBedrockProxyModelsDetailed,
   resolveAwsBedrockProxyApiKey,
@@ -15,6 +16,10 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe("aws-bedrock-proxy discovery", () => {
+  beforeEach(() => {
+    __clearAwsBedrockProxyDiscoveryCacheForTests();
+  });
+
   test("preserves usable model ids from an OpenAI-style /models payload and ignores wildcard placeholders", async () => {
     const fetchImpl = mock(async () => jsonResponse({
       object: "list",
@@ -45,6 +50,26 @@ describe("aws-bedrock-proxy discovery", () => {
     ]);
     expect(result.models.find((model) => model.id === "openai.gpt-oss-120b-1:0")?.supportsImageInput).toBe(true);
     expect(result.models.find((model) => model.id === "us.anthropic.claude-sonnet-4-6")?.supportsImageInput).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  test("caches successful /models responses so identical discovery reuses one network call", async () => {
+    const fetchImpl = mock(async () => jsonResponse({
+      object: "list",
+      data: [{ id: "router", object: "model" }],
+    }));
+
+    const opts = {
+      baseUrl: "https://proxy.example.com",
+      apiKey: "same-token",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    };
+
+    const first = await discoverAwsBedrockProxyModelsDetailed(opts);
+    const second = await discoverAwsBedrockProxyModelsDetailed(opts);
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 

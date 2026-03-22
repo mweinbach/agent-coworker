@@ -87,6 +87,11 @@ export async function resolveModelMetadata(
     allowPlaceholder?: boolean;
     /** Session/config slice so global `awsBedrockProxyBaseUrl` matches runtime discovery precedence. */
     config?: AgentConfig | AwsBedrockProxyResolutionConfig;
+    /**
+     * Connection-store API key for `aws-bedrock-proxy` so `/models` discovery matches runtime auth
+     * when the token is not in env. Combined with `env` inside `resolveAwsBedrockProxyApiKey`.
+     */
+    awsBedrockProxySavedApiKey?: string;
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
@@ -98,6 +103,7 @@ export async function resolveModelMetadata(
     const normalizedModelId = normalizeModelIdForProvider(provider, modelId, opts.source);
     const discovered = await resolveAwsBedrockProxyDiscoveredModel({
       modelId: normalizedModelId,
+      apiKey: opts.awsBedrockProxySavedApiKey,
       config: opts.config,
       providerOptions: opts.providerOptions,
       env: opts.env,

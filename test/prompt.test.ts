@@ -1,10 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadSystemPrompt, loadSubAgentPrompt, loadSystemPromptWithSkills } from "../src/prompt";
+import { __clearAwsBedrockProxyDiscoveryCacheForTests } from "../src/providers/awsBedrockProxyShared";
 import type { AgentConfig } from "../src/types";
 
 function repoRoot(): string {
@@ -146,6 +147,10 @@ const WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_FILES = [
 // loadSystemPrompt
 // ---------------------------------------------------------------------------
 describe("loadSystemPrompt", () => {
+  beforeEach(() => {
+    __clearAwsBedrockProxyDiscoveryCacheForTests();
+  });
+
   test("loads system.md from builtInDir/prompts/", async () => {
     const config = makeConfig();
     const prompt = await loadSystemPrompt(config);
@@ -732,6 +737,38 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("**slides**");
     expect(prompt).toContain("source: built-in");
     expect(discoveredSkills.map((skill) => skill.name)).toContain("slides");
+  });
+
+  test("loadSystemPromptWithSkills performs one /models request for aws-bedrock-proxy (no duplicate metadata resolution)", async () => {
+    let modelsRequests = 0;
+    const fetchImpl = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/models") || url.includes("/models")) {
+        modelsRequests += 1;
+        return jsonResponse({
+          object: "list",
+          data: [{ id: "vision-router", object: "model", modalities: ["text", "image"] }],
+        });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    await withMockedFetch(fetchImpl as typeof fetch, async () => {
+      const config = makeConfig({
+        provider: "aws-bedrock-proxy",
+        model: "vision-router",
+        preferredChildModel: "vision-router",
+        providerOptions: {
+          "aws-bedrock-proxy": {
+            baseUrl: "https://proxy.example.com/v1",
+          },
+        },
+        skillsDirs: ["/nonexistent/skills"],
+      });
+      await loadSystemPromptWithSkills(config);
+    });
+
+    expect(modelsRequests).toBe(1);
   });
 
   test("skips skills section when skills dirs do not exist", async () => {

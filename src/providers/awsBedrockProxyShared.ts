@@ -38,6 +38,21 @@ export type AwsBedrockProxyModelDiscoveryResult =
     };
 
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 7_500;
+const DISCOVERY_CACHE_TTL_MS = 60_000;
+
+type DiscoveryCacheEntry = {
+  expiresAt: number;
+  result: Extract<AwsBedrockProxyModelDiscoveryResult, { ok: true }>;
+};
+
+const discoveryCacheByKey = new Map<string, DiscoveryCacheEntry>();
+const discoveryInflightByKey = new Map<string, Promise<AwsBedrockProxyModelDiscoveryResult>>();
+
+/** Test-only: clear discovery cache and in-flight coalescing state. */
+export function __clearAwsBedrockProxyDiscoveryCacheForTests(): void {
+  discoveryCacheByKey.clear();
+  discoveryInflightByKey.clear();
+}
 
 function asNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -284,21 +299,12 @@ export async function discoverAwsBedrockProxyModels(opts: {
   return result.ok ? result.models : [];
 }
 
-export async function discoverAwsBedrockProxyModelsDetailed(opts: {
-  baseUrl?: string;
+async function discoverAwsBedrockProxyModelsDetailedUncached(opts: {
+  baseUrl: string;
   apiKey?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
-} = {}): Promise<AwsBedrockProxyModelDiscoveryResult> {
-  const baseUrl = opts.baseUrl;
-  if (!baseUrl) {
-    return {
-      ok: false,
-      code: "missing_base_url",
-      message: "Missing AWS Bedrock Proxy base URL.",
-    };
-  }
-
+}): Promise<AwsBedrockProxyModelDiscoveryResult> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_DISCOVERY_TIMEOUT_MS;
   const controller = new AbortController();
@@ -311,7 +317,7 @@ export async function discoverAwsBedrockProxyModelsDetailed(opts: {
     const apiKey = opts.apiKey?.trim();
     if (apiKey) headers.authorization = `Bearer ${apiKey}`;
 
-    const response = await fetchImpl(`${baseUrl}/models`, {
+    const response = await fetchImpl(`${opts.baseUrl}/models`, {
       method: "GET",
       headers,
       signal: controller.signal,
@@ -365,6 +371,52 @@ export async function discoverAwsBedrockProxyModelsDetailed(opts: {
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function discoverAwsBedrockProxyModelsDetailed(opts: {
+  baseUrl?: string;
+  apiKey?: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+} = {}): Promise<AwsBedrockProxyModelDiscoveryResult> {
+  const baseUrl = opts.baseUrl;
+  if (!baseUrl) {
+    return {
+      ok: false,
+      code: "missing_base_url",
+      message: "Missing AWS Bedrock Proxy base URL.",
+    };
+  }
+
+  const apiKeyPart = opts.apiKey?.trim() ?? "";
+  const cacheKey = `${baseUrl}\0${apiKeyPart}`;
+
+  const cached = discoveryCacheByKey.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.result;
+  }
+
+  let inflight = discoveryInflightByKey.get(cacheKey);
+  if (!inflight) {
+    inflight = discoverAwsBedrockProxyModelsDetailedUncached({
+      baseUrl,
+      apiKey: opts.apiKey,
+      fetchImpl: opts.fetchImpl,
+      timeoutMs: opts.timeoutMs,
+    }).then((result) => {
+      discoveryInflightByKey.delete(cacheKey);
+      if (result.ok) {
+        discoveryCacheByKey.set(cacheKey, {
+          expiresAt: Date.now() + DISCOVERY_CACHE_TTL_MS,
+          result,
+        });
+      }
+      return result;
+    });
+    discoveryInflightByKey.set(cacheKey, inflight);
+  }
+
+  return inflight;
 }
 
 export async function resolveAwsBedrockProxyDiscoveredModel(opts: {

@@ -1,9 +1,10 @@
-import { describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { getProviderCatalog, listProviderCatalogEntries } from "../../src/providers/connectionCatalog";
+import { __clearAwsBedrockProxyDiscoveryCacheForTests } from "../../src/providers/awsBedrockProxyShared";
 import { getAiCoworkerPaths } from "../../src/connect";
 import { PROVIDER_NAMES } from "../../src/types";
 
@@ -15,6 +16,10 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe("providers/connectionCatalog", () => {
+  beforeEach(() => {
+    __clearAwsBedrockProxyDiscoveryCacheForTests();
+  });
+
   test("catalog entries stay aligned with provider names and default-model map", async () => {
     const payload = await getProviderCatalog({
       readStore: async () => ({

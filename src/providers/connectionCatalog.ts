@@ -14,6 +14,7 @@ import { resolveAuthHomeDir } from "../utils/authHome";
 import {
   discoverAwsBedrockProxyModelsDetailed,
   formatAwsBedrockProxyDiscoveryFailure,
+  resolveAwsBedrockProxyApiKey,
   resolveAwsBedrockProxyBaseUrl,
 } from "./awsBedrockProxyShared";
 
@@ -190,7 +191,10 @@ export async function getProviderCatalog(opts: {
     });
     const discovery = await discoverAwsBedrockProxyModelsDetailed({
       baseUrl,
-      apiKey: savedKey,
+      apiKey: resolveAwsBedrockProxyApiKey({
+        savedKey,
+        env: opts.env,
+      }),
       fetchImpl: opts.fetchImpl,
     });
     const discoveredModels = discovery.ok ? discovery.models : [];

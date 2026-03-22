@@ -1,4 +1,4 @@
-import { describe, expect, test, mock } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,8 +14,13 @@ import {
   resolveProviderAuthMethod,
   setProviderApiKey,
 } from "../../src/providers/authRegistry";
+import { __clearAwsBedrockProxyDiscoveryCacheForTests } from "../../src/providers/awsBedrockProxyShared";
 
 describe("providers/authRegistry", () => {
+  beforeEach(() => {
+    __clearAwsBedrockProxyDiscoveryCacheForTests();
+  });
+
   test("lists auth methods for all providers", () => {
     const methods = listProviderAuthMethods();
     expect(methods.openai?.some((m) => m.id === "api_key")).toBe(true);

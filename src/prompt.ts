@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { getSavedProviderApiKey } from "./config";
 import type { AgentConfig } from "./types";
 import { discoverSkills } from "./skills";
 import { getResolvedModelMetadataSync, isDynamicModelProvider, resolveModelMetadata } from "./models/metadata";
@@ -18,14 +19,10 @@ import {
 import { isUserFacingProviderEnabled } from "./providers/catalog";
 import type { ProviderName } from "./types";
 
-async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
-  const modelMetadata = await resolveModelMetadata(config.provider, config.model, {
-    allowPlaceholder: true,
-    config,
-    providerOptions: config.providerOptions,
-    source: "model",
-    log: (line) => console.warn(line),
-  });
+async function resolveSystemTemplatePath(
+  config: AgentConfig,
+  modelMetadata: ResolvedModelMetadata,
+): Promise<string> {
   const modelSystemPath = path.join(config.builtInDir, "prompts", modelMetadata.promptTemplate);
   try {
     await fs.access(modelSystemPath);
@@ -341,10 +338,13 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
     allowPlaceholder: true,
     config,
     providerOptions: config.providerOptions,
+    ...(config.provider === "aws-bedrock-proxy"
+      ? { awsBedrockProxySavedApiKey: getSavedProviderApiKey(config, "aws-bedrock-proxy") }
+      : {}),
     source: "model",
     log: (line) => console.warn(line),
   });
-  const systemPath = await resolveSystemTemplatePath(config);
+  const systemPath = await resolveSystemTemplatePath(config, supportedModel);
   let prompt = await fs.readFile(systemPath, "utf-8");
 
   const skills = await discoverSkills(config.skillsDirs);

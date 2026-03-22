@@ -309,7 +309,7 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
-const { RUNTIME, requestJsonRpcControlEvent } = await import("../src/app/store.helpers");
+const { RUNTIME, ensureControlSocket, requestJsonRpcControlEvent } = await import("../src/app/store.helpers");
 const { ensureWorkspaceJsonRpcSocket } = await import("../src/app/store.helpers/jsonRpcSocket");
 
 function requestsFor(method: string) {
@@ -1253,6 +1253,25 @@ describe("workspace settings sync", () => {
     ]);
     expect(useAppStore.getState().workspaces.some((w) => w.id === workspaceId)).toBe(false);
     expect(useAppStore.getState().threads.some((t) => t.id === threadId)).toBe(false);
+  });
+
+  test("removeWorkspace closes the shared JsonRpcSocket before removing it so install waiters reject", async () => {
+    primeWorkspaceConnection();
+    ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+
+    const rejected = Promise.withResolvers<void>();
+    RUNTIME.skillInstallWaiters.set(workspaceId, {
+      pendingKey: "install:project",
+      resolve: rejected.resolve,
+      reject: rejected.reject,
+    });
+
+    await Promise.all([
+      useAppStore.getState().removeWorkspace(workspaceId),
+      expect(rejected.promise).rejects.toThrow("Control connection closed"),
+    ]);
+
+    expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
   });
 
   test("applyWorkspaceDefaultsToThread defers auto apply until session settings hydrate", async () => {

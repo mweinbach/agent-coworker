@@ -121,12 +121,12 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       }
 
       const jsonRpcSocket = RUNTIME.jsonRpcSockets.get(workspaceId);
-      RUNTIME.jsonRpcSockets.delete(workspaceId);
       try {
         jsonRpcSocket?.close();
       } catch {
         // ignore
       }
+      RUNTIME.jsonRpcSockets.delete(workspaceId);
 
       try {
         await stopWorkspaceServer({ workspaceId });

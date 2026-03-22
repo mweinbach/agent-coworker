@@ -236,36 +236,37 @@ function mergeToolTraceItems(toolItems: Extract<FeedItem, { kind: "tool" }>[]): 
 }
 
 function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntry[] {
-  const entries: ActivityTraceEntry[] = [];
-  let pendingTools: Extract<FeedItem, { kind: "tool" }>[] = [];
-
-  const flushPendingTools = () => {
-    if (pendingTools.length === 0) return;
-    for (const item of mergeToolTraceItems(pendingTools)) {
-      entries.push({ kind: "tool", item });
-    }
-    pendingTools = [];
-  };
+  // Reasoning always precedes tool calls in the trace, regardless of feed arrival order.
+  // (Tool events can land in the feed before the reasoning item is flushed during streaming.)
+  const reasoningItems: Extract<FeedItem, { kind: "reasoning" }>[] = [];
+  const toolItems: Extract<FeedItem, { kind: "tool" }>[] = [];
 
   for (const item of items) {
     if (item.kind === "reasoning") {
-      flushPendingTools();
-      const previous = entries[entries.length - 1];
-      if (
-        previous?.kind === "reasoning" &&
-        previous.item.mode === item.mode &&
-        normalizedReasoningText(previous.item.text) === normalizedReasoningText(item.text)
-      ) {
-        continue;
-      }
-      entries.push({ kind: "reasoning", item });
-      continue;
+      reasoningItems.push(item);
+    } else {
+      toolItems.push(item);
     }
-
-    pendingTools.push(item);
   }
 
-  flushPendingTools();
+  const entries: ActivityTraceEntry[] = [];
+
+  for (const item of reasoningItems) {
+    const previous = entries[entries.length - 1];
+    if (
+      previous?.kind === "reasoning" &&
+      previous.item.mode === item.mode &&
+      normalizedReasoningText(previous.item.text) === normalizedReasoningText(item.text)
+    ) {
+      continue;
+    }
+    entries.push({ kind: "reasoning", item });
+  }
+
+  for (const item of mergeToolTraceItems(toolItems)) {
+    entries.push({ kind: "tool", item });
+  }
+
   return entries;
 }
 

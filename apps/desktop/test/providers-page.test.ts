@@ -126,7 +126,7 @@ describe("desktop providers page", () => {
       providerLastAuthResult: null,
       userConfig: {},
       userConfigLastResult: null,
-      pendingUserConfigSave: false,
+      pendingUserConfigSave: null,
       workspaceRuntimeById: {},
       providerConnected: [],
       providerUiState: {

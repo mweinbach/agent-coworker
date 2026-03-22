@@ -41,7 +41,7 @@ const initialState: AppStoreDataState = {
   providerLastAuthResult: null,
   userConfig: {},
   userConfigLastResult: null,
-  pendingUserConfigSave: false,
+  pendingUserConfigSave: null,
   providerUiState: DEFAULT_PROVIDER_UI_STATE,
 
   composerText: "",

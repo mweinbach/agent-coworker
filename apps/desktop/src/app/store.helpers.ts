@@ -117,6 +117,10 @@ type ProviderAuthChallengeEvent = Extract<ServerEvent, { type: "provider_auth_ch
 type ProviderAuthResultEvent = Extract<ServerEvent, { type: "provider_auth_result" }>;
 type UserConfigEvent = Extract<ServerEvent, { type: "user_config" }>;
 type UserConfigResultEvent = Extract<ServerEvent, { type: "user_config_result" }>;
+export type PendingUserConfigSaveState = {
+  workspaceId: string;
+  sessionId: string;
+};
 
 function isProviderName(v: unknown): v is ProviderName {
   return typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);
@@ -182,7 +186,7 @@ export type AppStoreState = {
   providerLastAuthResult: ProviderAuthResultEvent | null;
   userConfig: UserConfigEvent["config"];
   userConfigLastResult: UserConfigResultEvent | null;
-  pendingUserConfigSave: boolean;
+  pendingUserConfigSave: PendingUserConfigSaveState | null;
   providerUiState: PersistedProviderUiState;
 
   composerText: string;

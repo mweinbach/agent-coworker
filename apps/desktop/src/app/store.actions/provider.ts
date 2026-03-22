@@ -479,7 +479,7 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
       });
       if (!workspaceId) {
         set(() => ({
-          pendingUserConfigSave: false,
+          pendingUserConfigSave: null,
           userConfigLastResult: {
             type: "user_config_result",
             sessionId: "",
@@ -491,12 +491,14 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
       }
 
       const normalizedBaseUrl = typeof baseUrl === "string" ? baseUrl.trim() : "";
+      const sessionId = get().workspaceRuntimeById[workspaceId]?.controlSessionId ?? "";
+      const sock = RUNTIME.controlSockets.get(workspaceId);
       set(() => ({
-        pendingUserConfigSave: true,
+        pendingUserConfigSave: sessionId ? { workspaceId, sessionId } : null,
         userConfigLastResult: null,
       }));
 
-      const ok = sendControl(get, workspaceId, (sessionId) => ({
+      const ok = Boolean(sock && sessionId && sock.send({
         type: "user_config_set",
         sessionId,
         config: {
@@ -504,9 +506,8 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
         },
       }));
       if (!ok) {
-        const sessionId = get().workspaceRuntimeById[workspaceId]?.controlSessionId ?? "";
         set((s) => ({
-          pendingUserConfigSave: false,
+          pendingUserConfigSave: null,
           userConfigLastResult: {
             type: "user_config_result",
             sessionId,

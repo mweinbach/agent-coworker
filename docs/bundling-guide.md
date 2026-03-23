@@ -107,13 +107,13 @@ console.log("Server ready at", url);
 process.on("SIGTERM", () => server.stop());
 ```
 
-This is how the built-in TUI works (`src/index.ts`): it starts the server in-process on an ephemeral port, then connects the TUI to it via WebSocket.
+This is how the CLI entrypoint works (`src/index.ts`): it launches the REPL, which starts the server in-process on an ephemeral port and connects over WebSocket.
 
 ## Connecting a Client
 
 ### Using AgentSocket (TypeScript/JavaScript)
 
-The repo ships a production-ready WebSocket client at `src/client/agentSocket.ts`:
+The repo ships a production-ready JSON-RPC WebSocket client at `src/client/jsonRpcSocket.ts`:
 
 ```typescript
 import { AgentSocket } from "agent-coworker/src/client";
@@ -334,13 +334,6 @@ The Electron desktop app (`apps/desktop/`) is the canonical example of a native 
 | Event reduction | `src/app/store.helpers/threadEventReducer.ts` | ServerEvent -> Zustand state |
 | State management | `src/app/store.tsx` | Zustand store with action namespaces |
 | IPC bridge | `electron/ipc.ts` | Electron main <-> renderer communication |
-
-The TUI (`apps/TUI/`) is a second reference, using Solid.js reactivity instead of React/Zustand:
-
-| Concern | File | Pattern |
-|---------|------|---------|
-| Socket + event reduction | `apps/TUI/context/sync.tsx` | AgentSocket -> Solid.js reactive store |
-| Stream lifecycle | `apps/TUI/context/syncModelStreamLifecycle.ts` | Managing streaming feed items |
 
 ## Checklist: Building a New Client
 

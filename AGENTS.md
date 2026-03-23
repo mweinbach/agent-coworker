@@ -10,11 +10,9 @@ All logic for the application should be done in the harness itself, consider the
 
 - `src/`: application code
 - `src/server/`: WebSocket server, protocol, and session state
-- `src/tui/`: thin TUI wrapper (archived, may be removed)
 - `src/cli/`: CLI REPL and argument parsing
 - `src/providers/`: model/provider integrations (OpenAI/Google/Anthropic and `*-cli`)
 - `src/tools/`: built-in tools (`bash`, `read`, `write`, `webSearch`, etc.)
-- `apps/TUI/`: main TUI built with OpenTUI + Solid.js (archived, may be removed)
 - `apps/desktop/`: Electron desktop application
 - `test/`: Bun tests (`*.test.ts`)
 - `config/`: built-in defaults and MCP server defaults
@@ -106,7 +104,7 @@ For headless/cloud testing, prefer `bun run serve` and interact via WebSocket (s
 
 - `bun test` runs the full suite (~1590 tests). All tests are deterministic and require no network or API keys.
 - Two tests are skipped by default (remote MCP integration tests requiring network).
-- There is no configured linter or formatter. `bun run typecheck` is the code quality check; it runs the repo-root core typecheck plus `apps/desktop` (including `electron/*`). `apps/TUI` is archived and not part of the default typecheck command.
+- There is no configured linter or formatter. `bun run typecheck` is the code quality check; it runs the repo-root core typecheck plus `apps/desktop` (including `electron/*`).
 
 ### Desktop App
 

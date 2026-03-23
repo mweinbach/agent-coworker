@@ -25,7 +25,6 @@ bun run cli                     # CLI REPL -- connects to server via WebSocket
 bun run serve                   # Standalone WebSocket server
 bun run desktop:dev             # Desktop development mode
 bun run dev                     # Watch mode (rebuilds on src/ changes)
-bun run tui                     # Archived TUI -- no longer maintained
 ```
 
 ## Architecture Overview
@@ -50,7 +49,6 @@ Key modules:
 | `src/config.ts` | Config loading with three-tier merge and env var overrides. |
 | `src/mcp/` | MCP server config registry, OAuth provider, auth store. |
 | `src/skills/` | Skill discovery and trigger extraction. |
-| `apps/TUI/` | Archived TUI built with OpenTUI + Solid.js. No longer maintained. |
 | `apps/desktop/` | Electron desktop app. |
 | `src/cli/` | CLI REPL client. |
 
@@ -61,7 +59,7 @@ src/
   agent.ts              # Agent turn logic (createRunTurn factory)
   config.ts             # Config loading + deep merge
   connect.ts            # Path resolution for .agent / .cowork directories
-  index.ts              # Main entry point (routes to CLI or archived TUI)
+  index.ts              # Main terminal entry point (CLI REPL)
   prompt.ts             # System prompt construction
   types.ts              # Shared TypeScript types
   server/               # WebSocket server, sessions, protocol
@@ -75,7 +73,6 @@ src/
   observability/        # OpenTelemetry + Langfuse integration
   utils/                # Shared utilities
 apps/
-  TUI/                  # Archived: OpenTUI + Solid.js terminal UI
   desktop/              # Electron desktop app
 config/
   defaults.json         # Built-in default configuration

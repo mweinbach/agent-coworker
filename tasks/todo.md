@@ -1,5 +1,18 @@
 # Task Plan
 
+## Remove Archived TUI Surface
+
+- [x] Remove the archived TUI implementation and its repo entrypoints instead of keeping it as a second terminal client.
+- [x] Delete the TUI-specific source, tests, docs, and package dependencies, and simplify the terminal entrypoint down to the supported CLI path.
+- [x] Re-run targeted verification for the CLI/docs changes plus the full suite after the removal.
+
+## Remove Archived TUI Surface Review
+
+- The repo no longer carries a second terminal UI surface. `apps/TUI/`, `src/tui/`, the OpenTUI docs mirror under `docs/opentui/`, and the dedicated TUI test files were removed outright instead of being kept as archived baggage.
+- The terminal entrypoint is now CLI-only: `src/index.ts` always routes to `runCliRepl(...)`, `package.json` no longer exposes `bun run tui`, and `src/cli/args.ts` dropped the retired mouse/TUI-only flags while keeping `--cli` as a harmless compatibility alias.
+- Root docs and contributor guidance were updated to stop advertising the removed client, and the root package no longer installs the unused OpenTUI and Solid dependencies.
+- Verification passed with `bun test test/cli-args.test.ts test/docs.check.test.ts`, `bun run docs:check`, `bun run typecheck`, and full `bun test` on 2026-03-23 (`2598 pass`, `3 skip`, `0 fail`).
+
 ## Optimize Slow Tool Tests
 
 - [x] Measure the current slow tool-test cases precisely and identify whether the cost is subprocess spawning, HTML parser startup, or explicit timeout waits.

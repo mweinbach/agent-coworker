@@ -196,26 +196,6 @@ Minimal readline-based interface:
 - Supports `--yolo` mode to bypass approvals
 - Persistent prompt history in `~/.cowork/state/prompt-history.jsonl`
 
-### TUI (`apps/TUI/`) — Archived
-
-> **Note**: The TUI is archived and no longer maintained. It may be removed in a future release.
-
-Built with OpenTUI + Solid.js (not React):
-
-**Context Provider Stack:**
-```
-ExitProvider → KVProvider → ThemeProvider → DialogProvider
-→ SyncProvider → KeybindProvider → LocalProvider → RouteProvider
-→ PromptProvider → App
-```
-
-**Key Features (when it was maintained):**
-- 31 built-in themes
-- Command palette (`Ctrl+K`)
-- Tool-specific renderers
-- Session management
-- Sidebar with context/todos
-
 ## Data Flow
 
 ### Message Flow

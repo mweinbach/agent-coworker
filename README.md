@@ -1,6 +1,6 @@
 # agent-coworker
 
-A local-first coding agent backend with CLI and desktop clients. An archived TUI is available but no longer maintained.
+A local-first coding agent backend with CLI and desktop clients.
 
 `agent-coworker` is built around one architectural decision: the agent lives behind a WebSocket server, not inside a single UI. The server owns sessions, tool execution, provider auth, MCP, persistence, safety checks, and streaming. The CLI REPL, Electron app, and any custom client are thin clients on top of the same protocol.
 
@@ -153,26 +153,6 @@ The WebSocket protocol is documented in [docs/websocket-protocol.md](docs/websoc
 - subagent creation and persistent subagent session management
 - observability and harness context
 
-## Archived clients
-
-### TUI (archived)
-
-> **Note**: The TUI is archived and no longer maintained. It may be removed in a future release.
-
-The terminal UI was built with OpenTUI and Solid.js. It is not a thin text wrapper around the CLI; it renders the same structured server events the desktop app uses:
-
-- streamed assistant text, reasoning, and tool activity
-- approval and ask prompts
-- todo state
-- session backup status
-- session lists, themes, prompt stash, and command palette flows
-
-To run the archived TUI:
-
-```bash
-bun run tui
-```
-
 ## Architecture
 
 ```text
@@ -272,7 +252,6 @@ Notes:
 
 - `bun install` at the repo root also installs desktop dependencies.
 - `bun run typecheck` covers the root project and `apps/desktop`.
-- `apps/TUI` is archived and not part of the default typecheck command.
 - The test suite is deterministic and does not require provider credentials.
 
 ## Repository map
@@ -281,11 +260,9 @@ Notes:
 | --- | --- |
 | `src/server/` | WebSocket server, protocol, session orchestration, persistence, backup |
 | `src/cli/` | CLI REPL and command parsing |
-| `src/tui/` | Thin TUI entrypoint (archived, may be removed) |
 | `src/tools/` | Built-in server-side tools |
 | `src/providers/` | Provider catalog, auth, and model adapters |
 | `src/mcp/` | MCP config, auth, and client lifecycle |
-| `apps/TUI/` | Main OpenTUI + Solid TUI implementation (archived, may be removed) |
 | `apps/desktop/` | Electron desktop app |
 | `skills/` | Bundled built-in skills |
 | `docs/` | Protocol, architecture, storage, MCP, and harness docs |

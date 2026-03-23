@@ -8,7 +8,7 @@
 *   **Main Technologies:**
     *   **Runtime:** Bun (high-performance JavaScript/TypeScript runtime).
     *   **Agent runtime:** repo-owned runtime adapters selected by provider/runtime config.
-    *   **UI/UX:** Electron for the desktop application. An archived TUI (OpenTUI + Solid.js) is available but no longer maintained.
+    *   **UI/UX:** Electron for the desktop application plus a plain CLI REPL.
     *   **Communication:** Custom WebSocket protocol for decoupled client-server interaction.
 *   **Core Architecture:**
     *   **Server (`src/server/`):** Manages `AgentSession` state, LLM orchestration, and WebSocket communication.
@@ -17,7 +17,6 @@
     *   **Clients:**
         *   **Desktop (`apps/desktop/`):** Primary native GUI using Electron.
         *   **CLI (`src/cli/`):** Minimal REPL for direct interaction.
-        *   **TUI (`apps/TUI/`):** Archived terminal UI built with OpenTUI + Solid.js. No longer maintained.
 
 ## Building and Running
 
@@ -32,7 +31,6 @@
 *   **Start Server Only:** `bun run serve`
 *   **Run Tests:** `bun test`
 *   **Desktop Development:** `bun run desktop:dev`
-*   **Archived TUI:** `bun run tui` (No longer maintained).
 
 ### Execution Flags
 These apply to `bun run cli`, `bun run serve`, and `bun src/index.ts` / `cowork`. They are **not** passed through `bun run start` (Electron dev); use workspace selection in the desktop app.
@@ -62,7 +60,7 @@ These apply to `bun run cli`, `bun run serve`, and `bun src/index.ts` / `cowork`
 
 ## Key Files and Directories
 
-*   `src/index.ts`: Main entry point (routes to CLI or archived TUI).
+*   `src/index.ts`: Main terminal entry point (CLI REPL).
 *   `src/agent.ts`: The core agent loop and LLM logic.
 *   `src/server/protocol.ts`: Source of truth for the WebSocket protocol.
 *   `docs/websocket-protocol.md`: Detailed documentation for building alternative clients.

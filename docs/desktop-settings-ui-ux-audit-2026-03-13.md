@@ -621,7 +621,6 @@ Verification run during the audit:
 
 - `bun test`
 - `bun run typecheck`
-- `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json`
 - `bun run build:server-binary`
 - `bun run build:desktop-resources`
 - `bun run desktop:build`
@@ -630,7 +629,6 @@ Results at audit time:
 
 - `bun test`: pass (`2249 pass, 2 skip, 0 fail`)
 - `bun run typecheck`: pass
-- `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json`: pass
 - `bun run build:server-binary`: pass
 - `bun run build:desktop-resources`: pass
 - `bun run desktop:build`: pass

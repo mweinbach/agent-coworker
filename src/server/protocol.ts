@@ -41,8 +41,8 @@ export { ASK_SKIP_TOKEN } from "../shared/ask";
 export type MCPServerEventSource = "workspace" | "user" | "system" | "workspace_legacy" | "user_legacy";
 export type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pending" | "error";
 
-// Keep the legacy websocket version string exported for archived TUI/docs checks
-// that still reference the pre-JSON-RPC protocol metadata.
+// Keep the legacy websocket version string exported for docs/tests that still
+// reference the pre-JSON-RPC protocol metadata.
 export const WEBSOCKET_PROTOCOL_VERSION = "7.29";
 
 export type SessionConfigPatch = {

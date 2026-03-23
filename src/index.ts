@@ -1,49 +1,25 @@
 #!/usr/bin/env bun
 
-import fs from "node:fs/promises";
-import path from "node:path";
-
 import { parseCliArgs } from "./cli/args";
 import { runCliRepl } from "./cli/repl";
 import { DEFAULT_PROVIDER_OPTIONS } from "./providers";
-import { startAgentServer } from "./server/startServer";
-
-async function loadModernRunTui() {
-  await import("@opentui/solid/preload");
-  return (await import("./tui/index")).runTui;
-}
 
 // Keep output clean by default.
 const globalSettings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?: boolean };
 globalSettings.AI_SDK_LOG_WARNINGS = false;
 
 function printUsage() {
-  console.log("Usage: cowork [--dir <directory_path>] [--cli] [--yolo] [--no-mouse]");
+  console.log("Usage: cowork [--dir <directory_path>] [--yolo] [--cli]");
   console.log("");
-  console.log("This runs the archived TUI (run with 'bun run tui'). For the desktop app,");
-  console.log("use 'bun run start' or 'bun run desktop:dev'. For CLI REPL, use 'bun run cli'");
-  console.log("or 'bun src/index.ts --cli'.");
+  console.log("This launches the CLI REPL. For the desktop app, use 'bun run start'");
+  console.log("or 'bun run desktop:dev'.");
   console.log("");
   console.log("Options:");
-  console.log("  --dir, -d   Run the agent in the specified directory");
-  console.log("  --cli, -c   Run the plain CLI instead of the TUI");
+  console.log("  --dir, -d   Run the CLI in the specified directory");
+  console.log("  --cli, -c   Compatibility alias; CLI is the default terminal interface");
   console.log("  --yolo, -y  Skip command approvals (dangerous; use with care)");
-  console.log("  --mouse, -m Enable OpenTUI mouse capture (enabled by default)");
-  console.log("  --no-mouse  Disable OpenTUI mouse capture");
   console.log("  --help, -h  Show help");
   console.log("");
-}
-
-async function resolveAndValidateDir(dirArg: string): Promise<string> {
-  const resolved = path.resolve(dirArg);
-  let st: { isDirectory: () => boolean } | null = null;
-  try {
-    st = await fs.stat(resolved);
-  } catch {
-    st = null;
-  }
-  if (!st || !st.isDirectory()) throw new Error(`--dir is not a directory: ${resolved}`);
-  return resolved;
 }
 
 async function main() {
@@ -60,51 +36,7 @@ async function main() {
     return;
   }
 
-  if (args.cli) {
-    await runCliRepl({ dir: args.dir, providerOptions: DEFAULT_PROVIDER_OPTIONS, yolo: args.yolo });
-    return;
-  }
-
-  const cwd = args.dir ? await resolveAndValidateDir(args.dir) : process.cwd();
-  if (args.dir) process.chdir(cwd);
-
-  const { server, url } = await startAgentServer({
-    cwd,
-    hostname: "127.0.0.1",
-    port: 0, // ephemeral port; avoids collisions and keeps launch simple
-    providerOptions: DEFAULT_PROVIDER_OPTIONS,
-    yolo: args.yolo,
-  });
-
-  let stopped = false;
-  const stop = () => {
-    if (stopped) return;
-    stopped = true;
-    try {
-      server.stop();
-    } catch {
-      // ignore
-    }
-  };
-
-  // Last-resort cleanup: if the process exits without the TUI cleaning up,
-  // ensure the server (and its child processes) are torn down.
-  process.on("exit", stop);
-  // Handle terminal close (e.g. closing the terminal window).
-  const onHup = () => {
-    stop();
-    process.exit(0);
-  };
-  process.on("SIGHUP", onHup);
-
-  const tuiRunner = await loadModernRunTui();
-  try {
-    await tuiRunner(url, { onDestroy: stop, useMouse: args.mouse });
-  } finally {
-    stop();
-    process.off("exit", stop);
-    process.off("SIGHUP", onHup);
-  }
+  await runCliRepl({ dir: args.dir, providerOptions: DEFAULT_PROVIDER_OPTIONS, yolo: args.yolo });
 }
 
 main().catch((err) => {

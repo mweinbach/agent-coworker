@@ -1,5 +1,6 @@
 # Lessons
 
+- When the user says an archived surface should be removed entirely, do the full deletion pass in one go: code, tests, docs, entrypoint scripts, and now-unused dependencies should all disappear together instead of leaving a dormant compatibility shell behind.
 - For slow tool tests in this repo, do not pay real subprocess or heavy HTML-parser startup costs when the assertion is only about tool orchestration or result shaping; use internal runners or deterministic fallback conversion paths instead.
 - When the user confirms a transport or UI layer is retired in this repo, do not preserve coverage by reviving that dead surface; move the behavioral coverage onto the supported JSON-RPC or leaf-helper path instead.
 - When JSON-RPC assistant output is segmented live, do not dedupe the final merged `assistant_message` by reconstructing history from feed rows alone; keep exact per-turn streamed assistant history or boundary whitespace will make the final cumulative payload look new and render the whole answer twice.

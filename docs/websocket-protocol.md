@@ -132,6 +132,9 @@ Currently implemented `cowork/*` methods include:
   - `cowork/provider/auth/callback`
   - `cowork/provider/auth/setApiKey`
   - `cowork/provider/auth/copyApiKey`
+- Provider user config controls
+  - `cowork/provider/userConfig/read` — reads global user config (`~/.agent/config.json`); returns `{ event: { type: "user_config", ... } }`
+  - `cowork/provider/userConfig/set` — writes a patch to global user config; accepts `{ cwd, config: { awsBedrockProxyBaseUrl?, openaiProxyBaseUrl? } }`; returns `{ event: { type: "user_config_result", ok, message, config? } }`
 - MCP controls
   - `cowork/mcp/servers/read`
   - `cowork/mcp/server/upsert`

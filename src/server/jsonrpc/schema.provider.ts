@@ -5,6 +5,25 @@ import {
   nonEmptyTrimmedStringSchema,
 } from "./schema.shared";
 
+export const userConfigEventSchema = z.object({
+  type: z.literal("user_config"),
+  sessionId: z.string(),
+  config: z.record(z.string(), z.unknown()),
+}).passthrough();
+
+export const userConfigResultEventSchema = z.object({
+  type: z.literal("user_config_result"),
+  sessionId: z.string(),
+  ok: z.boolean(),
+  message: z.string(),
+  config: z.record(z.string(), z.unknown()).optional(),
+}).passthrough();
+
+const userConfigPatchSchema = z.object({
+  awsBedrockProxyBaseUrl: z.string().nullable().optional(),
+  openaiProxyBaseUrl: z.string().nullable().optional(),
+}).strict();
+
 export const providerCatalogEventSchema = z.object({
   type: z.literal("provider_catalog"),
   all: z.array(z.unknown()),
@@ -66,6 +85,13 @@ export const jsonRpcProviderRequestSchemas = {
     provider: nonEmptyTrimmedStringSchema,
     sourceProvider: nonEmptyTrimmedStringSchema,
   }).strict(),
+  "cowork/provider/userConfig/read": z.object({
+    cwd: nonEmptyTrimmedStringSchema,
+  }).strict(),
+  "cowork/provider/userConfig/set": z.object({
+    cwd: nonEmptyTrimmedStringSchema,
+    config: userConfigPatchSchema,
+  }).strict(),
 } as const;
 
 export const jsonRpcProviderResultSchemas = {
@@ -80,4 +106,6 @@ export const jsonRpcProviderResultSchemas = {
   "cowork/provider/auth/callback": legacyEventEnvelope(providerAuthResultEventSchema),
   "cowork/provider/auth/setApiKey": legacyEventEnvelope(providerAuthResultEventSchema),
   "cowork/provider/auth/copyApiKey": legacyEventEnvelope(providerAuthResultEventSchema),
+  "cowork/provider/userConfig/read": legacyEventEnvelope(userConfigEventSchema),
+  "cowork/provider/userConfig/set": legacyEventEnvelope(userConfigResultEventSchema),
 } as const;

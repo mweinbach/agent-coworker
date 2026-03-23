@@ -1,11 +1,8 @@
-export const WS_PROTOCOL_DEFAULT_MODES = ["legacy", "jsonrpc"] as const;
+export const WS_PROTOCOL_MODE = "jsonrpc" as const;
 
-export type WsProtocolMode = (typeof WS_PROTOCOL_DEFAULT_MODES)[number];
+export type WsProtocolMode = typeof WS_PROTOCOL_MODE;
 
-export const WS_SUBPROTOCOLS: Record<WsProtocolMode, string> = {
-  legacy: "cowork.legacy.v1",
-  jsonrpc: "cowork.jsonrpc.v1",
-};
+export const WS_SUBPROTOCOL = "cowork.jsonrpc.v1";
 
 export type WsProtocolNegotiationSource = "subprotocol" | "query" | "default";
 
@@ -19,14 +16,8 @@ export type WsProtocolNegotiationResult =
   | { ok: true; protocol: ResolvedWsProtocol }
   | { ok: false; error: string };
 
-const SUBPROTOCOL_TO_MODE = new Map<string, WsProtocolMode>(
-  Object.entries(WS_SUBPROTOCOLS).map(([mode, subprotocol]) => [subprotocol, mode as WsProtocolMode]),
-);
-
-export function parseWsProtocolDefault(value: string | null | undefined): WsProtocolMode {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "jsonrpc") return "jsonrpc";
-  return "legacy";
+export function parseWsProtocolDefault(_value: string | null | undefined): WsProtocolMode {
+  return "jsonrpc";
 }
 
 export function splitWebSocketSubprotocolHeader(value: string | null | undefined): string[] {
@@ -43,12 +34,11 @@ export function resolveWsProtocol(opts: {
   defaultProtocol: WsProtocolMode;
 }): WsProtocolNegotiationResult {
   for (const offeredSubprotocol of opts.offeredSubprotocols) {
-    const mode = SUBPROTOCOL_TO_MODE.get(offeredSubprotocol);
-    if (mode) {
+    if (offeredSubprotocol === WS_SUBPROTOCOL) {
       return {
         ok: true,
         protocol: {
-          mode,
+          mode: "jsonrpc",
           selectedSubprotocol: offeredSubprotocol,
           source: "subprotocol",
         },
@@ -59,22 +49,22 @@ export function resolveWsProtocol(opts: {
   if (opts.offeredSubprotocols.length > 0) {
     return {
       ok: false,
-      error: `Unsupported WebSocket subprotocol: ${opts.offeredSubprotocols[0]}`,
+      error: `Unsupported WebSocket subprotocol: ${opts.offeredSubprotocols[0]}. Only ${WS_SUBPROTOCOL} is supported.`,
     };
   }
 
   const normalizedRequestedProtocol = opts.requestedProtocol?.trim().toLowerCase();
   if (normalizedRequestedProtocol) {
-    if (normalizedRequestedProtocol !== "legacy" && normalizedRequestedProtocol !== "jsonrpc") {
+    if (normalizedRequestedProtocol !== "jsonrpc") {
       return {
         ok: false,
-        error: `Unsupported WebSocket protocol mode: ${opts.requestedProtocol}`,
+        error: `Unsupported WebSocket protocol mode: ${opts.requestedProtocol}. Only "jsonrpc" is supported.`,
       };
     }
     return {
       ok: true,
       protocol: {
-        mode: normalizedRequestedProtocol,
+        mode: "jsonrpc",
         selectedSubprotocol: null,
         source: "query",
       },
@@ -84,7 +74,7 @@ export function resolveWsProtocol(opts: {
   return {
     ok: true,
     protocol: {
-      mode: opts.defaultProtocol,
+      mode: "jsonrpc",
       selectedSubprotocol: null,
       source: "default",
     },

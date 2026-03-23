@@ -455,15 +455,22 @@ describe("JSON-RPC projectors", () => {
     const toolCompleted = outbound
       .filter((message) => message.method === "item/completed")
       .filter((message) => message.params?.item?.type === "toolCall");
+    const toolOutputAvailable = toolCompleted.filter(
+      (message) => message.params?.item?.state === "output-available",
+    );
 
     expect(toolStarted).toHaveLength(1);
-    expect(toolCompleted).toHaveLength(1);
+    expect(toolCompleted.map((message) => message.params?.item?.state)).toEqual([
+      "input-available",
+      "output-available",
+    ]);
     expect(toolStarted[0]?.params?.item).toMatchObject({
       type: "toolCall",
       toolName: "nativeWebSearch",
       state: "input-streaming",
     });
-    expect(toolCompleted[0]?.params?.item).toMatchObject({
+    expect(toolOutputAvailable).toHaveLength(1);
+    expect(toolOutputAvailable[0]?.params?.item).toMatchObject({
       type: "toolCall",
       toolName: "nativeWebSearch",
       state: "output-available",
@@ -555,15 +562,22 @@ describe("JSON-RPC projectors", () => {
     const toolCompleted = emissions
       .filter((event) => event.eventType === "item/completed")
       .filter((event) => event.payload?.item?.type === "toolCall");
+    const toolOutputAvailable = toolCompleted.filter(
+      (event) => event.payload?.item?.state === "output-available",
+    );
 
     expect(toolStarted).toHaveLength(1);
-    expect(toolCompleted).toHaveLength(1);
+    expect(toolCompleted.map((event) => event.payload?.item?.state)).toEqual([
+      "input-available",
+      "output-available",
+    ]);
     expect(toolStarted[0]?.payload?.item).toMatchObject({
       type: "toolCall",
       toolName: "nativeWebSearch",
       state: "input-streaming",
     });
-    expect(toolCompleted[0]?.payload?.item).toMatchObject({
+    expect(toolOutputAvailable).toHaveLength(1);
+    expect(toolOutputAvailable[0]?.payload?.item).toMatchObject({
       type: "toolCall",
       toolName: "nativeWebSearch",
       state: "output-available",
@@ -657,11 +671,14 @@ describe("JSON-RPC projectors", () => {
       const legacyCompletedTools = outbound
         .filter((message) => message.method === "item/completed")
         .filter((message) => message.params?.item?.type === "toolCall");
-      expect(legacyCompletedTools.map((message) => message.params?.item?.args)).toEqual([
+      const legacyFinalTools = legacyCompletedTools.filter(
+        (message) => message.params?.item?.state === "output-available",
+      );
+      expect(legacyFinalTools.map((message) => message.params?.item?.args)).toEqual([
         { query: "first" },
         { query: "second" },
       ]);
-      expect(new Set(legacyCompletedTools.map((message) => message.params?.item?.id)).size).toBe(2);
+      expect(new Set(legacyFinalTools.map((message) => message.params?.item?.id)).size).toBe(2);
 
       const journalCompletedReasoning = emissions
         .filter((event) => event.eventType === "item/completed")
@@ -675,11 +692,14 @@ describe("JSON-RPC projectors", () => {
       const journalCompletedTools = emissions
         .filter((event) => event.eventType === "item/completed")
         .filter((event) => event.payload?.item?.type === "toolCall");
-      expect(journalCompletedTools.map((event) => event.payload?.item?.args)).toEqual([
+      const journalFinalTools = journalCompletedTools.filter(
+        (event) => event.payload?.item?.state === "output-available",
+      );
+      expect(journalFinalTools.map((event) => event.payload?.item?.args)).toEqual([
         { query: "first" },
         { query: "second" },
       ]);
-      expect(new Set(journalCompletedTools.map((event) => event.payload?.item?.id)).size).toBe(2);
+      expect(new Set(journalFinalTools.map((event) => event.payload?.item?.id)).size).toBe(2);
     });
   }
 });

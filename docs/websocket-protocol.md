@@ -203,15 +203,10 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - `cowork/session/turnUsage`
 - `cowork/session/budgetWarning`
 - `cowork/session/budgetExceeded`
-- `cowork/session/backupState`
-- `cowork/session/harnessContext`
 - `cowork/session/agentList`
 - `cowork/session/agentSpawned`
 - `cowork/session/agentStatus`
 - `cowork/session/agentWaitResult`
-- `cowork/log`
-- `cowork/todos`
-- `error`
 
 ### Server-initiated JSON-RPC requests currently available
 
@@ -221,9 +216,38 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 ### JSON-RPC replay and read model
 
 - `thread/list` now returns `messageCount` and `lastEventSeq` on every thread summary
+- `thread/read.coworkSnapshot` is the authoritative projected-feed hydration payload for UI clients and matches live `turn/*` + `item/*` ordering
 - `thread/read` can return a journal-projected `turns` array when `includeTurns: true`
 - `thread/resume` accepts `afterSeq` to replay journaled notifications after a known cursor, then reattaches the live thread sink so reconnecting clients do not receive the same journaled events twice
 - Cowork persists canonical thread journal events in sqlite so reconnect / restart replay is no longer limited to an in-memory socket buffer
+
+### Projected Conversation Contract
+
+Harness-projected conversation items are now the only supported UI rendering contract for live chat and hydration:
+
+- live updates: `turn/*` + `item/*`
+- hydration: `thread/read.coworkSnapshot`
+
+UI clients should render chat from projected items and should not depend on provider-specific legacy events such as `model_stream_*`, `assistant_message`, or `reasoning` for chat presentation.
+
+`item/started` and `item/completed` carry a discriminated `item` union. `turnId` is nullable so the harness can project feed items that are not owned by a model turn.
+
+Projected item kinds:
+
+- `userMessage`
+- `agentMessage`
+- `reasoning`
+- `toolCall`
+- `system`
+- `log`
+- `todos`
+- `error`
+
+Non-turn feed items such as `system`, `log`, `todos`, and `error` are emitted with `turnId: null`.
+
+Ask/approval prompts still arrive as server requests, but the harness also emits matching projected `system` feed items so snapshots and live feeds stay aligned.
+
+`item/completed` should be treated as the latest snapshot for that projected item id. For long-lived items, especially `toolCall`, the harness may emit multiple `item/completed` notifications for the same id as the projected state advances.
 
 ### JSON-RPC overload behavior
 

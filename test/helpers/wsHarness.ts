@@ -161,10 +161,18 @@ export function withSession<T>(
               return;
             }
             case "harness_context_set":
-              await rpc?.sendRequest("cowork/session/harnessContext/set", {
-                threadId,
-                context: message.context,
-              });
+              {
+                const response = await rpc?.sendRequest("cowork/session/harnessContext/set", {
+                  threadId,
+                  context: message.context,
+                });
+                if (response?.result?.event) {
+                  dispatch({
+                    ...response.result.event,
+                    sessionId: response.result.event.sessionId ?? activeSessionId,
+                  });
+                }
+              }
               return;
             case "user_message":
               await rpc?.sendRequest("turn/start", {

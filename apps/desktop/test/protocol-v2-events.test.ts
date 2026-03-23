@@ -558,18 +558,12 @@ describe("desktop JSON-RPC event mapping", () => {
     });
   });
 
-  test("completed-only JSON-RPC reasoning items anchor before an existing assistant reply", async () => {
+  test("completed-only JSON-RPC reasoning items preserve harness ordering before the assistant reply", async () => {
     const socket = await reconnectThreadAndGetSocket();
 
     socket.notify("turn/started", {
       threadId: sessionId,
       turn: { id: "turn-1", status: "inProgress", items: [] },
-    });
-    socket.notify("item/agentMessage/delta", {
-      threadId: sessionId,
-      turnId: "turn-1",
-      itemId: "assistant-1",
-      delta: "Final answer",
     });
     socket.notify("item/completed", {
       threadId: sessionId,
@@ -580,6 +574,12 @@ describe("desktop JSON-RPC event mapping", () => {
         mode: "reasoning",
         text: "Late synthesis.",
       },
+    });
+    socket.notify("item/agentMessage/delta", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "assistant-1",
+      delta: "Final answer",
     });
     socket.notify("item/completed", {
       threadId: sessionId,
@@ -685,7 +685,7 @@ describe("desktop JSON-RPC event mapping", () => {
     });
   });
 
-  test("shared JSON-RPC follow-up activity segments repeated assistant raw ids while streaming", async () => {
+  test("shared JSON-RPC follow-up activity applies harness-segmented assistant items while streaming", async () => {
     const socket = await reconnectThreadAndGetSocket();
 
     socket.notify("turn/started", {
@@ -695,7 +695,7 @@ describe("desktop JSON-RPC event mapping", () => {
     socket.notify("item/agentMessage/delta", {
       threadId: sessionId,
       turnId: "turn-1",
-      itemId: "assistant-raw",
+      itemId: "agentMessage:turn-1",
       delta: "Let me rewrite the script.\n",
     });
     socket.notify("item/started", {
@@ -740,7 +740,7 @@ describe("desktop JSON-RPC event mapping", () => {
     socket.notify("item/agentMessage/delta", {
       threadId: sessionId,
       turnId: "turn-1",
-      itemId: "assistant-raw",
+      itemId: "agentMessage:turn-1:2",
       delta: "Now let me run the updated script.\n",
     });
     socket.notify("item/completed", {
@@ -758,7 +758,7 @@ describe("desktop JSON-RPC event mapping", () => {
     socket.notify("item/agentMessage/delta", {
       threadId: sessionId,
       turnId: "turn-1",
-      itemId: "assistant-raw",
+      itemId: "agentMessage:turn-1:3",
       delta: "I need to fix the parameter and run it again.\n",
     });
     await flushAsyncWork();
@@ -802,15 +802,27 @@ describe("desktop JSON-RPC event mapping", () => {
       threadId: sessionId,
       turnId: "turn-1",
       item: {
-        id: "assistant-raw",
+        id: "agentMessage:turn-1",
         type: "agentMessage",
-        text: [
-          "Let me rewrite the script.",
-          "",
-          "Now let me run the updated script.",
-          "",
-          "I need to fix the parameter and run it again.",
-        ].join("\n"),
+        text: "Let me rewrite the script.\n",
+      },
+    });
+    socket.notify("item/completed", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      item: {
+        id: "agentMessage:turn-1:2",
+        type: "agentMessage",
+        text: "Now let me run the updated script.\n",
+      },
+    });
+    socket.notify("item/completed", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      item: {
+        id: "agentMessage:turn-1:3",
+        type: "agentMessage",
+        text: "I need to fix the parameter and run it again.\n",
       },
     });
     await flushAsyncWork();
@@ -933,22 +945,34 @@ describe("desktop JSON-RPC event mapping", () => {
         busy: true,
       }],
     });
-    socket.notify("cowork/todos", {
-      type: "todos",
-      sessionId,
-      todos: [{ id: "todo-1", content: "Ship the fix", status: "pending" }],
+    socket.notify("item/completed", {
+      threadId: sessionId,
+      turnId: null,
+      item: {
+        id: "todos-1",
+        type: "todos",
+        todos: [{ content: "Ship the fix", status: "pending", activeForm: "" }],
+      },
     });
-    socket.notify("cowork/log", {
-      type: "log",
-      sessionId,
-      line: "live log line",
+    socket.notify("item/completed", {
+      threadId: sessionId,
+      turnId: null,
+      item: {
+        id: "log-1",
+        type: "log",
+        line: "live log line",
+      },
     });
-    socket.notify("error", {
-      type: "error",
-      sessionId,
-      source: "session",
-      code: "internal_error",
-      message: "boom",
+    socket.notify("item/completed", {
+      threadId: sessionId,
+      turnId: null,
+      item: {
+        id: "error-1",
+        type: "error",
+        source: "session",
+        code: "internal_error",
+        message: "boom",
+      },
     });
     await flushAsyncWork();
     await flushAsyncWork();
@@ -957,7 +981,7 @@ describe("desktop JSON-RPC event mapping", () => {
     const runtime = state.threadRuntimeById[threadId];
     expect(runtime?.pendingSteer?.status).toBe("accepted");
     expect(runtime?.agents).toHaveLength(1);
-    expect(state.latestTodosByThreadId[threadId]).toEqual([{ id: "todo-1", content: "Ship the fix", status: "pending" }]);
+    expect(state.latestTodosByThreadId[threadId]).toEqual([{ content: "Ship the fix", status: "pending", activeForm: "" }]);
     expect(runtime?.feed.some((item) => item.kind === "log" && item.line === "live log line")).toBe(true);
     expect(runtime?.feed.some((item) => item.kind === "error" && item.message === "boom")).toBe(true);
     expect(state.notifications.some((entry) => entry.detail === "session/internal_error: boom")).toBe(true);
@@ -1042,10 +1066,14 @@ describe("desktop JSON-RPC event mapping", () => {
     expect(secondSocket).not.toBe(firstSocket);
     expect(RUNTIME.jsonRpcSockets.get(workspaceId)).toBe(secondSocket);
 
-    firstSocket.notify("cowork/log", {
-      type: "log",
-      sessionId,
-      line: "stale retired log line",
+    firstSocket.notify("item/completed", {
+      threadId: sessionId,
+      turnId: null,
+      item: {
+        id: "log-stale",
+        type: "log",
+        line: "stale retired log line",
+      },
     });
     firstSocket.requestFromServer("ask-stale", "item/tool/requestUserInput", {
       threadId: sessionId,
@@ -1064,10 +1092,14 @@ describe("desktop JSON-RPC event mapping", () => {
       item.kind === "log" && item.line === "stale retired log line"
     )).toBe(false);
 
-    secondSocket.notify("cowork/log", {
-      type: "log",
-      sessionId,
-      line: "fresh replacement log line",
+    secondSocket.notify("item/completed", {
+      threadId: sessionId,
+      turnId: null,
+      item: {
+        id: "log-fresh",
+        type: "log",
+        line: "fresh replacement log line",
+      },
     });
     await flushAsyncWork();
     await flushAsyncWork();

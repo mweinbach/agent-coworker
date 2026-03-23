@@ -296,7 +296,6 @@ export async function requestJsonRpcThreadRead(
 ): Promise<any | null> {
   const result = await requestJsonRpc(get, set, workspaceId, "thread/read", {
     threadId,
-    includeTurns: true,
   });
   return (result as any)?.coworkSnapshot ?? null;
 }

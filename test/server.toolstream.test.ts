@@ -207,7 +207,7 @@ describe("JSON-RPC tool loop notifications", () => {
       expect(toolStarted.params.item).toMatchObject({
         type: "toolCall",
         toolName: "bash",
-        state: "input-streaming",
+        state: "input-available",
         args: { command: "ls" },
       });
 

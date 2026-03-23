@@ -1,5 +1,24 @@
 # Task Plan
 
+## Harness-Owned Projection Contract
+
+- [x] Move live conversation projection into a shared harness-owned reducer/sink so JSON-RPC live projection, journal persistence, session snapshots, and thread/read hydration all share the same ordering and item-id logic.
+- [x] Switch desktop JSON-RPC feed handling to consume projected `turn/*` + `item/*` payloads and canonical `thread/read.coworkSnapshot` hydration instead of re-projecting provider/model events locally.
+- [x] Update the JSON-RPC schema/docs/generated artifacts and add focused regressions for reasoning/tool ordering, repeated raw ids, non-turn projected items, ask/approval parity, and the new snapshot contract.
+- [x] Re-run the projection-focused slices, `bun run typecheck`, regenerate JSON-RPC artifacts, and finish with a full `bun test` pass.
+
+## Harness-Owned Projection Contract Review
+
+- Added a shared harness projection core under `src/server/projection/` plus shared projected-item/model-stream utilities under `src/shared/`, then rewired the JSON-RPC live projector, journal projector, `SessionSnapshotProjector`, and `thread/read` snapshot path onto that single reducer/sink flow.
+- `thread/read` now returns the canonical projected `coworkSnapshot` feed unchanged, JSON-RPC item payloads use the explicit projected-item union, non-turn feed entries ride through `item/*` with `turnId: null`, and ask/approval now emit matching projected system feed items alongside the interactive server requests.
+- Desktop no longer translates projected JSON-RPC items back into synthetic `model_stream_*`, `assistant_message`, or `reasoning` events for live/persisted harness-backed threads; it applies projected items/snapshots directly and only keeps the legacy transcript replay mapper for old local transcript imports.
+- Focused regressions now cover shared projector reasoning/tool ordering, repeated provider raw ids, raw Gemini/native tool replay, projected non-turn feed items, ask/approval system-entry parity, desktop projected-item consumption, canonical `thread/read` hydration, and the updated websocket protocol/schema artifacts.
+- Verification passed with:
+  - `bun test test/jsonrpc.projectors.test.ts test/sessionSnapshotProjector.test.ts test/jsonrpc.thread-read-projector.test.ts apps/desktop/test/control-socket.test.ts apps/desktop/test/protocol-v2-events.test.ts test/server.jsonrpc.flow.test.ts`
+  - `bun run typecheck`
+  - `bun run docs:generate-jsonrpc`
+  - `bun test` on 2026-03-23 (`2608 pass`, `3 skip`, `0 fail`)
+
 ## Fix CLI JSON-RPC Contract Regressions
 
 - [x] Confirm the reviewed CLI regressions against the live JSON-RPC schema and route handlers before patching.

@@ -436,7 +436,7 @@ describe("JSON-RPC request router", () => {
     expect((harness.subscribeCalls[0] as any).opts?.skipPendingPromptRequestIds).toEqual(new Set(["ask-1"]));
   });
 
-  test("thread/read compacts adjacent assistant messages in the returned snapshot", async () => {
+  test("thread/read returns the canonical projected snapshot feed unchanged", async () => {
     const harness = createThreadReadHarness();
 
     await harness.router({} as any, {
@@ -457,7 +457,12 @@ describe("JSON-RPC request router", () => {
             feed: [
               expect.objectContaining({
                 id: "assistant-1",
-                text: "Hello world",
+                text: "Hello",
+                ts: "2026-03-22T00:00:01.000Z",
+              }),
+              expect.objectContaining({
+                id: "assistant-2",
+                text: " world",
                 ts: "2026-03-22T00:00:02.000Z",
               }),
               expect.objectContaining({

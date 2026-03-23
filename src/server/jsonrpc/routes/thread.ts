@@ -2,7 +2,7 @@ import type { AgentConfig } from "../../../types";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { createThreadTurnProjector } from "../threadReadProjector";
 
-import { compactSnapshotFeedForThreadRead, toJsonRpcParams } from "./shared";
+import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 const THREAD_READ_JOURNAL_BATCH_SIZE = 250;
@@ -162,7 +162,7 @@ export function createThreadRouteHandlers(
           ...thread,
           ...(turns ? { turns } : {}),
         },
-        coworkSnapshot: compactSnapshotFeedForThreadRead(snapshot),
+        coworkSnapshot: snapshot,
         ...(params.includeTurns === true
           ? { journalTailSeq }
           : {}),

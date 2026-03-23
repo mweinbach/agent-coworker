@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { projectedItemSchema } from "../../shared/projectedItems";
+import { sessionSnapshotSchema } from "../../shared/sessionSnapshot";
 import { nonEmptyTrimmedStringSchema } from "./schema.shared";
 
 export const jsonRpcThreadSchema = z.object({
@@ -69,13 +71,13 @@ export const jsonRpcThreadTurnNotificationSchemas = {
     turn: z.object({
       id: nonEmptyTrimmedStringSchema,
       status: z.string(),
-      items: z.array(z.unknown()),
+      items: z.array(projectedItemSchema),
     }).strict(),
   }).strict(),
   "item/started": z.object({
     threadId: nonEmptyTrimmedStringSchema,
-    turnId: nonEmptyTrimmedStringSchema,
-    item: z.record(z.string(), z.unknown()),
+    turnId: nonEmptyTrimmedStringSchema.nullable(),
+    item: projectedItemSchema,
   }).strict(),
   "item/reasoning/delta": z.object({
     threadId: nonEmptyTrimmedStringSchema,
@@ -92,8 +94,8 @@ export const jsonRpcThreadTurnNotificationSchemas = {
   }).strict(),
   "item/completed": z.object({
     threadId: nonEmptyTrimmedStringSchema,
-    turnId: nonEmptyTrimmedStringSchema,
-    item: z.record(z.string(), z.unknown()),
+    turnId: nonEmptyTrimmedStringSchema.nullable(),
+    item: projectedItemSchema,
   }).strict(),
   "turn/completed": z.object({
     threadId: nonEmptyTrimmedStringSchema,
@@ -140,9 +142,13 @@ export const jsonRpcThreadTurnResultSchemas = {
   }).strict(),
   "thread/read": z.object({
     thread: jsonRpcThreadSchema.extend({
-      turns: z.array(z.unknown()).optional(),
+      turns: z.array(z.object({
+        id: nonEmptyTrimmedStringSchema,
+        status: z.string(),
+        items: z.array(projectedItemSchema),
+      }).strict()).optional(),
     }),
-    coworkSnapshot: z.unknown().nullable(),
+    coworkSnapshot: sessionSnapshotSchema.nullable(),
     journalTailSeq: z.number().int().nonnegative().optional(),
   }).strict(),
   "thread/unsubscribe": z.object({

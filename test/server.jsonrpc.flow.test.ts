@@ -495,7 +495,13 @@ describe("server JSON-RPC flows", () => {
         input: [{ type: "text", text: "start ask flow" }],
       });
 
+      const systemEntry = await rpc.waitFor((message) =>
+        message.method === "item/completed"
+        && message.params.turnId === null
+        && message.params.item.type === "system",
+      );
       const request = await rpc.waitFor((message) => message.method === "item/tool/requestUserInput");
+      expect(systemEntry.params.item.line).toBe("question: Pick one");
       expect(request.params.question).toBe("Pick one");
       rpc.sendResponse(request.id, { answer: "b" });
 
@@ -533,7 +539,13 @@ describe("server JSON-RPC flows", () => {
         input: [{ type: "text", text: "start approval flow" }],
       });
 
+      const systemEntry = await rpc.waitFor((message) =>
+        message.method === "item/completed"
+        && message.params.turnId === null
+        && message.params.item.type === "system",
+      );
       const request = await rpc.waitFor((message) => message.method === "item/commandExecution/requestApproval");
+      expect(systemEntry.params.item.line).toBe("approval requested: rm -rf /tmp/example");
       expect(request.params.command).toBe("rm -rf /tmp/example");
       rpc.sendResponse(request.id, { decision: "accept" });
 

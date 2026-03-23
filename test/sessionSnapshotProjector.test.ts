@@ -181,6 +181,16 @@ describe("SessionSnapshotProjector", () => {
     );
     projector.applyEvent(
       {
+        type: "session_busy",
+        sessionId: "session-1",
+        busy: true,
+        turnId: "turn-1",
+        cause: "user_message",
+      },
+      "2026-03-20T00:00:01.500Z",
+    );
+    projector.applyEvent(
+      {
         type: "model_stream_chunk",
         sessionId: "session-1",
         turnId: "turn-1",

@@ -1,8 +1,6 @@
 import type { ServerEvent } from "../../protocol";
 import type { AgentSession } from "../../session/AgentSession";
 import type { PersistedSessionRecord } from "../../sessionDb";
-import type { SessionFeedItem, SessionSnapshot } from "../../../shared/sessionSnapshot";
-
 import type { JsonRpcThread, JsonRpcThreadSummaryFilter } from "./types";
 
 export function toJsonRpcParams(params: unknown): Record<string, unknown> {
@@ -112,45 +110,4 @@ export function isJsonRpcSessionError(
   event: ServerEvent,
 ): event is Extract<ServerEvent, { type: "error" }> {
   return event.type === "error";
-}
-
-export function compactSnapshotFeedForThreadRead(snapshot: SessionSnapshot): SessionSnapshot {
-  if (snapshot.feed.length < 2) {
-    return snapshot;
-  }
-
-  const compactedFeed: SessionFeedItem[] = [];
-  let changed = false;
-
-  for (const item of snapshot.feed) {
-    const previous = compactedFeed[compactedFeed.length - 1];
-    if (
-      previous?.kind === "message"
-      && previous.role === "assistant"
-      && !previous.annotations?.length
-      && item.kind === "message"
-      && item.role === "assistant"
-      && !item.annotations?.length
-    ) {
-      previous.text = `${previous.text}${item.text}`;
-      previous.ts = item.ts;
-      changed = true;
-      continue;
-    }
-
-    compactedFeed.push(
-      item.kind === "message" && item.annotations
-        ? { ...item, annotations: [...item.annotations] }
-        : { ...item }
-    );
-  }
-
-  if (!changed) {
-    return snapshot;
-  }
-
-  return {
-    ...snapshot,
-    feed: compactedFeed,
-  };
 }

@@ -208,8 +208,10 @@ describe("modelStreamReplay", () => {
       key: "ws_1",
       name: "nativeWebSearch",
       args: {
-        type: "search",
-        query: "native web search",
+        action: {
+          type: "search",
+          query: "native web search",
+        },
       },
     }]);
     expect(runtime.rawBackedTurns.has(turnId)).toBe(false);

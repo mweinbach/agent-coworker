@@ -70,6 +70,10 @@ function humanizeToolName(name: string): string {
 function nativeWebSearchAction(value: unknown): Record<string, unknown> | null {
   if (!isRecord(value)) return null;
   if (isRecord(value.action)) return value.action;
+  const actionType = getRecordValue(value, ["type"]);
+  if (typeof actionType === "string" && actionType.trim().length > 0) {
+    return value;
+  }
   return null;
 }
 

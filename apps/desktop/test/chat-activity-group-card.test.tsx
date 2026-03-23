@@ -144,6 +144,64 @@ describe("desktop activity group card", () => {
     expect(html).not.toContain("Planning search strategy");
   });
 
+  test("skips blank reasoning placeholders and keeps Codex native web search visible", () => {
+    const html = renderToStaticMarkup(
+      createElement(ActivityGroupCard, {
+        items: [
+          {
+            id: "r-empty",
+            kind: "reasoning",
+            mode: "summary",
+            ts: "2024-01-01T00:00:00.000Z",
+            text: "",
+          },
+          {
+            id: "t-memory",
+            kind: "tool",
+            ts: "2024-01-01T00:00:01.000Z",
+            name: "memory",
+            state: "output-error",
+            args: { action: "search", query: "lga" },
+            result: { error: "No memory found for \"lga\"." },
+          },
+          {
+            id: "r-summary",
+            kind: "reasoning",
+            mode: "summary",
+            ts: "2024-01-01T00:00:02.000Z",
+            text: "**Searching for crash details**\n\nChecking local sources first.",
+          },
+          {
+            id: "t-web",
+            kind: "tool",
+            ts: "2024-01-01T00:00:03.000Z",
+            name: "nativeWebSearch",
+            state: "output-available",
+            result: {
+              status: "completed",
+              action: {
+                type: "search",
+                query: "LGA crash 2026",
+                sources: [{ type: "url", url: "https://example.com/lga-crash" }],
+              },
+            },
+          },
+        ],
+      }),
+    );
+    const doc = new JSDOM(html).window.document;
+    const reasoningRows = doc.querySelectorAll('[data-activity-entry-kind="reasoning"]');
+    const toolRows = doc.querySelectorAll('[data-activity-entry-kind="tool"]');
+
+    expect(reasoningRows).toHaveLength(1);
+    expect(toolRows).toHaveLength(2);
+    expect(html).toContain("Memory");
+    expect(html).toContain("Web Search");
+    expect(html).toContain("Search: LGA crash 2026");
+    expect(reasoningRows[0]?.textContent).toContain("Summary");
+    expect(reasoningRows[0]?.textContent).toContain("Checking local sources first.");
+  });
+
   test("auto-expands approval tools in trace mode", () => {
     const html = renderToStaticMarkup(
       createElement(ActivityGroupCard, {

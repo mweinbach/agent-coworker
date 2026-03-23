@@ -243,8 +243,10 @@ describe("desktop model stream mapper", () => {
       key: "ws_1",
       name: "nativeWebSearch",
       args: {
-        type: "search",
-        query: "OpenAI responses web_search",
+        action: {
+          type: "search",
+          query: "OpenAI responses web_search",
+        },
       },
     }]);
 

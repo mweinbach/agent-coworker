@@ -1,5 +1,23 @@
 # Task Plan
 
+## Cowork Session UI Mapping Follow-up
+
+- [x] Inspect the real Codex LGA cowork session in the harness snapshot store and compare the canonical projected feed to the desktop rendering.
+- [x] Remove blank reasoning placeholder rows from the desktop activity timeline so harness-emitted empty reasoning items do not render as empty `Summary` blocks.
+- [x] Normalize Codex native web-search start args in the harness/model-stream mapper so live desktop tool cards can show the search/open-page detail without provider-specific UI logic.
+- [x] Re-run focused desktop/model-stream verification, repo typecheck, and record the current full-suite status.
+
+## Cowork Session UI Mapping Follow-up Review
+
+- The real session snapshot in `~/.cowork/sessions.db` already contains the Codex web-search activity as canonical projected `nativeWebSearch` tool items. The screenshot mismatch came from empty harness `reasoning` placeholders (`text: ""`) being rendered as blank `Summary` rows in the desktop activity card.
+- `apps/desktop/src/ui/chat/activityGroups.ts` now skips blank reasoning placeholders during grouping/timeline construction, so the activity card only renders meaningful reasoning text alongside the tool steps that actually happened.
+- `src/shared/modelStream.ts` now wraps OpenAI/Codex native web-search start args as `{ action: ... }`, which matches the shared tool-card contract and keeps the live running web-search subtitle specific instead of falling back to a generic “Searching the web”. The formatter in `apps/desktop/src/ui/chat/toolCards/toolCardFormatting.ts` also tolerates the older bare-action shape for replay compatibility.
+- Verification passed with:
+  - `bun test --cwd apps/desktop test/chat-activity-group-card.test.tsx test/store-feed-mapping.test.ts test/protocol-v2-events.test.ts test/chat-reasoning-ui.test.ts`
+  - `bun test test/modelStreamReplay.test.ts apps/desktop/test/model-stream-mapper.test.ts apps/desktop/test/tool-card-formatting.test.ts`
+  - `bun run typecheck`
+  - `bun test test/permissions.test.ts` currently fails on this branch in unrelated path-allowlist coverage, and `bun test` currently stops on the same existing `test/permissions.test.ts` failures
+
 ## Harness-Owned Projection Contract
 
 - [x] Move live conversation projection into a shared harness-owned reducer/sink so JSON-RPC live projection, journal persistence, session snapshots, and thread/read hydration all share the same ordering and item-id logic.

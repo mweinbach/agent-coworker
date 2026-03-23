@@ -59,6 +59,10 @@ function normalizedReasoningText(text: string): string {
   return text.trim();
 }
 
+function hasRenderableReasoningText(item: Extract<FeedItem, { kind: "reasoning" }>): boolean {
+  return normalizedReasoningText(item.text).length > 0;
+}
+
 const genericToolSubtitles = new Set([
   "Capturing input…",
   "Running…",
@@ -241,6 +245,9 @@ function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntr
   for (const item of items) {
     const previous = entries[entries.length - 1];
     if (item.kind === "reasoning") {
+      if (!hasRenderableReasoningText(item)) {
+        continue;
+      }
       if (
         previous?.kind === "reasoning" &&
         previous.item.mode === item.mode &&
@@ -308,7 +315,14 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
     if (item.kind === "todos") {
       continue;
     }
-    if (item.kind === "reasoning" || item.kind === "tool") {
+    if (item.kind === "reasoning") {
+      if (!hasRenderableReasoningText(item)) {
+        continue;
+      }
+      currentGroup.push(item);
+      continue;
+    }
+    if (item.kind === "tool") {
       currentGroup.push(item);
       continue;
     }

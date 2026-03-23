@@ -532,6 +532,11 @@ function webSearchCallSources(item: Record<string, unknown>): unknown[] | undefi
   return action.sources;
 }
 
+function nativeWebSearchArgs(item: Record<string, unknown>): Record<string, unknown> | undefined {
+  const action = webSearchCallAction(item);
+  return action ? { action } : undefined;
+}
+
 function mapNativeWebSearchRawEvent(evt: ModelStreamRawEvent): ModelStreamUpdate[] {
   if (evt.format !== "openai-responses-v1") return [];
 
@@ -549,7 +554,7 @@ function mapNativeWebSearchRawEvent(evt: ModelStreamRawEvent): ModelStreamUpdate
       turnId: evt.turnId,
       key,
       name: "nativeWebSearch",
-      args: webSearchCallAction(item),
+      args: nativeWebSearchArgs(item),
     }];
   }
 

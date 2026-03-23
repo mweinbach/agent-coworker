@@ -7,11 +7,13 @@ import { VERSION } from "../version";
 import { handleSlashCommand } from "./repl/commandRouter";
 import { activateNextPrompt, type ReplPromptStateAdapter } from "./repl/promptController";
 import {
+  applyCliJsonRpcResult,
   createNotificationHandler,
   type ApprovalPrompt,
   type AskPrompt,
   type ProviderStatus,
   type PublicConfig,
+  type PublicSessionConfig,
   type ReplServerEventState,
 } from "./repl/serverEventHandler";
 import {
@@ -28,7 +30,7 @@ import { CliStreamState } from "./streamState";
 import { JsonRpcSocket } from "../client/jsonRpcSocket";
 import { ASK_SKIP_TOKEN } from "../shared/ask";
 import { startAgentServer } from "../server/startServer";
-import { PROVIDER_NAMES } from "../types";
+import { isProviderName, PROVIDER_NAMES } from "../types";
 
 export { parseReplInput, normalizeProviderAuthMethods, resolveProviderAuthMethodSelection };
 export type { ParsedCommand };
@@ -41,6 +43,13 @@ globalSettings.AI_SDK_LOG_WARNINGS = false;
 
 const UI_PROVIDER_NAMES = PROVIDER_NAMES;
 const NOT_CONNECTED_MSG = "unable to send (not connected)";
+
+type JsonRpcThreadDescriptor = {
+  id: string;
+  provider?: string;
+  model?: string;
+  cwd?: string;
+};
 
 function formatDurationSeconds(totalSeconds: unknown): string {
   if (typeof totalSeconds !== "number" || !Number.isFinite(totalSeconds) || totalSeconds < 0) return "unknown";
@@ -76,10 +85,28 @@ export async function resolveAndValidateDir(dirArg: string): Promise<string> {
   return resolved;
 }
 
+function readJsonRpcThreadDescriptor(result: unknown): JsonRpcThreadDescriptor | null {
+  if (!result || typeof result !== "object") return null;
+  const thread = (result as Record<string, unknown>).thread;
+  if (!thread || typeof thread !== "object") return null;
+  const record = thread as Record<string, unknown>;
+  const id = typeof record.id === "string" && record.id.trim() ? record.id.trim() : null;
+  if (!id) return null;
+  return {
+    id,
+    ...(typeof record.modelProvider === "string" && record.modelProvider.trim()
+      ? { provider: record.modelProvider }
+      : {}),
+    ...(typeof record.model === "string" && record.model.trim() ? { model: record.model } : {}),
+    ...(typeof record.cwd === "string" && record.cwd.trim() ? { cwd: record.cwd } : {}),
+  };
+}
+
 export const __internal = {
   renderTodosToLines,
   renderToolsToLines,
   resolveAndValidateDir,
+  readJsonRpcThreadDescriptor,
   resolveAskAnswer,
   normalizeApprovalAnswer,
   parseReplInput,
@@ -148,6 +175,7 @@ export async function runCliRepl(
   let threadId: string | null = null;
   let lastKnownThreadId: string | null = initialResumeThreadId;
   let config: PublicConfig | null = null;
+  let sessionConfig: PublicSessionConfig | null = null;
   let selectedProvider: string | null = null;
   let disconnectNotified = false;
 
@@ -175,6 +203,28 @@ export async function runCliRepl(
   const rpcRequest = async (method: string, params?: unknown): Promise<unknown> => {
     if (!socket) throw new Error(NOT_CONNECTED_MSG);
     return await socket.request(method, params);
+  };
+
+  const applyJsonRpcResult = (result: unknown) => {
+    applyCliJsonRpcResult(eventState, result);
+  };
+
+  const applyThreadDescriptor = async (result: unknown, cwdForStorage: string) => {
+    const descriptor = readJsonRpcThreadDescriptor(result);
+    if (!descriptor) return null;
+    threadId = descriptor.id;
+    lastKnownThreadId = descriptor.id;
+    disconnectNotified = false;
+    if (descriptor.provider && isProviderName(descriptor.provider) && descriptor.model && descriptor.cwd) {
+      config = {
+        provider: descriptor.provider,
+        model: descriptor.model,
+        workingDirectory: descriptor.cwd,
+      };
+      selectedProvider = descriptor.provider;
+    }
+    await setStoredSessionForCwd(cwdForStorage, descriptor.id);
+    return descriptor.id;
   };
 
   const printHelp = () => {
@@ -268,6 +318,7 @@ export async function runCliRepl(
     socket = null;
     threadId = null;
     config = null;
+    sessionConfig = null;
     selectedProvider = null;
     busy = false;
     providerList = [...UI_PROVIDER_NAMES];
@@ -309,6 +360,12 @@ export async function runCliRepl(
     },
     set config(value) {
       config = value;
+    },
+    get sessionConfig() {
+      return sessionConfig;
+    },
+    set sessionConfig(value) {
+      sessionConfig = value;
     },
     get selectedProvider() {
       return selectedProvider;
@@ -417,6 +474,7 @@ export async function runCliRepl(
 
     threadId = null;
     config = null;
+    sessionConfig = null;
 
     const epoch = ++socketEpoch;
 
@@ -482,22 +540,30 @@ export async function runCliRepl(
       } else {
         result = (await nextSocket.request("thread/start", { cwd: process.cwd() })) as Record<string, unknown>;
       }
-      if (result && typeof result.threadId === "string") {
-        threadId = result.threadId;
-        lastKnownThreadId = result.threadId;
-        disconnectNotified = false;
-        await setStoredSessionForCwd(process.cwd(), result.threadId);
+      await applyThreadDescriptor(result, process.cwd());
+      for (const metadataResult of await Promise.allSettled([
+        nextSocket.request("cowork/session/state/read", { cwd: process.cwd() }),
+        nextSocket.request("cowork/provider/catalog/read", { cwd: process.cwd() }),
+        nextSocket.request("cowork/provider/authMethods/read", { cwd: process.cwd() }),
+      ])) {
+        if (metadataResult.status === "fulfilled") {
+          applyJsonRpcResult(metadataResult.value);
+        }
       }
     } catch (err) {
       // If resume fails, try starting a new thread.
       if (targetThreadId) {
         try {
           const result = (await nextSocket.request("thread/start", { cwd: process.cwd() })) as Record<string, unknown>;
-          if (result && typeof result.threadId === "string") {
-            threadId = result.threadId;
-            lastKnownThreadId = result.threadId;
-            disconnectNotified = false;
-            await setStoredSessionForCwd(process.cwd(), result.threadId);
+          await applyThreadDescriptor(result, process.cwd());
+          for (const metadataResult of await Promise.allSettled([
+            nextSocket.request("cowork/session/state/read", { cwd: process.cwd() }),
+            nextSocket.request("cowork/provider/catalog/read", { cwd: process.cwd() }),
+            nextSocket.request("cowork/provider/authMethods/read", { cwd: process.cwd() }),
+          ])) {
+            if (metadataResult.status === "fulfilled") {
+              applyJsonRpcResult(metadataResult.value);
+            }
           }
         } catch (retryErr) {
           console.error(`Error starting thread: ${String(retryErr)}`);
@@ -611,6 +677,7 @@ export async function runCliRepl(
           getCwd: () => process.cwd(),
           getBusy: () => busy,
           getConfig: () => config,
+          getSessionConfig: () => sessionConfig,
           getSelectedProvider: () => selectedProvider,
           setSelectedProvider: (provider) => {
             selectedProvider = provider;
@@ -624,14 +691,9 @@ export async function runCliRepl(
           tryRequest: async (method, params) => {
             try {
               const result = await rpcRequest(method, params);
-              // For /new, update threadId from the result.
-              if (method === "thread/start" && result && typeof result === "object") {
-                const r = result as Record<string, unknown>;
-                if (typeof r.threadId === "string") {
-                  threadId = r.threadId;
-                  lastKnownThreadId = r.threadId;
-                  await setStoredSessionForCwd(process.cwd(), r.threadId);
-                }
+              applyJsonRpcResult(result);
+              if (method === "thread/start" || method === "thread/resume") {
+                await applyThreadDescriptor(result, process.cwd());
               }
               return result as any;
             } catch (err) {

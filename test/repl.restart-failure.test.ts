@@ -97,7 +97,24 @@ class FakeWebSocket {
     if (parsed?.method === "thread/start" && parsed?.id != null) {
       activeDiagnostics?.log("fake-socket.schedule-thread-start-response");
       queueMicrotask(() => {
-        const response = { id: parsed.id, result: { threadId: "thread-test" } };
+        const response = {
+          id: parsed.id,
+          result: {
+            thread: {
+              id: "thread-test",
+              title: "",
+              preview: "",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+              cwd: process.cwd(),
+              createdAt: "2026-03-23T00:00:00.000Z",
+              updatedAt: "2026-03-23T00:00:00.000Z",
+              messageCount: 0,
+              lastEventSeq: 0,
+              status: { type: "loaded" },
+            },
+          },
+        };
         activeDiagnostics?.log("fake-socket.emit-thread-start-response", response);
         this.onmessage?.({ data: JSON.stringify(response) });
       });
@@ -106,9 +123,83 @@ class FakeWebSocket {
     if (parsed?.method === "thread/resume" && parsed?.id != null) {
       activeDiagnostics?.log("fake-socket.schedule-thread-resume-response");
       queueMicrotask(() => {
-        const response = { id: parsed.id, result: { threadId: "thread-test" } };
+        const response = {
+          id: parsed.id,
+          result: {
+            thread: {
+              id: "thread-test",
+              title: "",
+              preview: "",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+              cwd: process.cwd(),
+              createdAt: "2026-03-23T00:00:00.000Z",
+              updatedAt: "2026-03-23T00:00:00.000Z",
+              messageCount: 0,
+              lastEventSeq: 0,
+              status: { type: "loaded" },
+            },
+          },
+        };
         activeDiagnostics?.log("fake-socket.emit-thread-resume-response", response);
         this.onmessage?.({ data: JSON.stringify(response) });
+      });
+    }
+    if (
+      (parsed?.method === "cowork/session/state/read"
+        || parsed?.method === "cowork/provider/catalog/read"
+        || parsed?.method === "cowork/provider/authMethods/read")
+      && parsed?.id != null
+    ) {
+      queueMicrotask(() => {
+        const result = parsed.method === "cowork/session/state/read"
+          ? {
+              events: [
+                {
+                  type: "config_updated",
+                  sessionId: "thread-test",
+                  config: {
+                    provider: "openai",
+                    model: "gpt-5.4",
+                    workingDirectory: process.cwd(),
+                  },
+                },
+                {
+                  type: "session_settings",
+                  sessionId: "thread-test",
+                  enableMcp: true,
+                  enableMemory: true,
+                  memoryRequireApproval: false,
+                },
+                {
+                  type: "session_config",
+                  sessionId: "thread-test",
+                  config: {
+                    enableMemory: true,
+                  },
+                },
+              ],
+            }
+          : parsed.method === "cowork/provider/catalog/read"
+            ? {
+                event: {
+                  type: "provider_catalog",
+                  sessionId: "thread-test",
+                  all: [{ id: "openai" }],
+                  default: { openai: "gpt-5.4" },
+                  connected: ["openai"],
+                },
+              }
+            : {
+                event: {
+                  type: "provider_auth_methods",
+                  sessionId: "thread-test",
+                  methods: {
+                    openai: [{ id: "api_key", type: "api", label: "API key" }],
+                  },
+                },
+              };
+        this.onmessage?.({ data: JSON.stringify({ id: parsed.id, result }) });
       });
     }
   }

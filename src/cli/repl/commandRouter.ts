@@ -12,8 +12,9 @@ import {
 import { promptForApiKey, promptForProviderMethod } from "./authPrompts";
 import { normalizeProviderAuthMethods, type ProviderAuthMethod } from "../parser";
 import { defaultModelForProvider } from "../../config";
+import { listSessionToolNames } from "../../tools";
 import { isProviderName, PROVIDER_NAMES } from "../../types";
-import type { PublicConfig } from "./serverEventHandler";
+import type { PublicConfig, PublicSessionConfig } from "./serverEventHandler";
 
 const UI_PROVIDER_NAMES = PROVIDER_NAMES;
 
@@ -23,6 +24,7 @@ export type ReplCommandContext = {
   getCwd: () => string;
   getBusy: () => boolean;
   getConfig: () => PublicConfig | null;
+  getSessionConfig: () => PublicSessionConfig | null;
   getSelectedProvider: () => string | null;
   setSelectedProvider: (provider: string | null) => void;
   getProviderList: () => string[];
@@ -90,9 +92,9 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       ctx.activateNextPrompt();
       return true;
     }
-    const ok = await ctx.tryRequest("cowork/session/config/set", {
+    const ok = await ctx.tryRequest("cowork/session/usageBudget/set", {
       threadId: threadId()!,
-      config: { stopAtUsd: null },
+      stopAtUsd: null,
     });
     if (!ok) return true;
     console.log("session hard-stop threshold cleared");
@@ -294,6 +296,11 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
+    if (!ctx.getProviderAuthMethods()[serviceToken]?.length) {
+      const loaded = await ctx.tryRequest("cowork/provider/authMethods/read", { cwd: cwd() });
+      if (loaded === false) return true;
+    }
+
     const methods = normalizeProviderAuthMethods(ctx.getProviderAuthMethods()[serviceToken]);
     const apiMethod = methods.find((method) => method.type === "api") ?? null;
 
@@ -303,7 +310,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
         ctx.activateNextPrompt();
         return true;
       }
-      const ok = await ctx.tryRequest("cowork/provider/auth/authorize", {
+      const ok = await ctx.tryRequest("cowork/provider/auth/setApiKey", {
         cwd: cwd(),
         provider: serviceToken,
         methodId: apiMethod.id,
@@ -329,7 +336,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
         ctx.activateNextPrompt();
         return true;
       }
-      const ok = await ctx.tryRequest("cowork/provider/auth/authorize", {
+      const ok = await ctx.tryRequest("cowork/provider/auth/setApiKey", {
         cwd: cwd(),
         provider: serviceToken,
         methodId: method.id,
@@ -368,24 +375,28 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
     try {
-      const result = (await ctx.tryRequest("cowork/session/state/read", { cwd: cwd() })) as unknown;
-      if (result === false) return true;
-      // The tryRequest returns true/false for connection status; the actual
-      // response comes from the RPC call. If we get here with a result object
-      // we can try to display tools from it.
-      if (result && typeof result === "object" && "events" in (result as Record<string, unknown>)) {
-        const events = (result as Record<string, unknown>).events;
-        if (Array.isArray(events)) {
-          const toolNames = events
-            .filter((e: unknown) => e && typeof e === "object" && (e as Record<string, unknown>).type === "tool")
-            .map((e: unknown) => (e as Record<string, unknown>).name as string)
-            .filter(Boolean);
-          if (toolNames.length > 0) {
-            console.log(`\nTools:\n${toolNames.map((n) => `  - ${n}`).join("\n")}\n`);
-          } else {
-            console.log("\nNo tools found.\n");
-          }
-        }
+      if (!ctx.getSessionConfig()) {
+        const result = await ctx.tryRequest("cowork/session/state/read", { cwd: cwd() });
+        if (result === false) return true;
+      }
+
+      const config = ctx.getConfig();
+      if (!config) {
+        console.log("\nNo tools found.\n");
+        ctx.activateNextPrompt();
+        return true;
+      }
+
+      const sessionConfig = ctx.getSessionConfig();
+      const toolNames = listSessionToolNames({
+        provider: config.provider,
+        providerOptions: sessionConfig?.providerOptions,
+        enableMemory: sessionConfig?.enableMemory,
+      });
+      if (toolNames.length > 0) {
+        console.log(`\nTools:\n${toolNames.map((name) => `  - ${name}`).join("\n")}\n`);
+      } else {
+        console.log("\nNo tools found.\n");
       }
     } catch (err) {
       console.error(`Error listing tools: ${String(err)}`);

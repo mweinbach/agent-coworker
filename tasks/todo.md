@@ -1,5 +1,23 @@
 # Task Plan
 
+## Fix CLI JSON-RPC Contract Regressions
+
+- [x] Confirm the reviewed CLI regressions against the live JSON-RPC schema and route handlers before patching.
+- [x] Fix the CLI thread/auth/budget/tools/stream handling so it matches the current JSON-RPC request, result, and notification shapes.
+- [x] Add focused REPL regressions for thread envelopes, provider auth method loading, API-key auth routing, tool listing, and streamed delta/toolCall handling.
+- [x] Re-run focused REPL verification, repo typecheck, and the full `bun test` lane, then capture the exact evidence.
+
+## Fix CLI JSON-RPC Contract Regressions Review
+
+- `src/cli/repl.ts` now reads `thread/start` / `thread/resume` results from the JSON-RPC `{ thread: { ... } }` envelope, rehydrates CLI state from returned control events, and eagerly loads workspace control metadata (`session/state/read`, `provider/catalog/read`, `provider/authMethods/read`) after connect so the REPL does not start in a half-hydrated state.
+- `src/cli/repl/commandRouter.ts` now clears hard caps through `cowork/session/usageBudget/set`, fetches auth methods before `/connect` uses them, routes API-key connects through `cowork/provider/auth/setApiKey`, and lists tools from the real session tool-name policy instead of misreading `cowork/session/state/read` as a registry.
+- `src/cli/repl/serverEventHandler.ts` now matches the JSON-RPC notification payloads: assistant/reasoning deltas come from `params.delta`, tool lifecycle notifications use `item.type === "toolCall"`, and `thread/started` / control-event envelopes update CLI state consistently.
+- Added focused REPL coverage in `test/repl.test.ts`, `test/repl.server-event-handler.test.ts`, `test/repl.thread-envelope.test.ts`, and updated the REPL websocket harness tests for the thread-envelope startup contract.
+- Verification passed with:
+  - `bun test test/repl.test.ts test/repl.server-event-handler.test.ts test/repl.thread-envelope.test.ts test/repl.disconnect-send.test.ts test/repl.restart-failure.test.ts`
+  - `bun run typecheck`
+  - `bun test` on 2026-03-23 (`2604 pass`, `3 skip`, `0 fail`)
+
 ## Remove Archived TUI Surface
 
 - [x] Remove the archived TUI implementation and its repo entrypoints instead of keeping it as a second terminal client.

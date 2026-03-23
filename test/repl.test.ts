@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { handleSlashCommand, type ReplCommandContext } from "../src/cli/repl/commandRouter";
 import { __internal as replInternal } from "../src/cli/repl";
+import type { ProviderAuthMethod } from "../src/cli/parser";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -370,6 +371,9 @@ describe("REPL slash command routing", () => {
         model: "gpt-5.2",
         workingDirectory: "/tmp",
       }),
+      getSessionConfig: () => ({
+        enableMemory: true,
+      }),
       getSelectedProvider: () => selectedProvider,
       setSelectedProvider: (provider) => {
         selectedProvider = provider;
@@ -465,11 +469,98 @@ describe("REPL slash command routing", () => {
       console.log = originalLog;
     }
 
-    expect(tryRequest).toHaveBeenCalledWith("cowork/session/config/set", {
+    expect(tryRequest).toHaveBeenCalledWith("cowork/session/usageBudget/set", {
       threadId: "thread-1",
-      config: { stopAtUsd: null },
+      stopAtUsd: null,
     });
     expect(log).toHaveBeenCalledWith("session hard-stop threshold cleared");
+    expect(activateNextPrompt).toHaveBeenCalled();
+  });
+
+  test("/connect fetches auth methods before saving an API key", async () => {
+    let providerAuthMethods: Record<string, ProviderAuthMethod[]> = {};
+    const tryRequest = mock(async (method: string) => {
+      if (method === "cowork/provider/authMethods/read") {
+        providerAuthMethods = {
+          openai: [{ id: "api_key", type: "api", label: "API key" }],
+        };
+        return {
+          event: {
+            type: "provider_auth_methods",
+            sessionId: "session-1",
+            methods: providerAuthMethods,
+          },
+        };
+      }
+      return true;
+    });
+    const activateNextPrompt = mock(() => {});
+    const log = mock(() => {});
+    const ctx = makeCommandContext({
+      tryRequest,
+      activateNextPrompt,
+      getProviderAuthMethods: () => providerAuthMethods,
+    });
+    const originalLog = console.log;
+    console.log = log as any;
+    try {
+      const handled = await handleSlashCommand("/connect openai sk-test", ctx);
+      expect(handled).toBe(true);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(tryRequest).toHaveBeenNthCalledWith(1, "cowork/provider/authMethods/read", {
+      cwd: "/tmp",
+    });
+    expect(tryRequest).toHaveBeenNthCalledWith(2, "cowork/provider/auth/setApiKey", {
+      cwd: "/tmp",
+      provider: "openai",
+      methodId: "api_key",
+      apiKey: "sk-test",
+    });
+    expect(log).toHaveBeenCalledWith("saving key for openai...");
+    expect(activateNextPrompt).toHaveBeenCalled();
+  });
+
+  test("/tools lists built-in session tools instead of reading them from session state events", async () => {
+    const tryRequest = mock(async () => true);
+    const activateNextPrompt = mock(() => {});
+    const log = mock(() => {});
+    const ctx = makeCommandContext({
+      tryRequest,
+      activateNextPrompt,
+      getConfig: () => ({
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        workingDirectory: "/tmp",
+      }),
+      getSessionConfig: () => ({
+        enableMemory: false,
+        providerOptions: {
+          google: {
+            nativeWebSearch: true,
+          },
+        },
+      }),
+    });
+    const originalLog = console.log;
+    console.log = log as any;
+    try {
+      const handled = await handleSlashCommand("/tools", ctx);
+      expect(handled).toBe(true);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(tryRequest).not.toHaveBeenCalled();
+    const rendered = log.mock.calls[0]?.[0];
+    expect(typeof rendered).toBe("string");
+    expect(rendered).toContain("  - AskUserQuestion");
+    expect(rendered).toContain("  - ask");
+    expect(rendered).toContain("  - webFetch");
+    expect(rendered).not.toContain("  - memory");
+    expect(rendered).not.toContain("  - webSearch");
     expect(activateNextPrompt).toHaveBeenCalled();
   });
 

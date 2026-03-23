@@ -1,4 +1,5 @@
 import type { ToolContext } from "./context";
+import type { AgentConfig } from "../types";
 
 import { createAskTool } from "./ask";
 import { createBashTool } from "./bash";
@@ -37,6 +38,42 @@ function usesLegacyCodexWebSearch(ctx: ToolContext): boolean {
 function usesGoogleNativeWebTools(ctx: ToolContext): boolean {
   if (ctx.config.provider !== "google") return false;
   return getGoogleNativeWebSearchFromProviderOptions(ctx.config.providerOptions) === true;
+}
+
+function usesLegacyCodexWebSearchConfig(config: Pick<AgentConfig, "provider" | "providerOptions">): boolean {
+  if (config.provider !== "codex-cli") return false;
+  return getCodexWebSearchBackendFromProviderOptions(config.providerOptions) === "exa";
+}
+
+function usesGoogleNativeWebToolsConfig(config: Pick<AgentConfig, "provider" | "providerOptions">): boolean {
+  if (config.provider !== "google") return false;
+  return getGoogleNativeWebSearchFromProviderOptions(config.providerOptions) === true;
+}
+
+export function listSessionToolNames(config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory">): string[] {
+  const includeLegacyWebSearch =
+    !usesGoogleNativeWebToolsConfig(config)
+    && (config.provider !== "codex-cli" || usesLegacyCodexWebSearchConfig(config));
+
+  const names = [
+    "bash",
+    "read",
+    "write",
+    "edit",
+    "glob",
+    "grep",
+    ...(includeLegacyWebSearch ? ["webSearch"] : []),
+    "webFetch",
+    "ask",
+    "AskUserQuestion",
+    "todoWrite",
+    "notebookEdit",
+    "skill",
+    ...(config.enableMemory ?? true ? ["memory"] : []),
+    "usage",
+  ];
+
+  return [...names].sort((left, right) => left.localeCompare(right));
 }
 
 export function createTools(ctx: ToolContext): Record<string, any> {

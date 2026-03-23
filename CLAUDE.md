@@ -27,7 +27,7 @@ There is no linter or formatter configured. TypeScript strict mode is the primar
 
 - `src/index.ts` — Main entry; routes to CLI or archived TUI based on flags. Default (`bun run start`) launches the desktop app.
 - `src/server/index.ts` — Standalone WebSocket server
-- `src/cli/repl.ts` — CLI REPL (connects to server via WebSocket)
+- `src/cli/repl.ts` — CLI REPL (connects to server via JSON-RPC WebSocket)
 
 ### Core Loop
 
@@ -35,7 +35,7 @@ There is no linter or formatter configured. TypeScript strict mode is the primar
 
 ### Server & Protocol
 
-`src/server/session/AgentSession.ts` — `AgentSession` manages per-session state: message history, turn execution, backups, harness context, and pending ask/approval requests via deferred promises. The WebSocket protocol is defined in `src/server/protocol.ts` with typed `ClientMessage` and `ServerEvent` unions.
+`src/server/session/AgentSession.ts` — `AgentSession` manages per-session state: message history, turn execution, backups, harness context, and pending ask/approval requests via deferred promises. The server uses a JSON-RPC-lite protocol over WebSocket (`cowork.jsonrpc.v1`). Internal event types are defined as `ServerEvent` in `src/server/protocol.ts`; the JSON-RPC protocol types are in `src/server/jsonrpc/protocol.ts`.
 
 ### Provider System
 
@@ -68,7 +68,7 @@ The TUI was built with OpenTUI + Solid.js (not React). It has its own `tsconfig.
 - `apps/TUI/ui/` — Reusable dialog primitives (select, confirm, prompt, alert, help)
 - `apps/TUI/util/` — Utilities (format, clipboard, terminal, signal, editor, transcript)
 
-The `SyncProvider` bridges the existing `AgentSocket` WebSocket client into Solid.js reactive stores. The TUI never touches the agent or AI SDK directly — everything goes through WebSocket.
+The `SyncProvider` bridges the WebSocket client into Solid.js reactive stores. The TUI never touches the agent or AI SDK directly — everything goes through WebSocket. Note: The TUI still uses the archived `AgentSocket` (legacy protocol) which is no longer supported by the server.
 
 ### Key Patterns
 
@@ -81,12 +81,12 @@ The `SyncProvider` bridges the existing `AgentSocket` WebSocket client into Soli
 
 **All new features and capabilities MUST be built on top of the CLI/core logic and exposed via WebSocket controls.** The server + protocol layer is the canonical interface that every UI (desktop app, CLI REPL, or any future frontend) consumes. Never build logic directly into a specific UI — wire it through the server so any client can use it.
 
-When adding a new WebSocket message type or event:
+When adding a new JSON-RPC method or notification:
 
-1. Add the type to `ClientMessage` or `ServerEvent` in `src/server/protocol.ts`.
-2. Add validation in `safeParseClientMessage()` if it's a client message.
-3. Add the handler in `src/server/startServer/dispatchClientMessage.ts` (message routing) and/or the appropriate manager under `src/server/session/` (session logic).
-4. **Update `docs/websocket-protocol.md`** with the new message format, fields, example JSON, and where it fits in the flow.
+1. Add the route handler in the appropriate file under `src/server/jsonrpc/routes/`.
+2. Register it in `src/server/jsonrpc/routes/index.ts`.
+3. If it produces streaming events, add projection logic in `src/server/jsonrpc/eventProjector.ts` or `src/server/jsonrpc/journalProjector.ts`.
+4. **Update `docs/websocket-protocol.md`** with the new method, params, result, and where it fits in the flow.
 
 The protocol doc (`docs/websocket-protocol.md`) is the source of truth for anyone building an alternative UI. Keep it accurate and complete.
 The harness docs index (`docs/harness/index.md`) is the system-of-record map for harness behavior, context, and runbook guidance.

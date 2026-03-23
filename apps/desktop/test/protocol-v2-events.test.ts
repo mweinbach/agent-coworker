@@ -108,7 +108,6 @@ mock.module("../src/lib/desktopCommands", () => ({
 }));
 
 mock.module("../src/lib/agentSocket", () => ({
-  AgentSocket: class {},
   JsonRpcSocket: MockJsonRpcSocket,
 }));
 

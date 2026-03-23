@@ -27,14 +27,6 @@ const MOCK_UPDATE_STATE = {
   error: null,
 };
 
-class MockAgentSocket {
-  connect() {}
-  send() {
-    return true;
-  }
-  close() {}
-}
-
 class MockJsonRpcSocket {
   static instances: MockJsonRpcSocket[] = [];
   readonly readyPromise = Promise.resolve();
@@ -335,7 +327,6 @@ mock.module("../src/lib/desktopCommands", () => ({
 }));
 
 mock.module("../src/lib/agentSocket", () => ({
-  AgentSocket: MockAgentSocket,
   JsonRpcSocket: MockJsonRpcSocket,
 }));
 

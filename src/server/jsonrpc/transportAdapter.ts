@@ -3,7 +3,7 @@ import type { PersistedThreadJournalEvent } from "../sessionDb";
 import type { SessionBinding, StartServerSocket } from "../startServer/types";
 
 import { dispatchJsonRpcMessage } from "./dispatchJsonRpcMessage";
-import { createJsonRpcLegacyEventProjector } from "./legacyEventProjector";
+import { createJsonRpcEventProjector } from "./eventProjector";
 import {
   buildJsonRpcErrorResponse,
   JSONRPC_ERROR_CODES,
@@ -146,7 +146,7 @@ export function createJsonRpcTransportAdapter({
     const shouldReplayBufferedEvents =
       opts?.drainDisconnectedReplayBuffer || (!binding.socket && countLiveConnectionSinks(binding) === 0);
     const sinkId = `jsonrpc:${connectionId}:${threadId}`;
-    const projector = createJsonRpcLegacyEventProjector({
+    const projector = createJsonRpcEventProjector({
       threadId,
       send: (message) => sendJsonRpc(ws, message),
       shouldSendNotification: (method) => shouldSendNotification(ws, method),

@@ -1,3 +1,2 @@
-export type { AgentSocketOpts, JsonRpcSocketOpts } from "@cowork/client";
-export { AgentSocket, JsonRpcSocket } from "@cowork/client";
-
+export type { JsonRpcSocketOpts } from "@cowork/client";
+export { JsonRpcSocket } from "@cowork/client";

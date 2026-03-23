@@ -28,7 +28,7 @@ type JsonRpcOutboundMessage =
   | { id: string | number; method: string; params?: unknown }
   | { method: string; params?: unknown };
 
-type CreateJsonRpcLegacyEventProjectorOptions = {
+type CreateJsonRpcEventProjectorOptions = {
   threadId: string;
   send: (message: JsonRpcOutboundMessage) => void;
   shouldSendNotification?: (method: string) => boolean;
@@ -64,7 +64,7 @@ type BufferedToolState = {
   started: boolean;
 };
 
-export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEventProjectorOptions) {
+export function createJsonRpcEventProjector(opts: CreateJsonRpcEventProjectorOptions) {
   let activeTurnId: string | null = opts.initialActiveTurnId ?? null;
   let lastUserMessageText: string | null = null;
   let lastUserMessageClientMessageId: string | null = null;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { createJsonRpcLegacyEventProjector } from "../src/server/jsonrpc/legacyEventProjector";
+import { createJsonRpcEventProjector } from "../src/server/jsonrpc/eventProjector";
 import { createThreadJournalProjector } from "../src/server/jsonrpc/journalProjector";
 import type { ServerEvent } from "../src/server/protocol";
 
@@ -64,7 +64,7 @@ function googleRaw(index: number, event: Record<string, unknown>): ServerEvent {
 describe("JSON-RPC projectors", () => {
   test("legacy projector suppresses commentary deltas and streams reasoning items from live chunks", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
-    const projector = createJsonRpcLegacyEventProjector({
+    const projector = createJsonRpcEventProjector({
       threadId: sessionId,
       send: (message) => outbound.push(message as { method: string; params?: any }),
     });
@@ -208,7 +208,7 @@ describe("JSON-RPC projectors", () => {
 
   test("legacy projector splits assistant segments when reasoning resumes within the same turn", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
-    const projector = createJsonRpcLegacyEventProjector({
+    const projector = createJsonRpcEventProjector({
       threadId: sessionId,
       send: (message) => outbound.push(message as { method: string; params?: any }),
     });
@@ -314,7 +314,7 @@ describe("JSON-RPC projectors", () => {
 
   test("legacy projector drops a cumulative final assistant message when streamed output only differs by leading boundary whitespace", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
-    const projector = createJsonRpcLegacyEventProjector({
+    const projector = createJsonRpcEventProjector({
       threadId: sessionId,
       send: (message) => outbound.push(message as { method: string; params?: any }),
     });
@@ -380,7 +380,7 @@ describe("JSON-RPC projectors", () => {
 
   test("legacy projector replays raw Gemini search tool items and drops aggregate final reasoning duplicates", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
-    const projector = createJsonRpcLegacyEventProjector({
+    const projector = createJsonRpcEventProjector({
       threadId: sessionId,
       send: (message) => outbound.push(message as { method: string; params?: any }),
     });
@@ -582,7 +582,7 @@ describe("JSON-RPC projectors", () => {
     test(`projectors keep repeated PI reasoning and tool occurrences distinct for ${provider}`, () => {
       const outbound: Array<{ method: string; params?: any }> = [];
       const emissions: Array<{ eventType: string; payload: any }> = [];
-      const legacy = createJsonRpcLegacyEventProjector({
+      const legacy = createJsonRpcEventProjector({
         threadId: sessionId,
         send: (message) => outbound.push(message as { method: string; params?: any }),
       });

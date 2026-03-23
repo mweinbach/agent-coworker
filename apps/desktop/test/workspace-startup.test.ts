@@ -49,18 +49,6 @@ const MOCK_UPDATE_STATE = {
   error: null,
 };
 
-class MockAgentSocket {
-  constructor(public readonly opts: { client: string; onEvent?: (evt: any) => void }) {}
-
-  connect() {}
-
-  send() {
-    return true;
-  }
-
-  close() {}
-}
-
 class MockJsonRpcSocket {
   static autoOpen = true;
 
@@ -143,7 +131,6 @@ mock.module("../src/lib/desktopCommands", () => ({
 }));
 
 mock.module("../src/lib/agentSocket", () => ({
-  AgentSocket: MockAgentSocket,
   JsonRpcSocket: MockJsonRpcSocket,
 }));
 

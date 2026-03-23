@@ -50,7 +50,6 @@ class MockJsonRpcSocket {
 }
 
 mock.module("../src/lib/agentSocket", () => ({
-  AgentSocket: class {},
   JsonRpcSocket: MockJsonRpcSocket,
 }));
 

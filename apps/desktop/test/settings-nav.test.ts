@@ -66,15 +66,6 @@ mock.module("../src/lib/desktopCommands", () => ({
 }));
 
 mock.module("../src/lib/agentSocket", () => ({
-  AgentSocket: class {
-    connect() {
-      agentSocketConnectCalls += 1;
-    }
-    send() {
-      return true;
-    }
-    close() {}
-  },
   JsonRpcSocket: NoopJsonRpcSocket,
 }));
 

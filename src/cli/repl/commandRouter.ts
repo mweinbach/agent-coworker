@@ -12,7 +12,6 @@ import {
 import { promptForApiKey, promptForProviderMethod } from "./authPrompts";
 import { normalizeProviderAuthMethods, type ProviderAuthMethod } from "../parser";
 import { defaultModelForProvider } from "../../config";
-import type { ClientMessage } from "../../server/protocol";
 import { isProviderName, PROVIDER_NAMES } from "../../types";
 import type { PublicConfig } from "./serverEventHandler";
 
@@ -20,7 +19,8 @@ const UI_PROVIDER_NAMES = PROVIDER_NAMES;
 
 export type ReplCommandContext = {
   rl: readline.Interface;
-  getSessionId: () => string | null;
+  getThreadId: () => string | null;
+  getCwd: () => string;
   getBusy: () => boolean;
   getConfig: () => PublicConfig | null;
   getSelectedProvider: () => string | null;
@@ -28,14 +28,15 @@ export type ReplCommandContext = {
   getProviderList: () => string[];
   getProviderDefaultModel: (provider: string) => string | null;
   getProviderAuthMethods: () => Record<string, ProviderAuthMethod[]>;
-  trySend: (msg: ClientMessage) => boolean;
+  tryRequest: (method: string, params: unknown) => Promise<boolean>;
+  setThreadId: (threadId: string | null) => void;
   activateNextPrompt: () => void;
   printHelp: () => void;
   showConnectStatus: () => void;
   restartServer: (cwd: string) => Promise<void>;
   resolveAndValidateDir: (dirArg: string) => Promise<string>;
   setCwd: (cwd: string) => void;
-  resumeSession: (targetSessionId: string) => Promise<void>;
+  resumeSession: (targetThreadId: string) => Promise<void>;
 };
 
 function currentOpenAiCompatibleProvider(ctx: ReplCommandContext): "openai" | "codex-cli" | null {
@@ -47,7 +48,8 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   if (!input.startsWith("/")) return false;
 
   const [cmd, ...rest] = input.slice(1).split(/\s+/);
-  const sessionId = () => ctx.getSessionId();
+  const threadId = () => ctx.getThreadId();
+  const cwd = () => ctx.getCwd();
 
   if (cmd === "help") {
     ctx.printHelp();
@@ -62,7 +64,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
 
   if (cmd === "restart") {
     console.log("restarting server...");
-    await ctx.restartServer(process.cwd());
+    await ctx.restartServer(cwd());
     return true;
   }
 
@@ -72,24 +74,25 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       ctx.activateNextPrompt();
       return true;
     }
-    if (sessionId()) {
-      const ok = ctx.trySend({ type: "reset", sessionId: sessionId()! });
-      if (!ok) return true;
+    try {
+      const result = (await ctx.tryRequest("thread/start", { cwd: cwd() })) as unknown;
+      if (result === false) return true;
+    } catch (err) {
+      console.error(`Error starting new thread: ${String(err)}`);
     }
     ctx.activateNextPrompt();
     return true;
   }
 
   if (cmd === "clear-hard-cap") {
-    if (!sessionId()) {
+    if (!threadId()) {
       console.log("not connected: cannot clear the session hard cap yet");
       ctx.activateNextPrompt();
       return true;
     }
-    const ok = ctx.trySend({
-      type: "set_session_usage_budget",
-      sessionId: sessionId()!,
-      stopAtUsd: null,
+    const ok = await ctx.tryRequest("cowork/session/config/set", {
+      threadId: threadId()!,
+      config: { stopAtUsd: null },
     });
     if (!ok) return true;
     console.log("session hard-stop threshold cleared");
@@ -104,8 +107,8 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       ctx.activateNextPrompt();
       return true;
     }
-    if (sessionId()) {
-      const ok = ctx.trySend({ type: "set_model", sessionId: sessionId()!, model: id });
+    if (threadId()) {
+      const ok = await ctx.tryRequest("cowork/session/model/set", { threadId: threadId()!, model: id });
       if (!ok) return true;
     }
     ctx.activateNextPrompt();
@@ -129,8 +132,12 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       ctx.activateNextPrompt();
       return true;
     }
-    if (sessionId()) {
-      const ok = ctx.trySend({ type: "set_model", sessionId: sessionId()!, provider: name, model: nextModel });
+    if (threadId()) {
+      const ok = await ctx.tryRequest("cowork/session/model/set", {
+        threadId: threadId()!,
+        provider: name,
+        model: nextModel,
+      });
       if (!ok) return true;
       ctx.setSelectedProvider(name);
     }
@@ -153,15 +160,14 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
-    if (!sessionId()) {
+    if (!threadId()) {
       console.log("not connected: cannot change verbosity yet");
       ctx.activateNextPrompt();
       return true;
     }
 
-    const ok = ctx.trySend({
-      type: "set_config",
-      sessionId: sessionId()!,
+    const ok = await ctx.tryRequest("cowork/session/config/set", {
+      threadId: threadId()!,
       config: {
         providerOptions: {
           [provider]: {
@@ -191,15 +197,14 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
-    if (!sessionId()) {
+    if (!threadId()) {
       console.log("not connected: cannot change reasoning effort yet");
       ctx.activateNextPrompt();
       return true;
     }
 
-    const ok = ctx.trySend({
-      type: "set_config",
-      sessionId: sessionId()!,
+    const ok = await ctx.tryRequest("cowork/session/config/set", {
+      threadId: threadId()!,
       config: {
         providerOptions: {
           [provider]: {
@@ -229,15 +234,14 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
-    if (!sessionId()) {
+    if (!threadId()) {
       console.log("not connected: cannot change reasoning summary yet");
       ctx.activateNextPrompt();
       return true;
     }
 
-    const ok = ctx.trySend({
-      type: "set_config",
-      sessionId: sessionId()!,
+    const ok = await ctx.tryRequest("cowork/session/config/set", {
+      threadId: threadId()!,
       config: {
         providerOptions: {
           [provider]: {
@@ -284,7 +288,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
-    if (!sessionId()) {
+    if (!threadId()) {
       console.log("not connected: cannot run /connect yet");
       ctx.activateNextPrompt();
       return true;
@@ -299,9 +303,8 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
         ctx.activateNextPrompt();
         return true;
       }
-      const ok = ctx.trySend({
-        type: "provider_auth_set_api_key",
-        sessionId: sessionId()!,
+      const ok = await ctx.tryRequest("cowork/provider/auth/authorize", {
+        cwd: cwd(),
         provider: serviceToken,
         methodId: apiMethod.id,
         apiKey: apiKeyArg,
@@ -326,9 +329,8 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
         ctx.activateNextPrompt();
         return true;
       }
-      const ok = ctx.trySend({
-        type: "provider_auth_set_api_key",
-        sessionId: sessionId()!,
+      const ok = await ctx.tryRequest("cowork/provider/auth/authorize", {
+        cwd: cwd(),
         provider: serviceToken,
         methodId: method.id,
         apiKey: promptedKey,
@@ -339,18 +341,16 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
-    const ok = ctx.trySend({
-      type: "provider_auth_authorize",
-      sessionId: sessionId()!,
+    const ok = await ctx.tryRequest("cowork/provider/auth/authorize", {
+      cwd: cwd(),
       provider: serviceToken,
       methodId: method.id,
     });
     if (!ok) return true;
 
     if (method.oauthMode === "auto") {
-      ctx.trySend({
-        type: "provider_auth_callback",
-        sessionId: sessionId()!,
+      await ctx.tryRequest("cowork/provider/auth/callback", {
+        cwd: cwd(),
         provider: serviceToken,
         methodId: method.id,
       });
@@ -362,38 +362,57 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   }
 
   if (cmd === "tools") {
-    if (!sessionId()) {
+    if (!threadId()) {
       console.log("not connected: cannot list tools yet");
       ctx.activateNextPrompt();
       return true;
     }
-    const ok = ctx.trySend({ type: "list_tools", sessionId: sessionId()! });
-    if (!ok) return true;
+    try {
+      const result = (await ctx.tryRequest("cowork/session/state/read", { cwd: cwd() })) as unknown;
+      if (result === false) return true;
+      // The tryRequest returns true/false for connection status; the actual
+      // response comes from the RPC call. If we get here with a result object
+      // we can try to display tools from it.
+      if (result && typeof result === "object" && "events" in (result as Record<string, unknown>)) {
+        const events = (result as Record<string, unknown>).events;
+        if (Array.isArray(events)) {
+          const toolNames = events
+            .filter((e: unknown) => e && typeof e === "object" && (e as Record<string, unknown>).type === "tool")
+            .map((e: unknown) => (e as Record<string, unknown>).name as string)
+            .filter(Boolean);
+          if (toolNames.length > 0) {
+            console.log(`\nTools:\n${toolNames.map((n) => `  - ${n}`).join("\n")}\n`);
+          } else {
+            console.log("\nNo tools found.\n");
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`Error listing tools: ${String(err)}`);
+    }
     ctx.activateNextPrompt();
     return true;
   }
 
   if (cmd === "sessions") {
-    if (!sessionId()) {
-      console.log("not connected: cannot list sessions yet");
-      ctx.activateNextPrompt();
-      return true;
+    console.log("\nSession management uses threads in JSON-RPC mode.");
+    if (threadId()) {
+      console.log(`Current thread: ${threadId()}`);
     }
-    const ok = ctx.trySend({ type: "list_sessions", sessionId: sessionId()! });
-    if (!ok) return true;
+    console.log("Use /new to start a new thread, /resume <threadId> to resume one.\n");
     ctx.activateNextPrompt();
     return true;
   }
 
   if (cmd === "resume") {
-    const targetSessionId = rest.join(" ").trim();
-    if (!targetSessionId) {
-      console.log("usage: /resume <sessionId>");
+    const targetThreadId = rest.join(" ").trim();
+    if (!targetThreadId) {
+      console.log("usage: /resume <threadId>");
       ctx.activateNextPrompt();
       return true;
     }
-    console.log(`resuming session ${targetSessionId}...`);
-    await ctx.resumeSession(targetSessionId);
+    console.log(`resuming thread ${targetThreadId}...`);
+    await ctx.resumeSession(targetThreadId);
     ctx.activateNextPrompt();
     return true;
   }

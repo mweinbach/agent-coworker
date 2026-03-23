@@ -1,5 +1,18 @@
 # Task Plan
 
+## Optimize Slow Tool Tests
+
+- [x] Measure the current slow tool-test cases precisely and identify whether the cost is subprocess spawning, HTML parser startup, or explicit timeout waits.
+- [x] Refactor the slowest tool tests to use deterministic test doubles or lighter-weight code paths without weakening the behavioral contract under test.
+- [x] Re-run the focused tool-test timing check, `bun test test/tools.test.ts`, `bun run typecheck`, and the full `bun test` lane, then record the before/after evidence.
+
+## Optimize Slow Tool Tests Review
+
+- The main hotspot was `test/tools.test.ts`, not the smaller `test/tools.*.test.ts` files. A direct timing probe showed `test/tools.test.ts` at about `0.656s`, with the worst individual cases coming from four bash tests that spawned real shells (~35-40ms each), one HTML webFetch test that paid the `jsdom` + Readability startup cost (~195ms), and the intentional timeout test (~26ms).
+- `src/tools/bash.ts` now exposes a narrow `__internal` runner override for tests, and `src/tools/webFetch.ts` now exposes a narrow `__internal` HTML-render override for tests. `test/tools.test.ts` uses those hooks so the slow assertions still exercise the tool entrypoints without paying real subprocess startup or heavy HTML-parser initialization on every run.
+- The focused file now runs in about `0.253s` instead of `0.656s`, and the worst avoidable cases dropped sharply: bash stderr/cwd/large-output/stdout+stderr checks are sub-millisecond, and the Exa-enriched HTML case is ~2ms instead of ~195ms. The remaining ~25ms timeout case is intentional coverage of the response-timeout path.
+- Verification passed with the direct timing probes for `test/tools.test.ts` (`0.656s` before, `0.253s` after), `bun test test/tools.test.ts`, `bun run typecheck`, and full `bun test` (`2692 pass`, `3 skip`, `0 fail`).
+
 ## Remove Legacy WebSocket Test Coupling
 
 - [x] Reproduce the current failing verification lane and confirm the remaining breakages come from tests still importing archived TUI or legacy transport surfaces rather than from active JSON-RPC behavior.

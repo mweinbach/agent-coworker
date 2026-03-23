@@ -62,6 +62,10 @@ async function runShellCommand(opts: {
   });
 }
 
+let runShellCommandOverrideForTests:
+  | ((opts: { command: string; cwd: string; abortSignal?: AbortSignal }) => Promise<ExecResult>)
+  | null = null;
+
 function buildShellExecutionPlan(platform: NodeJS.Platform, command: string): Array<{ file: string; args: string[] }> {
   if (platform === "win32") {
     const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command];
@@ -149,7 +153,7 @@ export function createBashTool(ctx: ToolContext) {
       }
 
       return await new Promise((resolve) => {
-        void runShellCommand({
+        void (runShellCommandOverrideForTests ?? runShellCommand)({
           command,
           cwd: ctx.config.workingDirectory,
           abortSignal: ctx.abortSignal,
@@ -171,4 +175,12 @@ export const __internal = {
   buildBashToolDescription,
   buildShellExecutionPlan,
   runShellCommandWithExec,
+  setRunShellCommandForTests(
+    runner: (opts: { command: string; cwd: string; abortSignal?: AbortSignal }) => Promise<ExecResult>
+  ) {
+    runShellCommandOverrideForTests = runner;
+  },
+  resetRunShellCommandForTests() {
+    runShellCommandOverrideForTests = null;
+  },
 };

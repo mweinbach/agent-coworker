@@ -16,6 +16,9 @@ const MAX_REDIRECTS = 5;
 const DEFAULT_MAX_WEBFETCH_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 let responseTimeoutMs = 5_000;
 let maxDownloadBytes = DEFAULT_MAX_WEBFETCH_DOWNLOAD_BYTES;
+let htmlToMarkdownOverrideForTests:
+  | ((html: string, finalUrl: string, ctx: ToolContext) => Promise<string>)
+  | null = null;
 const SUPPORTED_IMAGE_MIME_TYPES = new Map<string, string>([
   ["image/png", ".png"],
   ["image/jpeg", ".jpg"],
@@ -649,6 +652,14 @@ export const __internal = {
   getMaxDownloadBytes: () => maxDownloadBytes,
   getResponseTimeoutMs: () => responseTimeoutMs,
   isDesktopBundleRuntime,
+  setHtmlToMarkdownForTests(
+    renderer: (html: string, finalUrl: string, ctx: ToolContext) => Promise<string>
+  ) {
+    htmlToMarkdownOverrideForTests = renderer;
+  },
+  resetHtmlToMarkdownForTests() {
+    htmlToMarkdownOverrideForTests = null;
+  },
   setMaxDownloadBytes: (bytes: number) => {
     maxDownloadBytes = bytes;
   },
@@ -712,7 +723,9 @@ export function createWebFetchTool(ctx: ToolContext) {
 
       const bodyText = await response.text();
       const isHtml = shouldTreatAsHtml(response.headers.get("content-type"), finalUrl, bodyText);
-      const baseText = isHtml ? await htmlToMarkdown(bodyText, finalUrl, ctx) : bodyText;
+      const baseText = isHtml
+        ? await (htmlToMarkdownOverrideForTests ?? htmlToMarkdown)(bodyText, finalUrl, ctx)
+        : bodyText;
       const exaContent = isHtml ? await maybeFetchExaEnrichment(ctx, finalUrl) : null;
       const out = truncateText(formatFetchedText(baseText, exaContent), maxLength);
 

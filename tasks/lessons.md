@@ -1,5 +1,6 @@
 # Lessons
 
+- For Google native citation UX in this repo, do not assume the stored annotation title is the best source label; opaque grounding redirects can often be resolved in the harness to the final article URL and page title, which is better than piling more logic into the desktop renderer.
 - For JSON-RPC CLI migrations in this repo, move the whole client contract together: read thread ids from the `{ thread }` envelope, hydrate local CLI state from control-event result payloads, fetch provider auth methods before `/connect`, send API keys through `setApiKey`, clear budgets through `usageBudget/set`, and match streamed `delta`/`toolCall` payload names exactly.
 - When the user says an archived surface should be removed entirely, do the full deletion pass in one go: code, tests, docs, entrypoint scripts, and now-unused dependencies should all disappear together instead of leaving a dormant compatibility shell behind.
 - For slow tool tests in this repo, do not pay real subprocess or heavy HTML-parser startup costs when the assertion is only about tool orchestration or result shaping; use internal runners or deterministic fallback conversion paths instead.

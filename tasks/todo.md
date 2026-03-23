@@ -1,5 +1,23 @@
 # Task Plan
 
+## Google Citation Title Resolution
+
+- [x] Confirm whether real Google native citation data already contains article titles or only opaque redirect URLs plus domain-like labels.
+- [x] Add a harness-side citation resolver that can follow opaque Google grounding redirects to the final article URL and page title with caching and tight timeouts.
+- [x] Use that resolver in the live Google runtime before assistant annotation items hit the UI, and in `thread/read` hydration so existing snapshots improve on reload.
+- [x] Re-run focused resolver/runtime/JSON-RPC tests, repo typecheck, and the full `bun test` lane.
+
+## Google Citation Title Resolution Review
+
+- `src/server/citationMetadata.ts` now owns harness-side citation enrichment for opaque Google grounding redirects. It follows the redirect to the final article URL, extracts a page title from `og:title`/`twitter:title`/`<title>`, caches by original citation URL, and keeps strict timeouts and partial-failure fallback so the UI never has to guess at provider-specific redirect behavior.
+- `src/runtime/googleNativeInteractions.ts` now resolves assistant text-block annotations before `text-end` events are emitted, so new Google native web-search answers stream into the projected feed with real article URLs and page titles already attached to the annotations.
+- `src/server/jsonrpc/routes/thread.ts` now applies the same enrichment during `thread/read`, which upgrades existing persisted Google snapshots on hydration without changing the desktop-side rendering contract.
+- Added focused regressions in `test/citationMetadata.test.ts`, `test/runtime.google-interactions.test.ts`, and `test/jsonrpc.router.test.ts`.
+- Verification passed with:
+  - `~/.bun/bin/bun test test/citationMetadata.test.ts test/runtime.google-interactions.test.ts test/jsonrpc.router.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test` on 2026-03-23 (`2625 pass`, `3 skip`, `0 fail`)
+
 ## Citation Popup Polish
 
 - [x] Inspect the real Google cowork snapshot and confirm whether the popup had access to the final destination URL or only the opaque Vertex redirect.

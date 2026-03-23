@@ -2,6 +2,7 @@ import { GoogleGenAI, type Interactions } from "@google/genai";
 
 import type { GoogleInteractionsModelInfo } from "./googleInteractionsModel";
 import { piTurnMessagesToModelMessages, toolResultContentFromOutput } from "./piMessageBridge";
+import { enrichCitationAnnotations } from "../server/citationMetadata";
 import type { ModelMessage } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -623,6 +624,19 @@ function buildNativeGoogleToolResultOutput(
   throw new Error(`Unknown native Google tool: ${name}`);
 }
 
+async function enrichTextBlockAnnotations(
+  block: AssistantContentBlock | undefined,
+): Promise<void> {
+  if (block?.type !== "text" || !block.annotations || block.annotations.length === 0) {
+    return;
+  }
+
+  const nextAnnotations = await enrichCitationAnnotations(block.annotations);
+  if (nextAnnotations) {
+    block.annotations = nextAnnotations;
+  }
+}
+
 function ensureThinkingBlock(
   contentBlocks: Map<number, AssistantContentBlock>,
   index: number,
@@ -1163,6 +1177,10 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
 
       if (eventType === "content.start" || eventType === "content.delta" || eventType === "content.stop") {
         processStreamEvent(eventRecord, contentBlocks, providerToolCallsById);
+        if (eventType === "content.stop") {
+          const blockIndex = typeof eventRecord.index === "number" ? eventRecord.index : 0;
+          await enrichTextBlockAnnotations(contentBlocks.get(blockIndex));
+        }
         for (const part of mapGoogleEventToStreamParts(eventRecord, contentBlocks, providerToolCallsById)) {
           pendingEventDelivery = queueEventDelivery(
             pendingEventDelivery,
@@ -1219,6 +1237,7 @@ export const __internal = {
   buildGoogleNativeRequest,
   convertMessagesToInteractionsInput,
   convertToolsToInteractionsTools,
+  enrichTextBlockAnnotations,
   googleTurnMessagesToModelMessages,
   mapGoogleEventToStreamParts,
   processStreamEvent,

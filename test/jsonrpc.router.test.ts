@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { __internal as citationMetadataInternal } from "../src/server/citationMetadata";
 import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createJsonRpcRequestRouter, type JsonRpcRouteContext } from "../src/server/jsonrpc/routes";
 
@@ -231,7 +232,7 @@ function createThreadResumeHarness() {
   };
 }
 
-function createThreadReadHarness() {
+function createThreadReadHarness(snapshotOverride?: any) {
   const sent: unknown[] = [];
   const thread = {
     id: "thread-1",
@@ -248,7 +249,7 @@ function createThreadReadHarness() {
       type: "loaded" as const,
     },
   };
-  const snapshot = {
+  const snapshot = snapshotOverride ?? {
     feed: [
       {
         id: "assistant-1",
@@ -474,5 +475,87 @@ describe("JSON-RPC request router", () => {
         },
       },
     ]);
+  });
+
+  test("thread/read enriches assistant citation annotations before returning coworkSnapshot", async () => {
+    const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+    const response = new Response(
+      "<html><head><title>LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure</title></head></html>",
+      {
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+        },
+      },
+    );
+    Object.defineProperty(response, "url", {
+      configurable: true,
+      value: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
+    });
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: async () => response,
+    });
+
+    try {
+      const harness = createThreadReadHarness({
+        feed: [
+          {
+            id: "assistant-1",
+            kind: "message",
+            role: "assistant",
+            ts: "2026-03-22T00:00:01.000Z",
+            text: "Hello",
+            annotations: [
+              {
+                type: "url_citation",
+                url: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/example",
+                title: "foxnews.com",
+                start_index: 0,
+                end_index: 5,
+              },
+            ],
+          },
+        ],
+      });
+
+      await harness.router({} as any, {
+        id: 4,
+        method: "thread/read",
+        params: {
+          threadId: "thread-1",
+        },
+      });
+
+      expect(harness.sent).toEqual([
+        {
+          id: 4,
+          result: {
+            thread: expect.objectContaining({ id: "thread-1" }),
+            coworkSnapshot: expect.objectContaining({
+              feed: [
+                expect.objectContaining({
+                  id: "assistant-1",
+                  annotations: [
+                    {
+                      type: "url_citation",
+                      url: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
+                      title: "LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure",
+                      start_index: 0,
+                      end_index: 5,
+                    },
+                  ],
+                }),
+              ],
+            }),
+          },
+        },
+      ]);
+    } finally {
+      citationMetadataInternal.clearCitationResolutionCache();
+      if (originalFetchDescriptor) {
+        Object.defineProperty(globalThis, "fetch", originalFetchDescriptor);
+      }
+    }
   });
 });

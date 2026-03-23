@@ -91,6 +91,47 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.showHiddenFiles).toBe(true);
   });
 
+  test("accepts aws bedrock proxy workspace provider options", () => {
+    const parsed = persistedStateInputSchema.parse({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_1",
+          name: "Workspace",
+          path: "/tmp/workspace",
+          createdAt: TS,
+          lastOpenedAt: TS,
+          providerOptions: {
+            "aws-bedrock-proxy": {
+              reasoningEffort: "high",
+              reasoningSummary: "detailed",
+              textVerbosity: "medium",
+              baseUrl: "https://bedrock-proxy.example.com",
+              promptCaching: {
+                enabled: true,
+                ttl: "1h",
+              },
+            },
+          },
+        },
+      ],
+      threads: [],
+    });
+
+    expect(parsed.workspaces[0]?.providerOptions).toEqual({
+      "aws-bedrock-proxy": {
+        reasoningEffort: "high",
+        reasoningSummary: "detailed",
+        textVerbosity: "medium",
+        baseUrl: "https://bedrock-proxy.example.com",
+        promptCaching: {
+          enabled: true,
+          ttl: "1h",
+        },
+      },
+    });
+  });
+
   test("accepts updater state payloads", () => {
     const parsed = updaterStateSchema.parse({
       phase: "downloading",

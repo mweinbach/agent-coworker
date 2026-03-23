@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  AWS_BEDROCK_PROXY_PROMPT_CACHING_TTL_VALUES,
   CODEX_WEB_SEARCH_BACKEND_VALUES,
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
@@ -55,6 +56,7 @@ const textVerbositySchema = z.enum(OPENAI_TEXT_VERBOSITY_VALUES);
 const webSearchBackendSchema = z.enum(CODEX_WEB_SEARCH_BACKEND_VALUES);
 const webSearchModeSchema = z.enum(CODEX_WEB_SEARCH_MODE_VALUES);
 const webSearchContextSizeSchema = z.enum(CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES);
+const awsBedrockProxyPromptCachingTtlSchema = z.enum(AWS_BEDROCK_PROXY_PROMPT_CACHING_TTL_VALUES);
 
 const contextMenuItemSchema: z.ZodType<ContextMenuItem> = z.object({
   id: safeIdSchema,
@@ -94,6 +96,14 @@ const codexCliProviderOptionsSchema = providerOptionsSchema.extend({
   }).strict().optional(),
 }).strict();
 
+const awsBedrockProxyProviderOptionsSchema = providerOptionsSchema.extend({
+  baseUrl: z.string().trim().min(1).optional(),
+  promptCaching: z.object({
+    enabled: z.boolean().optional(),
+    ttl: awsBedrockProxyPromptCachingTtlSchema.optional(),
+  }).strict().optional(),
+}).strict();
+
 const googleProviderOptionsSchema = z.object({
   nativeWebSearch: z.boolean().optional(),
   thinkingConfig: z.object({
@@ -104,6 +114,7 @@ const googleProviderOptionsSchema = z.object({
 const workspaceProviderOptionsSchema = z.object({
   openai: providerOptionsSchema.optional(),
   "codex-cli": codexCliProviderOptionsSchema.optional(),
+  "aws-bedrock-proxy": awsBedrockProxyProviderOptionsSchema.optional(),
   google: googleProviderOptionsSchema.optional(),
   lmstudio: z.object({
     baseUrl: z.string().trim().min(1).optional(),

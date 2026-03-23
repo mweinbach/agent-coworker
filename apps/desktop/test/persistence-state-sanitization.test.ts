@@ -369,6 +369,57 @@ describe("desktop persistence state validation", () => {
     });
   });
 
+  test("saveState preserves aws bedrock proxy workspace provider options", async () => {
+    const persistence = new PersistenceService();
+    const bedrockWorkspace = path.join(userDataDir, "workspace-bedrock-provider-options");
+    await fs.mkdir(bedrockWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_bedrock_provider_options",
+          name: "Bedrock provider options workspace",
+          path: bedrockWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          providerOptions: {
+            "aws-bedrock-proxy": {
+              reasoningEffort: "high",
+              reasoningSummary: "detailed",
+              textVerbosity: "medium",
+              baseUrl: "https://bedrock-proxy.example.com",
+              promptCaching: {
+                enabled: true,
+                ttl: "1h",
+              },
+            },
+          },
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.workspaces[0]?.providerOptions).toEqual({
+      "aws-bedrock-proxy": {
+        reasoningEffort: "high",
+        reasoningSummary: "detailed",
+        textVerbosity: "medium",
+        baseUrl: "https://bedrock-proxy.example.com",
+        promptCaching: {
+          enabled: true,
+          ttl: "1h",
+        },
+      },
+    });
+  });
+
   test("saveState preserves workspace cross-provider child routing defaults", async () => {
     const persistence = new PersistenceService();
     const routingWorkspace = path.join(userDataDir, "workspace-child-routing");

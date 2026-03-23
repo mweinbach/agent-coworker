@@ -1,5 +1,5 @@
 import type { AgentConfig } from "../../../types";
-import type { ServerEvent } from "../../protocol";
+import type { ServerEvent, UserConfigPatch } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 
 import {
@@ -207,6 +207,39 @@ export function createProviderRouteHandlers(
         (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => (
           event.type === "provider_auth_result" && event.provider === provider
         ),
+      );
+      if (context.utils.isSessionError(outcome)) {
+        sendSessionMutationError(context, ws, message.id, outcome);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+    },
+
+    "cowork/provider/userConfig/read": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const outcome = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (session) => await session.emitUserConfig(),
+        (event): event is Extract<ServerEvent, { type: "user_config" }> => event.type === "user_config",
+      );
+      if (context.utils.isSessionError(outcome)) {
+        sendSessionMutationError(context, ws, message.id, outcome);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+    },
+
+    "cowork/provider/userConfig/set": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const config = params.config && typeof params.config === "object" ? params.config as UserConfigPatch : {};
+      const outcome = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (session) => await session.setUserConfig(config),
+        (event): event is Extract<ServerEvent, { type: "user_config_result" }> => event.type === "user_config_result",
       );
       if (context.utils.isSessionError(outcome)) {
         sendSessionMutationError(context, ws, message.id, outcome);

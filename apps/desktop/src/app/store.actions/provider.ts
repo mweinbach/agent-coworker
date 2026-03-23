@@ -89,7 +89,7 @@ export async function refreshProviderStatusForWorkspace(
   }));
 }
 
-export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "connectProvider" | "setProviderApiKey" | "copyProviderApiKey" | "authorizeProviderAuth" | "logoutProviderAuth" | "callbackProviderAuth" | "requestProviderCatalog" | "requestProviderAuthMethods" | "refreshProviderStatus" | "setLmStudioEnabled" | "setLmStudioModelVisible"> {
+export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "connectProvider" | "setProviderApiKey" | "copyProviderApiKey" | "authorizeProviderAuth" | "logoutProviderAuth" | "callbackProviderAuth" | "requestProviderCatalog" | "requestProviderAuthMethods" | "refreshProviderStatus" | "requestUserConfig" | "setGlobalOpenAiProxyBaseUrl" | "setAwsBedrockProxyEnabled" | "setLmStudioEnabled" | "setLmStudioModelVisible"> {
   const resolveProviderWorkspaceId = (): string | null =>
     get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
 
@@ -448,7 +448,8 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
       const workspaceId = await ensureProviderControlReady();
       if (!workspaceId) return;
 
-      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "user_config_get", sessionId }));
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/userConfig/read", { cwd });
       if (!ok) {
         set((s) => ({
           notifications: pushNotification(s.notifications, {
@@ -491,26 +492,24 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
       }
 
       const normalizedBaseUrl = typeof baseUrl === "string" ? baseUrl.trim() : "";
-      const sessionId = get().workspaceRuntimeById[workspaceId]?.controlSessionId ?? "";
-      const sock = RUNTIME.controlSockets.get(workspaceId);
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
       set(() => ({
-        pendingUserConfigSave: sessionId ? { workspaceId, sessionId } : null,
+        pendingUserConfigSave: { workspaceId, sessionId: "" },
         userConfigLastResult: null,
       }));
 
-      const ok = Boolean(sock && sessionId && sock.send({
-        type: "user_config_set",
-        sessionId,
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/userConfig/set", {
+        cwd,
         config: {
           awsBedrockProxyBaseUrl: normalizedBaseUrl ? normalizedBaseUrl : null,
         },
-      }));
+      });
       if (!ok) {
         set((s) => ({
           pendingUserConfigSave: null,
           userConfigLastResult: {
             type: "user_config_result",
-            sessionId,
+            sessionId: "",
             ok: false,
             message: "Unable to update global user config.",
           },

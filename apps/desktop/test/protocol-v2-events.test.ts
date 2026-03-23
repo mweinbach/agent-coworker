@@ -606,6 +606,86 @@ describe("desktop JSON-RPC event mapping", () => {
     });
   });
 
+  test("completed-only JSON-RPC reasoning stays after a completed intermediate assistant item", async () => {
+    const socket = await reconnectThreadAndGetSocket();
+
+    socket.notify("turn/started", {
+      threadId: sessionId,
+      turn: { id: "turn-1", status: "inProgress", items: [] },
+    });
+    socket.notify("item/agentMessage/delta", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "assistant-1",
+      delta: "First draft",
+    });
+    socket.notify("item/completed", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      item: { id: "assistant-1", type: "agentMessage", text: "First draft" },
+    });
+    socket.notify("item/completed", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      item: {
+        id: "reasoning-2",
+        type: "reasoning",
+        mode: "reasoning",
+        text: "Need one more search.",
+      },
+    });
+    socket.notify("item/completed", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      item: {
+        id: "tool-1",
+        type: "toolCall",
+        toolName: "nativeWebSearch",
+        state: "output-available",
+        args: { queries: ["Project Hail Mary reception"] },
+        result: { queries: ["Project Hail Mary reception"], results: [{ title: "MovieWeb" }] },
+      },
+    });
+    socket.notify("item/agentMessage/delta", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      itemId: "assistant-2",
+      delta: "Final answer",
+    });
+    socket.notify("item/completed", {
+      threadId: sessionId,
+      turnId: "turn-1",
+      item: { id: "assistant-2", type: "agentMessage", text: "Final answer" },
+    });
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed.filter((item) =>
+      item.kind === "reasoning" || item.kind === "tool" || item.kind === "message"
+    ) ?? [];
+    expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "tool", "message"]);
+    expect(feed[0]).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      text: "First draft",
+    });
+    expect(feed[1]).toMatchObject({
+      kind: "reasoning",
+      mode: "reasoning",
+      text: "Need one more search.",
+    });
+    expect(feed[2]).toMatchObject({
+      kind: "tool",
+      name: "nativeWebSearch",
+      state: "output-available",
+    });
+    expect(feed[3]).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      text: "Final answer",
+    });
+  });
+
   test("shared JSON-RPC notifications hydrate live session metadata immediately", async () => {
     const socket = await reconnectThreadAndGetSocket();
 

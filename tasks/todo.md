@@ -1,5 +1,18 @@
 # Task Plan
 
+## Fix Live JSON-RPC Interleaved Reasoning Order
+
+- [x] Reproduce the streaming-only ordering bug where a turn emits multiple assistant segments with completed-only reasoning between them and confirm replay-on-reopen is already correct.
+- [x] Patch the desktop shared JSON-RPC reducer so `item/agentMessage/delta` keeps the real item id, distinct assistant segments do not collapse onto one synthetic stream key, and completed-only reasoning only anchors ahead of an assistant item that is still streaming.
+- [x] Add a focused desktop JSON-RPC regression for `assistant -> reasoning -> tool -> assistant` ordering and rerun the affected desktop verification slice.
+
+## Fix Live JSON-RPC Interleaved Reasoning Order Review
+
+- `apps/desktop/src/app/store.helpers/threadEventReducer.ts` now forwards the JSON-RPC `itemId` on `item/agentMessage/delta`, so multiple assistant items in one turn no longer share the same fallback `text:0` stream key while streaming.
+- The same reducer now distinguishes completed-only reasoning that belongs ahead of an in-flight assistant item from reasoning that occurs after an already completed intermediate assistant message, preserving live interleaved `assistant -> reasoning -> tool -> assistant` ordering.
+- `apps/desktop/src/app/store.feedMapping.ts` now tracks which assistant stream keys have already completed so the live reducer can anchor only against an actually in-flight assistant item.
+- Verification passed with `bun test apps/desktop/test/protocol-v2-events.test.ts`.
+
 ## Fix JSON-RPC Replay For PI/OpenCode Providers
 
 - [x] Inspect an affected `opencode-go` session in `~/.cowork/sessions.db` and compare the snapshot feed, JSON-RPC journal, and persisted raw stream data to isolate whether the remaining ordering bug is provider-specific or a shared replay issue.

@@ -415,7 +415,10 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           mappedSessionId,
           String(params.turnId ?? "jsonrpc-turn"),
           "text_delta",
-          { text: String(params.delta ?? "") },
+          {
+            id: String(params.itemId ?? `jsonrpc-assistant:${String(params.turnId ?? "jsonrpc-turn")}`),
+            text: String(params.delta ?? ""),
+          },
         ));
         return;
       }
@@ -442,18 +445,33 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
               item.kind === "reasoning" ? { ...item, mode, text: finalText } : item
             );
           } else {
-            handleThreadEvent(get, set, mappedThreadId, {
-              type: "reasoning",
-              sessionId: mappedSessionId,
-              kind: mode,
+            const itemId = deps.makeId();
+            const item: FeedItem = {
+              id: itemId,
+              kind: "reasoning",
+              mode,
+              ts: deps.nowIso(),
               text: finalText,
-            });
+            };
+            stream.reasoningItemIdByStream.set(key, itemId);
+            stream.reasoningTextByStream.set(key, finalText);
+            stream.reasoningTurns.add(turnId);
+            stream.lastReasoningTurnId = turnId;
+            const beforeAssistantId = activeIncompleteAssistantItemId(mappedThreadId, turnId);
+            if (beforeAssistantId) {
+              insertFeedItemBefore(set, mappedThreadId, beforeAssistantId, item);
+            } else {
+              pushFeedItem(set, mappedThreadId, item);
+            }
           }
         }
         return;
       }
 
       if (message.method === "item/completed" && params.item?.type === "agentMessage") {
+        const turnId = String(params.turnId ?? "jsonrpc-turn");
+        const streamId = String(params.item?.id ?? `jsonrpc-assistant:${turnId}`);
+        markAssistantStreamCompleted(mappedThreadId, turnId, streamId);
         handleThreadEvent(get, set, mappedThreadId, {
           type: "assistant_message",
           sessionId: mappedSessionId,
@@ -851,6 +869,20 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         },
       };
     });
+  }
+
+  function markAssistantStreamCompleted(threadId: string, turnId: string, streamId: string) {
+    const stream = getModelStreamRuntime(threadId);
+    stream.completedAssistantStreamKeys.add(`${turnId}:${streamId}`);
+  }
+
+  function activeIncompleteAssistantItemId(threadId: string, turnId: string): string | null {
+    const stream = getModelStreamRuntime(threadId);
+    const assistantKey = stream.lastAssistantStreamKeyByTurn.get(turnId);
+    if (!assistantKey || stream.completedAssistantStreamKeys.has(assistantKey)) {
+      return null;
+    }
+    return stream.assistantItemIdByStream.get(assistantKey) ?? null;
   }
 
   function sendThread(get: StoreGet, threadId: string, build: (sessionId: string) => ClientMessage): boolean {

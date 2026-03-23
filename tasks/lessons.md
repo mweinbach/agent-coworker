@@ -1,5 +1,7 @@
 # Lessons
 
+- For live desktop JSON-RPC turns with multiple assistant items, always forward `itemId` on `item/agentMessage/delta`; if you let the reducer fall back to a synthetic `text:${index}` key, interleaved assistant segments collapse together during streaming even though replay-on-reopen looks correct.
+- For completed-only JSON-RPC reasoning items, only anchor them ahead of an assistant item that is still actively streaming; once an intermediate assistant item has completed, later reasoning belongs after it as a new step, not before it.
 - For JSON-RPC transcript replay in this repo, do not assume stream ids are unique for the whole turn; PI/OpenCode providers can reuse ids like `s0` or fallback tool ids across steps, so projector and thread-read item ids must be occurrence-stable within the turn or later reasoning/tool entries will collapse onto earlier ones.
 - For desktop transcript/render bugs in this repo, do not stop at `session_snapshots`; inspect `thread_journal_events` and the JSON-RPC projector/reducer path too, because a session snapshot can be correct while the live/journal adapter still drops Gemini tool items or appends final reasoning after assistant deltas.
 - For desktop warm-start work in this repo, keep renderer-local cache strictly local and treat harness-owned `.cowork` or other shared config/session state as authoritative; never let desktop-only cache or shell state overwrite cross-client defaults just because it loaded first.

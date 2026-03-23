@@ -23,6 +23,7 @@ export type ThreadModelStreamRuntime = {
   assistantItemIdByStream: Map<string, string>;
   assistantTextByStream: Map<string, string>;
   lastAssistantStreamKeyByTurn: Map<string, string>;
+  completedAssistantStreamKeys: Set<string>;
   reasoningItemIdByStream: Map<string, string>;
   reasoningTextByStream: Map<string, string>;
   reasoningTextsSeenInTurn: Set<string>;
@@ -155,6 +156,7 @@ export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
     assistantItemIdByStream: new Map(),
     assistantTextByStream: new Map(),
     lastAssistantStreamKeyByTurn: new Map(),
+    completedAssistantStreamKeys: new Set(),
     reasoningItemIdByStream: new Map(),
     reasoningTextByStream: new Map(),
     reasoningTextsSeenInTurn: new Set(),
@@ -172,6 +174,7 @@ export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
 export function clearThreadModelStreamRuntime(runtime: ThreadModelStreamRuntime) {
   runtime.activeTurnId = null;
   clearStepLocalModelStreamRuntime(runtime, { snapshotReasoning: false });
+  runtime.completedAssistantStreamKeys.clear();
   runtime.reasoningTextsSeenInTurn.clear();
   runtime.reasoningTextHistoryInTurn = [];
   runtime.reasoningTurns.clear();
@@ -613,6 +616,7 @@ function applyModelStreamUpdate(
     }
     stream.lastAssistantTurnId = update.turnId;
     const assistantKey = `${update.turnId}:${update.streamId}`;
+    stream.completedAssistantStreamKeys.delete(assistantKey);
     stream.lastAssistantStreamKeyByTurn.set(update.turnId, assistantKey);
     const itemId = stream.assistantItemIdByStream.get(assistantKey);
     const nextText = `${stream.assistantTextByStream.get(assistantKey) ?? ""}${update.text}`;

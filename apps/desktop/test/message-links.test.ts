@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
+import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { createRoot } from "react-dom/client";
 
 import {
   decodeDesktopLocalFileHref,
@@ -11,6 +13,7 @@ import {
   rewriteBareDesktopFilePathsInTree,
   rewriteDesktopFileLinksInTree,
 } from "../src/components/ai-elements/message";
+import { setupJsdom } from "./jsdomHarness";
 
 describe("desktop message local file links", () => {
   test("converts file URLs into desktop paths", () => {
@@ -208,9 +211,9 @@ describe("desktop message local file links", () => {
     );
 
     expect(html).toContain("The Collision:");
-    expect(html).toContain("Plane hit a truck.<cite><a");
+    expect(html).toContain("Plane hit a truck.<cite");
+    expect(html).toContain('aria-haspopup="dialog"');
     expect(html).toContain(">Collision Report<");
-    expect(html).toContain('href="https://example.com/collision"');
     expect(html).not.toContain("tru<cite");
   });
 
@@ -260,12 +263,102 @@ describe("desktop message local file links", () => {
       ),
     );
 
-    expect(html).toContain("truck.<cite><a");
-    expect(html).toContain("released.<cite><a");
+    expect(html).toContain("truck.<cite");
+    expect(html).toContain("released.<cite");
+    expect(html).toContain('aria-haspopup="dialog"');
     expect(html).toContain(">Collision Report<");
     expect(html).toContain(">Safety Memo +1<");
-    expect(html).not.toContain("injured.<cite><a");
-    expect(html).not.toContain("Casu<cite><a");
-    expect(html).not.toContain("Mos<cite><a");
+    expect(html).not.toContain("injured.<cite");
+    expect(html).not.toContain("Casu<cite");
+    expect(html).not.toContain("Mos<cite");
+  });
+
+  test("citation chips open a source popup and navigate grouped sources with arrows", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      const text = [
+        "* **The Collision:** Plane hit a truck.",
+        "* **Casualties:** The pilot was killed. Over 40 others were injured. Most have been released.",
+      ].join("\n");
+
+      await act(async () => {
+        root.render(
+          createElement(
+            MessageResponse,
+            {
+              normalizeDisplayCitations: true,
+              citationSources: [
+                { title: "Collision Report", url: "https://example.com/collision" },
+                { title: "Safety Memo", url: "https://example.com/killed" },
+                { title: "Hospital Update", url: "https://example.com/injuries" },
+              ],
+              citationAnnotations: [
+                {
+                  type: "url_citation",
+                  start_index: 0,
+                  end_index: text.indexOf("truck.") + "truck.".length - 1,
+                  url: "https://example.com/collision",
+                },
+                {
+                  type: "url_citation",
+                  start_index: 0,
+                  end_index: text.indexOf("killed.") + "killed.".length - 1,
+                  url: "https://example.com/killed",
+                },
+                {
+                  type: "url_citation",
+                  start_index: 0,
+                  end_index: text.indexOf("Most") + 2,
+                  url: "https://example.com/injuries",
+                },
+              ],
+              citationUrlsByIndex: new Map([
+                [1, "https://example.com/collision"],
+                [2, "https://example.com/killed"],
+                [3, "https://example.com/injuries"],
+              ]),
+            },
+            text,
+          ),
+        );
+      });
+
+      const chipButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Safety Memo +1"));
+      if (!chipButton) {
+        throw new Error("missing grouped citation chip button");
+      }
+
+      await act(async () => {
+        chipButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.textContent).toContain("1/2");
+      expect(container.textContent).toContain("Safety Memo");
+      expect(container.textContent).toContain("https://example.com/killed");
+
+      const nextButton = container.querySelector('button[aria-label="Next source"]');
+      if (!nextButton) {
+        throw new Error("missing next source button");
+      }
+
+      await act(async () => {
+        nextButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.textContent).toContain("2/2");
+      expect(container.textContent).toContain("Hospital Update");
+      expect(container.textContent).toContain("https://example.com/injuries");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
   });
 });

@@ -1,5 +1,23 @@
 # Task Plan
 
+## Citation Popup Card
+
+- [x] Inspect the chip rendering path and confirm the desktop renderer can own the popup interaction while the shared normalizer still owns chip grouping/order.
+- [x] Turn paragraph-end citation chips into interactive source popups with previous/next navigation over grouped URLs.
+- [x] Hide the footer sources carousel for assistant messages that already render native annotation chips.
+- [x] Re-run focused desktop/shared rendering tests, repo typecheck, and full `bun test`.
+
+## Citation Popup Card Review
+
+- Native annotation citation chips now open an anchored popup card with previous/next arrows, a current-source counter, and the selected source title/domain/URL instead of acting like a static inline label. The shared renderer still owns paragraph/list-item grouping in `src/shared/displayCitationMarkers.ts`, while the desktop `cite` component in `apps/desktop/src/components/ai-elements/message.tsx` owns the popup interaction.
+- The popup uses the full grouped source list for that chip, not just the primary URL. To get that source payload through the Streamdown sanitize/component pipeline reliably, the shared HTML-mode renderer now packs the encoded source list into the chip `title` attribute with a private prefix instead of relying on a custom `data-*` prop that Streamdown did not consistently forward to the custom component.
+- `apps/desktop/src/ui/ChatView.tsx` now suppresses the separate footer `SourcesCarousel` when the assistant message already has native annotation chips, so the same sources do not render twice with two different affordances.
+- Added/updated regression coverage in `test/displayCitationMarkers.test.ts`, `apps/desktop/test/message-links.test.ts`, `apps/desktop/test/chat-view.stability.test.tsx`, and `apps/desktop/test/protocol-v2-events.test.ts` to lock the encoded chip contract, DOM popup behavior, arrow navigation, and the “chip instead of footer carousel” rendering path.
+- Verification passed with:
+  - `~/.bun/bin/bun test apps/desktop/test/message-links.test.ts test/displayCitationMarkers.test.ts apps/desktop/test/chat-view.stability.test.tsx apps/desktop/test/protocol-v2-events.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test` on 2026-03-23 (`2618 pass`, `3 skip`, `0 fail`)
+
 ## Citation Chip Polish
 
 - [x] Inspect the current native citation rendering path and confirm the chip styling has to be applied in the shared markdown normalizer rather than provider-specific UI code.

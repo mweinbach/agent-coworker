@@ -438,6 +438,117 @@ describe("desktop chat view stability", () => {
     }
   });
 
+  test("annotated assistant messages use citation chips instead of the footer sources carousel", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Thread 1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:30.000Z",
+          status: "active",
+          sessionId: "session-1",
+          lastEventSeq: 2,
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          wsUrl: null,
+          connected: true,
+          sessionId: "session-1",
+          config: {
+            provider: "google",
+            model: "gemini-3.1-pro-preview",
+          },
+          sessionConfig: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: false,
+          busySince: null,
+          feed: [
+            {
+              id: "tool-1",
+              kind: "tool",
+              name: "nativeWebSearch",
+              state: "completed",
+              result: {
+                action: {
+                  type: "search",
+                  query: "laguardia crash",
+                  sources: [
+                    { title: "Collision Report", url: "https://example.com/collision" },
+                    { title: "Safety Memo", url: "https://example.com/safety" },
+                  ],
+                },
+              },
+            },
+            {
+              id: "msg-1",
+              kind: "message",
+              role: "assistant",
+              ts: "2026-03-12T00:00:30.000Z",
+              text: "* **The Collision:** Plane hit a truck.",
+              annotations: [
+                {
+                  type: "url_citation",
+                  start_index: 0,
+                  end_index: "The Collision: Plane hit a truck.".length,
+                  title: "Collision Report",
+                  url: "https://example.com/collision",
+                },
+              ],
+            },
+          ],
+          pendingSteer: null,
+          transcriptOnly: false,
+        },
+      },
+      composerText: "",
+    } as any);
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      const chipButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Collision Report"));
+      expect(chipButton).not.toBeNull();
+      expect(container.textContent).not.toContain("Sources");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("busy composer stays editable and swaps between stop and send based on draft text", async () => {
     useAppStore.setState({
       ready: true,

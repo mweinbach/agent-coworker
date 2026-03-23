@@ -333,20 +333,22 @@ describe("display citation markers", () => {
   });
 
   test("maps native annotation offsets against rendered markdown text", () => {
-    expect(
-      normalizeDisplayCitationMarkers("* **The Collision:** Plane hit a truck.", {
-        citationMode: "html",
-        annotations: [
-          {
-            type: "url_citation",
-            start_index: 0,
-            end_index: "The Collision: Plane hit a truck.".length,
-            title: "Collision Report",
-            url: "https://example.com/collision",
-          },
-        ],
-      }),
-    ).toBe('* **The Collision:** Plane hit a truck.<cite><a href="https://example.com/collision" title="Collision Report">Collision Report</a></cite>');
+    const out = normalizeDisplayCitationMarkers("* **The Collision:** Plane hit a truck.", {
+      citationMode: "html",
+      annotations: [
+        {
+          type: "url_citation",
+          start_index: 0,
+          end_index: "The Collision: Plane hit a truck.".length,
+          title: "Collision Report",
+          url: "https://example.com/collision",
+        },
+      ],
+    });
+
+    expect(out).toContain('* **The Collision:** Plane hit a truck.<cite');
+    expect(out).toContain('__cowork_citation_sources__:');
+    expect(out).toContain('>Collision Report</cite>');
   });
 
   test("clusters native annotations into one paragraph-end chip per markdown block", () => {
@@ -359,19 +361,20 @@ describe("display citation markers", () => {
     const afterKilledPeriod = text.indexOf("killed.") + "killed.".length - 1;
     const insideMost = text.indexOf("Most") + 2;
 
-    expect(
-      normalizeDisplayCitationMarkers(text, {
-        citationMode: "html",
-        annotations: [
-          { type: "url_citation", start_index: 0, end_index: afterTruckPeriod, title: "Collision Report", url: "https://example.com/collision" },
-          { type: "url_citation", start_index: 0, end_index: afterKilledPeriod, title: "Safety Memo", url: "https://example.com/killed" },
-          { type: "url_citation", start_index: 0, end_index: insideMost, title: "Hospital Update", url: "https://example.com/injuries" },
-        ],
-      }),
-    ).toBe([
-      '* **The Collision:** Plane hit a truck.<cite><a href="https://example.com/collision" title="Collision Report">Collision Report</a></cite>',
-      '* **Casualties:** The pilot was killed. Over 40 others were injured. Most have been released.<cite><a href="https://example.com/killed" title="Safety Memo, Hospital Update">Safety Memo +1</a></cite>',
-    ].join("\n"));
+    const out = normalizeDisplayCitationMarkers(text, {
+      citationMode: "html",
+      annotations: [
+        { type: "url_citation", start_index: 0, end_index: afterTruckPeriod, title: "Collision Report", url: "https://example.com/collision" },
+        { type: "url_citation", start_index: 0, end_index: afterKilledPeriod, title: "Safety Memo", url: "https://example.com/killed" },
+        { type: "url_citation", start_index: 0, end_index: insideMost, title: "Hospital Update", url: "https://example.com/injuries" },
+      ],
+    });
+
+    expect(out).toContain('* **The Collision:** Plane hit a truck.<cite');
+    expect(out).toContain('>Collision Report</cite>');
+    expect(out).toContain('* **Casualties:** The pilot was killed. Over 40 others were injured. Most have been released.<cite');
+    expect(out).toContain('>Safety Memo +1</cite>');
+    expect(out).not.toContain("injured.<cite");
   });
 
   test("tracks native URL context sources for assistant messages", () => {

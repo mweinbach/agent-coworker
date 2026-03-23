@@ -1,6 +1,7 @@
 const citationClusterPattern = /(?:[ \t]*[【\[]\d+(?::\d+)?†[^\]】]+[】\]])+/g;
 const citationMarkerPattern = /[【\[](\d+)(?::\d+)?†[^\]】]+[】\]]/g;
 const citationSpacingExemptPrefix = /[\s([{'"“‘-]/;
+const citationChipTitlePrefix = "__cowork_citation_sources__:";
 
 type CitationDisplayOptions = {
   citationUrlsByIndex?: ReadonlyMap<number, string>;
@@ -677,6 +678,12 @@ export type CitationSource = {
   title?: string;
 };
 
+type CitationChipSourcePayload = {
+  id: string;
+  url: string;
+  title?: string;
+};
+
 function extractCitationSourcesByIndexFromAnnotations(
   annotations: unknown,
   citationUrlsByIndex?: ReadonlyMap<number, string>,
@@ -744,12 +751,33 @@ function truncateLabel(value: string, maxLength: number): string {
   return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
+function serializeCitationChipSources(sources: readonly CitationChipSourcePayload[]): string {
+  return encodeURIComponent(JSON.stringify(sources));
+}
+
 function renderCitationChip(ids: string[], options: CitationDisplayOptions): string {
   if (ids.length === 0) {
     return "";
   }
 
   const citationSourcesByIndex = buildCitationSourcesByIndex(options);
+  const resolvedSources = ids
+    .map((id) => {
+      const numericId = Number.parseInt(id, 10);
+      if (!Number.isFinite(numericId)) {
+        return null;
+      }
+      const source = citationSourcesByIndex.get(numericId);
+      const url = source?.url ?? options.citationUrlsByIndex?.get(numericId);
+      if (!url || url.trim().length === 0) {
+        return null;
+      }
+
+      return source?.title
+        ? { id, url, title: source.title }
+        : { id, url };
+    })
+    .filter((source): source is CitationChipSourcePayload => Boolean(source));
   const primaryId = ids.find((id) => {
     const numericId = Number.parseInt(id, 10);
     return Number.isFinite(numericId) && citationSourcesByIndex.has(numericId);
@@ -761,22 +789,13 @@ function renderCitationChip(ids: string[], options: CitationDisplayOptions): str
   const chipLabel = ids.length > 1
     ? `${truncateLabel(baseLabel, 26)} +${ids.length - 1}`
     : truncateLabel(baseLabel, 30);
-  const tooltipLabel = ids
-    .map((id) => {
-      const numericId = Number.parseInt(id, 10);
-      if (!Number.isFinite(numericId)) {
-        return `Source ${id}`;
-      }
-      const source = citationSourcesByIndex.get(numericId);
-      return source ? displayCitationSourceLabel(source) : `Source ${id}`;
-    })
-    .join(", ");
+  const encodedSources = resolvedSources.length > 0 ? serializeCitationChipSources(resolvedSources) : "";
 
-  if (primaryUrl && primaryUrl.trim().length > 0) {
-    return `<cite><a href="${primaryUrl}" title="${escapeHtml(tooltipLabel)}">${escapeHtml(chipLabel)}</a></cite>`;
+  if (!primaryUrl || primaryUrl.trim().length === 0) {
+    return `<cite>${escapeHtml(chipLabel)}</cite>`;
   }
 
-  return `<cite title="${escapeHtml(tooltipLabel)}">${escapeHtml(chipLabel)}</cite>`;
+  return `<cite title="${escapeHtml(`${citationChipTitlePrefix}${encodedSources}`)}">${escapeHtml(chipLabel)}</cite>`;
 }
 
 function exaResultsArray(value: unknown): unknown[] {

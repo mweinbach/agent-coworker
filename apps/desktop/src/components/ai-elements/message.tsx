@@ -1,8 +1,8 @@
-import type { ComponentProps, HTMLAttributes } from "react";
+import type { ComponentProps, HTMLAttributes, ReactNode } from "react";
 import type { Options as RehypeSanitizeOptions } from "rehype-sanitize";
 import type { PluggableList } from "unified";
 
-import { Children, memo } from "react";
+import { Children, memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   defaultRehypePlugins,
   defaultRemarkPlugins,
@@ -54,13 +54,14 @@ export function MessageContent({ className, ...props }: MessageContentProps) {
 
 const streamdownPlugins = { cjk, code, math, mermaid };
 const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";
+const CITATION_CHIP_TITLE_PREFIX = "__cowork_citation_sources__:";
 const desktopSanitizeSchema: RehypeSanitizeOptions = {
   ...defaultSchema,
   tagNames: [...(defaultSchema.tagNames ?? []), "cite", "span", "sup"],
   attributes: {
     ...defaultSchema.attributes,
     a: [...(defaultSchema.attributes?.a ?? []), "title"],
-    cite: [...(defaultSchema.attributes?.cite ?? []), "title"],
+    cite: [...(defaultSchema.attributes?.cite ?? []), "data-citation-sources", "title"],
     span: [...(defaultSchema.attributes?.span ?? []), "title"],
   },
   protocols: {
@@ -98,6 +99,294 @@ type DesktopPathMatch = {
   end: number;
   path: string;
 };
+
+type CitationChipSourcePayload = CitationSource & {
+  id?: string;
+};
+
+type DesktopCitationChipProps = ComponentProps<"cite"> & {
+  node?: unknown;
+  "data-citation-sources"?: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function decodeCitationChipSources(rawValue?: string): CitationChipSourcePayload[] {
+  if (typeof rawValue !== "string" || rawValue.trim().length === 0) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(decodeURIComponent(rawValue));
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.flatMap((entry) => {
+      if (!isRecord(entry) || typeof entry.url !== "string" || entry.url.trim().length === 0) {
+        return [];
+      }
+
+      return [{
+        url: entry.url,
+        ...(typeof entry.title === "string" && entry.title.trim().length > 0 ? { title: entry.title } : {}),
+        ...(typeof entry.id === "string" && entry.id.trim().length > 0 ? { id: entry.id } : {}),
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function citationChipSourcesAttrFromNode(node: unknown): string | undefined {
+  if (!isRecord(node)) {
+    return undefined;
+  }
+
+  const directValue = node["data-citation-sources"];
+  if (typeof directValue === "string" && directValue.trim().length > 0) {
+    return directValue;
+  }
+
+  const properties = isRecord(node.properties) ? node.properties : null;
+  const propertyValue = properties?.["data-citation-sources"];
+  if (typeof propertyValue === "string" && propertyValue.trim().length > 0) {
+    return propertyValue;
+  }
+
+  return undefined;
+}
+
+function citationChipSourcesAttrFromTitle(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.startsWith(CITATION_CHIP_TITLE_PREFIX)) {
+    return undefined;
+  }
+  const encodedSources = value.slice(CITATION_CHIP_TITLE_PREFIX.length);
+  return encodedSources.trim().length > 0 ? encodedSources : undefined;
+}
+
+function flattenReactText(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") {
+    return String(node);
+  }
+  if (Array.isArray(node)) {
+    return node.map((entry) => flattenReactText(entry)).join("");
+  }
+  if (isRecord(node) && "props" in node && isRecord(node.props) && "children" in node.props) {
+    return flattenReactText(node.props.children as ReactNode);
+  }
+  return "";
+}
+
+function citationSourceDomain(siteUrl: string): string {
+  try {
+    return new URL(siteUrl).hostname.replace(/^www\./, "");
+  } catch {
+    return siteUrl;
+  }
+}
+
+function citationSourceTitle(source: CitationSource): string {
+  const title = source.title?.trim();
+  return title && title.length > 0 ? title : citationSourceDomain(source.url);
+}
+
+function faviconUrl(siteUrl: string): string {
+  try {
+    const { hostname } = new URL(siteUrl);
+    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=32`;
+  } catch {
+    return "";
+  }
+}
+
+function CitationFavicon({ url }: { url: string }) {
+  const [failed, setFailed] = useState(false);
+  const src = faviconUrl(url);
+
+  if (!src || failed) {
+    return (
+      <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold uppercase text-muted-foreground">
+        {citationSourceDomain(url).charAt(0)}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt=""
+      className="size-6 shrink-0 rounded-full object-contain"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+async function openExternalCitationSource(url: string): Promise<void> {
+  const confirmed = await confirmAction({
+    title: "Open external link?",
+    message: "This will open the link in your default browser.",
+    detail: url,
+    kind: "info",
+    confirmLabel: "Open link",
+    cancelLabel: "Cancel",
+    defaultAction: "cancel",
+  });
+  if (confirmed) {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}
+
+function CitationArrow({ direction }: { direction: "left" | "right" }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 12 12" fill="none" className="text-foreground">
+      {direction === "left" ? (
+        <path d="M7.5 2.5L4 6l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      ) : (
+        <path d="M4.5 2.5L8 6l-3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      )}
+    </svg>
+  );
+}
+
+function DesktopCitationChip({
+  children,
+  className,
+  "data-citation-sources": encodedSources,
+  node,
+  title,
+  ...props
+}: DesktopCitationChipProps) {
+  const resolvedEncodedSources = encodedSources
+    ?? citationChipSourcesAttrFromTitle(title)
+    ?? citationChipSourcesAttrFromNode(node);
+  const sources = useMemo(() => decodeCitationChipSources(resolvedEncodedSources), [resolvedEncodedSources]);
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const rootRef = useRef<HTMLElement | null>(null);
+  const label = useMemo(() => {
+    const text = flattenReactText(children).trim();
+    return text.length > 0 ? text : "Source";
+  }, [children]);
+  const currentSource = sources[Math.min(activeIndex, Math.max(0, sources.length - 1))] ?? null;
+
+  useEffect(() => {
+    if (activeIndex < sources.length) {
+      return;
+    }
+    setActiveIndex(0);
+  }, [activeIndex, sources.length]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof Node && rootRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        return;
+      }
+      if (sources.length <= 1) {
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setActiveIndex((index) => (index - 1 + sources.length) % sources.length);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setActiveIndex((index) => (index + 1) % sources.length);
+      }
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open, sources.length]);
+
+  if (sources.length === 0) {
+    return (
+      <cite className={cn("ml-2 inline-flex not-italic", className)} {...props}>
+        {children}
+      </cite>
+    );
+  }
+
+  return (
+    <cite ref={rootRef} className={cn("relative ml-2 inline-flex not-italic", className)} {...props}>
+      <button
+        type="button"
+        className="inline-flex items-center rounded-full border border-border/70 bg-muted/60 px-2.5 py-0.5 text-[0.72rem] font-medium leading-none text-muted-foreground transition-colors hover:border-border hover:bg-muted"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={() => setOpen((value) => !value)}
+      >
+        {label}
+      </button>
+      {open && currentSource ? (
+        <div
+          role="dialog"
+          aria-label="Citation sources"
+          className="absolute left-0 top-[calc(100%+0.55rem)] z-30 w-[min(22rem,calc(100vw-4rem))] overflow-hidden rounded-[1.35rem] border border-border/70 bg-card shadow-[0_18px_40px_rgba(0,0,0,0.14)]"
+        >
+          <div className="flex items-center gap-1 border-b border-border/60 bg-muted/25 px-3 py-2">
+            <button
+              type="button"
+              className="flex size-8 items-center justify-center rounded-full transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
+              aria-label="Previous source"
+              disabled={sources.length <= 1}
+              onClick={() => setActiveIndex((index) => (index - 1 + sources.length) % sources.length)}
+            >
+              <CitationArrow direction="left" />
+            </button>
+            <button
+              type="button"
+              className="flex size-8 items-center justify-center rounded-full transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
+              aria-label="Next source"
+              disabled={sources.length <= 1}
+              onClick={() => setActiveIndex((index) => (index + 1) % sources.length)}
+            >
+              <CitationArrow direction="right" />
+            </button>
+            <div className="ml-auto text-sm text-muted-foreground">
+              {activeIndex + 1}/{sources.length}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="block w-full px-4 py-4 text-left transition-colors hover:bg-accent/35"
+            onClick={() => {
+              setOpen(false);
+              void openExternalCitationSource(currentSource.url);
+            }}
+          >
+            <div className="mb-3 flex items-center gap-3">
+              <CitationFavicon url={currentSource.url} />
+              <div className="min-w-0">
+                <div className="truncate text-xs font-medium text-muted-foreground">{citationSourceDomain(currentSource.url)}</div>
+                <div className="truncate text-[1.05rem] font-semibold leading-6 text-foreground">{citationSourceTitle(currentSource)}</div>
+              </div>
+            </div>
+            <div className="break-all text-sm leading-6 text-muted-foreground">{currentSource.url}</div>
+          </button>
+        </div>
+      ) : null}
+    </cite>
+  );
+}
 
 function isExternalMessageHref(rawHref: string): boolean {
   try {
@@ -510,12 +799,13 @@ export const MessageResponse = memo(function MessageResponse({
         fallbackToSourcesFooter,
       )}
       className={cn(
-        "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline [&_cite]:ml-2 [&_cite]:inline-flex [&_cite]:translate-y-[-0.02em] [&_cite]:items-center [&_cite]:rounded-full [&_cite]:border [&_cite]:border-border/70 [&_cite]:bg-muted/60 [&_cite]:px-2.5 [&_cite]:py-0.5 [&_cite]:text-[0.72rem] [&_cite]:not-italic [&_cite]:font-medium [&_cite]:leading-none [&_cite]:text-muted-foreground [&_cite_a]:no-underline hover:[&_cite]:border-border hover:[&_cite]:bg-muted",
+        "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline",
         className,
       )}
       components={{
         ...components,
         a: DesktopMessageLink,
+        cite: DesktopCitationChip,
       }}
       plugins={{
         ...streamdownPlugins,

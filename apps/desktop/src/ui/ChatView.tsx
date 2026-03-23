@@ -53,6 +53,7 @@ import {
   buildCitationOverflowFilePathsByMessageId,
   buildCitationSourcesByMessageId,
   buildCitationUrlsByMessageId,
+  extractCitationUrlsFromAnnotations,
   extractCitationSourcesFromWebSearchResult,
   extractCitationUrlsFromWebSearchResult,
 } from "../../../../src/shared/displayCitationMarkers";
@@ -333,6 +334,9 @@ const FeedRow = memo(function FeedRow(props: {
   const { developerMode } = useChatViewContext();
   const item = props.item;
   const hasSources = props.citationSources && props.citationSources.length > 0;
+  const hasInlineCitationChip = item.kind === "message"
+    && item.role === "assistant"
+    && extractCitationUrlsFromAnnotations(item.annotations).size > 0;
 
   if (item.kind === "message") {
     return (
@@ -352,7 +356,7 @@ const FeedRow = memo(function FeedRow(props: {
             <div className="whitespace-pre-wrap">{item.text}</div>
           )}
         </MessageContent>
-        {hasSources && (
+        {hasSources && !hasInlineCitationChip && (
           <SourcesCarousel sources={props.citationSources!} className="mt-1" />
         )}
       </Message>

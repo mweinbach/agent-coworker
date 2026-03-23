@@ -52,6 +52,11 @@ function recordStringArray(record: Record<string, unknown>, key: string): string
   return value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
 }
 
+function firstStringArrayValue(record: Record<string, unknown>, key: string): string | null {
+  const values = recordStringArray(record, key);
+  return values.length > 0 ? values[0]! : null;
+}
+
 function humanizeToolName(name: string): string {
   const nativeKind = nativeGoogleToolKind(name);
   if (nativeKind === "web-search") {
@@ -74,14 +79,26 @@ function nativeWebSearchAction(value: unknown): Record<string, unknown> | null {
   if (typeof actionType === "string" && actionType.trim().length > 0) {
     return value;
   }
+  const queries = recordStringArray(value, "queries");
+  if (queries.length > 0) {
+    return {
+      type: "search",
+      ...(queries.length === 1 ? { query: queries[0] } : {}),
+      queries,
+    };
+  }
   return null;
 }
 
 function nativeWebSearchActionSummary(action: Record<string, unknown>): string {
   const actionType = toText(getRecordValue(action, ["type"])).trim().toLowerCase();
   if (actionType === "search") {
-    const query = getRecordValue(action, ["query", "q"]);
-    return query ? `Search: ${truncate(toText(query), 90)}` : "Search completed";
+    const query = getRecordValue(action, ["query", "q"]) ?? firstStringArrayValue(action, "queries");
+    if (query) {
+      return `Search: ${truncate(toText(query), 90)}`;
+    }
+    const queryCount = recordStringArray(action, "queries").length;
+    return queryCount > 1 ? `Searches: ${queryCount}` : "Search completed";
   }
   if (actionType === "open_page") {
     const url = getRecordValue(action, ["url"]);

@@ -185,4 +185,70 @@ describe("desktop message local file links", () => {
     expect(html).toContain(">5<");
     expect(html).not.toContain("†L");
   });
+
+  test("renders markdown-backed native annotations after the visible sentence", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        MessageResponse,
+        {
+          normalizeDisplayCitations: true,
+          citationAnnotations: [
+            {
+              type: "url_citation",
+              start_index: 0,
+              end_index: "The Collision: Plane hit a truck.".length,
+              url: "https://example.com/collision",
+            },
+          ],
+          citationUrlsByIndex: new Map([[1, "https://example.com/collision"]]),
+        },
+        "* **The Collision:** Plane hit a truck.",
+      ),
+    );
+
+    expect(html).toContain("The Collision:");
+    expect(html).toContain("Plane hit a truck.<sup");
+    expect(html).toContain('href="https://example.com/collision"');
+    expect(html).not.toContain("tru<sup");
+  });
+
+  test("renders raw-source Google-style annotations at sentence boundaries instead of the next bullet", () => {
+    const text = [
+      "* **The Collision:** Plane hit a truck.",
+      "* **Casualties:** The pilot was killed. Over 40 others were injured. Most have been released.",
+    ].join("\n");
+
+    const html = renderToStaticMarkup(
+      createElement(
+        MessageResponse,
+        {
+          normalizeDisplayCitations: true,
+          citationAnnotations: [
+            {
+              type: "url_citation",
+              start_index: 0,
+              end_index: text.indexOf("truck.") + "truck.".length - 1,
+              url: "https://example.com/collision",
+            },
+            {
+              type: "url_citation",
+              start_index: 0,
+              end_index: text.indexOf("Most") + 2,
+              url: "https://example.com/injuries",
+            },
+          ],
+          citationUrlsByIndex: new Map([
+            [1, "https://example.com/collision"],
+            [2, "https://example.com/injuries"],
+          ]),
+        },
+        text,
+      ),
+    );
+
+    expect(html).toContain("truck.<sup");
+    expect(html).toContain("injured.<sup");
+    expect(html).not.toContain("Casu<sup");
+    expect(html).not.toContain("Mos<sup");
+  });
 });

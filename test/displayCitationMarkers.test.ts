@@ -332,6 +332,47 @@ describe("display citation markers", () => {
     ).toBe("Coffee [1](https://maps.google.com/?cid=123) nearby");
   });
 
+  test("maps native annotation offsets against rendered markdown text", () => {
+    expect(
+      normalizeDisplayCitationMarkers("* **The Collision:** Plane hit a truck.", {
+        citationMode: "html",
+        annotations: [
+          {
+            type: "url_citation",
+            start_index: 0,
+            end_index: "The Collision: Plane hit a truck.".length,
+            url: "https://example.com/collision",
+          },
+        ],
+      }),
+    ).toBe('* **The Collision:** Plane hit a truck.<sup><a href="https://example.com/collision">1</a></sup>');
+  });
+
+  test("prefers raw inclusive annotation anchors when they already match the markdown source", () => {
+    const text = [
+      "* **The Collision:** Plane hit a truck.",
+      "* **Casualties:** The pilot was killed. Over 40 others were injured. Most have been released.",
+    ].join("\n");
+
+    const afterTruckPeriod = text.indexOf("truck.") + "truck.".length - 1;
+    const afterKilledPeriod = text.indexOf("killed.") + "killed.".length - 1;
+    const insideMost = text.indexOf("Most") + 2;
+
+    expect(
+      normalizeDisplayCitationMarkers(text, {
+        citationMode: "html",
+        annotations: [
+          { type: "url_citation", start_index: 0, end_index: afterTruckPeriod, url: "https://example.com/collision" },
+          { type: "url_citation", start_index: 0, end_index: afterKilledPeriod, url: "https://example.com/killed" },
+          { type: "url_citation", start_index: 0, end_index: insideMost, url: "https://example.com/injuries" },
+        ],
+      }),
+    ).toBe([
+      '* **The Collision:** Plane hit a truck.<sup><a href="https://example.com/collision">1</a></sup>',
+      '* **Casualties:** The pilot was killed.<sup><a href="https://example.com/killed">2</a></sup> Over 40 others were injured.<sup><a href="https://example.com/injuries">3</a></sup> Most have been released.',
+    ].join("\n"));
+  });
+
   test("tracks native URL context sources for assistant messages", () => {
     const feed = [
       { id: "user-1", kind: "message", role: "user" as const },

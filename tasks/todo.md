@@ -1,5 +1,23 @@
 # Task Plan
 
+## Google Cowork Citation Follow-up
+
+- [x] Inspect the latest real Google cowork session snapshot and confirm whether native web search already arrives in the canonical feed.
+- [x] Fix shared native citation insertion so Google `url_citation` indices land on stable sentence boundaries without requiring provider-specific UI logic.
+- [x] Make native web-search cards show Google `queries` detail without requiring provider-specific desktop branching.
+- [x] Re-run focused citation/tool-render verification plus repo typecheck and record the status.
+
+## Google Cowork Citation Follow-up Review
+
+- The latest real Google cowork session in `~/.cowork/sessions.db` (`df63bab0-ef91-412d-84ce-db67fd647ea3`) already contained the canonical `nativeWebSearch` tool item plus `url_citation` annotations on the assistant message. The missing behavior in the UI was not feed loss; it was citation marker placement and a formatter gap for Google-style `queries` args.
+- `src/shared/displayCitationMarkers.ts` now resolves native annotation endpoints through a shared raw-vs-markdown heuristic: keep raw Google anchors when they already line up with the markdown source, otherwise fall back to markdown-aware remapping and snap short overshoots back to the prior sentence boundary. That keeps superscript source numbers out of mid-word positions and off the next bullet heading in the real Google cowork answer.
+- `apps/desktop/src/ui/chat/toolCards/toolCardFormatting.ts` now treats `nativeWebSearch` payloads with top-level `queries` the same way it already treats action-shaped search payloads, so Google native web-search cards surface the actual search query without any extra provider-specific UI branch.
+- Added regression coverage in `test/displayCitationMarkers.test.ts`, `apps/desktop/test/message-links.test.ts`, and `apps/desktop/test/tool-card-formatting.test.ts` to lock the markdown-aware citation placement and Google query-array rendering behavior.
+- Verification passed with:
+  - `~/.bun/bin/bun test test/displayCitationMarkers.test.ts apps/desktop/test/message-links.test.ts apps/desktop/test/tool-card-formatting.test.ts apps/desktop/test/store-feed-mapping.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test` on 2026-03-23 (`2616 pass`, `3 skip`, `0 fail`)
+
 ## Cowork Session UI Mapping Follow-up
 
 - [x] Inspect the real Codex LGA cowork session in the harness snapshot store and compare the canonical projected feed to the desktop rendering.

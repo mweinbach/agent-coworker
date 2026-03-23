@@ -117,6 +117,443 @@ type LinkCitationAnnotation = {
   title?: string;
 };
 
+type MarkdownLinkSpan = {
+  labelEnd: number;
+  destinationEnd: number;
+};
+
+function backtickRunLengthAt(text: string, index: number): number {
+  if (text[index] !== "`") return 0;
+  let end = index;
+  while (end < text.length && text[end] === "`") {
+    end += 1;
+  }
+  return end - index;
+}
+
+function markdownFenceLengthAtLineStart(text: string, index: number): number {
+  const marker = text[index];
+  if (marker !== "`" && marker !== "~") {
+    return 0;
+  }
+  let end = index;
+  while (end < text.length && text[end] === marker) {
+    end += 1;
+  }
+  const length = end - index;
+  return length >= 3 ? length : 0;
+}
+
+function skipMarkdownLine(text: string, index: number): number {
+  let cursor = index;
+  while (cursor < text.length && text[cursor] !== "\n") {
+    cursor += 1;
+  }
+  if (cursor < text.length && text[cursor] === "\n") {
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function skipMarkdownLinePrefix(text: string, index: number): number {
+  let cursor = index;
+
+  while (cursor < text.length) {
+    const base = cursor;
+    let probe = cursor;
+
+    while (probe < text.length && (text[probe] === " " || text[probe] === "\t") && probe - base < 4) {
+      probe += 1;
+    }
+
+    if (text[probe] === ">") {
+      probe += 1;
+      while (probe < text.length && (text[probe] === " " || text[probe] === "\t")) {
+        probe += 1;
+      }
+      cursor = probe;
+      continue;
+    }
+
+    const headingMatch = text.slice(probe).match(/^#{1,6}(?=\s)/);
+    if (headingMatch) {
+      probe += headingMatch[0].length;
+      while (probe < text.length && (text[probe] === " " || text[probe] === "\t")) {
+        probe += 1;
+      }
+      cursor = probe;
+      continue;
+    }
+
+    const unorderedListMatch = text.slice(probe).match(/^[-+*](?=\s)/);
+    if (unorderedListMatch) {
+      probe += unorderedListMatch[0].length;
+      while (probe < text.length && (text[probe] === " " || text[probe] === "\t")) {
+        probe += 1;
+      }
+      cursor = probe;
+      continue;
+    }
+
+    const orderedListMatch = text.slice(probe).match(/^\d+[.)](?=\s)/);
+    if (orderedListMatch) {
+      probe += orderedListMatch[0].length;
+      while (probe < text.length && (text[probe] === " " || text[probe] === "\t")) {
+        probe += 1;
+      }
+      cursor = probe;
+      continue;
+    }
+
+    return cursor;
+  }
+
+  return cursor;
+}
+
+function markdownDelimiterRunLengthAt(text: string, index: number): number {
+  const marker = text[index];
+  if (marker !== "*" && marker !== "_" && marker !== "~") {
+    return 0;
+  }
+
+  let end = index;
+  while (end < text.length && text[end] === marker && end - index < 3) {
+    end += 1;
+  }
+  const length = end - index;
+
+  if (marker === "~" && length < 2) {
+    return 0;
+  }
+
+  if (length >= 2) {
+    return length;
+  }
+
+  const previous = index > 0 ? text[index - 1] ?? "" : "";
+  const next = text[end] ?? "";
+  const previousWhitespace = previous.length === 0 || /\s/.test(previous);
+  const nextWhitespace = next.length === 0 || /\s/.test(next);
+  return !previousWhitespace && !nextWhitespace ? 1 : 0;
+}
+
+function findMarkdownLinkSpan(text: string, index: number): MarkdownLinkSpan | null {
+  if (text[index] !== "[") {
+    return null;
+  }
+
+  let labelEnd = index + 1;
+  while (labelEnd < text.length) {
+    const current = text[labelEnd];
+    if (current === "\\" && labelEnd + 1 < text.length) {
+      labelEnd += 2;
+      continue;
+    }
+    if (current === "]") {
+      break;
+    }
+    labelEnd += 1;
+  }
+
+  if (labelEnd >= text.length || text[labelEnd] !== "]" || text[labelEnd + 1] !== "(") {
+    return null;
+  }
+
+  let depth = 1;
+  let destinationEnd = labelEnd + 2;
+  while (destinationEnd < text.length) {
+    const current = text[destinationEnd];
+    if (current === "\\" && destinationEnd + 1 < text.length) {
+      destinationEnd += 2;
+      continue;
+    }
+    if (current === "(") {
+      depth += 1;
+    } else if (current === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return {
+          labelEnd,
+          destinationEnd: destinationEnd + 1,
+        };
+      }
+    }
+    destinationEnd += 1;
+  }
+
+  return null;
+}
+
+function markdownLinkDestinationEndAt(text: string, index: number): number | null {
+  if (text[index] !== "]" || text[index + 1] !== "(") {
+    return null;
+  }
+
+  let depth = 1;
+  let cursor = index + 2;
+  while (cursor < text.length) {
+    const current = text[cursor];
+    if (current === "\\" && cursor + 1 < text.length) {
+      cursor += 2;
+      continue;
+    }
+    if (current === "(") {
+      depth += 1;
+    } else if (current === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return cursor + 1;
+      }
+    }
+    cursor += 1;
+  }
+
+  return null;
+}
+
+function advancePastTrailingMarkdownSyntax(text: string, index: number): number {
+  let cursor = index;
+
+  while (cursor < text.length) {
+    const linkDestinationEnd = markdownLinkDestinationEndAt(text, cursor);
+    if (linkDestinationEnd !== null) {
+      cursor = linkDestinationEnd;
+      continue;
+    }
+
+    const backticks = backtickRunLengthAt(text, cursor);
+    if (backticks > 0) {
+      cursor += backticks;
+      continue;
+    }
+
+    const delimiterLength = markdownDelimiterRunLengthAt(text, cursor);
+    if (delimiterLength > 0) {
+      cursor += delimiterLength;
+      continue;
+    }
+
+    break;
+  }
+
+  return cursor;
+}
+
+function buildMarkdownVisibleOffsetMap(text: string): number[] {
+  const offsets = [0];
+  let cursor = 0;
+  let lineStart = true;
+  let fenceMarker: { char: string; length: number } | null = null;
+  let inlineCodeTicks = 0;
+  let activeLink: MarkdownLinkSpan | null = null;
+
+  while (cursor < text.length) {
+    if (lineStart) {
+      if (fenceMarker) {
+        const closingFenceLength = markdownFenceLengthAtLineStart(text, cursor);
+        if (closingFenceLength >= fenceMarker.length && text[cursor] === fenceMarker.char) {
+          cursor = skipMarkdownLine(text, cursor);
+          lineStart = true;
+          fenceMarker = null;
+          continue;
+        }
+      } else {
+        const openingFenceLength = markdownFenceLengthAtLineStart(text, cursor);
+        if (openingFenceLength > 0) {
+          fenceMarker = { char: text[cursor]!, length: openingFenceLength };
+          cursor = skipMarkdownLine(text, cursor);
+          lineStart = true;
+          continue;
+        }
+      }
+
+      const afterPrefix = skipMarkdownLinePrefix(text, cursor);
+      if (afterPrefix !== cursor) {
+        cursor = afterPrefix;
+        lineStart = false;
+        continue;
+      }
+    }
+
+    if (activeLink && cursor === activeLink.labelEnd) {
+      cursor = activeLink.destinationEnd;
+      activeLink = null;
+      continue;
+    }
+
+    if (inlineCodeTicks > 0) {
+      const closingRun = backtickRunLengthAt(text, cursor);
+      if (closingRun === inlineCodeTicks) {
+        cursor += closingRun;
+        inlineCodeTicks = 0;
+        continue;
+      }
+
+      const char = text[cursor]!;
+      cursor += 1;
+      offsets.push(cursor);
+      lineStart = char === "\n";
+      continue;
+    }
+
+    if (fenceMarker) {
+      const char = text[cursor]!;
+      cursor += 1;
+      offsets.push(cursor);
+      lineStart = char === "\n";
+      continue;
+    }
+
+    if (text[cursor] === "\\" && cursor + 1 < text.length) {
+      const escapedChar = text[cursor + 1]!;
+      cursor += 2;
+      offsets.push(cursor);
+      lineStart = escapedChar === "\n";
+      continue;
+    }
+
+    if (text[cursor] === "[") {
+      const linkSpan = findMarkdownLinkSpan(text, cursor);
+      if (linkSpan) {
+        activeLink = linkSpan;
+        cursor += 1;
+        continue;
+      }
+    }
+
+    const openingBackticks = backtickRunLengthAt(text, cursor);
+    if (openingBackticks > 0) {
+      inlineCodeTicks = openingBackticks;
+      cursor += openingBackticks;
+      continue;
+    }
+
+    const delimiterLength = markdownDelimiterRunLengthAt(text, cursor);
+    if (delimiterLength > 0) {
+      cursor += delimiterLength;
+      continue;
+    }
+
+    const char = text[cursor]!;
+    cursor += 1;
+    offsets.push(cursor);
+    lineStart = char === "\n";
+  }
+
+  return offsets;
+}
+
+function isLetterOrNumber(char: string | undefined): boolean {
+  return typeof char === "string" && /\p{L}|\p{N}/u.test(char);
+}
+
+function isSkippableMarkdownAnchorChar(char: string | undefined): boolean {
+  return typeof char === "string" && /[\s*_`#[\]()<>+-]/.test(char);
+}
+
+function findPreviousAnchorCharIndex(text: string, index: number): number | null {
+  let cursor = Math.min(index, text.length - 1);
+  while (cursor >= 0) {
+    const current = text[cursor];
+    if (!isSkippableMarkdownAnchorChar(current)) {
+      return cursor;
+    }
+    cursor -= 1;
+  }
+  return null;
+}
+
+function findPreviousSentenceBoundaryIndex(text: string, index: number): number | null {
+  let cursor = Math.min(index, text.length - 1);
+  while (cursor >= 0) {
+    const current = text[cursor];
+    if (current === "." || current === "!" || current === "?") {
+      return cursor;
+    }
+    cursor -= 1;
+  }
+  return null;
+}
+
+function countLeadingWordCharsSince(text: string, boundaryIndex: number, targetIndex: number): number {
+  let count = 0;
+  for (let cursor = boundaryIndex + 1; cursor <= targetIndex && cursor < text.length; cursor += 1) {
+    const current = text[cursor];
+    if (isLetterOrNumber(current)) {
+      count += 1;
+      continue;
+    }
+    if (!isSkippableMarkdownAnchorChar(current)) {
+      return Number.POSITIVE_INFINITY;
+    }
+  }
+  return count;
+}
+
+function resolveRawAnnotationEndIndex(text: string, rawEndIndex: number): number {
+  if (text.length === 0) {
+    return 0;
+  }
+
+  const normalizedEndIndex = Math.max(0, Math.min(Math.trunc(rawEndIndex), text.length - 1));
+  const previousAnchorCharIndex = findPreviousAnchorCharIndex(text, normalizedEndIndex);
+  if (previousAnchorCharIndex === null) {
+    return 0;
+  }
+
+  let anchorCharIndex = previousAnchorCharIndex;
+  const previousSentenceBoundaryIndex = findPreviousSentenceBoundaryIndex(text, anchorCharIndex);
+  if (previousSentenceBoundaryIndex !== null && previousSentenceBoundaryIndex < anchorCharIndex) {
+    const leadingWordChars = countLeadingWordCharsSince(text, previousSentenceBoundaryIndex, anchorCharIndex);
+    if (leadingWordChars > 0 && leadingWordChars <= 3) {
+      anchorCharIndex = previousSentenceBoundaryIndex;
+    }
+  }
+
+  return Math.min(advancePastTrailingMarkdownSyntax(text, anchorCharIndex + 1), text.length);
+}
+
+function resolveMarkdownAnnotationEndIndex(text: string, rawEndIndex: number): number {
+  const visibleOffsetMap = buildMarkdownVisibleOffsetMap(text);
+  const normalizedEndIndex = Math.max(0, Math.trunc(rawEndIndex));
+  const mappedIndex = normalizedEndIndex < visibleOffsetMap.length
+    ? visibleOffsetMap[normalizedEndIndex]!
+    : Math.min(normalizedEndIndex, text.length);
+  return Math.min(advancePastTrailingMarkdownSyntax(text, mappedIndex), text.length);
+}
+
+function scoreAnnotationBoundary(text: string, boundaryIndex: number): number {
+  const previous = boundaryIndex > 0 ? text[boundaryIndex - 1] : "";
+  const next = boundaryIndex < text.length ? text[boundaryIndex] : "";
+
+  let score = 0;
+  if (isLetterOrNumber(previous) && isLetterOrNumber(next)) {
+    score -= 10;
+  }
+  if (previous === "." || previous === "!" || previous === "?") {
+    score += 8;
+  }
+  if (isLetterOrNumber(previous) && (!next || /\s/.test(next))) {
+    score += 4;
+  }
+  if (next === "*" || next === "#" || next === ">" || next === "-" || next === "+") {
+    score -= 6;
+  }
+  if (previous === "\n" || previous === "\r") {
+    score -= 4;
+  }
+  return score;
+}
+
+function resolveAnnotationEndIndex(text: string, rawEndIndex: number): number {
+  const rawIndex = resolveRawAnnotationEndIndex(text, rawEndIndex);
+  const markdownIndex = resolveMarkdownAnnotationEndIndex(text, rawEndIndex);
+  return scoreAnnotationBoundary(text, rawIndex) >= scoreAnnotationBoundary(text, markdownIndex)
+    ? rawIndex
+    : markdownIndex;
+}
+
 function extractLinkCitationAnnotations(value: unknown): LinkCitationAnnotation[] {
   if (!Array.isArray(value)) {
     return [];
@@ -346,11 +783,12 @@ function insertNativeCitationMarkers(text: string, options: CitationDisplayOptio
   for (const annotation of annotations) {
     const citationIndex = indexByUrl.get(annotation.url);
     if (!citationIndex) continue;
-    const currentIds = idsByEndIndex.get(annotation.endIndex) ?? [];
+    const resolvedEndIndex = resolveAnnotationEndIndex(text, annotation.endIndex);
+    const currentIds = idsByEndIndex.get(resolvedEndIndex) ?? [];
     const nextId = String(citationIndex);
     if (!currentIds.includes(nextId)) {
       currentIds.push(nextId);
-      idsByEndIndex.set(annotation.endIndex, currentIds);
+      idsByEndIndex.set(resolvedEndIndex, currentIds);
     }
   }
 

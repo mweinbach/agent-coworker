@@ -355,15 +355,17 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
     });
     if (!ok) return true;
 
+    console.log(`starting OAuth sign-in for ${serviceToken}...`);
+
     if (method.oauthMode === "auto") {
-      await ctx.tryRequest("cowork/provider/auth/callback", {
+      const callbackOk = await ctx.tryRequest("cowork/provider/auth/callback", {
         cwd: cwd(),
         provider: serviceToken,
         methodId: method.id,
       });
+      if (!callbackOk) return true;
     }
 
-    console.log(`starting OAuth sign-in for ${serviceToken}...`);
     ctx.activateNextPrompt();
     return true;
   }
@@ -392,7 +394,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
         provider: config.provider,
         providerOptions: sessionConfig?.providerOptions,
         enableMemory: sessionConfig?.enableMemory,
-      });
+      }, { includeAgentControl: true });
       if (toolNames.length > 0) {
         console.log(`\nTools:\n${toolNames.map((name) => `  - ${name}`).join("\n")}\n`);
       } else {

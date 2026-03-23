@@ -50,7 +50,14 @@ function usesGoogleNativeWebToolsConfig(config: Pick<AgentConfig, "provider" | "
   return getGoogleNativeWebSearchFromProviderOptions(config.providerOptions) === true;
 }
 
-export function listSessionToolNames(config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory">): string[] {
+type ListSessionToolNameOptions = {
+  includeAgentControl?: boolean;
+};
+
+export function listSessionToolNames(
+  config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory">,
+  opts: ListSessionToolNameOptions = {},
+): string[] {
   const includeLegacyWebSearch =
     !usesGoogleNativeWebToolsConfig(config)
     && (config.provider !== "codex-cli" || usesLegacyCodexWebSearchConfig(config));
@@ -71,6 +78,9 @@ export function listSessionToolNames(config: Pick<AgentConfig, "provider" | "pro
     "skill",
     ...(config.enableMemory ?? true ? ["memory"] : []),
     "usage",
+    ...(opts.includeAgentControl
+      ? ["spawnAgent", "listAgents", "sendAgentInput", "waitForAgent", "resumeAgent", "closeAgent"]
+      : []),
   ];
 
   return [...names].sort((left, right) => left.localeCompare(right));

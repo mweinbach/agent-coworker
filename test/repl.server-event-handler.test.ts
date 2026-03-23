@@ -1,7 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
 
 import { CliStreamState } from "../src/cli/streamState";
-import { createNotificationHandler, type ReplServerEventState } from "../src/cli/repl/serverEventHandler";
+import {
+  applyCliJsonRpcResult,
+  createNotificationHandler,
+  type ReplServerEventState,
+} from "../src/cli/repl/serverEventHandler";
 
 function createState(): ReplServerEventState {
   return {
@@ -137,6 +141,64 @@ describe("CLI notification handler", () => {
       workingDirectory: "/tmp/project",
     });
     expect(state.selectedProvider).toBe("openai");
+  });
+
+  test("applyCliJsonRpcResult logs provider auth challenges from legacy result envelopes", () => {
+    const state = createState();
+    const originalLog = console.log;
+    const log = mock(() => {});
+    console.log = log as any;
+
+    try {
+      applyCliJsonRpcResult(state, {
+        event: {
+          type: "provider_auth_challenge",
+          sessionId: "thread-1",
+          provider: "codex-cli",
+          methodId: "oauth_cli",
+          challenge: {
+            method: "auto",
+            instructions: "Continue in the browser.",
+            url: "https://example.com/auth",
+            command: "open https://example.com/auth",
+          },
+        },
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(log.mock.calls.map((call) => call[0])).toEqual([
+      "Continue in the browser.",
+      "https://example.com/auth",
+      "open https://example.com/auth",
+    ]);
+  });
+
+  test("applyCliJsonRpcResult logs provider auth results from legacy result envelopes", () => {
+    const state = createState();
+    const originalLog = console.log;
+    const log = mock(() => {});
+    console.log = log as any;
+
+    try {
+      applyCliJsonRpcResult(state, {
+        events: [
+          {
+            type: "provider_auth_result",
+            sessionId: "thread-1",
+            provider: "codex-cli",
+            methodId: "oauth_cli",
+            ok: false,
+            message: "OAuth sign-in failed.",
+          },
+        ],
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(log).toHaveBeenCalledWith("OAuth sign-in failed.");
   });
 
   test("item/agentMessage/delta streams params.delta text", () => {

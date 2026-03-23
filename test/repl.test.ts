@@ -523,7 +523,7 @@ describe("REPL slash command routing", () => {
     expect(activateNextPrompt).toHaveBeenCalled();
   });
 
-  test("/tools lists built-in session tools instead of reading them from session state events", async () => {
+  test("/tools lists the full root-session tool set instead of reading names from session state events", async () => {
     const tryRequest = mock(async () => true);
     const activateNextPrompt = mock(() => {});
     const log = mock(() => {});
@@ -558,6 +558,12 @@ describe("REPL slash command routing", () => {
     expect(typeof rendered).toBe("string");
     expect(rendered).toContain("  - AskUserQuestion");
     expect(rendered).toContain("  - ask");
+    expect(rendered).toContain("  - spawnAgent");
+    expect(rendered).toContain("  - listAgents");
+    expect(rendered).toContain("  - sendAgentInput");
+    expect(rendered).toContain("  - waitForAgent");
+    expect(rendered).toContain("  - resumeAgent");
+    expect(rendered).toContain("  - closeAgent");
     expect(rendered).toContain("  - webFetch");
     expect(rendered).not.toContain("  - memory");
     expect(rendered).not.toContain("  - webSearch");

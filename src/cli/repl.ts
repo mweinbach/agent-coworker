@@ -130,6 +130,7 @@ export async function runCliRepl(
   const initialDir = opts.dir ? await resolveAndValidateDir(opts.dir) : process.cwd();
   if (opts.dir) process.chdir(initialDir);
   const initialResumeThreadId = await getStoredSessionForCwd(initialDir);
+  let workspaceCwd = initialDir;
 
   const startAgentServerImpl = opts.__internal?.startAgentServer ?? startAgentServer;
   const WebSocketImpl = opts.__internal?.WebSocket;
@@ -215,6 +216,7 @@ export async function runCliRepl(
     threadId = descriptor.id;
     lastKnownThreadId = descriptor.id;
     disconnectNotified = false;
+    workspaceCwd = descriptor.cwd ?? cwdForStorage;
     if (descriptor.provider && isProviderName(descriptor.provider) && descriptor.model && descriptor.cwd) {
       config = {
         provider: descriptor.provider,
@@ -223,8 +225,20 @@ export async function runCliRepl(
       };
       selectedProvider = descriptor.provider;
     }
-    await setStoredSessionForCwd(cwdForStorage, descriptor.id);
-    return descriptor.id;
+    await setStoredSessionForCwd(workspaceCwd, descriptor.id);
+    return descriptor;
+  };
+
+  const loadWorkspaceMetadata = async (targetSocket: JsonRpcSocket, cwd: string) => {
+    for (const metadataResult of await Promise.allSettled([
+      targetSocket.request("cowork/session/state/read", { cwd }),
+      targetSocket.request("cowork/provider/catalog/read", { cwd }),
+      targetSocket.request("cowork/provider/authMethods/read", { cwd }),
+    ])) {
+      if (metadataResult.status === "fulfilled") {
+        applyJsonRpcResult(metadataResult.value);
+      }
+    }
   };
 
   const printHelp = () => {
@@ -533,38 +547,23 @@ export async function runCliRepl(
 
     // Start or resume a thread.
     const targetThreadId = resumeThreadId?.trim() || lastKnownThreadId || undefined;
+    const requestCwd = workspaceCwd;
     try {
       let result: Record<string, unknown>;
       if (targetThreadId) {
         result = (await nextSocket.request("thread/resume", { threadId: targetThreadId })) as Record<string, unknown>;
       } else {
-        result = (await nextSocket.request("thread/start", { cwd: process.cwd() })) as Record<string, unknown>;
+        result = (await nextSocket.request("thread/start", { cwd: requestCwd })) as Record<string, unknown>;
       }
-      await applyThreadDescriptor(result, process.cwd());
-      for (const metadataResult of await Promise.allSettled([
-        nextSocket.request("cowork/session/state/read", { cwd: process.cwd() }),
-        nextSocket.request("cowork/provider/catalog/read", { cwd: process.cwd() }),
-        nextSocket.request("cowork/provider/authMethods/read", { cwd: process.cwd() }),
-      ])) {
-        if (metadataResult.status === "fulfilled") {
-          applyJsonRpcResult(metadataResult.value);
-        }
-      }
+      const descriptor = await applyThreadDescriptor(result, requestCwd);
+      await loadWorkspaceMetadata(nextSocket, descriptor?.cwd ?? requestCwd);
     } catch (err) {
       // If resume fails, try starting a new thread.
       if (targetThreadId) {
         try {
-          const result = (await nextSocket.request("thread/start", { cwd: process.cwd() })) as Record<string, unknown>;
-          await applyThreadDescriptor(result, process.cwd());
-          for (const metadataResult of await Promise.allSettled([
-            nextSocket.request("cowork/session/state/read", { cwd: process.cwd() }),
-            nextSocket.request("cowork/provider/catalog/read", { cwd: process.cwd() }),
-            nextSocket.request("cowork/provider/authMethods/read", { cwd: process.cwd() }),
-          ])) {
-            if (metadataResult.status === "fulfilled") {
-              applyJsonRpcResult(metadataResult.value);
-            }
-          }
+          const result = (await nextSocket.request("thread/start", { cwd: requestCwd })) as Record<string, unknown>;
+          const descriptor = await applyThreadDescriptor(result, requestCwd);
+          await loadWorkspaceMetadata(nextSocket, descriptor?.cwd ?? requestCwd);
         } catch (retryErr) {
           console.error(`Error starting thread: ${String(retryErr)}`);
         }
@@ -577,6 +576,7 @@ export async function runCliRepl(
   const restartServer = async (cwd: string, rl: readline.Interface) => {
     serverStopping = true;
     try {
+      workspaceCwd = cwd;
       // Clear client state and suppress disconnect noise during intentional restarts.
       const resumeCandidate = threadId ?? lastKnownThreadId;
       if (socket) {
@@ -674,7 +674,7 @@ export async function runCliRepl(
         const handled = await handleSlashCommand(line, {
           rl,
           getThreadId: () => threadId,
-          getCwd: () => process.cwd(),
+          getCwd: () => workspaceCwd,
           getBusy: () => busy,
           getConfig: () => config,
           getSessionConfig: () => sessionConfig,
@@ -690,10 +690,11 @@ export async function runCliRepl(
           getProviderAuthMethods: () => providerAuthMethods,
           tryRequest: async (method, params) => {
             try {
+              const requestCwd = workspaceCwd;
               const result = await rpcRequest(method, params);
               applyJsonRpcResult(result);
               if (method === "thread/start" || method === "thread/resume") {
-                await applyThreadDescriptor(result, process.cwd());
+                await applyThreadDescriptor(result, requestCwd);
               }
               return result as any;
             } catch (err) {
@@ -713,7 +714,10 @@ export async function runCliRepl(
           showConnectStatus,
           restartServer: async (cwd) => await restartServer(cwd, rl),
           resolveAndValidateDir,
-          setCwd: (cwd) => process.chdir(cwd),
+          setCwd: (cwd) => {
+            workspaceCwd = cwd;
+            process.chdir(cwd);
+          },
           resumeSession: async (targetThreadId) => {
             await connectToServer(serverUrl, rl, targetThreadId);
           },

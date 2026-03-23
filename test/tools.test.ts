@@ -20,7 +20,7 @@ import { createTodoWriteTool, currentTodos, onTodoChange } from "../src/tools/to
 import { createNotebookEditTool } from "../src/tools/notebookEdit";
 import { createSkillTool } from "../src/tools/skill";
 import { createMemoryTool } from "../src/tools/memory";
-import { createTools } from "../src/tools/index";
+import { createTools, listSessionToolNames } from "../src/tools/index";
 import { getAiCoworkerPaths, writeConnectionStore } from "../src/connect";
 import { __internal as webSafetyInternal } from "../src/utils/webSafety";
 
@@ -3551,6 +3551,29 @@ describe("createTools", () => {
     const tools = createTools(makeCtx(dir, { config: makeConfig(dir, { enableMemory: false }) }));
     expect(tools).not.toHaveProperty("memory");
     expect(Object.keys(tools).length).toBe(14);
+  });
+
+  test("listSessionToolNames includes root-session agent controls when requested", () => {
+    const names = listSessionToolNames({
+      provider: "google",
+      providerOptions: {
+        google: {
+          nativeWebSearch: true,
+        },
+      },
+      enableMemory: false,
+    }, { includeAgentControl: true });
+
+    expect(names).toEqual(expect.arrayContaining([
+      "spawnAgent",
+      "listAgents",
+      "sendAgentInput",
+      "waitForAgent",
+      "resumeAgent",
+      "closeAgent",
+    ]));
+    expect(names).not.toContain("memory");
+    expect(names).not.toContain("webSearch");
   });
 
   test("omits child-agent lifecycle tools when child-agent control is unavailable", async () => {

@@ -50,6 +50,29 @@ export type ReplServerEventContext = {
   resetModelStreamState: () => void;
 };
 
+function logProviderAuthChallenge(event: Extract<ServerEvent, { type: "provider_auth_challenge" }>) {
+  const instructions = asString(event.challenge?.instructions);
+  const url = asString(event.challenge?.url);
+  const command = asString(event.challenge?.command);
+
+  if (instructions) {
+    console.log(instructions);
+  }
+  if (url) {
+    console.log(url);
+  }
+  if (command) {
+    console.log(command);
+  }
+}
+
+function logProviderAuthResult(event: Extract<ServerEvent, { type: "provider_auth_result" }>) {
+  const message = asString(event.message);
+  if (message) {
+    console.log(message);
+  }
+}
+
 function renderTodos(todos: TodoItem[]) {
   for (const line of renderTodosToLines(todos)) {
     console.log(line);
@@ -125,6 +148,16 @@ export function applyCliServerEvent(
 
     case "provider_status": {
       state.providerStatuses = event.providers as ProviderStatus[];
+      break;
+    }
+
+    case "provider_auth_challenge": {
+      logProviderAuthChallenge(event);
+      break;
+    }
+
+    case "provider_auth_result": {
+      logProviderAuthResult(event);
       break;
     }
 

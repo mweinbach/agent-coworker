@@ -13,7 +13,7 @@ globalSettings.AI_SDK_LOG_WARNINGS = false;
 
 function printUsage() {
   console.log(
-    "Usage: bun src/server/index.ts [--dir <directory_path>] [--host <hostname>] [--port <port>] [--yolo] [--json] [--ws-protocol-default <legacy|jsonrpc>]"
+    "Usage: bun src/server/index.ts [--dir <directory_path>] [--host <hostname>] [--port <port>] [--yolo] [--json] [--ws-protocol-default <jsonrpc>]"
   );
 }
 
@@ -30,14 +30,14 @@ function parseArgs(argv: string[]): {
   port: number;
   yolo: boolean;
   json: boolean;
-  wsProtocolDefault?: "legacy" | "jsonrpc";
+  wsProtocolDefault?: "jsonrpc";
 } {
   let dir: string | undefined;
   let host = "127.0.0.1";
   let port = 7337;
   let yolo = false;
   let json = false;
-  let wsProtocolDefault: "legacy" | "jsonrpc" | undefined;
+  let wsProtocolDefault: "jsonrpc" | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -80,8 +80,8 @@ function parseArgs(argv: string[]): {
     if (a === "--ws-protocol-default") {
       const v = argv[i + 1];
       if (!v) throw new Error(`Missing value for ${a}`);
-      if (v !== "legacy" && v !== "jsonrpc") {
-        throw new Error(`Invalid value for ${a}: ${v}`);
+      if (v !== "jsonrpc") {
+        throw new Error(`Invalid value for ${a}: ${v}. Only "jsonrpc" is supported.`);
       }
       wsProtocolDefault = v;
       i++;
@@ -157,7 +157,7 @@ async function main() {
         hostHints,
         port: server.port,
         cwd: config.workingDirectory,
-        wsProtocolDefault: wsProtocolDefault ?? process.env.COWORK_WS_DEFAULT_PROTOCOL ?? "legacy",
+        wsProtocolDefault: "jsonrpc",
       })
     );
     return;

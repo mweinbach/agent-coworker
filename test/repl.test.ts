@@ -362,7 +362,8 @@ describe("REPL slash command routing", () => {
     let selectedProvider: string | null = null;
     return {
       rl: { close: mock(() => {}) } as any,
-      getSessionId: () => "session-1",
+      getThreadId: () => "thread-1",
+      getCwd: () => "/tmp",
       getBusy: () => false,
       getConfig: () => ({
         provider: "openai",
@@ -381,7 +382,8 @@ describe("REPL slash command routing", () => {
         return null;
       },
       getProviderAuthMethods: () => ({}),
-      trySend: mock(() => true),
+      tryRequest: mock(async () => true),
+      setThreadId: mock(() => {}),
       activateNextPrompt: mock(() => {}),
       printHelp: mock(() => {}),
       showConnectStatus: mock(() => {}),
@@ -394,9 +396,9 @@ describe("REPL slash command routing", () => {
   }
 
   test("/verbosity sends set_config for the active provider", async () => {
-    const trySend = mock(() => true);
+    const tryRequest = mock(async () => true);
     const activateNextPrompt = mock(() => {});
-    const ctx = makeCommandContext({ trySend, activateNextPrompt });
+    const ctx = makeCommandContext({ tryRequest, activateNextPrompt });
     const originalLog = console.log;
     console.log = mock(() => {}) as any;
     try {
@@ -406,9 +408,8 @@ describe("REPL slash command routing", () => {
       console.log = originalLog;
     }
 
-    expect(trySend).toHaveBeenCalledWith({
-      type: "set_config",
-      sessionId: "session-1",
+    expect(tryRequest).toHaveBeenCalledWith("cowork/session/config/set", {
+      threadId: "thread-1",
       config: {
         providerOptions: {
           openai: {
@@ -421,9 +422,9 @@ describe("REPL slash command routing", () => {
   });
 
   test("/provider immediately retargets subsequent option commands", async () => {
-    const trySend = mock(() => true);
+    const tryRequest = mock(async () => true);
     const activateNextPrompt = mock(() => {});
-    const ctx = makeCommandContext({ trySend, activateNextPrompt });
+    const ctx = makeCommandContext({ tryRequest, activateNextPrompt });
     const originalLog = console.log;
     console.log = mock(() => {}) as any;
     try {
@@ -433,15 +434,13 @@ describe("REPL slash command routing", () => {
       console.log = originalLog;
     }
 
-    expect(trySend).toHaveBeenNthCalledWith(1, {
-      type: "set_model",
-      sessionId: "session-1",
+    expect(tryRequest).toHaveBeenNthCalledWith(1, "cowork/session/model/set", {
+      threadId: "thread-1",
       provider: "codex-cli",
       model: "gpt-5.4",
     });
-    expect(trySend).toHaveBeenNthCalledWith(2, {
-      type: "set_config",
-      sessionId: "session-1",
+    expect(tryRequest).toHaveBeenNthCalledWith(2, "cowork/session/config/set", {
+      threadId: "thread-1",
       config: {
         providerOptions: {
           "codex-cli": {
@@ -453,10 +452,10 @@ describe("REPL slash command routing", () => {
   });
 
   test("/clear-hard-cap sends an out-of-band budget clear message", async () => {
-    const trySend = mock(() => true);
+    const tryRequest = mock(async () => true);
     const activateNextPrompt = mock(() => {});
     const log = mock(() => {});
-    const ctx = makeCommandContext({ trySend, activateNextPrompt });
+    const ctx = makeCommandContext({ tryRequest, activateNextPrompt });
     const originalLog = console.log;
     console.log = log as any;
     try {
@@ -466,21 +465,20 @@ describe("REPL slash command routing", () => {
       console.log = originalLog;
     }
 
-    expect(trySend).toHaveBeenCalledWith({
-      type: "set_session_usage_budget",
-      sessionId: "session-1",
-      stopAtUsd: null,
+    expect(tryRequest).toHaveBeenCalledWith("cowork/session/config/set", {
+      threadId: "thread-1",
+      config: { stopAtUsd: null },
     });
     expect(log).toHaveBeenCalledWith("session hard-stop threshold cleared");
     expect(activateNextPrompt).toHaveBeenCalled();
   });
 
   test("/reasoning-effort refuses non-openai-compatible providers", async () => {
-    const trySend = mock(() => true);
+    const tryRequest = mock(async () => true);
     const activateNextPrompt = mock(() => {});
     const log = mock(() => {});
     const ctx = makeCommandContext({
-      trySend,
+      tryRequest,
       activateNextPrompt,
       getConfig: () => ({
         provider: "google",
@@ -497,7 +495,7 @@ describe("REPL slash command routing", () => {
       console.log = originalLog;
     }
 
-    expect(trySend).not.toHaveBeenCalled();
+    expect(tryRequest).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(
       "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first",
     );
@@ -505,10 +503,10 @@ describe("REPL slash command routing", () => {
   });
 
   test("/effort aliases reasoning-effort for codex-cli", async () => {
-    const trySend = mock(() => true);
+    const tryRequest = mock(async () => true);
     const activateNextPrompt = mock(() => {});
     const ctx = makeCommandContext({
-      trySend,
+      tryRequest,
       activateNextPrompt,
       getConfig: () => ({
         provider: "codex-cli",
@@ -525,9 +523,8 @@ describe("REPL slash command routing", () => {
       console.log = originalLog;
     }
 
-    expect(trySend).toHaveBeenCalledWith({
-      type: "set_config",
-      sessionId: "session-1",
+    expect(tryRequest).toHaveBeenCalledWith("cowork/session/config/set", {
+      threadId: "thread-1",
       config: {
         providerOptions: {
           "codex-cli": {
@@ -540,9 +537,9 @@ describe("REPL slash command routing", () => {
   });
 
   test("/reasoning-summary sends set_config for the active provider", async () => {
-    const trySend = mock(() => true);
+    const tryRequest = mock(async () => true);
     const activateNextPrompt = mock(() => {});
-    const ctx = makeCommandContext({ trySend, activateNextPrompt });
+    const ctx = makeCommandContext({ tryRequest, activateNextPrompt });
     const originalLog = console.log;
     console.log = mock(() => {}) as any;
     try {
@@ -552,9 +549,8 @@ describe("REPL slash command routing", () => {
       console.log = originalLog;
     }
 
-    expect(trySend).toHaveBeenCalledWith({
-      type: "set_config",
-      sessionId: "session-1",
+    expect(tryRequest).toHaveBeenCalledWith("cowork/session/config/set", {
+      threadId: "thread-1",
       config: {
         providerOptions: {
           openai: {

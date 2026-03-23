@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 
-import type { ClientMessage, ServerEvent } from "../src/server/protocol";
 import { createFailureDiagnostics } from "./shared/failureDiagnostics";
 
 type FailureDiagnostics = ReturnType<typeof createFailureDiagnostics>;
@@ -61,7 +60,7 @@ class FakeWebSocket {
   onmessage: null | ((ev: { data: any }) => void) = null;
   onclose: null | (() => void) = null;
 
-  constructor(_url: string) {
+  constructor(_url: string, _protocols?: string | string[]) {
     FakeWebSocket.instances.push(this);
     activeDiagnostics?.log("fake-socket.construct", {
       instanceCount: FakeWebSocket.instances.length,
@@ -79,27 +78,37 @@ class FakeWebSocket {
       readyState: this.readyState,
       data,
     });
-    let parsed: ClientMessage | null = null;
+    let parsed: any = null;
     try {
       parsed = JSON.parse(String(data));
     } catch {
       parsed = null;
     }
-    if (parsed?.type === "client_hello") {
-      activeDiagnostics?.log("fake-socket.schedule-server-hello");
-      const hello: ServerEvent = {
-        type: "server_hello",
-        sessionId: "sess-test",
-        config: {
-          provider: "openai",
-          model: "gpt-test",
-          workingDirectory: "/tmp",
-          outputDirectory: "/tmp/output",
-        },
-      };
+    // Respond to JSON-RPC initialize request
+    if (parsed?.method === "initialize" && parsed?.id != null) {
+      activeDiagnostics?.log("fake-socket.schedule-initialize-response");
       queueMicrotask(() => {
-        activeDiagnostics?.log("fake-socket.emit-server-hello", hello);
-        this.onmessage?.({ data: JSON.stringify(hello) });
+        const response = { id: parsed.id, result: { serverInfo: { name: "test" } } };
+        activeDiagnostics?.log("fake-socket.emit-initialize-response", response);
+        this.onmessage?.({ data: JSON.stringify(response) });
+      });
+    }
+    // Respond to thread/start request
+    if (parsed?.method === "thread/start" && parsed?.id != null) {
+      activeDiagnostics?.log("fake-socket.schedule-thread-start-response");
+      queueMicrotask(() => {
+        const response = { id: parsed.id, result: { threadId: "thread-test" } };
+        activeDiagnostics?.log("fake-socket.emit-thread-start-response", response);
+        this.onmessage?.({ data: JSON.stringify(response) });
+      });
+    }
+    // Respond to thread/resume request
+    if (parsed?.method === "thread/resume" && parsed?.id != null) {
+      activeDiagnostics?.log("fake-socket.schedule-thread-resume-response");
+      queueMicrotask(() => {
+        const response = { id: parsed.id, result: { threadId: "thread-test" } };
+        activeDiagnostics?.log("fake-socket.emit-thread-resume-response", response);
+        this.onmessage?.({ data: JSON.stringify(response) });
       });
     }
   }
@@ -123,7 +132,7 @@ function getHarnessSnapshot() {
   };
 }
 
-async function waitForCliReady(timeoutMs = 1_000) {
+async function waitForCliReady(timeoutMs = 2_000) {
   const startedAt = Date.now();
   activeDiagnostics?.log("wait-for-cli-ready.start", getHarnessSnapshot());
   while (Date.now() - startedAt < timeoutMs) {
@@ -210,6 +219,9 @@ describe("CLI REPL restart failure recovery", () => {
 
           diagnostics.log("after runCliRepl", getHarnessSnapshot());
           await waitForCliReady();
+
+          // Wait for the handshake + thread start to complete
+          await new Promise<void>((resolve) => setTimeout(resolve, 200));
 
           diagnostics.log("after waitForCliReady", getHarnessSnapshot());
           expect(rlRef).toBeDefined();

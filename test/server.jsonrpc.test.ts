@@ -78,14 +78,23 @@ async function expectNoMessage(ws: WebSocket, durationMs = 150): Promise<void> {
 }
 
 describe("server JSON-RPC websocket mode", () => {
-  test("legacy remains the default websocket protocol", async () => {
+  test("jsonrpc is the default websocket protocol", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
     try {
       const ws = new WebSocket(url);
-      const hello = await waitForSingleMessage(ws);
-      expect(hello.type).toBe("server_hello");
+      await waitForOpen(ws);
+      // JSON-RPC mode requires initialize handshake — no immediate server_hello
+      await expectNoMessage(ws);
+
+      ws.send(JSON.stringify({
+        id: 1,
+        method: "thread/list",
+        params: {},
+      }));
+      const notInitialized = await waitForSingleMessage(ws);
+      expect(notInitialized.error?.code).toBe(-32002);
       ws.close();
     } finally {
       server.stop();

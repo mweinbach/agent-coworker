@@ -1,12 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 
 import { CliStreamState } from "../src/cli/streamState";
-import { createServerEventHandler, type ReplServerEventState } from "../src/cli/repl/serverEventHandler";
+import { createNotificationHandler, type ReplServerEventState } from "../src/cli/repl/serverEventHandler";
 
 function createState(): ReplServerEventState {
   return {
-    sessionId: null,
-    lastKnownSessionId: null,
+    threadId: null,
+    lastKnownThreadId: null,
     config: null,
     selectedProvider: null,
     busy: false,
@@ -25,51 +25,80 @@ function createState(): ReplServerEventState {
   };
 }
 
-describe("CLI server event handler", () => {
-  test("treats stored-session persistence as best effort on server hello", async () => {
+describe("CLI notification handler", () => {
+  test("turn/started sets busy=true and resets stream state", () => {
     const state = createState();
-    const send = mock(() => true);
     const resetModelStreamState = mock(() => {});
     const activateNextPrompt = mock(() => {});
-    const storeSessionForCurrentCwd = mock(async () => {
-      throw new Error("disk is read-only");
-    });
-    const handleServerEvent = createServerEventHandler({
+    const handler = createNotificationHandler({
       state,
       streamState: new CliStreamState(),
       activateNextPrompt,
       resetModelStreamState,
-      send,
-      storeSessionForCurrentCwd,
+    });
+
+    handler({ method: "turn/started", params: { threadId: "t1", turnId: "turn-1" } }, {} as any);
+
+    expect(state.busy).toBe(true);
+    expect(resetModelStreamState).toHaveBeenCalledTimes(1);
+  });
+
+  test("turn/completed sets busy=false and activates prompt", () => {
+    const state = createState();
+    state.busy = true;
+    const resetModelStreamState = mock(() => {});
+    const activateNextPrompt = mock(() => {});
+    const handler = createNotificationHandler({
+      state,
+      streamState: new CliStreamState(),
+      activateNextPrompt,
+      resetModelStreamState,
+    });
+
+    handler({ method: "turn/completed", params: { threadId: "t1", turnId: "turn-1" } }, {} as any);
+
+    expect(state.busy).toBe(false);
+    expect(resetModelStreamState).toHaveBeenCalledTimes(1);
+    expect(activateNextPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  test("cowork/session/configUpdated updates config and selectedProvider", () => {
+    const state = createState();
+    const resetModelStreamState = mock(() => {});
+    const activateNextPrompt = mock(() => {});
+    const handler = createNotificationHandler({
+      state,
+      streamState: new CliStreamState(),
+      activateNextPrompt,
+      resetModelStreamState,
     });
     const originalLog = console.log;
     console.log = mock(() => {}) as any;
 
     try {
-      handleServerEvent(
+      handler(
         {
-          type: "server_hello",
-          sessionId: "sess-1",
-          config: {
-            provider: "openai",
-            model: "gpt-test",
-            workingDirectory: "/tmp/project",
-            outputDirectory: "/tmp/project/output",
+          method: "cowork/session/configUpdated",
+          params: {
+            threadId: "t1",
+            config: {
+              provider: "google",
+              model: "gemini-3.1-pro",
+              workingDirectory: "/tmp/project",
+            },
           },
         },
         {} as any,
       );
-
-      await Promise.resolve();
-      await Promise.resolve();
     } finally {
       console.log = originalLog;
     }
 
-    expect(state.sessionId).toBe("sess-1");
-    expect(state.lastKnownSessionId).toBe("sess-1");
-    expect(state.selectedProvider).toBe("openai");
-    expect(storeSessionForCurrentCwd).toHaveBeenCalledWith("sess-1");
-    expect(send).toHaveBeenCalledTimes(3);
+    expect(state.config).toEqual({
+      provider: "google",
+      model: "gemini-3.1-pro",
+      workingDirectory: "/tmp/project",
+    });
+    expect(state.selectedProvider).toBe("google");
   });
 });

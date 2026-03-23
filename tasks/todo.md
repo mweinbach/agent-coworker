@@ -372,3 +372,19 @@
 - `src/server/startServer.ts` and `src/server/jsonrpc/routes/skillsMemoryAndWorkspaceBackup.ts` now treat emitted validation errors from `cowork/skills/installation/read` and `cowork/skills/installation/{enable,disable,delete,update}` as terminal JSON-RPC errors instead of waiting for the capture timeout.
 - `apps/desktop/test/workspace-settings-sync.test.ts`, `test/jsonrpc.routes.review-fixes.test.ts`, and `test/server.jsonrpc.control.test.ts` now lock down the thread-response envelope state path plus the skill-installation error returns in both extracted-route and live-server coverage.
 - Verification passed with `bun test apps/desktop/test/workspace-settings-sync.test.ts`, `bun test test/jsonrpc.routes.review-fixes.test.ts`, `bun test test/server.jsonrpc.control.test.ts`, `bun run typecheck`, and `bun run test`.
+
+## Extract Shared JSON-RPC Projection Core
+
+- [x] Create canonical projected-event types and a shared projection sink contract for JSON-RPC model-stream projection.
+- [x] Extract the duplicated stateful projection engine from `src/server/jsonrpc/eventProjector.ts` and `src/server/jsonrpc/journalProjector.ts` into `src/server/jsonrpc/projectionCore.ts` without changing wire output.
+- [x] Refactor the live event projector and thread journal projector into thin adapters over the shared core, preserving reconnect bootstrap, request wiring, journal metadata, and passthrough notifications.
+- [x] Add direct unit coverage for the shared projection core and rerun the focused JSON-RPC/server regression slices plus full repo verification.
+- [x] Manually validate desktop streaming parity, reconnect replay, and journal-backed thread reads after the refactor.
+
+## Extract Shared JSON-RPC Projection Core Review
+
+- Added `src/server/jsonrpc/projectionCore.types.ts` and `src/server/jsonrpc/projectionCore.ts`, so the buffered assistant/reasoning/tool state machine, raw replay handling, occurrence-stable item IDs, dedupe rules, turn lifecycle, and ask/approval projection now live in one shared projector core instead of being duplicated in the live and journal adapters.
+- `src/server/jsonrpc/eventProjector.ts` is now a thin JSON-RPC mapper over the shared core plus the existing passthrough notification surface, and `src/server/jsonrpc/journalProjector.ts` is now a thin journal-envelope mapper that preserves timestamps plus `turnId` / `itemId` / `requestId` metadata.
+- Added `test/jsonrpc.projectionCore.test.ts` to lock down the extracted core directly for assistant/reasoning/tool ordering, commentary suppression, streamed-reasoning dedupe, repeated tool occurrences, assistant remainder handling, raw Google/OpenAI replay, per-turn cleanup, and reconnect bootstrap.
+- Automated verification passed with `bun test test/jsonrpc.projectionCore.test.ts`, `bun test test/jsonrpc.projectionCore.test.ts test/jsonrpc.projectors.test.ts test/jsonrpc.thread-read-projector.test.ts test/server.jsonrpc.flow.test.ts test/server.jsonrpc.test.ts test/harness.ws.e2e.test.ts`, `bun run typecheck`, and full `bun test`.
+- Manual desktop validation passed by sending `Read package.json and tell me the package name.` in the Electron app, confirming live reasoning/tool activity, restarting the workspace server from Settings > Workspaces > Advanced, verifying the same thread replayed intact after reconnect, and capturing the matching post-restart `thread/read` response in `/opt/cursor/artifacts/projection_core_thread_read_after_reconnect.json`.

@@ -341,6 +341,7 @@ const FeedRow = memo(function FeedRow(props: {
           {item.role === "assistant" ? (
             <MessageResponse
               citationAnnotations={item.annotations}
+              citationSources={props.citationSources}
               citationUrlsByIndex={props.citationUrlsByIndex}
               normalizeDisplayCitations
               fallbackToSourcesFooter={!hasSources}

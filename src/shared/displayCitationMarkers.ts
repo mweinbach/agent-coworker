@@ -4,6 +4,7 @@ const citationSpacingExemptPrefix = /[\s([{'"“‘-]/;
 
 type CitationDisplayOptions = {
   citationUrlsByIndex?: ReadonlyMap<number, string>;
+  citationSourcesByIndex?: ReadonlyMap<number, CitationSource>;
   citationMode?: "plain" | "markdown" | "html";
   annotations?: unknown;
   fallbackToSourcesFooter?: boolean;
@@ -88,6 +89,15 @@ function toHtmlCitationCluster(ids: string[], citationUrlsByIndex?: ReadonlyMap<
     .map((id) => toHtmlCitationLabel(id, citationUrlsByIndex))
     .filter((value): value is string => Boolean(value));
   return renderedIds.length > 0 ? `<sup>${renderedIds.join(",")}</sup>` : "";
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function extractOverflowFilePath(value: unknown): string | null {
@@ -554,6 +564,73 @@ function resolveAnnotationEndIndex(text: string, rawEndIndex: number): number {
     : markdownIndex;
 }
 
+function findLineStartIndex(text: string, index: number): number {
+  const boundedIndex = Math.max(0, Math.min(index, text.length));
+  const previousNewline = text.lastIndexOf("\n", Math.max(0, boundedIndex - 1));
+  return previousNewline === -1 ? 0 : previousNewline + 1;
+}
+
+function findLineEndIndex(text: string, lineStartIndex: number): number {
+  const nextNewline = text.indexOf("\n", lineStartIndex);
+  return nextNewline === -1 ? text.length : nextNewline;
+}
+
+function trimTrailingInlineWhitespace(text: string, endIndex: number): number {
+  let cursor = Math.max(0, Math.min(endIndex, text.length));
+  while (cursor > 0) {
+    const current = text[cursor - 1];
+    if (current !== " " && current !== "\t" && current !== "\r") {
+      break;
+    }
+    cursor -= 1;
+  }
+  return cursor;
+}
+
+function markdownLineKind(text: string, lineStartIndex: number): "blank" | "structured" | "plain" {
+  const lineEndIndex = findLineEndIndex(text, lineStartIndex);
+  const rawLine = text.slice(lineStartIndex, lineEndIndex);
+  if (rawLine.trim().length === 0) {
+    return "blank";
+  }
+
+  const normalized = rawLine.replace(/^[ \t]{0,3}/, "");
+  if (/^(?:>\s?|#{1,6}\s+|[-+*]\s+|\d+[.)]\s+)/.test(normalized)) {
+    return "structured";
+  }
+
+  return "plain";
+}
+
+function resolveCitationBlockEndIndex(text: string, anchorEndIndex: number): number {
+  if (text.length === 0) {
+    return 0;
+  }
+
+  const boundedAnchorEndIndex = Math.max(0, Math.min(anchorEndIndex, text.length));
+  let lineStartIndex = findLineStartIndex(text, boundedAnchorEndIndex);
+  let lineEndIndex = findLineEndIndex(text, lineStartIndex);
+  let blockEndIndex = trimTrailingInlineWhitespace(text, lineEndIndex);
+
+  if (markdownLineKind(text, lineStartIndex) === "structured") {
+    return blockEndIndex;
+  }
+
+  while (lineEndIndex < text.length && text[lineEndIndex] === "\n") {
+    const nextLineStartIndex = lineEndIndex + 1;
+    const nextLineKind = markdownLineKind(text, nextLineStartIndex);
+    if (nextLineKind !== "plain") {
+      break;
+    }
+
+    lineStartIndex = nextLineStartIndex;
+    lineEndIndex = findLineEndIndex(text, lineStartIndex);
+    blockEndIndex = trimTrailingInlineWhitespace(text, lineEndIndex);
+  }
+
+  return blockEndIndex;
+}
+
 function extractLinkCitationAnnotations(value: unknown): LinkCitationAnnotation[] {
   if (!Array.isArray(value)) {
     return [];
@@ -599,6 +676,108 @@ export type CitationSource = {
   url: string;
   title?: string;
 };
+
+function extractCitationSourcesByIndexFromAnnotations(
+  annotations: unknown,
+  citationUrlsByIndex?: ReadonlyMap<number, string>,
+): Map<number, CitationSource> {
+  const resolvedCitationUrlsByIndex = citationUrlsByIndex ?? extractCitationUrlsFromAnnotations(annotations);
+  const indexByUrl = new Map<string, number>();
+  for (const [index, url] of resolvedCitationUrlsByIndex) {
+    indexByUrl.set(url, index);
+  }
+
+  const out = new Map<number, CitationSource>();
+  for (const annotation of extractLinkCitationAnnotations(annotations)) {
+    const citationIndex = indexByUrl.get(annotation.url);
+    if (!citationIndex || out.has(citationIndex)) {
+      continue;
+    }
+
+    out.set(citationIndex, annotation.title
+      ? { url: annotation.url, title: annotation.title }
+      : { url: annotation.url });
+  }
+  return out;
+}
+
+function buildCitationSourcesByIndex(options: CitationDisplayOptions): Map<number, CitationSource> {
+  const out = new Map<number, CitationSource>();
+
+  for (const [index, source] of options.citationSourcesByIndex ?? []) {
+    out.set(index, source);
+  }
+
+  for (const [index, source] of extractCitationSourcesByIndexFromAnnotations(options.annotations, options.citationUrlsByIndex)) {
+    if (!out.has(index)) {
+      out.set(index, source);
+    }
+  }
+
+  for (const [index, url] of options.citationUrlsByIndex ?? []) {
+    if (!out.has(index)) {
+      out.set(index, { url });
+    }
+  }
+
+  return out;
+}
+
+function displayCitationSourceLabel(source: CitationSource): string {
+  const title = source.title?.trim();
+  if (title && title.length > 0 && title.length <= 28) {
+    return title;
+  }
+
+  try {
+    const hostname = new URL(source.url).hostname.replace(/^www\./, "");
+    return hostname || source.url;
+  } catch {
+    return source.url;
+  }
+}
+
+function truncateLabel(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function renderCitationChip(ids: string[], options: CitationDisplayOptions): string {
+  if (ids.length === 0) {
+    return "";
+  }
+
+  const citationSourcesByIndex = buildCitationSourcesByIndex(options);
+  const primaryId = ids.find((id) => {
+    const numericId = Number.parseInt(id, 10);
+    return Number.isFinite(numericId) && citationSourcesByIndex.has(numericId);
+  }) ?? ids[0]!;
+  const primaryIndex = Number.parseInt(primaryId, 10);
+  const primarySource = Number.isFinite(primaryIndex) ? citationSourcesByIndex.get(primaryIndex) : undefined;
+  const primaryUrl = Number.isFinite(primaryIndex) ? options.citationUrlsByIndex?.get(primaryIndex) : undefined;
+  const baseLabel = primarySource ? displayCitationSourceLabel(primarySource) : `Source ${primaryId}`;
+  const chipLabel = ids.length > 1
+    ? `${truncateLabel(baseLabel, 26)} +${ids.length - 1}`
+    : truncateLabel(baseLabel, 30);
+  const tooltipLabel = ids
+    .map((id) => {
+      const numericId = Number.parseInt(id, 10);
+      if (!Number.isFinite(numericId)) {
+        return `Source ${id}`;
+      }
+      const source = citationSourcesByIndex.get(numericId);
+      return source ? displayCitationSourceLabel(source) : `Source ${id}`;
+    })
+    .join(", ");
+
+  if (primaryUrl && primaryUrl.trim().length > 0) {
+    return `<cite><a href="${primaryUrl}" title="${escapeHtml(tooltipLabel)}">${escapeHtml(chipLabel)}</a></cite>`;
+  }
+
+  return `<cite title="${escapeHtml(tooltipLabel)}">${escapeHtml(chipLabel)}</cite>`;
+}
 
 function exaResultsArray(value: unknown): unknown[] {
   if (typeof value === "string") {
@@ -784,11 +963,14 @@ function insertNativeCitationMarkers(text: string, options: CitationDisplayOptio
     const citationIndex = indexByUrl.get(annotation.url);
     if (!citationIndex) continue;
     const resolvedEndIndex = resolveAnnotationEndIndex(text, annotation.endIndex);
-    const currentIds = idsByEndIndex.get(resolvedEndIndex) ?? [];
+    const insertionEndIndex = options.citationMode === "html"
+      ? resolveCitationBlockEndIndex(text, resolvedEndIndex)
+      : resolvedEndIndex;
+    const currentIds = idsByEndIndex.get(insertionEndIndex) ?? [];
     const nextId = String(citationIndex);
     if (!currentIds.includes(nextId)) {
       currentIds.push(nextId);
-      idsByEndIndex.set(resolvedEndIndex, currentIds);
+      idsByEndIndex.set(insertionEndIndex, currentIds);
     }
   }
 
@@ -802,11 +984,19 @@ function insertNativeCitationMarkers(text: string, options: CitationDisplayOptio
   for (const rawEndIndex of orderedEndIndexes) {
     const endIndex = Math.min(Math.max(rawEndIndex, cursor), text.length);
     out += text.slice(cursor, endIndex);
-    const previousChar = endIndex > 0 ? text[endIndex - 1] ?? "" : "";
-    out += renderCitationIds(idsByEndIndex.get(rawEndIndex) ?? [], {
-      ...options,
-      citationUrlsByIndex,
-    }, previousChar);
+    const ids = idsByEndIndex.get(rawEndIndex) ?? [];
+    if (options.citationMode === "html") {
+      out += renderCitationChip(ids, {
+        ...options,
+        citationUrlsByIndex,
+      });
+    } else {
+      const previousChar = endIndex > 0 ? text[endIndex - 1] ?? "" : "";
+      out += renderCitationIds(ids, {
+        ...options,
+        citationUrlsByIndex,
+      }, previousChar);
+    }
     cursor = endIndex;
   }
   out += text.slice(cursor);

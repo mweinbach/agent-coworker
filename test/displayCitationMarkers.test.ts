@@ -341,14 +341,15 @@ describe("display citation markers", () => {
             type: "url_citation",
             start_index: 0,
             end_index: "The Collision: Plane hit a truck.".length,
+            title: "Collision Report",
             url: "https://example.com/collision",
           },
         ],
       }),
-    ).toBe('* **The Collision:** Plane hit a truck.<sup><a href="https://example.com/collision">1</a></sup>');
+    ).toBe('* **The Collision:** Plane hit a truck.<cite><a href="https://example.com/collision" title="Collision Report">Collision Report</a></cite>');
   });
 
-  test("prefers raw inclusive annotation anchors when they already match the markdown source", () => {
+  test("clusters native annotations into one paragraph-end chip per markdown block", () => {
     const text = [
       "* **The Collision:** Plane hit a truck.",
       "* **Casualties:** The pilot was killed. Over 40 others were injured. Most have been released.",
@@ -362,14 +363,14 @@ describe("display citation markers", () => {
       normalizeDisplayCitationMarkers(text, {
         citationMode: "html",
         annotations: [
-          { type: "url_citation", start_index: 0, end_index: afterTruckPeriod, url: "https://example.com/collision" },
-          { type: "url_citation", start_index: 0, end_index: afterKilledPeriod, url: "https://example.com/killed" },
-          { type: "url_citation", start_index: 0, end_index: insideMost, url: "https://example.com/injuries" },
+          { type: "url_citation", start_index: 0, end_index: afterTruckPeriod, title: "Collision Report", url: "https://example.com/collision" },
+          { type: "url_citation", start_index: 0, end_index: afterKilledPeriod, title: "Safety Memo", url: "https://example.com/killed" },
+          { type: "url_citation", start_index: 0, end_index: insideMost, title: "Hospital Update", url: "https://example.com/injuries" },
         ],
       }),
     ).toBe([
-      '* **The Collision:** Plane hit a truck.<sup><a href="https://example.com/collision">1</a></sup>',
-      '* **Casualties:** The pilot was killed.<sup><a href="https://example.com/killed">2</a></sup> Over 40 others were injured.<sup><a href="https://example.com/injuries">3</a></sup> Most have been released.',
+      '* **The Collision:** Plane hit a truck.<cite><a href="https://example.com/collision" title="Collision Report">Collision Report</a></cite>',
+      '* **Casualties:** The pilot was killed. Over 40 others were injured. Most have been released.<cite><a href="https://example.com/killed" title="Safety Memo, Hospital Update">Safety Memo +1</a></cite>',
     ].join("\n"));
   });
 

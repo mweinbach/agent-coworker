@@ -1,5 +1,23 @@
 # Task Plan
 
+## Citation Chip Polish
+
+- [x] Inspect the current native citation rendering path and confirm the chip styling has to be applied in the shared markdown normalizer rather than provider-specific UI code.
+- [x] Collapse native annotation citations into one chip per paragraph or list item instead of dropping markers inline after each sentence.
+- [x] Feed source titles into the shared renderer so the chip can show a compact source label plus `+N` when multiple citations land in the same paragraph.
+- [x] Re-run focused rendering/protocol tests, repo typecheck, and full `bun test`.
+
+## Citation Chip Polish Review
+
+- Native assistant annotation citations now render as one compact chip at the end of each markdown paragraph or list item instead of as inline superscripts. The shared resolver in `src/shared/displayCitationMarkers.ts` still uses the raw-vs-markdown anchor heuristic to find the correct containing block, but HTML-mode native citations now collapse to a block-end chip wrapper rather than attaching themselves to the middle of a sentence.
+- `apps/desktop/src/components/ai-elements/message.tsx` now passes citation source metadata into the shared renderer and styles the chip through a dedicated `cite` wrapper that survives the Streamdown sanitize/render pipeline. That lets the chip show a compact source label such as `Safety Memo +1` while keeping normal inline links and legacy superscript citations unchanged.
+- `apps/desktop/src/ui/ChatView.tsx` now forwards the per-message citation sources into `MessageResponse`, so native web-search and URL-context answers can label the chip from actual source metadata instead of falling back to bare numbers.
+- Added/updated regression coverage in `test/displayCitationMarkers.test.ts`, `apps/desktop/test/message-links.test.ts`, and `apps/desktop/test/protocol-v2-events.test.ts` to lock paragraph-end chip placement, grouping behavior, and live feed rendering around the shared JSON-RPC path.
+- Verification passed with:
+  - `~/.bun/bin/bun test test/displayCitationMarkers.test.ts apps/desktop/test/message-links.test.ts apps/desktop/test/tool-card-formatting.test.ts apps/desktop/test/protocol-v2-events.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test` on 2026-03-23 (`2616 pass`, `3 skip`, `0 fail`)
+
 ## Google Cowork Citation Follow-up
 
 - [x] Inspect the latest real Google cowork session snapshot and confirm whether native web search already arrives in the canonical feed.

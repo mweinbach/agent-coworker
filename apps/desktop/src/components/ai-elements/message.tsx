@@ -15,7 +15,7 @@ import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 
-import { normalizeDisplayCitationMarkers } from "../../../../../src/shared/displayCitationMarkers";
+import { normalizeDisplayCitationMarkers, type CitationSource } from "../../../../../src/shared/displayCitationMarkers";
 import { confirmAction, openPath } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
 
@@ -56,7 +56,13 @@ const streamdownPlugins = { cjk, code, math, mermaid };
 const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";
 const desktopSanitizeSchema: RehypeSanitizeOptions = {
   ...defaultSchema,
-  tagNames: [...(defaultSchema.tagNames ?? []), "sup"],
+  tagNames: [...(defaultSchema.tagNames ?? []), "cite", "span", "sup"],
+  attributes: {
+    ...defaultSchema.attributes,
+    a: [...(defaultSchema.attributes?.a ?? []), "title"],
+    cite: [...(defaultSchema.attributes?.cite ?? []), "title"],
+    span: [...(defaultSchema.attributes?.span ?? []), "title"],
+  },
   protocols: {
     ...defaultSchema.protocols,
     href: [...(defaultSchema.protocols?.href ?? []), "tel", "cowork-file"],
@@ -443,6 +449,7 @@ function DesktopMessageLink({
 export type MessageResponseProps = StreamdownProps & {
   normalizeDisplayCitations?: boolean;
   citationUrlsByIndex?: ReadonlyMap<number, string>;
+  citationSources?: readonly CitationSource[];
   citationAnnotations?: unknown;
   fallbackToSourcesFooter?: boolean;
 };
@@ -451,6 +458,7 @@ function normalizeMessageResponseChildren(
   children: StreamdownProps["children"],
   normalizeDisplayCitations: boolean,
   citationUrlsByIndex?: ReadonlyMap<number, string>,
+  citationSources?: readonly CitationSource[],
   citationAnnotations?: unknown,
   fallbackToSourcesFooter = true,
 ): StreamdownProps["children"] {
@@ -461,6 +469,7 @@ function normalizeMessageResponseChildren(
   if (typeof children === "string") {
     return normalizeDisplayCitationMarkers(children, {
       citationUrlsByIndex,
+      citationSourcesByIndex: citationSources ? new Map(citationSources.map((source, index) => [index + 1, source] as const)) : undefined,
       citationMode: "html",
       annotations: citationAnnotations,
       fallbackToSourcesFooter,
@@ -470,6 +479,7 @@ function normalizeMessageResponseChildren(
   return Children.map(children, (child) => typeof child === "string"
     ? normalizeDisplayCitationMarkers(child, {
       citationUrlsByIndex,
+      citationSourcesByIndex: citationSources ? new Map(citationSources.map((source, index) => [index + 1, source] as const)) : undefined,
       citationMode: "html",
       annotations: citationAnnotations,
       fallbackToSourcesFooter,
@@ -480,6 +490,7 @@ function normalizeMessageResponseChildren(
 export const MessageResponse = memo(function MessageResponse({
   className,
   citationUrlsByIndex,
+  citationSources,
   citationAnnotations,
   normalizeDisplayCitations = false,
   fallbackToSourcesFooter = true,
@@ -494,11 +505,12 @@ export const MessageResponse = memo(function MessageResponse({
         children,
         normalizeDisplayCitations,
         citationUrlsByIndex,
+        citationSources,
         citationAnnotations,
         fallbackToSourcesFooter,
       )}
       className={cn(
-        "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline",
+        "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline [&_cite]:ml-2 [&_cite]:inline-flex [&_cite]:translate-y-[-0.02em] [&_cite]:items-center [&_cite]:rounded-full [&_cite]:border [&_cite]:border-border/70 [&_cite]:bg-muted/60 [&_cite]:px-2.5 [&_cite]:py-0.5 [&_cite]:text-[0.72rem] [&_cite]:not-italic [&_cite]:font-medium [&_cite]:leading-none [&_cite]:text-muted-foreground [&_cite_a]:no-underline hover:[&_cite]:border-border hover:[&_cite]:bg-muted",
         className,
       )}
       components={{

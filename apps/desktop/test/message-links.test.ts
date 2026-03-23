@@ -192,6 +192,7 @@ describe("desktop message local file links", () => {
         MessageResponse,
         {
           normalizeDisplayCitations: true,
+          citationSources: [{ title: "Collision Report", url: "https://example.com/collision" }],
           citationAnnotations: [
             {
               type: "url_citation",
@@ -207,12 +208,13 @@ describe("desktop message local file links", () => {
     );
 
     expect(html).toContain("The Collision:");
-    expect(html).toContain("Plane hit a truck.<sup");
+    expect(html).toContain("Plane hit a truck.<cite><a");
+    expect(html).toContain(">Collision Report<");
     expect(html).toContain('href="https://example.com/collision"');
-    expect(html).not.toContain("tru<sup");
+    expect(html).not.toContain("tru<cite");
   });
 
-  test("renders raw-source Google-style annotations at sentence boundaries instead of the next bullet", () => {
+  test("renders raw-source Google-style annotations as one chip at the end of each bullet", () => {
     const text = [
       "* **The Collision:** Plane hit a truck.",
       "* **Casualties:** The pilot was killed. Over 40 others were injured. Most have been released.",
@@ -223,6 +225,11 @@ describe("desktop message local file links", () => {
         MessageResponse,
         {
           normalizeDisplayCitations: true,
+          citationSources: [
+            { title: "Collision Report", url: "https://example.com/collision" },
+            { title: "Safety Memo", url: "https://example.com/killed" },
+            { title: "Hospital Update", url: "https://example.com/injuries" },
+          ],
           citationAnnotations: [
             {
               type: "url_citation",
@@ -233,22 +240,32 @@ describe("desktop message local file links", () => {
             {
               type: "url_citation",
               start_index: 0,
+              end_index: text.indexOf("killed.") + "killed.".length - 1,
+              url: "https://example.com/killed",
+            },
+            {
+              type: "url_citation",
+              start_index: 0,
               end_index: text.indexOf("Most") + 2,
               url: "https://example.com/injuries",
             },
           ],
           citationUrlsByIndex: new Map([
             [1, "https://example.com/collision"],
-            [2, "https://example.com/injuries"],
+            [2, "https://example.com/killed"],
+            [3, "https://example.com/injuries"],
           ]),
         },
         text,
       ),
     );
 
-    expect(html).toContain("truck.<sup");
-    expect(html).toContain("injured.<sup");
-    expect(html).not.toContain("Casu<sup");
-    expect(html).not.toContain("Mos<sup");
+    expect(html).toContain("truck.<cite><a");
+    expect(html).toContain("released.<cite><a");
+    expect(html).toContain(">Collision Report<");
+    expect(html).toContain(">Safety Memo +1<");
+    expect(html).not.toContain("injured.<cite><a");
+    expect(html).not.toContain("Casu<cite><a");
+    expect(html).not.toContain("Mos<cite><a");
   });
 });

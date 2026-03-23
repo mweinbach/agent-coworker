@@ -26,7 +26,6 @@ import { createLegacySessionSnapshot } from "./session/SessionSnapshotProjector"
 import { SessionDb, type PersistedSessionRecord } from "./sessionDb";
 import { WorkspaceBackupService } from "./workspaceBackups";
 import {
-  WEBSOCKET_PROTOCOL_VERSION,
   type ServerEvent,
 } from "./protocol";
 import { decodeJsonRpcMessage } from "./jsonrpc/decodeJsonRpcMessage";
@@ -47,8 +46,6 @@ import {
 } from "./jsonrpc/protocol";
 import { createSessionEventCapture } from "./jsonrpc/sessionEventCapture";
 import { createJsonRpcTransportAdapter } from "./jsonrpc/transportAdapter";
-import { decodeClientMessage } from "./startServer/decodeClientMessage";
-import { dispatchClientMessage } from "./startServer/dispatchClientMessage";
 import { type SessionBinding, type StartServerSocketData } from "./startServer/types";
 import type { SeededSessionContext, SessionDependencies, SessionInfoState } from "./session/SessionContext";
 import {
@@ -656,156 +653,6 @@ export async function startAgentServer(
     },
   });
 
-  const openLegacySocket = (ws: Bun.ServerWebSocket<StartServerSocketData>) => {
-    const resumeSessionId = ws.data.resumeSessionId;
-    const legacySinkId = `legacy:${ws.data.connectionId ?? "unknown"}`;
-    const resumable =
-      resumeSessionId && sessionBindings.has(resumeSessionId)
-        ? sessionBindings.get(resumeSessionId)
-        : undefined;
-    const resumableSession = resumable?.session ?? null;
-
-    let session: AgentSession;
-    let binding: SessionBinding;
-    let isResume = false;
-    let resumedFromStorage = false;
-
-    if (resumable && resumable.socket === null && resumableSession) {
-      binding = resumable;
-      binding.socket = ws;
-      session = resumableSession;
-      isResume = true;
-    } else {
-      binding = {
-        session: null,
-        socket: ws,
-        sinks: new Map(),
-      };
-      const built = buildSession(binding, resumeSessionId);
-      session = built.session;
-      isResume = built.isResume;
-      resumedFromStorage = built.resumedFromStorage;
-      binding.session = session;
-      ensureThreadJournalSink(binding, session.id);
-      sessionBindings.set(session.id, binding);
-    }
-
-    ws.data.session = session;
-    ws.data.resumeSessionId = session.id;
-    ensureThreadJournalSink(binding, session.id);
-    addBindingSink(binding, legacySinkId, (evt) => {
-      try {
-        ws.send(JSON.stringify(evt));
-      } catch {
-        // ignore
-      }
-    });
-
-    const sessionInfo = session.getSessionInfoEvent();
-    const hello: ServerEvent = {
-      type: "server_hello",
-      sessionId: session.id,
-      protocolVersion: WEBSOCKET_PROTOCOL_VERSION,
-      capabilities: {
-        modelStreamChunk: "v1",
-      },
-      config: session.getPublicConfig(),
-      sessionKind: sessionInfo.sessionKind,
-      ...(sessionInfo.parentSessionId ? { parentSessionId: sessionInfo.parentSessionId } : {}),
-      ...(sessionInfo.role ? { role: sessionInfo.role } : {}),
-      ...(sessionInfo.mode ? { mode: sessionInfo.mode } : {}),
-      ...(typeof sessionInfo.depth === "number" ? { depth: sessionInfo.depth } : {}),
-      ...(sessionInfo.nickname ? { nickname: sessionInfo.nickname } : {}),
-      ...(sessionInfo.requestedModel ? { requestedModel: sessionInfo.requestedModel } : {}),
-      ...(sessionInfo.effectiveModel ? { effectiveModel: sessionInfo.effectiveModel } : {}),
-      ...(sessionInfo.requestedReasoningEffort
-        ? { requestedReasoningEffort: sessionInfo.requestedReasoningEffort }
-        : {}),
-      ...(sessionInfo.effectiveReasoningEffort
-        ? { effectiveReasoningEffort: sessionInfo.effectiveReasoningEffort }
-        : {}),
-      ...(sessionInfo.executionState ? { executionState: sessionInfo.executionState } : {}),
-      ...(sessionInfo.lastMessagePreview ? { lastMessagePreview: sessionInfo.lastMessagePreview } : {}),
-      ...(isResume
-        ? {
-            isResume: true,
-            ...(resumedFromStorage ? { resumedFromStorage: true } : {}),
-            busy: session.isBusy,
-            ...(session.isBusy && session.activeTurnId ? { turnId: session.activeTurnId } : {}),
-            messageCount: session.messageCount,
-            hasPendingAsk: session.hasPendingAsk,
-            hasPendingApproval: session.hasPendingApproval,
-          }
-        : {}),
-      ...(sessionInfo.sessionKind !== "root"
-        ? {
-            sessionKind: sessionInfo.sessionKind,
-            ...(sessionInfo.parentSessionId ? { parentSessionId: sessionInfo.parentSessionId } : {}),
-            ...(sessionInfo.role ? { role: sessionInfo.role } : {}),
-            ...(sessionInfo.mode ? { mode: sessionInfo.mode } : {}),
-            ...(typeof sessionInfo.depth === "number" ? { depth: sessionInfo.depth } : {}),
-            ...(sessionInfo.nickname ? { nickname: sessionInfo.nickname } : {}),
-            ...(sessionInfo.requestedModel ? { requestedModel: sessionInfo.requestedModel } : {}),
-            ...(sessionInfo.effectiveModel ? { effectiveModel: sessionInfo.effectiveModel } : {}),
-            ...(sessionInfo.requestedReasoningEffort
-              ? { requestedReasoningEffort: sessionInfo.requestedReasoningEffort }
-              : {}),
-            ...(sessionInfo.effectiveReasoningEffort
-              ? { effectiveReasoningEffort: sessionInfo.effectiveReasoningEffort }
-              : {}),
-            ...(sessionInfo.executionState ? { executionState: sessionInfo.executionState } : {}),
-            ...(sessionInfo.lastMessagePreview ? { lastMessagePreview: sessionInfo.lastMessagePreview } : {}),
-          }
-        : {}),
-    };
-
-    ws.send(JSON.stringify(hello));
-
-    const settings: ServerEvent = {
-      type: "session_settings",
-      sessionId: session.id,
-      enableMcp: session.getEnableMcp(),
-      enableMemory: session.getEnableMemory(),
-      memoryRequireApproval: session.getMemoryRequireApproval(),
-    };
-    ws.send(JSON.stringify(settings));
-    ws.send(JSON.stringify(session.getSessionConfigEvent()));
-    ws.send(JSON.stringify(session.getSessionInfoEvent()));
-
-    ws.send(JSON.stringify(session.getObservabilityStatusEvent()));
-    void session.emitProviderCatalog();
-    session.emitProviderAuthMethods();
-    void session.refreshProviderStatus();
-    void session.emitMcpServers();
-    void session.getSessionBackupState();
-    if (isResume) {
-      for (const evt of session.drainDisconnectedReplayEvents()) {
-        try {
-          ws.send(JSON.stringify(evt));
-        } catch {
-          // ignore
-        }
-      }
-    }
-    if (isResume) {
-      session.replayPendingPrompts();
-    }
-  };
-
-  const closeLegacySocket = (ws: Bun.ServerWebSocket<StartServerSocketData>) => {
-    const session = ws.data.session;
-    if (!session) return;
-    const binding = sessionBindings.get(session.id);
-    if (!binding) return;
-    removeBindingSink(binding, `legacy:${ws.data.connectionId ?? "unknown"}`);
-
-    if (binding.socket === ws) {
-      binding.socket = null;
-    }
-    if (countLiveConnectionSinks(binding) === 0) {
-      session.beginDisconnectedReplayBuffer();
-    }
-  };
   const threadJournalWriteQueues = new Map<string, Promise<void>>();
   const pendingThreadJournalEvents = new Map<string, Array<{
     threadId: string;
@@ -1055,49 +902,22 @@ export async function startAgentServer(
       },
       websocket: {
         open(ws) {
-          if (ws.data.protocolMode === "jsonrpc") {
-            jsonRpcTransport.openConnection(ws);
-            return;
-          }
-          openLegacySocket(ws);
+          jsonRpcTransport.openConnection(ws);
         },
         message(ws, raw) {
-          if (ws.data.protocolMode === "jsonrpc") {
-            const decoded = decodeJsonRpcMessage(raw);
-            if (!decoded.ok) {
-              ws.send(JSON.stringify(decoded.response));
-              return;
-            }
-            jsonRpcTransport.handleMessage(
-              ws,
-              decoded.message,
-              routeJsonRpcRequest,
-            );
-            return;
-          }
-
-          const session = ws.data.session;
-          if (!session) return;
-
-          const decoded = decodeClientMessage(raw, session.id);
+          const decoded = decodeJsonRpcMessage(raw);
           if (!decoded.ok) {
-            ws.send(JSON.stringify(decoded.event));
+            ws.send(JSON.stringify(decoded.response));
             return;
           }
-
-          dispatchClientMessage({
+          jsonRpcTransport.handleMessage(
             ws,
-            session,
-            message: decoded.message,
-            sessionBindings,
-          });
+            decoded.message,
+            routeJsonRpcRequest,
+          );
         },
         close(ws) {
-          if (ws.data.protocolMode === "jsonrpc") {
-            jsonRpcTransport.closeConnection(ws);
-            return;
-          }
-          closeLegacySocket(ws);
+          jsonRpcTransport.closeConnection(ws);
         },
       },
     });

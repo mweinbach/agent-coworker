@@ -64,6 +64,33 @@ function dedupeReplayReasoningItems(items: Array<Record<string, unknown>>): Arra
   return out;
 }
 
+function dedupeReplayAssistantItems(items: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  let assistantHistory = "";
+  const out: Array<Record<string, unknown>> = [];
+
+  for (const item of items) {
+    if (item.type !== "agentMessage" || typeof item.text !== "string") {
+      out.push(item);
+      continue;
+    }
+
+    const normalized = normalizeTranscriptReplayText(item.text);
+    if (!normalized) {
+      continue;
+    }
+
+    const aggregate = normalizeTranscriptReplayText(assistantHistory);
+    if (aggregate && normalized === aggregate) {
+      continue;
+    }
+
+    assistantHistory = `${assistantHistory}${item.text}`;
+    out.push(item);
+  }
+
+  return out;
+}
+
 export function createThreadTurnProjector() {
   const turns = new Map<string, ProjectedTurnState>();
   const order: string[] = [];
@@ -181,9 +208,9 @@ export function createThreadTurnProjector() {
     return {
       id: turn.id,
       status: turn.status,
-      items: dedupeReplayReasoningItems(
+      items: dedupeReplayAssistantItems(dedupeReplayReasoningItems(
         turn.itemOrder.map((itemId) => turn.items.get(itemId)!).filter(Boolean),
-      ),
+      )),
     };
   });
 

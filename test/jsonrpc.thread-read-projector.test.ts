@@ -441,4 +441,60 @@ describe("JSON-RPC thread read projector", () => {
       },
     ]);
   });
+
+  test("drops cumulative assistant duplicates that only differ by leading boundary whitespace", () => {
+    const turns = projectThreadTurnsFromJournal([
+      {
+        threadId: "thread-1",
+        seq: 1,
+        ts: "2026-03-22T15:39:39.127Z",
+        eventType: "turn/started",
+        turnId: "turn-1",
+        itemId: null,
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "inProgress", items: [] },
+        },
+      },
+      {
+        threadId: "thread-1",
+        seq: 2,
+        ts: "2026-03-22T15:39:41.772Z",
+        eventType: "item/completed",
+        turnId: "turn-1",
+        itemId: "assistant-1",
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "assistant-1", type: "agentMessage", text: "\n\nFinal answer." },
+        },
+      },
+      {
+        threadId: "thread-1",
+        seq: 3,
+        ts: "2026-03-22T15:39:41.773Z",
+        eventType: "item/completed",
+        turnId: "turn-1",
+        itemId: "assistant-2",
+        requestId: null,
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "assistant-2", type: "agentMessage", text: "Final answer." },
+        },
+      },
+    ] as any);
+
+    expect(turns).toEqual([
+      {
+        id: "turn-1",
+        status: "inProgress",
+        items: [
+          { id: "assistant-1", type: "agentMessage", text: "\n\nFinal answer." },
+        ],
+      },
+    ]);
+  });
 });

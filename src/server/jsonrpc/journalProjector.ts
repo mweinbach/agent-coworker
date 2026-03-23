@@ -76,6 +76,10 @@ function normalizeReasoningText(text: string): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+function hasVisibleAssistantText(text: string): boolean {
+  return text.trim().length > 0;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -160,7 +164,7 @@ export function createThreadJournalProjector(opts: CreateThreadJournalProjectorO
     if (!state) return;
     const text = finalText ?? state.text;
     activeAssistantByTurn.delete(turnId);
-    if (!text) return;
+    if (!hasVisibleAssistantText(text)) return;
     startAssistantState(turnId, state);
     emit("item/completed", {
       threadId: opts.threadId,
@@ -186,7 +190,21 @@ export function createThreadJournalProjector(opts: CreateThreadJournalProjectorO
 
   const assistantRemainderForTurn = (turnId: string, text: string) => {
     const history = assistantHistoryByTurn.get(turnId) ?? "";
-    return text.startsWith(history) ? text.slice(history.length) : text;
+    if (!history) return text;
+    if (text.startsWith(history)) return text.slice(history.length);
+
+    const trimmedHistory = history.trimStart();
+    if (trimmedHistory && text.startsWith(trimmedHistory)) {
+      return text.slice(trimmedHistory.length);
+    }
+
+    const normalizedHistory = normalizeTranscriptReplayText(history);
+    const normalizedText = normalizeTranscriptReplayText(text);
+    if (normalizedHistory && normalizedText === normalizedHistory) {
+      return "";
+    }
+
+    return text;
   };
 
   const reasoningStreamKey = (turnId: string, part: Record<string, unknown> | undefined) =>

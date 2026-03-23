@@ -1,5 +1,19 @@
 # Task Plan
 
+## Fix Duplicate Final JSON-RPC Assistant Content
+
+- [x] Inspect the latest duplicated live session in `~/.cowork/sessions.db` and confirm the duplicate comes from the final cumulative JSON-RPC `assistant_message` path rather than a replay-only issue.
+- [x] Patch the live/journal JSON-RPC projectors so cumulative final assistant payloads are suppressed when streamed assistant history only differs by boundary whitespace, and ignore whitespace-only assistant segments.
+- [x] Harden desktop transcript/replay assistant dedupe to use exact streamed assistant history rather than guessed paragraph joins, add focused regressions, and rerun the affected server/desktop verification slices plus `bun run typecheck`.
+
+## Fix Duplicate Final JSON-RPC Assistant Content Review
+
+- `src/server/jsonrpc/legacyEventProjector.ts` and `src/server/jsonrpc/journalProjector.ts` now drop whitespace-only assistant segments and suppress final cumulative assistant payloads when they only differ from streamed content by leading boundary whitespace, which stops the live duplicate-answer append after segmented streaming.
+- `src/server/jsonrpc/threadReadProjector.ts` now drops older cumulative assistant duplicates during replay, so already-bad JSON-RPC journal rows no longer re-duplicate the same answer on reconnect when the only difference was boundary whitespace.
+- `apps/desktop/src/app/store.feedMapping.ts` now dedupes merged `assistant_message` payloads against exact per-turn streamed assistant history instead of reconstructing the history from feed rows with synthetic paragraph separators, which keeps multi-step streamed answers and source cards from rendering twice.
+- Added regressions in `test/jsonrpc.projectors.test.ts`, `test/jsonrpc.thread-read-projector.test.ts`, and `apps/desktop/test/store-feed-mapping.test.ts`.
+- Verification passed with `bun test test/jsonrpc.projectors.test.ts test/jsonrpc.thread-read-projector.test.ts apps/desktop/test/store-feed-mapping.test.ts apps/desktop/test/protocol-v2-events.test.ts` and `bun run typecheck`.
+
 ## Fix Live JSON-RPC Follow-Up Activity Streaming
 
 - [x] Confirm the refresh view is already correct and isolate the remaining defect to the desktop live JSON-RPC reducer rather than the replay/journal projector.

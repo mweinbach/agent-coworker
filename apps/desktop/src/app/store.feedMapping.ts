@@ -22,6 +22,7 @@ export type ThreadModelStreamRuntime = {
   activeTurnId: string | null;
   assistantItemIdByStream: Map<string, string>;
   assistantTextByStream: Map<string, string>;
+  assistantTextHistoryInTurn: string[];
   lastAssistantStreamKeyByTurn: Map<string, string>;
   completedAssistantStreamKeys: Set<string>;
   reasoningItemIdByStream: Map<string, string>;
@@ -155,6 +156,7 @@ export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
     activeTurnId: null,
     assistantItemIdByStream: new Map(),
     assistantTextByStream: new Map(),
+    assistantTextHistoryInTurn: [],
     lastAssistantStreamKeyByTurn: new Map(),
     completedAssistantStreamKeys: new Set(),
     reasoningItemIdByStream: new Map(),
@@ -173,8 +175,9 @@ export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
 
 export function clearThreadModelStreamRuntime(runtime: ThreadModelStreamRuntime) {
   runtime.activeTurnId = null;
-  clearStepLocalModelStreamRuntime(runtime, { snapshotReasoning: false });
+  clearStepLocalModelStreamRuntime(runtime, { snapshotReasoning: false, snapshotAssistant: false });
   runtime.completedAssistantStreamKeys.clear();
+  runtime.assistantTextHistoryInTurn = [];
   runtime.reasoningTextsSeenInTurn.clear();
   runtime.reasoningTextHistoryInTurn = [];
   runtime.reasoningTurns.clear();
@@ -197,16 +200,30 @@ function rememberStreamedReasoningText(runtime: ThreadModelStreamRuntime, text: 
   runtime.reasoningTextHistoryInTurn.push(normalized);
 }
 
+function rememberStreamedAssistantText(runtime: ThreadModelStreamRuntime, text: string) {
+  if (!hasVisibleAssistantText(text)) return;
+  runtime.assistantTextHistoryInTurn.push(text);
+}
+
 function rememberStreamedReasoningTexts(runtime: ThreadModelStreamRuntime) {
   for (const text of runtime.reasoningTextByStream.values()) {
     rememberStreamedReasoningText(runtime, text);
   }
 }
 
+function rememberStreamedAssistantTexts(runtime: ThreadModelStreamRuntime) {
+  for (const text of runtime.assistantTextByStream.values()) {
+    rememberStreamedAssistantText(runtime, text);
+  }
+}
+
 function clearStepLocalModelStreamRuntime(
   runtime: ThreadModelStreamRuntime,
-  opts: { snapshotReasoning?: boolean } = {},
+  opts: { snapshotReasoning?: boolean; snapshotAssistant?: boolean } = {},
 ) {
+  if (opts.snapshotAssistant !== false) {
+    rememberStreamedAssistantTexts(runtime);
+  }
   if (opts.snapshotReasoning !== false) {
     rememberStreamedReasoningTexts(runtime);
   }
@@ -502,6 +519,18 @@ export function shouldSkipAssistantMessageAfterStreamReplay(
       if (stream.replay.rawBackedTurns.has(stream.lastAssistantTurnId)) {
         return normalizedAssistantText.endsWith(streamed);
       }
+    }
+  }
+
+  const exactStreamedAssistantText = normalizeTranscriptReplayText([
+    ...stream.assistantTextHistoryInTurn,
+    ...stream.assistantTextByStream.values(),
+  ].join(""));
+  if (exactStreamedAssistantText) {
+    if (normalizedAssistantText === exactStreamedAssistantText) return true;
+
+    if (stream.lastAssistantTurnId && stream.replay.rawBackedTurns.has(stream.lastAssistantTurnId)) {
+      return normalizedAssistantText.endsWith(exactStreamedAssistantText);
     }
   }
 

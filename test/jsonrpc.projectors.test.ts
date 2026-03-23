@@ -312,6 +312,72 @@ describe("JSON-RPC projectors", () => {
     expect(reasoningCompletedIndex).toBeLessThan(secondAssistantStartedIndex);
   });
 
+  test("legacy projector drops a cumulative final assistant message when streamed output only differs by leading boundary whitespace", () => {
+    const outbound: Array<{ method: string; params?: any }> = [];
+    const projector = createJsonRpcLegacyEventProjector({
+      threadId: sessionId,
+      send: (message) => outbound.push(message as { method: string; params?: any }),
+    });
+
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    projector.handle(streamChunk("text_delta", { id: "s0", text: "\n\n" }));
+    projector.handle(streamChunk("reasoning_start", { id: "r1", mode: "reasoning" }));
+    projector.handle(streamChunk("reasoning_delta", { id: "r1", mode: "reasoning", text: "Checking the benchmarks." }));
+    projector.handle(streamChunk("reasoning_end", { id: "r1", mode: "reasoning" }));
+    projector.handle(streamChunk("text_delta", { id: "s0", text: "\n\nFinal answer." }));
+    projector.handle({
+      type: "assistant_message",
+      sessionId,
+      text: "Final answer.",
+    });
+
+    const assistantCompleted = outbound
+      .filter((message) => message.method === "item/completed")
+      .filter((message) => message.params?.item?.type === "agentMessage");
+
+    expect(assistantCompleted).toHaveLength(1);
+    expect(String(assistantCompleted[0]?.params?.item?.text ?? "")).toBe("Final answer.");
+  });
+
+  test("journal projector drops a cumulative final assistant message when streamed output only differs by leading boundary whitespace", () => {
+    const emissions: Array<{ eventType: string; payload: any }> = [];
+    const projector = createThreadJournalProjector({
+      threadId: sessionId,
+      emit: (event) => emissions.push({ eventType: event.eventType, payload: event.payload }),
+    });
+
+    projector.handle({
+      type: "session_busy",
+      sessionId,
+      busy: true,
+      turnId,
+      cause: "user_message",
+    });
+    projector.handle(streamChunk("text_delta", { id: "s0", text: "\n\n" }));
+    projector.handle(streamChunk("reasoning_start", { id: "r1", mode: "reasoning" }));
+    projector.handle(streamChunk("reasoning_delta", { id: "r1", mode: "reasoning", text: "Checking the benchmarks." }));
+    projector.handle(streamChunk("reasoning_end", { id: "r1", mode: "reasoning" }));
+    projector.handle(streamChunk("text_delta", { id: "s0", text: "\n\nFinal answer." }));
+    projector.handle({
+      type: "assistant_message",
+      sessionId,
+      text: "Final answer.",
+    });
+
+    const assistantCompleted = emissions
+      .filter((event) => event.eventType === "item/completed")
+      .filter((event) => event.payload?.item?.type === "agentMessage");
+
+    expect(assistantCompleted).toHaveLength(1);
+    expect(String(assistantCompleted[0]?.payload?.item?.text ?? "")).toBe("Final answer.");
+  });
+
   test("legacy projector replays raw Gemini search tool items and drops aggregate final reasoning duplicates", () => {
     const outbound: Array<{ method: string; params?: any }> = [];
     const projector = createJsonRpcLegacyEventProjector({

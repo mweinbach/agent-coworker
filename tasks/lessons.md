@@ -1,5 +1,6 @@
 # Lessons
 
+- When JSON-RPC assistant output is segmented live, do not dedupe the final merged `assistant_message` by reconstructing history from feed rows alone; keep exact per-turn streamed assistant history or boundary whitespace will make the final cumulative payload look new and render the whole answer twice.
 - When refresh shows the correct JSON-RPC assistant/reasoning/tool chronology but live streaming does not, inspect the desktop live `item/*` reducer before touching projector/replay code again; the remaining bug can be reused raw `item/agentMessage/delta` ids keeping one assistant card open across multiple steps.
 - For JSON-RPC projector bugs in this repo, inspect `thread_journal_events` for repeated `item/agentMessage/delta` ids before touching only the desktop reducer; a live interleaving bug can come from the server projector collapsing the whole turn onto one `agentMessage` item even when replay later looks fine.
 - For multi-step turns with follow-up assistant output, never key projected assistant items only by `turnId`; close the current assistant item before reasoning/tool phases and start a fresh occurrence when assistant output resumes, even if the underlying stream id is reused or the final legacy `assistant_message` text is cumulative.

@@ -2,7 +2,8 @@ import type { ComponentProps, HTMLAttributes, ReactNode } from "react";
 import type { Options as RehypeSanitizeOptions } from "rehype-sanitize";
 import type { PluggableList } from "unified";
 
-import { Children, memo, useEffect, useMemo, useRef, useState } from "react";
+import { Children, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   defaultRehypePlugins,
   defaultRemarkPlugins,
@@ -15,7 +16,11 @@ import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 
-import { normalizeDisplayCitationMarkers, type CitationSource } from "../../../../../src/shared/displayCitationMarkers";
+import {
+  describeCitationSource,
+  normalizeDisplayCitationMarkers,
+  type CitationSource,
+} from "../../../../../src/shared/displayCitationMarkers";
 import { confirmAction, openPath } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
 
@@ -55,6 +60,8 @@ export function MessageContent({ className, ...props }: MessageContentProps) {
 const streamdownPlugins = { cjk, code, math, mermaid };
 const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";
 const CITATION_CHIP_TITLE_PREFIX = "__cowork_citation_sources__:";
+const CITATION_POPUP_MARGIN = 16;
+const CITATION_POPUP_GAP = 10;
 const desktopSanitizeSchema: RehypeSanitizeOptions = {
   ...defaultSchema,
   tagNames: [...(defaultSchema.tagNames ?? []), "cite", "span", "sup"],
@@ -108,6 +115,13 @@ type DesktopCitationChipProps = ComponentProps<"cite"> & {
   node?: unknown;
   "data-citation-sources"?: string;
 };
+
+type CitationPopupPosition = {
+  left: number;
+  top: number;
+};
+
+const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -180,36 +194,23 @@ function flattenReactText(node: ReactNode): string {
   return "";
 }
 
-function citationSourceDomain(siteUrl: string): string {
-  try {
-    return new URL(siteUrl).hostname.replace(/^www\./, "");
-  } catch {
-    return siteUrl;
-  }
-}
-
 function citationSourceTitle(source: CitationSource): string {
-  const title = source.title?.trim();
-  return title && title.length > 0 ? title : citationSourceDomain(source.url);
+  return describeCitationSource(source).titleLabel;
 }
 
-function faviconUrl(siteUrl: string): string {
-  try {
-    const { hostname } = new URL(siteUrl);
-    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=32`;
-  } catch {
-    return "";
-  }
+function faviconUrl(hostname: string): string {
+  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=32`;
 }
 
-function CitationFavicon({ url }: { url: string }) {
+function CitationFavicon({ source }: { source: CitationSource }) {
   const [failed, setFailed] = useState(false);
-  const src = faviconUrl(url);
+  const display = useMemo(() => describeCitationSource(source), [source]);
+  const src = display.faviconHostname ? faviconUrl(display.faviconHostname) : "";
 
   if (!src || failed) {
     return (
       <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold uppercase text-muted-foreground">
-        {citationSourceDomain(url).charAt(0)}
+        {display.hostLabel.charAt(0)}
       </div>
     );
   }
@@ -224,19 +225,41 @@ function CitationFavicon({ url }: { url: string }) {
   );
 }
 
-async function openExternalCitationSource(url: string): Promise<void> {
+async function openExternalCitationSource(source: CitationSource): Promise<void> {
+  const display = describeCitationSource(source);
   const confirmed = await confirmAction({
     title: "Open external link?",
     message: "This will open the link in your default browser.",
-    detail: url,
+    detail: display.displayUrl ?? display.hostLabel,
     kind: "info",
     confirmLabel: "Open link",
     cancelLabel: "Cancel",
     defaultAction: "cancel",
   });
   if (confirmed) {
-    window.open(url, "_blank", "noopener,noreferrer");
+    window.open(source.url, "_blank", "noopener,noreferrer");
   }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function computeCitationPopupPosition(anchorRect: DOMRect, cardRect: DOMRect): CitationPopupPosition {
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const maxLeft = Math.max(CITATION_POPUP_MARGIN, viewportWidth - cardRect.width - CITATION_POPUP_MARGIN);
+  const preferredLeft = clamp(anchorRect.left, CITATION_POPUP_MARGIN, maxLeft);
+  const belowTop = anchorRect.bottom + CITATION_POPUP_GAP;
+  const aboveTop = anchorRect.top - cardRect.height - CITATION_POPUP_GAP;
+  const maxTop = Math.max(CITATION_POPUP_MARGIN, viewportHeight - cardRect.height - CITATION_POPUP_MARGIN);
+  const top = belowTop + cardRect.height <= viewportHeight - CITATION_POPUP_MARGIN
+    ? belowTop
+    : aboveTop >= CITATION_POPUP_MARGIN
+      ? aboveTop
+      : clamp(belowTop, CITATION_POPUP_MARGIN, maxTop);
+
+  return { left: preferredLeft, top };
 }
 
 function CitationArrow({ direction }: { direction: "left" | "right" }) {
@@ -266,11 +289,18 @@ function DesktopCitationChip({
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const rootRef = useRef<HTMLElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [popupPosition, setPopupPosition] = useState<CitationPopupPosition | null>(null);
   const label = useMemo(() => {
     const text = flattenReactText(children).trim();
     return text.length > 0 ? text : "Source";
   }, [children]);
   const currentSource = sources[Math.min(activeIndex, Math.max(0, sources.length - 1))] ?? null;
+  const currentSourceDisplay = useMemo(
+    () => currentSource ? describeCitationSource(currentSource) : null,
+    [currentSource],
+  );
 
   useEffect(() => {
     if (activeIndex < sources.length) {
@@ -286,7 +316,7 @@ function DesktopCitationChip({
 
     const onPointerDown = (event: MouseEvent) => {
       const target = event.target;
-      if (target instanceof Node && rootRef.current?.contains(target)) {
+      if (target instanceof Node && (rootRef.current?.contains(target) || cardRef.current?.contains(target))) {
         return;
       }
       setOpen(false);
@@ -317,6 +347,34 @@ function DesktopCitationChip({
     };
   }, [open, sources.length]);
 
+  useIsomorphicLayoutEffect(() => {
+    if (!open) {
+      setPopupPosition(null);
+      return;
+    }
+
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const updatePosition = () => {
+      const anchor = buttonRef.current;
+      const card = cardRef.current;
+      if (!anchor || !card) {
+        return;
+      }
+      setPopupPosition(computeCitationPopupPosition(anchor.getBoundingClientRect(), card.getBoundingClientRect()));
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [currentSource, open]);
+
   if (sources.length === 0) {
     return (
       <cite className={cn("ml-2 inline-flex not-italic", className)} {...props}>
@@ -328,6 +386,7 @@ function DesktopCitationChip({
   return (
     <cite ref={rootRef} className={cn("relative ml-2 inline-flex not-italic", className)} {...props}>
       <button
+        ref={buttonRef}
         type="button"
         className="inline-flex items-center rounded-full border border-border/70 bg-muted/60 px-2.5 py-0.5 text-[0.72rem] font-medium leading-none text-muted-foreground transition-colors hover:border-border hover:bg-muted"
         aria-expanded={open}
@@ -336,54 +395,63 @@ function DesktopCitationChip({
       >
         {label}
       </button>
-      {open && currentSource ? (
-        <div
-          role="dialog"
-          aria-label="Citation sources"
-          className="absolute left-0 top-[calc(100%+0.55rem)] z-30 w-[min(22rem,calc(100vw-4rem))] overflow-hidden rounded-[1.35rem] border border-border/70 bg-card shadow-[0_18px_40px_rgba(0,0,0,0.14)]"
-        >
-          <div className="flex items-center gap-1 border-b border-border/60 bg-muted/25 px-3 py-2">
-            <button
-              type="button"
-              className="flex size-8 items-center justify-center rounded-full transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
-              aria-label="Previous source"
-              disabled={sources.length <= 1}
-              onClick={() => setActiveIndex((index) => (index - 1 + sources.length) % sources.length)}
-            >
-              <CitationArrow direction="left" />
-            </button>
-            <button
-              type="button"
-              className="flex size-8 items-center justify-center rounded-full transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
-              aria-label="Next source"
-              disabled={sources.length <= 1}
-              onClick={() => setActiveIndex((index) => (index + 1) % sources.length)}
-            >
-              <CitationArrow direction="right" />
-            </button>
-            <div className="ml-auto text-sm text-muted-foreground">
-              {activeIndex + 1}/{sources.length}
-            </div>
-          </div>
-          <button
-            type="button"
-            className="block w-full px-4 py-4 text-left transition-colors hover:bg-accent/35"
-            onClick={() => {
-              setOpen(false);
-              void openExternalCitationSource(currentSource.url);
-            }}
+      {open && currentSource && typeof document !== "undefined"
+        ? createPortal(
+          <div
+            ref={cardRef}
+            role="dialog"
+            aria-label="Citation sources"
+            className="fixed z-[70] w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-[1.35rem] border border-border/70 bg-card shadow-[0_18px_40px_rgba(0,0,0,0.14)]"
+            style={popupPosition ? { left: popupPosition.left, top: popupPosition.top } : { left: 0, top: 0, visibility: "hidden" }}
           >
-            <div className="mb-3 flex items-center gap-3">
-              <CitationFavicon url={currentSource.url} />
-              <div className="min-w-0">
-                <div className="truncate text-xs font-medium text-muted-foreground">{citationSourceDomain(currentSource.url)}</div>
-                <div className="truncate text-[1.05rem] font-semibold leading-6 text-foreground">{citationSourceTitle(currentSource)}</div>
+            <div className="flex items-center gap-1 border-b border-border/60 bg-muted/25 px-3 py-2">
+              <button
+                type="button"
+                className="flex size-8 items-center justify-center rounded-full transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
+                aria-label="Previous source"
+                disabled={sources.length <= 1}
+                onClick={() => setActiveIndex((index) => (index - 1 + sources.length) % sources.length)}
+              >
+                <CitationArrow direction="left" />
+              </button>
+              <button
+                type="button"
+                className="flex size-8 items-center justify-center rounded-full transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
+                aria-label="Next source"
+                disabled={sources.length <= 1}
+                onClick={() => setActiveIndex((index) => (index + 1) % sources.length)}
+              >
+                <CitationArrow direction="right" />
+              </button>
+              <div className="ml-auto text-sm text-muted-foreground">
+                {activeIndex + 1}/{sources.length}
               </div>
             </div>
-            <div className="break-all text-sm leading-6 text-muted-foreground">{currentSource.url}</div>
-          </button>
-        </div>
-      ) : null}
+            <button
+              type="button"
+              className="block w-full px-4 py-4 text-left transition-colors hover:bg-accent/35"
+              onClick={() => {
+                setOpen(false);
+                void openExternalCitationSource(currentSource);
+              }}
+            >
+              <div className="flex items-center gap-3">
+                <CitationFavicon source={currentSource} />
+                <div className="min-w-0">
+                  {currentSourceDisplay && currentSourceDisplay.hostLabel !== citationSourceTitle(currentSource) ? (
+                    <div className="truncate text-xs font-medium text-muted-foreground">{currentSourceDisplay.hostLabel}</div>
+                  ) : null}
+                  <div className="truncate text-[1.05rem] font-semibold leading-6 text-foreground">{citationSourceTitle(currentSource)}</div>
+                </div>
+              </div>
+              {currentSourceDisplay?.displayUrl ? (
+                <div className="mt-3 break-all text-sm leading-6 text-muted-foreground">{currentSourceDisplay.displayUrl}</div>
+              ) : null}
+            </button>
+          </div>,
+          document.body,
+        )
+        : null}
     </cite>
   );
 }

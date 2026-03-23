@@ -1,5 +1,20 @@
 # Task Plan
 
+## Citation Popup Polish
+
+- [x] Inspect the real Google cowork snapshot and confirm whether the popup had access to the final destination URL or only the opaque Vertex redirect.
+- [x] Hide opaque Google grounding redirect URLs from the popup while keeping a clean source label/fallback favicon path.
+- [x] Move the citation popup card out of the conversation flow so it can stack above the composer instead of tucking under the input surface.
+- [x] Re-run focused citation tests, repo typecheck, and the full `bun test` lane.
+
+## Citation Popup Polish Review
+
+- The real Google cowork snapshot in `~/.cowork/sessions.db` still only exposes the opaque `vertexaisearch.cloud.google.com/grounding-api-redirect/...` URL plus a title like `cbsnews.com` on the assistant annotations. There is no stable final article URL in the persisted feed to display directly, so the renderer now treats that redirect as an opaque open target instead of printing it back to the user.
+- `src/shared/displayCitationMarkers.ts` now exports shared citation-display helpers that recognize opaque Google grounding redirects and derive sane display metadata from the source title/hostname. That keeps the provider-specific redirect rule out of the desktop view logic and gives future UIs the same contract.
+- `apps/desktop/src/components/ai-elements/message.tsx` now renders citation popups through a fixed body-level portal anchored to the chip button. The card clamps to the viewport, can flip upward when needed, and stacks above the composer instead of behaving like an absolutely positioned child inside the scrolling conversation log.
+- The desktop popup card now hides opaque redirect bodies, avoids showing `vertexaisearch.cloud.google.com` as the source hostname/favicon, and still opens the underlying citation target when the user clicks through.
+- Added regression coverage in `test/displayCitationMarkers.test.ts` and `apps/desktop/test/message-links.test.ts` for opaque Google redirect display metadata, popup portal rendering, grouped-source navigation, and the “hide redirect text but keep site label” behavior.
+
 ## Citation Popup Card
 
 - [x] Inspect the chip rendering path and confirm the desktop renderer can own the popup interaction while the shared normalizer still owns chip grouping/order.

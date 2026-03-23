@@ -678,6 +678,67 @@ export type CitationSource = {
   title?: string;
 };
 
+export type CitationSourceDisplayInfo = {
+  displayUrl: string | null;
+  faviconHostname: string | null;
+  hostLabel: string;
+  opaqueRedirect: boolean;
+  titleLabel: string;
+};
+
+const opaqueCitationRedirectHosts = new Set([
+  "vertexaisearch.cloud.google.com",
+]);
+
+function citationSourceHostname(url: string): string | null {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, "");
+    return hostname.length > 0 ? hostname : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeCitationHostnameLabel(value: string | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim().replace(/^https?:\/\//i, "").replace(/^www\./i, "");
+  if (!trimmed || /[/?#\s]/.test(trimmed)) {
+    return null;
+  }
+
+  return /^(?:[a-z0-9-]+\.)+[a-z]{2,}$/i.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
+export function isOpaqueCitationRedirectUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return opaqueCitationRedirectHosts.has(parsed.hostname) && parsed.pathname.startsWith("/grounding-api-redirect/");
+  } catch {
+    return false;
+  }
+}
+
+export function describeCitationSource(source: CitationSource): CitationSourceDisplayInfo {
+  const titleLabel = source.title?.trim() || citationSourceHostname(source.url) || source.url;
+  const opaqueRedirect = isOpaqueCitationRedirectUrl(source.url);
+  const titleHostname = normalizeCitationHostnameLabel(source.title);
+  const urlHostname = citationSourceHostname(source.url);
+  const hostLabel = opaqueRedirect
+    ? titleHostname ?? urlHostname ?? "Source"
+    : urlHostname ?? titleHostname ?? source.url;
+
+  return {
+    titleLabel,
+    hostLabel,
+    displayUrl: opaqueRedirect ? null : source.url,
+    faviconHostname: titleHostname ?? urlHostname,
+    opaqueRedirect,
+  };
+}
+
 type CitationChipSourcePayload = {
   id: string;
   url: string;

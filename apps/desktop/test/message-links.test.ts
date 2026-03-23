@@ -337,11 +337,15 @@ describe("desktop message local file links", () => {
         chipButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
-      expect(container.textContent).toContain("1/2");
-      expect(container.textContent).toContain("Safety Memo");
-      expect(container.textContent).toContain("https://example.com/killed");
+      expect(harness.dom.window.document.body.textContent).toContain("1/2");
+      expect(harness.dom.window.document.body.textContent).toContain("Safety Memo");
+      expect(harness.dom.window.document.body.textContent).toContain("https://example.com/killed");
 
-      const nextButton = container.querySelector('button[aria-label="Next source"]');
+      const popup = harness.dom.window.document.querySelector('[role="dialog"][aria-label="Citation sources"]');
+      expect(popup?.getAttribute("class")).toContain("fixed");
+      expect(popup?.getAttribute("class")).toContain("z-[70]");
+
+      const nextButton = harness.dom.window.document.querySelector('button[aria-label="Next source"]');
       if (!nextButton) {
         throw new Error("missing next source button");
       }
@@ -350,9 +354,65 @@ describe("desktop message local file links", () => {
         nextButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
-      expect(container.textContent).toContain("2/2");
-      expect(container.textContent).toContain("Hospital Update");
-      expect(container.textContent).toContain("https://example.com/injuries");
+      expect(harness.dom.window.document.body.textContent).toContain("2/2");
+      expect(harness.dom.window.document.body.textContent).toContain("Hospital Update");
+      expect(harness.dom.window.document.body.textContent).toContain("https://example.com/injuries");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("Google redirect citation popups hide opaque URLs and keep site labels", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      const text = "* **Airport Impact:** LaGuardia closed while investigators responded.";
+      const redirectUrl = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQH4iedWtHk5dpRaMko9c5l9JzmcarVDEORW9szHs95gjSSCj2JkhUUyZvaidzIWRapHw_3-kZ7dCNLNntqbNOG-1k1kPLkRV77xUiqNQZ2hgjRNwSIsvIO0LzWHRiZctDIIpgP8RF0M5PxFPx_NDRrWdX84KIiwhoTOJp2zgYRiG_IQu2QGnPiGcX2MdP6NcIWkgJfjNk0XM9FfYY_dHpZJqg==";
+
+      await act(async () => {
+        root.render(
+          createElement(
+            MessageResponse,
+            {
+              normalizeDisplayCitations: true,
+              citationSources: [{ title: "cbsnews.com", url: redirectUrl }],
+              citationAnnotations: [
+                {
+                  type: "url_citation",
+                  start_index: 0,
+                  end_index: text.length - 1,
+                  url: redirectUrl,
+                  title: "cbsnews.com",
+                },
+              ],
+              citationUrlsByIndex: new Map([[1, redirectUrl]]),
+            },
+            text,
+          ),
+        );
+      });
+
+      const chipButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("cbsnews.com"));
+      if (!chipButton) {
+        throw new Error("missing Google citation chip button");
+      }
+
+      await act(async () => {
+        chipButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const popupText = harness.dom.window.document.body.textContent ?? "";
+      expect(popupText).toContain("cbsnews.com");
+      expect(popupText).not.toContain("vertexaisearch.cloud.google.com");
+      expect(popupText).not.toContain("grounding-api-redirect");
 
       await act(async () => {
         root.unmount();

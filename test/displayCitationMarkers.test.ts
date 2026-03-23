@@ -4,9 +4,11 @@ import {
   buildCitationOverflowFilePathsByMessageId,
   buildCitationSourcesByMessageId,
   buildCitationUrlsByMessageId,
+  describeCitationSource,
   extractCitationSourcesFromWebSearchResult,
   extractCitationOverflowFilePathFromWebSearchResult,
   extractCitationUrlsFromWebSearchResult,
+  isOpaqueCitationRedirectUrl,
   normalizeDisplayCitationMarkers,
 } from "../src/shared/displayCitationMarkers";
 
@@ -117,6 +119,22 @@ describe("display citation markers", () => {
       { title: "Source One", url: "https://example.com/one" },
       { title: "Source Two", url: "https://example.com/two" },
     ]);
+  });
+
+  test("treats Google grounding redirects as opaque display URLs", () => {
+    const source = {
+      title: "cbsnews.com",
+      url: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQH4iedWtHk5dpRaMko9c5l9JzmcarVDEORW9szHs95gjSSCj2JkhUUyZvaidzIWRapHw_3-kZ7dCNLNntqbNOG-1k1kPLkRV77xUiqNQZ2hgjRNwSIsvIO0LzWHRiZctDIIpgP8RF0M5PxFPx_NDRrWdX84KIiwhoTOJp2zgYRiG_IQu2QGnPiGcX2MdP6NcIWkgJfjNk0XM9FfYY_dHpZJqg==",
+    };
+
+    expect(isOpaqueCitationRedirectUrl(source.url)).toBe(true);
+    expect(describeCitationSource(source)).toEqual({
+      titleLabel: "cbsnews.com",
+      hostLabel: "cbsnews.com",
+      displayUrl: null,
+      faviconHostname: "cbsnews.com",
+      opaqueRedirect: true,
+    });
   });
 
   test("extracts citation sources from overflowed JSON spill content", () => {

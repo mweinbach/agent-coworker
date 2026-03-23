@@ -1,5 +1,7 @@
 # Lessons
 
+- For JSON-RPC projector bugs in this repo, inspect `thread_journal_events` for repeated `item/agentMessage/delta` ids before touching only the desktop reducer; a live interleaving bug can come from the server projector collapsing the whole turn onto one `agentMessage` item even when replay later looks fine.
+- For multi-step turns with follow-up assistant output, never key projected assistant items only by `turnId`; close the current assistant item before reasoning/tool phases and start a fresh occurrence when assistant output resumes, even if the underlying stream id is reused or the final legacy `assistant_message` text is cumulative.
 - For live desktop JSON-RPC turns with multiple assistant items, always forward `itemId` on `item/agentMessage/delta`; if you let the reducer fall back to a synthetic `text:${index}` key, interleaved assistant segments collapse together during streaming even though replay-on-reopen looks correct.
 - For completed-only JSON-RPC reasoning items, only anchor them ahead of an assistant item that is still actively streaming; once an intermediate assistant item has completed, later reasoning belongs after it as a new step, not before it.
 - For JSON-RPC transcript replay in this repo, do not assume stream ids are unique for the whole turn; PI/OpenCode providers can reuse ids like `s0` or fallback tool ids across steps, so projector and thread-read item ids must be occurrence-stable within the turn or later reasoning/tool entries will collapse onto earlier ones.

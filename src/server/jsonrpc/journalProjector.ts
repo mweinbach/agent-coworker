@@ -30,6 +30,12 @@ type BufferedReasoningState = {
   started: boolean;
 };
 
+type BufferedAssistantState = {
+  itemId: string;
+  text: string;
+  started: boolean;
+};
+
 type BufferedToolState = {
   itemId: string;
   name: string;
@@ -94,8 +100,9 @@ export function createThreadJournalProjector(opts: CreateThreadJournalProjectorO
   let activeTurnId: string | null = null;
   let lastUserMessageText: string | null = null;
   let lastUserMessageClientMessageId: string | null = null;
-  const agentTextByTurn = new Map<string, string>();
-  const agentItemIdByTurn = new Map<string, string>();
+  const activeAssistantByTurn = new Map<string, BufferedAssistantState>();
+  const assistantOccurrenceByTurn = new Map<string, number>();
+  const assistantHistoryByTurn = new Map<string, string>();
   const reasoningByKey = new Map<string, BufferedReasoningState>();
   const reasoningOccurrenceByKey = new Map<string, number>();
   const reasoningTextsSeenInTurn = new Set<string>();
@@ -120,12 +127,66 @@ export function createThreadJournalProjector(opts: CreateThreadJournalProjectorO
     });
   };
 
-  const ensureAgentItemId = (turnId: string) => {
-    let itemId = agentItemIdByTurn.get(turnId);
-    if (itemId) return itemId;
-    itemId = makeItemId("agentMessage", turnId);
-    agentItemIdByTurn.set(turnId, itemId);
-    return itemId;
+  const ensureActiveAssistantState = (turnId: string) => {
+    const existing = activeAssistantByTurn.get(turnId);
+    if (existing) return existing;
+    const nextOccurrence = (assistantOccurrenceByTurn.get(turnId) ?? 0) + 1;
+    assistantOccurrenceByTurn.set(turnId, nextOccurrence);
+    const next: BufferedAssistantState = {
+      itemId: occurrenceItemId(makeItemId("agentMessage", turnId), nextOccurrence),
+      text: "",
+      started: false,
+    };
+    activeAssistantByTurn.set(turnId, next);
+    return next;
+  };
+
+  const startAssistantState = (turnId: string, state: BufferedAssistantState) => {
+    if (state.started) return;
+    state.started = true;
+    emit("item/started", {
+      threadId: opts.threadId,
+      turnId,
+      item: {
+        id: state.itemId,
+        type: "agentMessage",
+        text: "",
+      },
+    }, { turnId, itemId: state.itemId });
+  };
+
+  const completeAssistantState = (turnId: string, finalText?: string) => {
+    const state = activeAssistantByTurn.get(turnId);
+    if (!state) return;
+    const text = finalText ?? state.text;
+    activeAssistantByTurn.delete(turnId);
+    if (!text) return;
+    startAssistantState(turnId, state);
+    emit("item/completed", {
+      threadId: opts.threadId,
+      turnId,
+      item: {
+        id: state.itemId,
+        type: "agentMessage",
+        text,
+      },
+    }, { turnId, itemId: state.itemId });
+    assistantHistoryByTurn.set(turnId, `${assistantHistoryByTurn.get(turnId) ?? ""}${text}`);
+  };
+
+  const completeAssistantStateBeforeStep = (turnId: string) => {
+    const state = activeAssistantByTurn.get(turnId);
+    if (!state) return;
+    if (state.text) {
+      completeAssistantState(turnId, state.text);
+      return;
+    }
+    activeAssistantByTurn.delete(turnId);
+  };
+
+  const assistantRemainderForTurn = (turnId: string, text: string) => {
+    const history = assistantHistoryByTurn.get(turnId) ?? "";
+    return text.startsWith(history) ? text.slice(history.length) : text;
   };
 
   const reasoningStreamKey = (turnId: string, part: Record<string, unknown> | undefined) =>
@@ -185,13 +246,11 @@ export function createThreadJournalProjector(opts: CreateThreadJournalProjectorO
       mode,
       text,
     };
-    if (!agentItemIdByTurn.has(turnId)) {
-      emit("item/started", {
-        threadId: opts.threadId,
-        turnId,
-        item,
-      }, { turnId, itemId });
-    }
+    emit("item/started", {
+      threadId: opts.threadId,
+      turnId,
+      item,
+    }, { turnId, itemId });
     emit("item/completed", {
       threadId: opts.threadId,
       turnId,
@@ -246,9 +305,15 @@ export function createThreadJournalProjector(opts: CreateThreadJournalProjectorO
 
   const clearTurnProjectionState = (turnId: string | null) => {
     if (turnId) {
+      activeAssistantByTurn.delete(turnId);
+      assistantOccurrenceByTurn.delete(turnId);
+      assistantHistoryByTurn.delete(turnId);
       clearReasoningStateForTurn(turnId);
       clearToolStateForTurn(turnId);
     } else {
+      activeAssistantByTurn.clear();
+      assistantOccurrenceByTurn.clear();
+      assistantHistoryByTurn.clear();
       reasoningByKey.clear();
       reasoningOccurrenceByKey.clear();
       toolByKey.clear();
@@ -352,31 +417,26 @@ export function createThreadJournalProjector(opts: CreateThreadJournalProjectorO
     if (update.kind === "assistant_delta") {
       if (update.phase === "commentary") return;
       const delta = update.text;
-      const itemId = ensureAgentItemId(update.turnId);
-      const current = agentTextByTurn.get(update.turnId) ?? "";
-      const next = `${current}${delta}`;
-      agentTextByTurn.set(update.turnId, next);
-      if (current.length === 0) {
-        emit("item/started", {
-          threadId: opts.threadId,
-          turnId: update.turnId,
-          item: {
-            id: itemId,
-            type: "agentMessage",
-            text: "",
-          },
-        }, { turnId: update.turnId, itemId });
-      }
+      const state = ensureActiveAssistantState(update.turnId);
+      state.text = `${state.text}${delta}`;
+      startAssistantState(update.turnId, state);
       if (delta) {
         emit("item/agentMessage/delta", {
           threadId: opts.threadId,
           turnId: update.turnId,
-          itemId,
+          itemId: state.itemId,
           delta,
-        }, { turnId: update.turnId, itemId });
+        }, { turnId: update.turnId, itemId: state.itemId });
       }
       return;
     }
+
+    if (update.kind === "assistant_text_end") {
+      completeAssistantStateBeforeStep(update.turnId);
+      return;
+    }
+
+    completeAssistantStateBeforeStep(update.turnId);
 
     if (update.kind === "reasoning_start") {
       const { state } = ensureBufferedReasoning(update.turnId, { id: update.streamId, mode: update.mode });
@@ -460,6 +520,7 @@ export function createThreadJournalProjector(opts: CreateThreadJournalProjectorO
         case "session_busy":
           if (event.busy) {
             if (activeTurnId && event.turnId && activeTurnId !== event.turnId) {
+              completeAssistantStateBeforeStep(activeTurnId);
               clearTurnProjectionState(activeTurnId);
             }
             activeTurnId = event.turnId ?? null;
@@ -497,6 +558,7 @@ export function createThreadJournalProjector(opts: CreateThreadJournalProjectorO
           }
 
           if (event.turnId) {
+            completeAssistantStateBeforeStep(event.turnId);
             clearTurnProjectionState(event.turnId);
             emit("turn/completed", {
               threadId: opts.threadId,
@@ -534,39 +596,27 @@ export function createThreadJournalProjector(opts: CreateThreadJournalProjectorO
         case "assistant_message":
           if (!activeTurnId) return;
           {
-            const itemId = ensureAgentItemId(activeTurnId);
-            const previous = agentTextByTurn.get(activeTurnId) ?? "";
-            agentTextByTurn.set(activeTurnId, event.text);
-            if (!previous && event.text) {
-              emit("item/started", {
-                threadId: opts.threadId,
-                turnId: activeTurnId,
-                item: {
-                  id: itemId,
-                  type: "agentMessage",
-                  text: "",
-                },
-              }, { turnId: activeTurnId, itemId });
+            const remainder = assistantRemainderForTurn(activeTurnId, event.text);
+            const activeAssistant = activeAssistantByTurn.get(activeTurnId);
+            if (activeAssistant) {
+              completeAssistantState(activeTurnId, remainder || activeAssistant.text);
+            } else if (remainder) {
+              const state = ensureActiveAssistantState(activeTurnId);
+              state.text = remainder;
+              startAssistantState(activeTurnId, state);
               emit("item/agentMessage/delta", {
                 threadId: opts.threadId,
                 turnId: activeTurnId,
-                itemId,
-                delta: event.text,
-              }, { turnId: activeTurnId, itemId });
+                itemId: state.itemId,
+                delta: remainder,
+              }, { turnId: activeTurnId, itemId: state.itemId });
+              completeAssistantState(activeTurnId, remainder);
             }
-            emit("item/completed", {
-              threadId: opts.threadId,
-              turnId: activeTurnId,
-              item: {
-                id: itemId,
-                type: "agentMessage",
-                text: event.text,
-              },
-            }, { turnId: activeTurnId, itemId });
           }
           return;
         case "reasoning":
           if (!activeTurnId) return;
+          completeAssistantStateBeforeStep(activeTurnId);
           emitReasoningItem(activeTurnId, event.kind, event.text, makeItemId("reasoning", `${activeTurnId}:${crypto.randomUUID()}`));
           return;
         case "ask":

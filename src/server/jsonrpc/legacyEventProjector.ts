@@ -41,6 +41,12 @@ type BufferedReasoningState = {
   started: boolean;
 };
 
+type BufferedAssistantState = {
+  itemId: string;
+  text: string;
+  started: boolean;
+};
+
 type BufferedToolState = {
   itemId: string;
   name: string;
@@ -106,8 +112,9 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
   let lastUserMessageText: string | null = null;
   let lastUserMessageClientMessageId: string | null = null;
   const userItemIdByTurn = new Map<string, string>();
-  const agentItemIdByTurn = new Map<string, string>();
-  const agentTextByTurn = new Map<string, string>();
+  const activeAssistantByTurn = new Map<string, BufferedAssistantState>();
+  const assistantOccurrenceByTurn = new Map<string, number>();
+  const assistantHistoryByTurn = new Map<string, string>();
   const reasoningByKey = new Map<string, BufferedReasoningState>();
   const reasoningOccurrenceByKey = new Map<string, number>();
   const reasoningTextsSeenInTurn = new Set<string>();
@@ -116,8 +123,12 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
   const toolOccurrenceByKey = new Map<string, number>();
   const replayRuntime: ModelStreamReplayRuntime = createModelStreamReplayRuntime();
   if (activeTurnId) {
-    agentItemIdByTurn.set(activeTurnId, makeItemId("agentMessage", activeTurnId));
-    agentTextByTurn.set(activeTurnId, opts.initialAgentText ?? "");
+    activeAssistantByTurn.set(activeTurnId, {
+      itemId: makeItemId("agentMessage", activeTurnId),
+      text: opts.initialAgentText ?? "",
+      started: true,
+    });
+    assistantOccurrenceByTurn.set(activeTurnId, 1);
   }
 
   const shouldSendNotification = (method: string) => opts.shouldSendNotification?.(method) ?? true;
@@ -161,21 +172,66 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
     });
   };
 
-  const ensureAgentItemStarted = (turnId: string) => {
-    let itemId = agentItemIdByTurn.get(turnId);
-    if (itemId) return itemId;
-    itemId = makeItemId("agentMessage", turnId);
-    agentItemIdByTurn.set(turnId, itemId);
+  const ensureActiveAssistantState = (turnId: string) => {
+    const existing = activeAssistantByTurn.get(turnId);
+    if (existing) return existing;
+    const nextOccurrence = (assistantOccurrenceByTurn.get(turnId) ?? 0) + 1;
+    assistantOccurrenceByTurn.set(turnId, nextOccurrence);
+    const next: BufferedAssistantState = {
+      itemId: occurrenceItemId(makeItemId("agentMessage", turnId), nextOccurrence),
+      text: "",
+      started: false,
+    };
+    activeAssistantByTurn.set(turnId, next);
+    return next;
+  };
+
+  const startAssistantState = (turnId: string, state: BufferedAssistantState) => {
+    if (state.started) return;
+    state.started = true;
     sendNotification("item/started", {
       threadId: opts.threadId,
       turnId,
       item: {
-        id: itemId,
+        id: state.itemId,
         type: "agentMessage",
-        text: agentTextByTurn.get(turnId) ?? "",
+        text: "",
       },
     });
-    return itemId;
+  };
+
+  const completeAssistantState = (turnId: string, finalText?: string) => {
+    const state = activeAssistantByTurn.get(turnId);
+    if (!state) return;
+    const text = finalText ?? state.text;
+    activeAssistantByTurn.delete(turnId);
+    if (!text) return;
+    startAssistantState(turnId, state);
+    sendNotification("item/completed", {
+      threadId: opts.threadId,
+      turnId,
+      item: {
+        id: state.itemId,
+        type: "agentMessage",
+        text,
+      },
+    });
+    assistantHistoryByTurn.set(turnId, `${assistantHistoryByTurn.get(turnId) ?? ""}${text}`);
+  };
+
+  const completeAssistantStateBeforeStep = (turnId: string) => {
+    const state = activeAssistantByTurn.get(turnId);
+    if (!state) return;
+    if (state.text) {
+      completeAssistantState(turnId, state.text);
+      return;
+    }
+    activeAssistantByTurn.delete(turnId);
+  };
+
+  const assistantRemainderForTurn = (turnId: string, text: string) => {
+    const history = assistantHistoryByTurn.get(turnId) ?? "";
+    return text.startsWith(history) ? text.slice(history.length) : text;
   };
 
   const reasoningStreamKey = (turnId: string, part: Record<string, unknown> | undefined) =>
@@ -229,18 +285,16 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
     if (hasMatchingStreamedReasoningText(text)) {
       return false;
     }
-    if (!agentItemIdByTurn.has(turnId)) {
-      sendNotification("item/started", {
-        threadId: opts.threadId,
-        turnId,
-        item: {
-          id: itemId,
-          type: "reasoning",
-          mode,
-          text,
-        },
-      });
-    }
+    sendNotification("item/started", {
+      threadId: opts.threadId,
+      turnId,
+      item: {
+        id: itemId,
+        type: "reasoning",
+        mode,
+        text,
+      },
+    });
     sendNotification("item/completed", {
       threadId: opts.threadId,
       turnId,
@@ -300,9 +354,15 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
 
   const clearTurnProjectionState = (turnId: string | null) => {
     if (turnId) {
+      activeAssistantByTurn.delete(turnId);
+      assistantOccurrenceByTurn.delete(turnId);
+      assistantHistoryByTurn.delete(turnId);
       clearReasoningStateForTurn(turnId);
       clearToolStateForTurn(turnId);
     } else {
+      activeAssistantByTurn.clear();
+      assistantOccurrenceByTurn.clear();
+      assistantHistoryByTurn.clear();
       reasoningByKey.clear();
       reasoningOccurrenceByKey.clear();
       toolByKey.clear();
@@ -406,20 +466,26 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
     if (update.kind === "assistant_delta") {
       if (update.phase === "commentary") return;
       const currentText = update.text;
-      const previous = agentTextByTurn.get(update.turnId) ?? "";
-      const next = `${previous}${currentText}`;
-      agentTextByTurn.set(update.turnId, next);
-      const itemId = ensureAgentItemStarted(update.turnId);
+      const state = ensureActiveAssistantState(update.turnId);
+      state.text = `${state.text}${currentText}`;
+      startAssistantState(update.turnId, state);
       if (currentText) {
         sendNotification("item/agentMessage/delta", {
           threadId: opts.threadId,
           turnId: update.turnId,
-          itemId,
+          itemId: state.itemId,
           delta: currentText,
         });
       }
       return;
     }
+
+    if (update.kind === "assistant_text_end") {
+      completeAssistantStateBeforeStep(update.turnId);
+      return;
+    }
+
+    completeAssistantStateBeforeStep(update.turnId);
 
     if (update.kind === "reasoning_start") {
       const { state } = ensureBufferedReasoning(update.turnId, { id: update.streamId, mode: update.mode });
@@ -503,6 +569,7 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
         case "session_busy":
           if (event.busy) {
             if (activeTurnId && event.turnId && activeTurnId !== event.turnId) {
+              completeAssistantStateBeforeStep(activeTurnId);
               clearTurnProjectionState(activeTurnId);
             }
             activeTurnId = event.turnId ?? null;
@@ -545,6 +612,7 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
           }
 
           if (event.turnId) {
+            completeAssistantStateBeforeStep(event.turnId);
             clearTurnProjectionState(event.turnId);
             sendNotification("turn/completed", {
               threadId: opts.threadId,
@@ -582,30 +650,27 @@ export function createJsonRpcLegacyEventProjector(opts: CreateJsonRpcLegacyEvent
         case "assistant_message":
           if (!activeTurnId) return;
           {
-            const itemId = ensureAgentItemStarted(activeTurnId);
-            const previousText = agentTextByTurn.get(activeTurnId) ?? "";
-            agentTextByTurn.set(activeTurnId, event.text);
-            if (!previousText && event.text) {
+            const remainder = assistantRemainderForTurn(activeTurnId, event.text);
+            const activeAssistant = activeAssistantByTurn.get(activeTurnId);
+            if (activeAssistant) {
+              completeAssistantState(activeTurnId, remainder || activeAssistant.text);
+            } else if (remainder) {
+              const state = ensureActiveAssistantState(activeTurnId);
+              state.text = remainder;
+              startAssistantState(activeTurnId, state);
               sendNotification("item/agentMessage/delta", {
                 threadId: opts.threadId,
                 turnId: activeTurnId,
-                itemId,
-                delta: event.text,
+                itemId: state.itemId,
+                delta: remainder,
               });
+              completeAssistantState(activeTurnId, remainder);
             }
-            sendNotification("item/completed", {
-              threadId: opts.threadId,
-              turnId: activeTurnId,
-              item: {
-                id: itemId,
-                type: "agentMessage",
-                text: event.text,
-              },
-            });
           }
           return;
         case "reasoning":
           if (!activeTurnId) return;
+          completeAssistantStateBeforeStep(activeTurnId);
           emitReasoningItem(activeTurnId, event.kind, event.text, makeItemId("reasoning", `${activeTurnId}:${crypto.randomUUID()}`));
           return;
         case "session_settings":

@@ -1,5 +1,18 @@
 # Task Plan
 
+## Fix Follow-Up JSON-RPC Assistant Segments
+
+- [x] Inspect the latest affected session in `~/.cowork/sessions.db` and confirm the remaining live-only bug is caused by the server JSON-RPC projector collapsing multiple assistant segments in one turn onto a single `agentMessage` item.
+- [x] Patch both JSON-RPC projector paths so assistant segments close before follow-up reasoning/tool phases and restart with a fresh assistant item when output resumes within the same turn.
+- [x] Add focused regressions for reused assistant stream ids across interleaved reasoning in both live notification and journal projection paths, then rerun the affected projector, desktop JSON-RPC, thread-read, and typecheck verification slices.
+
+## Fix Follow-Up JSON-RPC Assistant Segments Review
+
+- `src/server/jsonrpc/legacyEventProjector.ts` and `src/server/jsonrpc/journalProjector.ts` no longer treat an entire turn as one long `agentMessage` item. Assistant text now closes before reasoning/tool follow-up phases and resumes on a fresh assistant item when output continues later in the same turn.
+- The projector now preserves intra-turn ordering even when assistant output reuses the same underlying stream id or when the final legacy `assistant_message` event arrives with cumulative text for the whole turn.
+- `test/jsonrpc.projectors.test.ts` now covers the exact failing shape: assistant output, reasoning, then more assistant output in the same turn with a reused stream id.
+- Verification passed with `bun test test/jsonrpc.projectors.test.ts`, `bun test test/jsonrpc.thread-read-projector.test.ts`, `bun test apps/desktop/test/protocol-v2-events.test.ts`, and `bun run typecheck`.
+
 ## Fix Live JSON-RPC Interleaved Reasoning Order
 
 - [x] Reproduce the streaming-only ordering bug where a turn emits multiple assistant segments with completed-only reasoning between them and confirm replay-on-reopen is already correct.

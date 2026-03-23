@@ -2,10 +2,16 @@ import type { AgentConfig } from "../../../types";
 import type { ServerEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 
+import {
+  captureBindingMutationOutcome,
+  captureBindingOutcome,
+  captureWorkspaceControlOutcome,
+  sendSessionMutationError,
+} from "./outcomes";
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
-export function createSessionAndWorkspaceControlRouteHandlers(
+export function createSessionRouteHandlers(
   context: JsonRpcRouteContext,
 ): JsonRpcRequestHandlerMap {
   return {
@@ -56,12 +62,23 @@ export function createSessionAndWorkspaceControlRouteHandlers(
         });
         return;
       }
-      const event = await context.events.capture(
+      const outcome = await captureBindingMutationOutcome(
+        context,
         binding!,
         async () => await session.setModel(model, provider),
         (event): event is Extract<ServerEvent, { type: "config_updated" }> => event.type === "config_updated",
       );
-      context.jsonrpc.sendResult(ws, message.id, { event });
+      if (outcome?.type === "error") {
+        sendSessionMutationError(context, ws, message.id, outcome);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, {
+        event: outcome ?? {
+          type: "config_updated",
+          sessionId: session.id,
+          config: session.getPublicConfig(),
+        },
+      });
     },
 
     "cowork/session/usageBudget/set": async (ws, message) => {
@@ -82,12 +99,17 @@ export function createSessionAndWorkspaceControlRouteHandlers(
       const stopAtUsd = typeof params.stopAtUsd === "number" || params.stopAtUsd === null
         ? params.stopAtUsd as number | null
         : undefined;
-      const event = await context.events.capture(
+      const outcome = await captureBindingOutcome(
+        context,
         binding!,
         () => session.setSessionUsageBudget(warnAtUsd, stopAtUsd),
         (event): event is Extract<ServerEvent, { type: "session_usage" }> => event.type === "session_usage",
       );
-      context.jsonrpc.sendResult(ws, message.id, { event });
+      if (outcome.type === "error") {
+        sendSessionMutationError(context, ws, message.id, outcome);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
     },
 
     "cowork/session/config/set": async (ws, message) => {
@@ -103,12 +125,19 @@ export function createSessionAndWorkspaceControlRouteHandlers(
         });
         return;
       }
-      const event = await context.events.capture(
+      const outcome = await captureBindingMutationOutcome(
+        context,
         binding!,
         async () => await session.setConfig(configPatch),
         (event): event is Extract<ServerEvent, { type: "session_config" }> => event.type === "session_config",
       );
-      context.jsonrpc.sendResult(ws, message.id, { event });
+      if (outcome?.type === "error") {
+        sendSessionMutationError(context, ws, message.id, outcome);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, {
+        event: outcome ?? session.getSessionConfigEvent(),
+      });
     },
 
     "cowork/session/defaults/apply": async (ws, message) => {
@@ -156,16 +185,20 @@ export function createSessionAndWorkspaceControlRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.requireWorkspacePath(params, message.method);
       const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
-      const binding = context.workspaceControl.getOrCreateBinding(cwd);
-      const session = binding.session!;
-      const event = await context.events.capture(
-        binding,
+      const session = context.workspaceControl.getOrCreateBinding(cwd).session!;
+      const outcome = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
         async () => await session.deleteSession(targetSessionId),
         (event): event is Extract<ServerEvent, { type: "session_deleted" }> => (
           event.type === "session_deleted" && event.targetSessionId === targetSessionId
         ),
       );
-      context.jsonrpc.sendResult(ws, message.id, { event });
+      if (outcome.type === "error") {
+        sendSessionMutationError(context, ws, message.id, outcome);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
     },
   };
 }

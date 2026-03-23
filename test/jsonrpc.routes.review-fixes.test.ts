@@ -1,23 +1,45 @@
 import { describe, expect, test } from "bun:test";
 
-import { createProviderAndMcpRouteHandlers } from "../src/server/jsonrpc/routes/providerAndMcp";
-import { createSkillsMemoryAndWorkspaceBackupRouteHandlers } from "../src/server/jsonrpc/routes/skillsMemoryAndWorkspaceBackup";
+import { createMcpRouteHandlers } from "../src/server/jsonrpc/routes/mcp";
+import { createMemoryRouteHandlers } from "../src/server/jsonrpc/routes/memory";
+import { createProviderRouteHandlers } from "../src/server/jsonrpc/routes/provider";
+import { createSessionRouteHandlers } from "../src/server/jsonrpc/routes/session";
+import { createSkillsRouteHandlers } from "../src/server/jsonrpc/routes/skills";
+import { createWorkspaceBackupRouteHandlers } from "../src/server/jsonrpc/routes/workspaceBackups";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "../src/server/jsonrpc/routes/types";
 import type { ServerEvent } from "../src/server/protocol";
 
 type RouteHarness = ReturnType<typeof createRouteHarness>;
 
 function createRouteHarness(
-  session: Record<string, (...args: any[]) => Promise<void> | void>,
+  session: Record<string, any>,
   emitted: ServerEvent[] = [],
+  opts?: {
+    threadId?: string;
+    threadSession?: Record<string, any>;
+  },
 ) {
   const results: Array<{ id: string | number | null; result: unknown }> = [];
   const errors: Array<{ id: string | number | null; error: { code: number; message: string } }> = [];
-  const binding = {} as any;
+  const binding = { session } as any;
+  const threadId = opts?.threadId ?? "thread-1";
+  const threadBinding = opts?.threadSession ? { session: opts.threadSession } as any : null;
 
   const context = {
     getConfig: () => ({ workingDirectory: "C:/workspace" }),
-    threads: {} as any,
+    threads: {
+      create: () => {
+        throw new Error("unused");
+      },
+      load: (candidateThreadId: string) => candidateThreadId === threadId ? threadBinding : null,
+      getLive: (candidateThreadId: string) => candidateThreadId === threadId ? threadBinding ?? undefined : undefined,
+      getPersisted: () => null,
+      listPersisted: () => [],
+      listLiveRoot: () => [],
+      subscribe: () => threadBinding,
+      unsubscribe: () => "notSubscribed" as const,
+      readSnapshot: () => null,
+    },
     journal: {} as any,
     workspaceControl: {
       getOrCreateBinding: () => binding,
@@ -111,7 +133,7 @@ describe("JSON-RPC extracted route review fixes", () => {
       },
     });
 
-    const handlers = createProviderAndMcpRouteHandlers(harness.context);
+    const handlers = createProviderRouteHandlers(harness.context);
     const response = await harness.invoke(handlers, "cowork/provider/auth/authorize", {
       cwd: "C:/workspace",
       provider: "google",
@@ -119,6 +141,97 @@ describe("JSON-RPC extracted route review fixes", () => {
     });
 
     expect(response.error?.message).toContain('Unsupported auth method "missing_method"');
+    expect(response.result).toBeUndefined();
+  });
+
+  test("session model set returns the current config when the mutation is a no-op", async () => {
+    const threadSession = {
+      id: "thread-1",
+      setModel: async () => {},
+      getPublicConfig: () => ({
+        provider: "google",
+        model: "gemini-3-flash-preview",
+      }),
+    };
+    const harness = createRouteHarness({}, [], { threadSession });
+
+    const handlers = createSessionRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/model/set", {
+      threadId: "thread-1",
+      provider: "google",
+      model: "gemini-3-flash-preview",
+    });
+
+    expect((response.result as any).event).toMatchObject({
+      type: "config_updated",
+      sessionId: "thread-1",
+      config: {
+        provider: "google",
+        model: "gemini-3-flash-preview",
+      },
+    });
+  });
+
+  test("session config set returns the current config event when the mutation is a no-op", async () => {
+    const currentConfigEvent = {
+      type: "session_config",
+      sessionId: "thread-1",
+      config: {
+        defaultBackupsEnabled: true,
+      },
+    } as const;
+    const threadSession = {
+      id: "thread-1",
+      setConfig: async () => {},
+      getSessionConfigEvent: () => currentConfigEvent,
+    };
+    const harness = createRouteHarness({}, [], { threadSession });
+
+    const handlers = createSessionRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/config/set", {
+      threadId: "thread-1",
+      config: {},
+    });
+
+    expect((response.result as any).event).toEqual(currentConfigEvent);
+  });
+
+  test("session usage budget forwards emitted validation errors", async () => {
+    let harness!: RouteHarness;
+    const threadSession = {
+      id: "thread-1",
+      setSessionUsageBudget: async () => {
+        harness.emitted.push(sessionError("Budget configuration is invalid."));
+      },
+    };
+    harness = createRouteHarness({}, [], { threadSession });
+
+    const handlers = createSessionRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/usageBudget/set", {
+      threadId: "thread-1",
+      warnAtUsd: 5,
+      stopAtUsd: 1,
+    });
+
+    expect(response.error?.message).toContain("Budget configuration is invalid");
+    expect(response.result).toBeUndefined();
+  });
+
+  test("session delete forwards emitted session errors", async () => {
+    let harness!: RouteHarness;
+    harness = createRouteHarness({
+      deleteSession: async () => {
+        harness.emitted.push(sessionError("Cannot delete the active session."));
+      },
+    });
+
+    const handlers = createSessionRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/delete", {
+      cwd: "C:/workspace",
+      targetSessionId: "session-1",
+    });
+
+    expect(response.error?.message).toContain("Cannot delete the active session");
     expect(response.result).toBeUndefined();
   });
 
@@ -146,7 +259,7 @@ describe("JSON-RPC extracted route review fixes", () => {
       },
     });
 
-    const handlers = createProviderAndMcpRouteHandlers(harness.context);
+    const handlers = createMcpRouteHandlers(harness.context);
     const response = await harness.invoke(handlers, "cowork/mcp/server/validate", {
       cwd: "C:/workspace",
       name: "beta",
@@ -238,12 +351,54 @@ describe("JSON-RPC extracted route review fixes", () => {
         },
       });
 
-      const handlers = createProviderAndMcpRouteHandlers(harness.context);
+      const handlers = createMcpRouteHandlers(harness.context);
       const response = await harness.invoke(handlers, scenario.method, scenario.params);
 
       expect((response.result as any).event).toMatchObject({ name: "beta" });
     });
   }
+
+  test("provider catalog read forwards emitted provider errors", async () => {
+    let harness!: RouteHarness;
+    harness = createRouteHarness({
+      emitProviderCatalog: async () => {
+        harness.emitted.push(sessionError("Failed to load provider catalog.", "provider"));
+      },
+    });
+
+    const handlers = createProviderRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/provider/catalog/read", {
+      cwd: "C:/workspace",
+    });
+
+    expect(response.error?.message).toContain("Failed to load provider catalog");
+    expect(response.result).toBeUndefined();
+  });
+
+  test("mcp server upsert stops before emitting the server list when the mutation emits an error", async () => {
+    let emittedServers = false;
+    let harness!: RouteHarness;
+    harness = createRouteHarness({
+      upsertMcpServer: async () => {
+        harness.emitted.push(sessionError("Invalid MCP server configuration."));
+      },
+      emitMcpServers: async () => {
+        emittedServers = true;
+      },
+    });
+
+    const handlers = createMcpRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/mcp/server/upsert", {
+      cwd: "C:/workspace",
+      server: {
+        name: "broken",
+      },
+    });
+
+    expect(response.error?.message).toContain("Invalid MCP server configuration");
+    expect(response.result).toBeUndefined();
+    expect(emittedServers).toBe(false);
+  });
 
   test("skills/read correlates skill_content by requested skill name", async () => {
     const harness = createRouteHarness({
@@ -265,7 +420,7 @@ describe("JSON-RPC extracted route review fixes", () => {
       },
     });
 
-    const handlers = createSkillsMemoryAndWorkspaceBackupRouteHandlers(harness.context);
+    const handlers = createSkillsRouteHandlers(harness.context);
     const response = await harness.invoke(handlers, "cowork/skills/read", {
       cwd: "C:/workspace",
       skillName: "beta",
@@ -299,7 +454,7 @@ describe("JSON-RPC extracted route review fixes", () => {
         },
       });
 
-      const handlers = createSkillsMemoryAndWorkspaceBackupRouteHandlers(harness.context);
+      const handlers = createSkillsRouteHandlers(harness.context);
       const response = await harness.invoke(handlers, scenario.method, {
         cwd: "C:/workspace",
         skillName: "missing-skill",
@@ -311,6 +466,39 @@ describe("JSON-RPC extracted route review fixes", () => {
     });
   }
 
+  for (const scenario of [
+    {
+      method: "cowork/skills/install/preview",
+      sessionMethod: "previewSkillInstall",
+      params: { cwd: "C:/workspace", sourceInput: "catalog:demo", targetScope: "project" },
+    },
+    {
+      method: "cowork/skills/install",
+      sessionMethod: "installSkills",
+      params: { cwd: "C:/workspace", sourceInput: "catalog:demo", targetScope: "project" },
+    },
+    {
+      method: "cowork/skills/installation/copy",
+      sessionMethod: "copySkillInstallation",
+      params: { cwd: "C:/workspace", installationId: "demo-installation", targetScope: "project" },
+    },
+  ] as const) {
+    test(`${scenario.method} forwards emitted session errors`, async () => {
+      let harness!: RouteHarness;
+      harness = createRouteHarness({
+        [scenario.sessionMethod]: async () => {
+          harness.emitted.push(sessionError(`Failed ${scenario.sessionMethod}.`));
+        },
+      });
+
+      const handlers = createSkillsRouteHandlers(harness.context);
+      const response = await harness.invoke(handlers, scenario.method, scenario.params);
+
+      expect(response.error?.message).toContain(`Failed ${scenario.sessionMethod}`);
+      expect(response.result).toBeUndefined();
+    });
+  }
+
   test("cowork/skills/installation/checkUpdate forwards emitted validation errors", async () => {
     const harness = createRouteHarness({
       checkSkillInstallationUpdate: async () => {
@@ -318,7 +506,7 @@ describe("JSON-RPC extracted route review fixes", () => {
       },
     });
 
-    const handlers = createSkillsMemoryAndWorkspaceBackupRouteHandlers(harness.context);
+    const handlers = createSkillsRouteHandlers(harness.context);
     const response = await harness.invoke(handlers, "cowork/skills/installation/checkUpdate", {
       cwd: "C:/workspace",
       installationId: "missing-installation",
@@ -335,7 +523,7 @@ describe("JSON-RPC extracted route review fixes", () => {
       },
     });
 
-    const handlers = createSkillsMemoryAndWorkspaceBackupRouteHandlers(harness.context);
+    const handlers = createSkillsRouteHandlers(harness.context);
     const response = await harness.invoke(handlers, "cowork/skills/installation/read", {
       cwd: "C:/workspace",
       installationId: "   ",
@@ -358,7 +546,7 @@ describe("JSON-RPC extracted route review fixes", () => {
         },
       });
 
-      const handlers = createSkillsMemoryAndWorkspaceBackupRouteHandlers(harness.context);
+      const handlers = createSkillsRouteHandlers(harness.context);
       const response = await harness.invoke(handlers, scenario.method, {
         cwd: "C:/workspace",
         installationId: "missing-installation",
@@ -381,7 +569,7 @@ describe("JSON-RPC extracted route review fixes", () => {
         },
       });
 
-      const handlers = createSkillsMemoryAndWorkspaceBackupRouteHandlers(harness.context);
+      const handlers = createMemoryRouteHandlers(harness.context);
       const response = await harness.invoke(handlers, scenario.method, {
         cwd: "C:/workspace",
         scope: "workspace",
@@ -413,7 +601,7 @@ describe("JSON-RPC extracted route review fixes", () => {
         },
       });
 
-      const handlers = createSkillsMemoryAndWorkspaceBackupRouteHandlers(harness.context);
+      const handlers = createWorkspaceBackupRouteHandlers(harness.context);
       const response = await harness.invoke(handlers, scenario.method, {
         cwd: "C:/workspace",
         ...scenario.params,

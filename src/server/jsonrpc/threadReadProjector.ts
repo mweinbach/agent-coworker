@@ -1,4 +1,9 @@
 import type { PersistedThreadJournalEvent } from "../sessionDb";
+import {
+  normalizeReasoningText,
+  normalizeTranscriptReplayText,
+  occurrenceItemId,
+} from "./projectorShared";
 
 type ProjectedTurn = {
   id: string;
@@ -14,25 +19,6 @@ type ProjectedTurnState = {
   currentProjectedIdByRawId: Map<string, string>;
   seenOccurrencesByRawId: Map<string, number>;
 };
-
-function occurrenceItemId(baseId: string, occurrence: number): string {
-  return occurrence <= 1 ? baseId : `${baseId}:${occurrence}`;
-}
-
-function normalizeReasoningText(text: string): string | null {
-  const normalized = text.trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function normalizeTranscriptReplayText(text: string): string {
-  return text
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map((line) => line.trim())
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
 
 function dedupeReplayReasoningItems(items: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   const reasoningHistory: string[] = [];

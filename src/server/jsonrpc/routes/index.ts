@@ -1,19 +1,27 @@
 import { JSONRPC_ERROR_CODES } from "../protocol";
 
-import { createProviderAndMcpRouteHandlers } from "./providerAndMcp";
-import { createSessionAndWorkspaceControlRouteHandlers } from "./sessionAndWorkspaceControl";
-import { createSkillsMemoryAndWorkspaceBackupRouteHandlers } from "./skillsMemoryAndWorkspaceBackup";
-import { createThreadAndTurnRouteHandlers } from "./threadAndTurn";
+import { createMcpRouteHandlers } from "./mcp";
+import { createMemoryRouteHandlers } from "./memory";
+import { createProviderRouteHandlers } from "./provider";
+import { createSessionRouteHandlers } from "./session";
+import { createSkillsRouteHandlers } from "./skills";
+import { createThreadRouteHandlers } from "./thread";
+import { createTurnRouteHandlers } from "./turn";
+import { createWorkspaceBackupRouteHandlers } from "./workspaceBackups";
 import type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 export type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 export function createJsonRpcRequestRouter(context: JsonRpcRouteContext): JsonRpcRequestHandler {
   const handlers: JsonRpcRequestHandlerMap = {
-    ...createThreadAndTurnRouteHandlers(context),
-    ...createSessionAndWorkspaceControlRouteHandlers(context),
-    ...createProviderAndMcpRouteHandlers(context),
-    ...createSkillsMemoryAndWorkspaceBackupRouteHandlers(context),
+    ...createThreadRouteHandlers(context),
+    ...createTurnRouteHandlers(context),
+    ...createSessionRouteHandlers(context),
+    ...createProviderRouteHandlers(context),
+    ...createMcpRouteHandlers(context),
+    ...createSkillsRouteHandlers(context),
+    ...createMemoryRouteHandlers(context),
+    ...createWorkspaceBackupRouteHandlers(context),
   };
 
   return async (ws, message) => {

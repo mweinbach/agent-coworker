@@ -13,7 +13,17 @@ import {
   type ModelStreamRawEvent,
   type ModelStreamUpdate,
 } from "../../client/modelStream";
-import { parseStructuredToolInput } from "../../shared/structuredInput";
+import {
+  hasVisibleAssistantText,
+  makeItemId,
+  normalizeReasoningText,
+  normalizeToolArgsFromInput,
+  normalizeTranscriptReplayText,
+  occurrenceItemId,
+  readPartString,
+  reasoningModeFromPart,
+  type ProjectedReasoningMode,
+} from "./projectorShared";
 
 type ThreadJournalEmission = Omit<PersistedThreadJournalEvent, "seq">;
 
@@ -22,7 +32,6 @@ type CreateThreadJournalProjectorOptions = {
   emit: (event: ThreadJournalEmission) => void;
 };
 
-type ProjectedReasoningMode = "reasoning" | "summary";
 type BufferedReasoningState = {
   itemId: string;
   mode: ProjectedReasoningMode;
@@ -43,62 +52,6 @@ type BufferedToolState = {
   inputText: string;
   started: boolean;
 };
-
-function occurrenceItemId(baseId: string, occurrence: number): string {
-  return occurrence <= 1 ? baseId : `${baseId}:${occurrence}`;
-}
-
-function makeItemId(prefix: string, seed: string): string {
-  return `${prefix}:${seed}`;
-}
-
-function readPartString(part: Record<string, unknown> | undefined, key: string): string | null {
-  const value = part?.[key];
-  return typeof value === "string" && value.trim().length > 0 ? value : null;
-}
-
-function reasoningModeFromPart(part: Record<string, unknown> | undefined): ProjectedReasoningMode {
-  return readPartString(part, "mode") === "summary" ? "summary" : "reasoning";
-}
-
-function normalizeTranscriptReplayText(text: string): string {
-  return text
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map((line) => line.trim())
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function normalizeReasoningText(text: string): string | null {
-  const normalized = text.trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function hasVisibleAssistantText(text: string): boolean {
-  return text.trim().length > 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeToolArgsFromInput(inputText: string, existingArgs?: unknown): unknown {
-  const parsed = parseStructuredToolInput(inputText);
-  const base = isRecord(existingArgs) ? existingArgs : {};
-  const { input: _discardInput, ...rest } = base;
-
-  if (isRecord(parsed)) {
-    return { ...rest, ...parsed };
-  }
-
-  if (Object.keys(rest).length > 0) {
-    return { ...rest, input: inputText };
-  }
-
-  return { input: inputText };
-}
 
 export function createThreadJournalProjector(opts: CreateThreadJournalProjectorOptions) {
   let activeTurnId: string | null = null;

@@ -398,4 +398,68 @@ describe("server JSON-RPC control methods", () => {
       server.stop();
     }
   });
+
+  test("session model set returns the current config when the selected model is unchanged", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const created = await rpc.request("thread/start", { cwd: tmpDir });
+      const thread = created.result.thread;
+      const response = await rpc.request("cowork/session/model/set", {
+        threadId: thread.id,
+        provider: thread.modelProvider,
+        model: thread.model,
+      });
+
+      expect(response.result.event.type).toBe("config_updated");
+      expect(response.result.event.config.provider).toBe(thread.modelProvider);
+      expect(response.result.event.config.model).toBe(thread.model);
+      rpc.close();
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("session config set returns the current config event when the patch is a no-op", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const created = await rpc.request("thread/start", { cwd: tmpDir });
+      const response = await rpc.request("cowork/session/config/set", {
+        threadId: created.result.thread.id,
+        config: {},
+      });
+
+      expect(response.result.event.type).toBe("session_config");
+      expect(response.result.event.config.defaultBackupsEnabled).toBe(true);
+      rpc.close();
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("session usage budget returns the emitted validation error instead of timing out", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const created = await rpc.request("thread/start", { cwd: tmpDir });
+      const response = await rpc.request("cowork/session/usageBudget/set", {
+        threadId: created.result.thread.id,
+        warnAtUsd: 5,
+        stopAtUsd: 1,
+      });
+
+      expect(response.error.message).toContain("Warning threshold must be less than the hard-stop threshold");
+      expect(response.result).toBeUndefined();
+      rpc.close();
+    } finally {
+      server.stop();
+    }
+  });
 });

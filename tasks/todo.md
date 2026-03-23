@@ -1,5 +1,17 @@
 # Task Plan
 
+## Remove Legacy WebSocket Test Coupling
+
+- [x] Reproduce the current failing verification lane and confirm the remaining breakages come from tests still importing archived TUI or legacy transport surfaces rather than from active JSON-RPC behavior.
+- [x] Replace stale legacy transport coverage with JSON-RPC-backed server and harness coverage, and reroute archived TUI helper tests onto leaf modules instead of restoring dead socket code.
+- [x] Run targeted regression slices for the rewritten server/harness/TUI tests, then rerun `bun run typecheck` and full `bun test`.
+
+## Remove Legacy WebSocket Test Coupling Review
+
+- The stale legacy websocket-facing tests now either exercise supported JSON-RPC behavior (`test/server.toolstream.test.ts`, `test/helpers/wsHarness.ts`, and the added JSON-RPC agent/harness-context routes and schemas) or import archived TUI leaf helpers directly instead of pulling dead socket lifecycle modules back into scope.
+- Desktop compatibility coverage stays on the active renderer contract: `apps/desktop/src/lib/wsProtocol.ts` once again parses the server events the desktop cache/store tests actually depend on, and `src/server/session/AgentSession.ts` now waits for queued persistence before clearing harness context on dispose so restart/resume tests stop racing shutdown.
+- Verification passed with `bun test test/server.toolstream.test.ts`, `bun test test/tui.global-hotkeys.test.ts test/tui.sync-lifecycle.test.ts test/tui.log-filter.test.ts test/server.toolstream.test.ts test/harness.ws.e2e.test.ts`, `bun test test/tui.args.test.ts test/tui.question-prompt.test.ts apps/TUI/routes/session/question.test.ts test/jsonrpc.codegen.test.ts`, `bun test apps/TUI/context/local.test.ts apps/TUI/component/dialog-provider.test.ts`, `bun test test/harness.ws.e2e.test.ts apps/desktop/test/bootstrap-cache.test.ts apps/desktop/test/store-feed-mapping.test.ts`, `bun run docs:generate-jsonrpc`, `bun run docs:check`, `bun run typecheck`, and `bun test` on 2026-03-23 01:06:48 EDT (`2692 pass`, `3 skip`, `0 fail`).
+
 ## Fix Duplicate Final JSON-RPC Assistant Content
 
 - [x] Inspect the latest duplicated live session in `~/.cowork/sessions.db` and confirm the duplicate comes from the final cumulative JSON-RPC `assistant_message` path rather than a replay-only issue.

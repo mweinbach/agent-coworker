@@ -90,6 +90,13 @@ export const jsonRpcSessionRequestSchemas = {
     threadId: nonEmptyTrimmedStringSchema,
     config: anyObjectSchema,
   }).strict(),
+  "cowork/session/harnessContext/get": z.object({
+    threadId: nonEmptyTrimmedStringSchema,
+  }).strict(),
+  "cowork/session/harnessContext/set": z.object({
+    threadId: nonEmptyTrimmedStringSchema,
+    context: anyObjectSchema,
+  }).strict(),
   "cowork/session/defaults/apply": z.object({
     cwd: nonEmptyTrimmedStringSchema,
     threadId: optionalNonEmptyTrimmedStringSchema,
@@ -128,6 +135,8 @@ export const jsonRpcSessionResultSchemas = {
   "cowork/session/model/set": legacyEventEnvelope(configUpdatedEventSchema),
   "cowork/session/usageBudget/set": legacyEventEnvelope(sessionUsageEventSchema),
   "cowork/session/config/set": legacyEventEnvelope(sessionConfigEventSchema),
+  "cowork/session/harnessContext/get": legacyEventEnvelope(harnessContextEventSchema),
+  "cowork/session/harnessContext/set": legacyEventEnvelope(harnessContextEventSchema),
   "cowork/session/defaults/apply": legacyEventEnvelope(sessionConfigEventSchema),
   "cowork/session/delete": legacyEventEnvelope(sessionDeletedEventSchema),
 } as const;

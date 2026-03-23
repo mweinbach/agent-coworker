@@ -4,7 +4,7 @@ import {
   stageAfterAuthMethodSelection,
   shouldStartAutoOauthCallback,
   type AuthMethod,
-} from "./dialog-provider";
+} from "./dialog-provider-auth";
 
 const apiMethod: AuthMethod = {
   id: "api_key",

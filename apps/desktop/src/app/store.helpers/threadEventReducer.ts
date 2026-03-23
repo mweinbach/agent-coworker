@@ -81,6 +81,24 @@ const JSONRPC_THREAD_EVENT_METHODS = new Set([
   "error",
 ]);
 
+type ThreadOutboundMessage =
+  | { type: "cancel"; sessionId: string; includeSubagents?: boolean }
+  | { type: "session_close"; sessionId: string }
+  | { type: "set_session_title"; sessionId: string; title: string }
+  | { type: "set_model"; sessionId: string; provider: string; model: string }
+  | { type: "set_session_usage_budget"; sessionId: string; warnAtUsd?: number | null; stopAtUsd?: number | null }
+  | { type: "set_config"; sessionId: string; config: Record<string, unknown> }
+  | {
+    type: "apply_session_defaults";
+    sessionId: string;
+    provider?: string;
+    model?: string;
+    enableMcp?: boolean;
+    config?: Record<string, unknown>;
+  }
+  | { type: "ask_response"; sessionId: string; requestId: string; answer: string }
+  | { type: "approval_response"; sessionId: string; requestId: string; approved: boolean };
+
 function sortAgentSummaries(agents: ThreadAgentSummary[]): ThreadAgentSummary[] {
   return [...agents].sort((left, right) => {
     const updatedDiff = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
@@ -977,7 +995,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     return stream.assistantItemIdByStream.get(assistantKey) ?? null;
   }
 
-  function sendThread(get: StoreGet, threadId: string, build: (sessionId: string) => Record<string, unknown>): boolean {
+  function sendThread(get: StoreGet, threadId: string, build: (sessionId: string) => ThreadOutboundMessage): boolean {
     const workspaceId = workspaceIdForThread(get, threadId);
     if (!workspaceId) {
       return false;

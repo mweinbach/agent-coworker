@@ -57,7 +57,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
   type ApplySessionDefaultsMessage = {
     type: "apply_session_defaults";
     sessionId: string;
-    provider?: string;
+    provider?: ProviderName;
     model?: string;
     enableMcp?: boolean;
     config?: SessionConfigPatch;

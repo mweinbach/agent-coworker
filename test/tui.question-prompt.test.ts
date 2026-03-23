@@ -4,7 +4,7 @@ import {
   normalizeAskOptions,
   normalizeAskQuestion,
   shouldRenderAskOptions,
-} from "../apps/TUI/routes/session/question";
+} from "../apps/TUI/routes/session/questionPromptHelpers";
 
 describe("TUI question prompt helpers", () => {
   test("normalizes and truncates long question text", () => {

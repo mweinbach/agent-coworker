@@ -140,6 +140,49 @@ export function createSessionRouteHandlers(
       });
     },
 
+    "cowork/session/harnessContext/get": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+      const binding = context.threads.getLive(threadId);
+      const session = binding?.session;
+      if (!session) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} requires threadId`,
+        });
+        return;
+      }
+
+      const outcome = await context.events.capture(
+        binding!,
+        () => session.getHarnessContext(),
+        (event): event is Extract<ServerEvent, { type: "harness_context" }> => event.type === "harness_context",
+      );
+      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+    },
+
+    "cowork/session/harnessContext/set": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+      const binding = context.threads.getLive(threadId);
+      const session = binding?.session;
+      const nextContext = params.context;
+      if (!session || !nextContext || typeof nextContext !== "object") {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} requires threadId and context`,
+        });
+        return;
+      }
+
+      const outcome = await context.events.capture(
+        binding!,
+        () => session.setHarnessContext(nextContext as any),
+        (event): event is Extract<ServerEvent, { type: "harness_context" }> => event.type === "harness_context",
+      );
+      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+    },
+
     "cowork/session/defaults/apply": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.requireWorkspacePath(params, message.method);

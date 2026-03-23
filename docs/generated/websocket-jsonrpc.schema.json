@@ -328,6 +328,40 @@
           ],
           "additionalProperties": false
         },
+        "cowork/session/harnessContext/get": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "threadId"
+          ],
+          "additionalProperties": false
+        },
+        "cowork/session/harnessContext/set": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "context": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "threadId",
+            "context"
+          ],
+          "additionalProperties": false
+        },
         "cowork/session/defaults/apply": {
           "type": "object",
           "properties": {
@@ -378,6 +412,141 @@
           "required": [
             "cwd",
             "targetSessionId"
+          ],
+          "additionalProperties": false
+        },
+        "cowork/session/agent/spawn": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            },
+            "role": {
+              "type": "string",
+              "minLength": 1
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reasoningEffort": {
+              "type": "string",
+              "minLength": 1
+            },
+            "forkContext": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "threadId",
+            "message"
+          ],
+          "additionalProperties": false
+        },
+        "cowork/session/agent/list": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "threadId"
+          ],
+          "additionalProperties": false
+        },
+        "cowork/session/agent/input/send": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "agentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            },
+            "interrupt": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "threadId",
+            "agentId",
+            "message"
+          ],
+          "additionalProperties": false
+        },
+        "cowork/session/agent/wait": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "agentIds": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "threadId",
+            "agentIds"
+          ],
+          "additionalProperties": false
+        },
+        "cowork/session/agent/resume": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "agentId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "threadId",
+            "agentId"
+          ],
+          "additionalProperties": false
+        },
+        "cowork/session/agent/close": {
+          "type": "object",
+          "properties": {
+            "threadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "agentId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "threadId",
+            "agentId"
           ],
           "additionalProperties": false
         },
@@ -1181,8 +1350,16 @@
         "cowork/session/model/set",
         "cowork/session/usageBudget/set",
         "cowork/session/config/set",
+        "cowork/session/harnessContext/get",
+        "cowork/session/harnessContext/set",
         "cowork/session/defaults/apply",
         "cowork/session/delete",
+        "cowork/session/agent/spawn",
+        "cowork/session/agent/list",
+        "cowork/session/agent/input/send",
+        "cowork/session/agent/wait",
+        "cowork/session/agent/resume",
+        "cowork/session/agent/close",
         "cowork/provider/catalog/read",
         "cowork/provider/authMethods/read",
         "cowork/provider/status/refresh",
@@ -1882,6 +2059,50 @@
           ],
           "additionalProperties": false
         },
+        "cowork/session/harnessContext/get": {
+          "type": "object",
+          "properties": {
+            "event": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "harness_context"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "event"
+          ],
+          "additionalProperties": false
+        },
+        "cowork/session/harnessContext/set": {
+          "type": "object",
+          "properties": {
+            "event": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "harness_context"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "event"
+          ],
+          "additionalProperties": false
+        },
         "cowork/session/defaults/apply": {
           "type": "object",
           "properties": {
@@ -1932,6 +2153,36 @@
           "required": [
             "event"
           ],
+          "additionalProperties": false
+        },
+        "cowork/session/agent/spawn": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "cowork/session/agent/list": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "cowork/session/agent/input/send": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "cowork/session/agent/wait": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "cowork/session/agent/resume": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "cowork/session/agent/close": {
+          "type": "object",
+          "properties": {},
           "additionalProperties": false
         },
         "cowork/provider/catalog/read": {
@@ -3022,8 +3273,16 @@
         "cowork/session/model/set",
         "cowork/session/usageBudget/set",
         "cowork/session/config/set",
+        "cowork/session/harnessContext/get",
+        "cowork/session/harnessContext/set",
         "cowork/session/defaults/apply",
         "cowork/session/delete",
+        "cowork/session/agent/spawn",
+        "cowork/session/agent/list",
+        "cowork/session/agent/input/send",
+        "cowork/session/agent/wait",
+        "cowork/session/agent/resume",
+        "cowork/session/agent/close",
         "cowork/provider/catalog/read",
         "cowork/provider/authMethods/read",
         "cowork/provider/status/refresh",

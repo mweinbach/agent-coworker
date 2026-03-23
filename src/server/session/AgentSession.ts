@@ -1254,7 +1254,9 @@ export class AgentSession {
   dispose(reason: string) {
     this.state.abortController?.abort();
     this.interactionManager.rejectAllPending(`Session disposed (${reason})`);
-    this.deps.harnessContextStore.clear(this.id);
+    void this.waitForPersistenceIdle().finally(() => {
+      this.deps.harnessContextStore.clear(this.id);
+    });
     void this.backupController.closeSessionBackup();
   }
 

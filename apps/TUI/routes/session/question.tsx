@@ -3,20 +3,12 @@ import { useTheme } from "../../context/theme";
 import { useSyncActions } from "../../context/sync";
 import type { AskRequest } from "../../context/sync";
 import { keyNameFromEvent } from "../../util/keyboard";
-import { ASK_SKIP_TOKEN } from "../../../../src/shared/ask";
 import {
-  normalizeAskOptions as normalizeAskOptionsShared,
-  normalizeAskQuestion as normalizeAskQuestionShared,
-  shouldRenderAskOptions as shouldRenderAskOptionsShared,
-} from "../../../../src/shared/askPrompt";
-
-export const normalizeAskQuestion = normalizeAskQuestionShared;
-export const normalizeAskOptions = normalizeAskOptionsShared;
-export const shouldRenderAskOptions = shouldRenderAskOptionsShared;
-
-export function resolveAskEscapeAnswer(): string {
-  return ASK_SKIP_TOKEN;
-}
+  normalizeAskOptions,
+  normalizeAskQuestion,
+  resolveAskEscapeAnswer,
+  shouldRenderAskOptions,
+} from "./questionPromptHelpers";
 
 export function QuestionPrompt(props: { ask: AskRequest }) {
   const theme = useTheme();

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { shouldSuppressLegacyToolLogLine, shouldSuppressRawDebugLogLine } from "../apps/TUI/context/sync";
+import { shouldSuppressLegacyToolLogLine, shouldSuppressRawDebugLogLine } from "../apps/TUI/context/syncEventReducer";
 
 describe("TUI log suppression helpers", () => {
   test("suppresses raw provider debug stream logs", () => {

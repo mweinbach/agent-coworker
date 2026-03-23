@@ -281,9 +281,9 @@ Configuration merges across three tiers (each overrides the previous):
 
 ### Adding a WebSocket Message
 
-1. Add type to `ClientMessage` or `ServerEvent` in `src/server/protocol.ts`
-2. Add validation in `safeParseClientMessage()` (for client messages)
-3. Add handler in `src/server/startServer/dispatchClientMessage.ts` or the appropriate manager under `src/server/session/`
+1. Add legacy event typing in `src/server/protocol.ts` when needed, and add JSON-RPC request/result/notification schemas in `src/server/jsonrpc/schema.ts` plus the relevant module in `src/server/jsonrpc/`
+2. Add validation in the JSON-RPC schema bundle and parser helpers (for client messages)
+3. Add handler in `src/server/jsonrpc/routes/` or the appropriate manager under `src/server/session/`
 4. Document in `docs/websocket-protocol.md`
 
 ### Adding a Provider

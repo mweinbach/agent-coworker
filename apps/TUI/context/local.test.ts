@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   availableProvidersFromCatalogState,
   modelChoicesFromSyncState,
-} from "./local";
+} from "./localHelpers";
 import type { ProviderCatalogState } from "./syncTypes";
 
 describe("local context provider/model helpers", () => {

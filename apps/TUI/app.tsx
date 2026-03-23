@@ -13,6 +13,7 @@ import { Home } from "./routes/home";
 import { Session } from "./routes/session/index";
 import { Toast, showToast } from "./ui/toast";
 import { resolveCtrlCAction } from "./util/ctrl-c";
+import { shouldSuspendGlobalHotkeys } from "./util/globalHotkeys";
 import { keyModifiersFromEvent, keyNameFromEvent } from "./util/keyboard";
 
 export function App() {
@@ -61,13 +62,6 @@ export function App() {
       <Toast />
     </box>
   );
-}
-
-export function shouldSuspendGlobalHotkeys(state: {
-  pendingAsk: boolean;
-  pendingApproval: boolean;
-}): boolean {
-  return state.pendingAsk || state.pendingApproval;
 }
 
 function GlobalHotkeys() {

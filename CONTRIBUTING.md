@@ -158,9 +158,9 @@ The `ToolContext` interface (defined in `src/tools/context.ts`) provides:
 
 Follow these four steps whenever you add a new client message or server event:
 
-1. **Add the type** to `ClientMessage` or `ServerEvent` in `src/server/protocol.ts`.
-2. **Add validation** in `safeParseClientMessage()` (same file) if it is a client message.
-3. **Add the handler** in `src/server/startServer/dispatchClientMessage.ts` (message routing) and/or the appropriate manager under `src/server/session/` (session logic).
+1. **Add the type/schema** to `src/server/protocol.ts` for any legacy event projection that still needs typing, and to `src/server/jsonrpc/schema.ts` plus the relevant module in `src/server/jsonrpc/` for supported JSON-RPC requests, results, or notifications.
+2. **Add validation** in the JSON-RPC schema bundle (`src/server/jsonrpc/schema.ts`) and parser helpers when the message is client-originated.
+3. **Add the handler** in `src/server/jsonrpc/routes/` (request routing) and/or the appropriate manager under `src/server/session/` (session logic).
 4. **Update `docs/websocket-protocol.md`** with the new message format, fields, example JSON, and where it fits in the flow.
 
 The protocol doc is the source of truth for anyone building an alternative UI.

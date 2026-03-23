@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import { jsonRpcAgentNotificationSchemas } from "./schema.agents";
+import {
+  jsonRpcAgentNotificationSchemas,
+  jsonRpcAgentRequestSchemas,
+  jsonRpcAgentResultSchemas,
+} from "./schema.agents";
 import { jsonRpcBackupsRequestSchemas, jsonRpcBackupsResultSchemas } from "./schema.backups";
 import {
   jsonRpcCoreRequestSchemas,
@@ -31,6 +35,7 @@ export const jsonRpcRequestSchemas = {
   ...jsonRpcCoreRequestSchemas,
   ...jsonRpcThreadTurnRequestSchemas,
   ...jsonRpcSessionRequestSchemas,
+  ...jsonRpcAgentRequestSchemas,
   ...jsonRpcProviderRequestSchemas,
   ...jsonRpcMcpRequestSchemas,
   ...jsonRpcSkillsRequestSchemas,
@@ -53,6 +58,7 @@ export const jsonRpcResultSchemas = {
   ...jsonRpcCoreResultSchemas,
   ...jsonRpcThreadTurnResultSchemas,
   ...jsonRpcSessionResultSchemas,
+  ...jsonRpcAgentResultSchemas,
   ...jsonRpcProviderResultSchemas,
   ...jsonRpcMcpResultSchemas,
   ...jsonRpcSkillsResultSchemas,

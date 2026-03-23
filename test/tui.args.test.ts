@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseArgs } from "../apps/TUI/index";
+import { parseArgs } from "../apps/TUI/util/args";
 
 describe("parseArgs", () => {
   test("uses copy-friendly defaults", () => {

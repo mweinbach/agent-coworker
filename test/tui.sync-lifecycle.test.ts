@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { buildSessionCloseMessage, deriveHelloSessionState } from "../apps/TUI/context/sync";
+import { buildSessionCloseMessage, deriveHelloSessionState } from "../apps/TUI/context/syncEventReducer";
 import type { ServerEvent } from "../src/server/protocol";
 
 function makeServerHello(overrides: Partial<Extract<ServerEvent, { type: "server_hello" }>> = {}): Extract<ServerEvent, { type: "server_hello" }> {
@@ -50,4 +50,3 @@ describe("TUI sync lifecycle helpers", () => {
     expect(buildSessionCloseMessage(null)).toBeNull();
   });
 });
-

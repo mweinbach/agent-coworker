@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { shouldSuspendGlobalHotkeys } from "../apps/TUI/app";
+import { shouldSuspendGlobalHotkeys } from "../apps/TUI/util/globalHotkeys";
 
 describe("TUI global hotkey gating", () => {
   test("suspends global hotkeys while an ask prompt is active", () => {

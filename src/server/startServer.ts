@@ -52,7 +52,6 @@ import {
   parseWsProtocolDefault,
   resolveWsProtocol,
   splitWebSocketSubprotocolHeader,
-  type WsProtocolMode,
 } from "./wsProtocol/negotiation";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
@@ -243,7 +242,7 @@ export interface StartAgentServerOptions {
   connectProviderImpl?: typeof connectModelProvider;
   getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
   runTurnImpl?: typeof runTurnFn;
-  wsProtocolDefault?: WsProtocolMode;
+  wsProtocolDefault?: "jsonrpc";
 }
 
 export async function startAgentServer(

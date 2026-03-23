@@ -1,6 +1,5 @@
 import type { AgentSession } from "../session/AgentSession";
 import type { JsonRpcInitializeParams } from "../jsonrpc/protocol";
-import type { WsProtocolMode } from "../wsProtocol/negotiation";
 
 export type JsonRpcConnectionState = {
   initializeRequestReceived: boolean;
@@ -22,7 +21,7 @@ export type JsonRpcConnectionState = {
 export type StartServerSocketData = {
   session?: AgentSession;
   resumeSessionId?: string;
-  protocolMode?: WsProtocolMode;
+  protocolMode?: "jsonrpc";
   selectedSubprotocol?: string | null;
   connectionId?: string;
   rpc?: JsonRpcConnectionState;

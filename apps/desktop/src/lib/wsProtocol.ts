@@ -1,8 +1,4 @@
-import {
-  safeParseServerEvent as safeParseServerEventFromProtocol,
-  safeParseServerEventJson,
-  type ServerEvent as CoreServerEvent,
-} from "../../../../src/server/protocol";
+import type { ServerEvent as CoreServerEvent } from "../../../../src/server/protocol";
 export { ASK_SKIP_TOKEN } from "../../../../src/shared/ask";
 export { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "../../../../src/shared/toolOutputOverflow";
 
@@ -23,14 +19,20 @@ export type {
   TodoItem,
 } from "../../../../src/types";
 
-export type { ClientMessage, ServerEvent } from "../../../../src/server/protocol";
+export type { ServerEvent } from "../../../../src/server/protocol";
 
 export type ConfigSubset = Extract<CoreServerEvent, { type: "server_hello" }>["config"];
 
 export function safeJsonParse(raw: unknown): unknown | null {
-  return safeParseServerEventJson(raw);
+  if (typeof raw !== "string") return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
-export function safeParseServerEvent(raw: unknown): CoreServerEvent | null {
-  return safeParseServerEventFromProtocol(raw);
+export function safeParseServerEvent(_raw: unknown): CoreServerEvent | null {
+  // Legacy server event parsing removed — JSON-RPC protocol handles validation
+  return null;
 }

@@ -1,4 +1,4 @@
-import type { ClientMessage, ServerEvent } from "../../lib/wsProtocol";
+import type { ServerEvent } from "../../lib/wsProtocol";
 import {
   mapModelStreamChunk,
   replayModelStreamRawEvent,
@@ -977,7 +977,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     return stream.assistantItemIdByStream.get(assistantKey) ?? null;
   }
 
-  function sendThread(get: StoreGet, threadId: string, build: (sessionId: string) => ClientMessage): boolean {
+  function sendThread(get: StoreGet, threadId: string, build: (sessionId: string) => Record<string, unknown>): boolean {
     const workspaceId = workspaceIdForThread(get, threadId);
     if (!workspaceId) {
       return false;

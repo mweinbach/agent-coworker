@@ -15,7 +15,8 @@ import {
   renamePath,
   trashPath,
 } from "../../lib/desktopCommands";
-import type { ClientMessage, ProviderName } from "../../lib/wsProtocol";
+import type { ProviderName } from "../../lib/wsProtocol";
+import type { SessionConfigPatch } from "../../../../../src/server/protocol";
 
 import {
   type AppStoreActions,
@@ -53,7 +54,14 @@ import { normalizeWorkspaceUserProfile } from "../types";
 import type { ThreadRecord, WorkspaceDefaultsPatch, WorkspaceRecord } from "../types";
 
 export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "applyWorkspaceDefaultsToThread" | "updateWorkspaceDefaults"> {
-  type ApplySessionDefaultsMessage = Extract<ClientMessage, { type: "apply_session_defaults" }>;
+  type ApplySessionDefaultsMessage = {
+    type: "apply_session_defaults";
+    sessionId: string;
+    provider?: string;
+    model?: string;
+    enableMcp?: boolean;
+    config?: SessionConfigPatch;
+  };
   type DefaultsTargetState = {
     config: { provider?: unknown; model?: unknown } | null | undefined;
     sessionConfig: any;

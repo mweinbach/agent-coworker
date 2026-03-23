@@ -15,6 +15,19 @@
 - The desktop popup card now hides opaque redirect bodies, avoids showing `vertexaisearch.cloud.google.com` as the source hostname/favicon, and still opens the underlying citation target when the user clicks through.
 - Added regression coverage in `test/displayCitationMarkers.test.ts` and `apps/desktop/test/message-links.test.ts` for opaque Google redirect display metadata, popup portal rendering, grouped-source navigation, and the “hide redirect text but keep site label” behavior.
 
+## Citation Popup Compactness Follow-up
+
+- [x] Tighten the popup card sizing and control spacing so the source picker reads like a compact affordance instead of a large modal-like surface.
+- [x] Stabilize favicon rendering so the popup shows an immediate placeholder and prewarms icon URLs before opening.
+- [x] Re-run focused citation tests, repo typecheck, and the full `bun test` lane.
+
+## Citation Popup Compactness Follow-up Review
+
+- `apps/desktop/src/components/ai-elements/message.tsx` now uses a smaller citation popup surface with tighter header/body spacing, smaller arrow buttons, and reduced typography so the card reads as a lightweight source picker instead of an oversized sheet.
+- Citation favicon rendering is now placeholder-first: the popup always reserves the icon slot with a compact monogram badge, then fades the favicon in only after it loads. That avoids the empty-image flash and keeps the row geometry stable.
+- Citation chips now prewarm the favicon URLs as soon as the chip mounts, so by the time the user opens the popup the site icon is usually already cached instead of starting its network request on click.
+- Added a focused regression in `apps/desktop/test/message-links.test.ts` to lock the smaller popup width contract and verify favicon prewarming starts before the popup opens.
+
 ## Citation Popup Card
 
 - [x] Inspect the chip rendering path and confirm the desktop renderer can own the popup interaction while the shared normalizer still owns chip grouping/order.

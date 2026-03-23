@@ -344,6 +344,7 @@ describe("desktop message local file links", () => {
       const popup = harness.dom.window.document.querySelector('[role="dialog"][aria-label="Citation sources"]');
       expect(popup?.getAttribute("class")).toContain("fixed");
       expect(popup?.getAttribute("class")).toContain("z-[70]");
+      expect(popup?.getAttribute("class")).toContain("w-[min(18rem,calc(100vw-2rem))]");
 
       const nextButton = harness.dom.window.document.querySelector('button[aria-label="Next source"]');
       if (!nextButton) {
@@ -361,6 +362,65 @@ describe("desktop message local file links", () => {
       await act(async () => {
         root.unmount();
       });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("citation chips prewarm favicon URLs before the popup opens", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      const assignedImageUrls: string[] = [];
+      const OriginalWindowImage = harness.dom.window.Image;
+      const OriginalGlobalImage = globalThis.Image;
+
+      class TrackingImage {
+        set src(value: string) {
+          assignedImageUrls.push(value);
+        }
+      }
+
+      harness.dom.window.Image = TrackingImage as unknown as typeof harness.dom.window.Image;
+      globalThis.Image = TrackingImage as unknown as typeof globalThis.Image;
+
+      try {
+        await act(async () => {
+          root.render(
+            createElement(
+              MessageResponse,
+              {
+                normalizeDisplayCitations: true,
+                citationSources: [{ title: "preload-check.example", url: "https://example.com/preload-check" }],
+                citationAnnotations: [
+                  {
+                    type: "url_citation",
+                    start_index: 0,
+                    end_index: 11,
+                    url: "https://example.com/preload-check",
+                    title: "preload-check.example",
+                  },
+                ],
+                citationUrlsByIndex: new Map([[1, "https://example.com/preload-check"]]),
+              },
+              "Source block.",
+            ),
+          );
+        });
+
+        expect(assignedImageUrls).toContain("https://www.google.com/s2/favicons?domain=preload-check.example&sz=32");
+
+        await act(async () => {
+          root.unmount();
+        });
+      } finally {
+        harness.dom.window.Image = OriginalWindowImage;
+        globalThis.Image = OriginalGlobalImage;
+      }
     } finally {
       harness.restore();
     }

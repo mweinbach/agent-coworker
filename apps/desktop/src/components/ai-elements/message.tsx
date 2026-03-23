@@ -62,6 +62,7 @@ const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";
 const CITATION_CHIP_TITLE_PREFIX = "__cowork_citation_sources__:";
 const CITATION_POPUP_MARGIN = 16;
 const CITATION_POPUP_GAP = 10;
+const preloadedCitationFaviconUrls = new Set<string>();
 const desktopSanitizeSchema: RehypeSanitizeOptions = {
   ...defaultSchema,
   tagNames: [...(defaultSchema.tagNames ?? []), "cite", "span", "sup"],
@@ -202,26 +203,39 @@ function faviconUrl(hostname: string): string {
   return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=32`;
 }
 
-function CitationFavicon({ source }: { source: CitationSource }) {
-  const [failed, setFailed] = useState(false);
-  const display = useMemo(() => describeCitationSource(source), [source]);
-  const src = display.faviconHostname ? faviconUrl(display.faviconHostname) : "";
+function citationFaviconSrc(source: CitationSource): string {
+  const display = describeCitationSource(source);
+  return display.faviconHostname ? faviconUrl(display.faviconHostname) : "";
+}
 
-  if (!src || failed) {
-    return (
-      <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold uppercase text-muted-foreground">
-        {display.hostLabel.charAt(0)}
-      </div>
-    );
-  }
+function CitationFavicon({ source }: { source: CitationSource }) {
+  const display = useMemo(() => describeCitationSource(source), [source]);
+  const src = useMemo(() => citationFaviconSrc(source), [source]);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setLoaded(false);
+    setFailed(false);
+  }, [src]);
 
   return (
-    <img
-      src={src}
-      alt=""
-      className="size-6 shrink-0 rounded-full object-contain"
-      onError={() => setFailed(true)}
-    />
+    <div className="relative flex size-5 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted/80 text-[10px] font-semibold uppercase text-muted-foreground">
+      <span aria-hidden="true">{display.hostLabel.charAt(0)}</span>
+      {src && !failed ? (
+        <img
+          src={src}
+          alt=""
+          className={cn(
+            "absolute inset-0 size-full rounded-full object-contain transition-opacity duration-150",
+            loaded ? "opacity-100" : "opacity-0",
+          )}
+          decoding="async"
+          onLoad={() => setLoaded(true)}
+          onError={() => setFailed(true)}
+        />
+      ) : null}
+    </div>
   );
 }
 
@@ -301,6 +315,22 @@ function DesktopCitationChip({
     () => currentSource ? describeCitationSource(currentSource) : null,
     [currentSource],
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    for (const source of sources) {
+      const src = citationFaviconSrc(source);
+      if (!src || preloadedCitationFaviconUrls.has(src)) {
+        continue;
+      }
+      preloadedCitationFaviconUrls.add(src);
+      const image = new window.Image();
+      image.src = src;
+    }
+  }, [sources]);
 
   useEffect(() => {
     if (activeIndex < sources.length) {
@@ -401,13 +431,13 @@ function DesktopCitationChip({
             ref={cardRef}
             role="dialog"
             aria-label="Citation sources"
-            className="fixed z-[70] w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-[1.35rem] border border-border/70 bg-card shadow-[0_18px_40px_rgba(0,0,0,0.14)]"
+            className="fixed z-[70] w-[min(18rem,calc(100vw-2rem))] overflow-hidden rounded-[1.1rem] border border-border/70 bg-card shadow-[0_14px_28px_rgba(0,0,0,0.13)]"
             style={popupPosition ? { left: popupPosition.left, top: popupPosition.top } : { left: 0, top: 0, visibility: "hidden" }}
           >
-            <div className="flex items-center gap-1 border-b border-border/60 bg-muted/25 px-3 py-2">
+            <div className="flex items-center gap-0.5 border-b border-border/60 bg-muted/25 px-2.5 py-1.5">
               <button
                 type="button"
-                className="flex size-8 items-center justify-center rounded-full transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
+                className="flex size-7 items-center justify-center rounded-full transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border/40 disabled:cursor-not-allowed disabled:opacity-35"
                 aria-label="Previous source"
                 disabled={sources.length <= 1}
                 onClick={() => setActiveIndex((index) => (index - 1 + sources.length) % sources.length)}
@@ -416,36 +446,36 @@ function DesktopCitationChip({
               </button>
               <button
                 type="button"
-                className="flex size-8 items-center justify-center rounded-full transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
+                className="flex size-7 items-center justify-center rounded-full transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border/40 disabled:cursor-not-allowed disabled:opacity-35"
                 aria-label="Next source"
                 disabled={sources.length <= 1}
                 onClick={() => setActiveIndex((index) => (index + 1) % sources.length)}
               >
                 <CitationArrow direction="right" />
               </button>
-              <div className="ml-auto text-sm text-muted-foreground">
+              <div className="ml-auto text-xs font-medium text-muted-foreground">
                 {activeIndex + 1}/{sources.length}
               </div>
             </div>
             <button
               type="button"
-              className="block w-full px-4 py-4 text-left transition-colors hover:bg-accent/35"
+              className="block w-full px-3.5 py-3 text-left transition-colors hover:bg-accent/35"
               onClick={() => {
                 setOpen(false);
                 void openExternalCitationSource(currentSource);
               }}
             >
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2.5">
                 <CitationFavicon source={currentSource} />
                 <div className="min-w-0">
                   {currentSourceDisplay && currentSourceDisplay.hostLabel !== citationSourceTitle(currentSource) ? (
                     <div className="truncate text-xs font-medium text-muted-foreground">{currentSourceDisplay.hostLabel}</div>
                   ) : null}
-                  <div className="truncate text-[1.05rem] font-semibold leading-6 text-foreground">{citationSourceTitle(currentSource)}</div>
+                  <div className="truncate text-[0.98rem] font-semibold leading-5 text-foreground">{citationSourceTitle(currentSource)}</div>
                 </div>
               </div>
               {currentSourceDisplay?.displayUrl ? (
-                <div className="mt-3 break-all text-sm leading-6 text-muted-foreground">{currentSourceDisplay.displayUrl}</div>
+                <div className="mt-2 break-all text-xs leading-5 text-muted-foreground">{currentSourceDisplay.displayUrl}</div>
               ) : null}
             </button>
           </div>,

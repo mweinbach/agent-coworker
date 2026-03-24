@@ -542,15 +542,15 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
   return (
     <div className={cn("flex h-full flex-col overflow-hidden", className)}>
-      <div className="flex items-center justify-between px-3 pb-2 pt-3">
+      <div className="flex items-center justify-between px-2.5 pb-1 pt-2">
         <div className="flex items-center gap-2 min-w-0">
-          <div className="text-xs font-semibold tracking-wide text-muted-foreground/80 shrink-0">FILES</div>
-          <div className="text-muted-foreground/40 text-xs shrink-0 font-light">/</div>
+          <div className="text-[10px] font-semibold tracking-[0.16em] text-muted-foreground/80 shrink-0 uppercase">Files</div>
+          <div className="text-muted-foreground/35 text-[11px] shrink-0 font-light">/</div>
           <Button
             type="button"
             variant="link"
             size="sm"
-            className="h-auto min-w-0 justify-start p-0 text-xs font-semibold text-foreground no-underline hover:underline"
+            className="h-auto min-w-0 justify-start p-0 text-[11.5px] font-semibold text-foreground/88 no-underline hover:text-foreground hover:underline"
             data-file-explorer-control="true"
             onClick={() => void openFile(workspaceId, rootPath, false).catch(() => {})}
             title="Open in native explorer"
@@ -560,7 +560,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         </div>
       </div>
 
-      <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5" data-file-explorer-scroll-region="true">
+      <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-1" data-file-explorer-scroll-region="true">
         {rootSnapshot?.error ? (
           <div className="rounded bg-destructive/10 p-3 text-center text-xs text-destructive">{rootSnapshot.error}</div>
         ) : treeRows.length === 0 && rootSnapshot?.loading ? (
@@ -606,7 +606,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                   aria-selected={isSelected}
                   aria-expanded={isDirectory ? row.expanded : undefined}
                   className={cn(
-                    "group flex cursor-pointer items-center gap-1 rounded-md py-1.5 pr-1 text-xs transition-colors",
+                    "group flex cursor-pointer items-center gap-1 rounded-[9px] py-1 pr-1 text-[11.5px] transition-colors",
                     isSelected
                       ? "bg-accent text-accent-foreground"
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
@@ -663,31 +663,31 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                       size="icon-sm"
                       aria-label={row.expanded ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
                       className={cn(
-                        "h-5 w-5 min-w-5 rounded p-0 transition-colors select-none shadow-none",
+                        "h-[18px] w-[18px] min-w-[18px] rounded p-0 transition-colors select-none shadow-none",
                         isSelected ? "hover:bg-accent-foreground/15" : "hover:bg-muted"
                       )}
                       data-file-explorer-control="true"
                       onPress={() => toggleDirectory(entry.path)}
                     >
-                      {row.expanded ? <ChevronDownIcon className="h-3.5 w-3.5" /> : <ChevronRightIcon className="h-3.5 w-3.5" />}
+                      {row.expanded ? <ChevronDownIcon className="h-3.25 w-3.25" /> : <ChevronRightIcon className="h-3.25 w-3.25" />}
                     </Button>
                   ) : (
-                    <span className="inline-block h-5 w-5" aria-hidden />
+                    <span className="inline-block h-[18px] w-[18px]" aria-hidden />
                   )}
 
                   {isDirectory ? (
                     row.expanded ? (
-                      <FolderOpenIcon className={cn("h-3.5 w-3.5 shrink-0", isSelected ? "text-accent-foreground" : "text-blue-500/85")} />
+                      <FolderOpenIcon className={cn("h-3.25 w-3.25 shrink-0", isSelected ? "text-accent-foreground" : "text-blue-500/85")} />
                     ) : (
-                      <FolderIcon className={cn("h-3.5 w-3.5 shrink-0", isSelected ? "text-accent-foreground" : "text-blue-500/85")} />
+                      <FolderIcon className={cn("h-3.25 w-3.25 shrink-0", isSelected ? "text-accent-foreground" : "text-blue-500/85")} />
                     )
                   ) : (
-                    <FileIcon className="h-3.5 w-3.5 shrink-0" />
+                    <FileIcon className="h-3.25 w-3.25 shrink-0" />
                   )}
 
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-medium">{entry.name}</div>
-                    <div className={cn("truncate text-[10px]", isSelected ? "text-accent-foreground/85" : "text-muted-foreground")}>
+                    <div className={cn("truncate text-[9px] leading-3.5", isSelected ? "text-accent-foreground/85" : "text-muted-foreground")}>
                       {entryMeta}
                     </div>
                   </div>
@@ -698,13 +698,13 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                     size="icon-sm"
                     aria-label={`More options for ${entry.name}`}
                     className={cn(
-                      "h-6 w-6 min-w-6 rounded p-0 opacity-0 transition-opacity select-none shadow-none",
+                      "h-5 w-5 min-w-5 rounded p-0 opacity-0 transition-opacity select-none shadow-none",
                       isSelected ? "opacity-100 hover:bg-accent-foreground/15" : "group-hover:opacity-100 hover:bg-muted"
                     )}
                     data-file-explorer-control="true"
                     onPress={() => void openEntryMenu(entry)}
                   >
-                    <MoreVerticalIcon className="h-3.5 w-3.5" />
+                    <MoreVerticalIcon className="h-3.25 w-3.25" />
                   </Button>
                 </div>
               );

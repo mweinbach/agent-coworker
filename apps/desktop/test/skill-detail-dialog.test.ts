@@ -121,9 +121,29 @@ describe("skill detail dialog", () => {
       }
       const root = createRoot(container);
 
-      await act(async () => {
-        root.render(createElement(SkillDetailDialog, { workspaceId: "ws-1" }));
-      });
+      // Verify store state is correct before render
+      const storeState = useAppStore.getState();
+      const rt = storeState.workspaceRuntimeById["ws-1"];
+      if (!rt) {
+        throw new Error(`store has no ws-1 runtime. keys: ${Object.keys(storeState.workspaceRuntimeById).join(",")}`);
+      }
+      if (!rt.selectedSkillInstallation) {
+        throw new Error(`ws-1 runtime has no selectedSkillInstallation. installationId: ${rt.selectedSkillInstallationId}`);
+      }
+
+      let renderError: unknown = null;
+      const origConsoleError = console.error;
+      console.error = (...args: unknown[]) => {
+        renderError = args.map(String).join(" ");
+        origConsoleError(...args);
+      };
+      try {
+        await act(async () => {
+          root.render(createElement(SkillDetailDialog, { workspaceId: "ws-1" }));
+        });
+      } finally {
+        console.error = origConsoleError;
+      }
 
       const openFolderButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
         (button) => button.textContent?.includes("Open folder"),
@@ -131,7 +151,16 @@ describe("skill detail dialog", () => {
 
       if (!openFolderButton) {
         const html = harness.dom.window.document.getElementById("root")?.innerHTML ?? "(empty)";
-        throw new Error(`missing open folder button. DOM: ${html.slice(0, 500)}`);
+        const storeAfter = useAppStore.getState();
+        const rtAfter = storeAfter.workspaceRuntimeById["ws-1"];
+        throw new Error(
+          `missing open folder button.` +
+          ` DOM: ${html.slice(0, 300)}` +
+          ` | renderError: ${renderError}` +
+          ` | rt-after: ${rtAfter ? "exists" : "missing"}` +
+          ` | installationId-after: ${rtAfter?.selectedSkillInstallationId}` +
+          ` | installation-after: ${rtAfter?.selectedSkillInstallation ? "exists" : "null"}`
+        );
       }
 
       await act(async () => {

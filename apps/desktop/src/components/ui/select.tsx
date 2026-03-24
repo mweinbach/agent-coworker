@@ -10,9 +10,19 @@ type SelectContextValue = {
   defaultValue?: string;
   disabled?: boolean;
   onValueChange?: (value: string) => void;
+  open: boolean;
+  setOpen: (open: boolean) => void;
 };
 
-const SelectContext = React.createContext<SelectContextValue>({ size: "default" });
+const SelectContext = React.createContext<SelectContextValue | null>(null);
+
+function useSelectContext(): SelectContextValue {
+  const context = React.useContext(SelectContext);
+  if (!context) {
+    throw new Error("Select components must be used within <Select>");
+  }
+  return context;
+}
 
 type SelectProps = {
   value?: string;
@@ -23,9 +33,21 @@ type SelectProps = {
 };
 
 function Select({ value, defaultValue, disabled, onValueChange, children }: SelectProps) {
+  const [internalOpen, setInternalOpen] = React.useState(false);
+
   return (
-    <SelectContext.Provider value={{ value, defaultValue, disabled, onValueChange, size: "default" }}>
-      {children}
+    <SelectContext.Provider
+      value={{
+        value,
+        defaultValue,
+        disabled,
+        onValueChange,
+        size: "default",
+        open: internalOpen,
+        setOpen: setInternalOpen,
+      }}
+    >
+      <div className="relative">{children}</div>
     </SelectContext.Provider>
   );
 }
@@ -39,7 +61,7 @@ function SelectGroup({ className, children, ...props }: React.HTMLAttributes<HTM
 }
 
 function SelectValue({ placeholder, children, className, ...props }: React.HTMLAttributes<HTMLSpanElement> & { placeholder?: string }) {
-  const { value } = React.useContext(SelectContext);
+  const { value } = useSelectContext();
 
   return (
     <span data-slot="select-value" className={cn("truncate", !value && "text-muted-foreground", className)} {...props}>
@@ -52,23 +74,29 @@ function SelectTrigger({
   className,
   children,
   size = "default",
+  onClick,
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
   size?: SelectSize;
 }) {
-  const { disabled } = React.useContext(SelectContext);
+  const context = useSelectContext();
 
   return (
     <button
       type="button"
       data-size={size}
       data-slot="select-trigger"
+      aria-expanded={context.open}
       className={cn(
         "flex w-fit min-w-40 items-center justify-between gap-2 rounded-md border border-border bg-background text-sm text-foreground shadow-sm outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50",
         size === "sm" ? "h-8 px-2.5 text-xs" : "h-9 px-3 py-2",
         className,
       )}
-      disabled={disabled}
+      disabled={context.disabled}
+      onClick={(event) => {
+        context.setOpen(!context.open);
+        onClick?.(event);
+      }}
       {...props}
     >
       {children}
@@ -86,11 +114,16 @@ function SelectScrollDownButton({ className, ...props }: React.ComponentProps<"d
 }
 
 function SelectContent({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  const context = useSelectContext();
+  if (!context.open) {
+    return null;
+  }
+
   return (
     <div
       data-slot="select-content"
       className={cn(
-        "relative z-50 min-w-[8rem] rounded-md border border-border bg-popover text-popover-foreground shadow-md",
+        "absolute left-0 top-[calc(100%+0.25rem)] z-[120] min-w-full rounded-md border border-border bg-popover text-popover-foreground shadow-md",
         className,
       )}
       {...props}
@@ -119,7 +152,8 @@ type SelectItemProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 function SelectItem({ className, children, value, onClick, ...props }: SelectItemProps) {
-  const { size, onValueChange } = React.useContext(SelectContext);
+  const context = useSelectContext();
+  const size = context.size;
 
   return (
     <button
@@ -131,7 +165,8 @@ function SelectItem({ className, children, value, onClick, ...props }: SelectIte
         className,
       )}
       onClick={(event) => {
-        onValueChange?.(value);
+        context.onValueChange?.(value);
+        context.setOpen(false);
         onClick?.(event);
       }}
       {...props}

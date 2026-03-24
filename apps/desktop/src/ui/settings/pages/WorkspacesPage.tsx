@@ -1284,7 +1284,7 @@ export function WorkspacesPage() {
                       <div className={MODEL_CARD_FIELD_CLASS}>
                         <div className="text-sm font-medium text-foreground">Provider</div>
                         <Select
-                          value={currentProviderIsConfigured ? effectiveProvider : undefined}
+                          value={effectiveProvider}
                           onValueChange={(value) => {
                             if (!ws) return;
                             const nextProvider = value as ProviderName;

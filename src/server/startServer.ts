@@ -230,14 +230,13 @@ async function persistProjectConfigPatch(
 async function readUserConfigState(userAgentDir: string): Promise<PersistedUserConfigState> {
   const configPath = path.join(userAgentDir, "config.json");
   const current = await loadJsonObjectSafe(configPath);
-  const normalizedBaseUrl = resolveAwsBedrockProxyBaseUrl({
-    baseUrl: typeof current.awsBedrockProxyBaseUrl === "string"
-      ? current.awsBedrockProxyBaseUrl
-      : typeof current.openaiProxyBaseUrl === "string"
-        ? current.openaiProxyBaseUrl
-        : undefined,
-    env: {},
-  });
+  const normalizedBaseUrl =
+    (typeof current.awsBedrockProxyBaseUrl === "string"
+      ? resolveAwsBedrockProxyBaseUrl({ baseUrl: current.awsBedrockProxyBaseUrl, env: {} })
+      : undefined) ??
+    (typeof current.openaiProxyBaseUrl === "string"
+      ? resolveAwsBedrockProxyBaseUrl({ baseUrl: current.openaiProxyBaseUrl, env: {} })
+      : undefined);
   return normalizedBaseUrl ? { awsBedrockProxyBaseUrl: normalizedBaseUrl } : {};
 }
 

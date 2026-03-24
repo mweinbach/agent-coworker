@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 import { MemoryStore } from "../src/memoryStore";
 import { startAgentServer } from "../src/server/startServer";
@@ -457,6 +459,37 @@ describe("server JSON-RPC control methods", () => {
 
       expect(response.error.message).toContain("Warning threshold must be less than the hard-stop threshold");
       expect(response.result).toBeUndefined();
+      rpc.close();
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("userConfig/read falls back to legacy openaiProxyBaseUrl when canonical awsBedrockProxyBaseUrl is malformed", async () => {
+    const tmpDir = await makeTmpProject();
+    // Write a config with an invalid canonical URL and a valid legacy fallback
+    const agentDir = path.join(tmpDir, ".agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agentDir, "config.json"),
+      JSON.stringify({
+        awsBedrockProxyBaseUrl: "ht!tp://not-a-valid-url",
+        openaiProxyBaseUrl: "https://valid-legacy-proxy.example.com/v1",
+      }),
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request("cowork/provider/userConfig/read", {
+        cwd: tmpDir,
+      });
+
+      expect(response.result.event.type).toBe("user_config");
+      expect(response.result.event.config.awsBedrockProxyBaseUrl).toBe(
+        "https://valid-legacy-proxy.example.com/v1",
+      );
       rpc.close();
     } finally {
       server.stop();

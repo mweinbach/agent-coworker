@@ -113,8 +113,8 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
     }
 
     await ensureServerRunning(get, set, workspaceId);
-    const socket = ensureControlSocket(get, set, workspaceId);
-    if (!socket || !get().workspaceRuntimeById[workspaceId]?.controlSessionId) {
+    const ready = await waitForControlSession(get, set, workspaceId);
+    if (!ready) {
       return null;
     }
 

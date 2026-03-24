@@ -110,7 +110,7 @@ function Button({
       data-variant={variant}
       isDisabled={disabled}
       isIconOnly={size === "icon" || size === "icon-sm"}
-      onPress={onClick as React.ComponentProps<typeof HeroButton>["onPress"]}
+      onClick={onClick}
       size={mapSize(size)}
       variant={mapVariant(variant)}
     >

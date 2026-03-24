@@ -68,9 +68,9 @@ function SettingsNavigation({
 
   return (
     <aside className="settings-shell__nav app-left-sidebar-pane flex min-h-0 flex-col border-r border-border/70 max-[960px]:border-r-0 max-[960px]:border-b">
-      <div className="border-b border-border/80 px-3.5 py-4 flex flex-col gap-2">
+      <div className="border-b border-border/80 px-3 py-3 flex flex-col gap-2">
         <Button
-          className="settings-shell__back-button sidebar-lift h-10 w-full justify-start rounded-xl border border-border/75 bg-foreground/[0.035] px-3 text-[14px] font-medium text-foreground/86 hover:bg-foreground/[0.055] hover:text-foreground"
+          className="settings-shell__back-button sidebar-lift h-9 w-full justify-start rounded-lg border border-border/70 bg-foreground/[0.03] px-3 text-[13px] font-medium text-foreground/86 hover:bg-foreground/[0.05] hover:text-foreground"
           variant="ghost"
           type="button"
           onClick={onBack}
@@ -85,7 +85,7 @@ function SettingsNavigation({
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3.5 py-4 flex flex-col gap-6 max-[960px]:flex-row max-[960px]:flex-wrap">
+      <div className="flex-1 overflow-y-auto px-3 py-3.5 flex flex-col gap-5 max-[960px]:flex-row max-[960px]:flex-wrap">
         {SETTINGS_GROUPS.map((group) => (
           <div key={group.label} className="flex flex-col gap-1">
             <h4 className="mb-1 px-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/88">
@@ -97,7 +97,7 @@ function SettingsNavigation({
                   key={page.id}
                   variant="ghost"
                   className={cn(
-                    "settings-shell__nav-button sidebar-lift h-9 justify-start rounded-xl px-3 text-[14px] font-medium tracking-[-0.015em]",
+                    "settings-shell__nav-button sidebar-lift h-8 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em]",
                     activePage === page.id
                       ? "bg-foreground/[0.055] text-foreground"
                       : "text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground",
@@ -139,10 +139,10 @@ export function SettingsShell() {
         <div
           className={cn(
             "settings-shell__content w-full max-[960px]:p-4",
-            activePage.id === "backup" ? "h-full p-0" : "p-6 lg:p-7"
+            activePage.id === "backup" ? "h-full p-0" : "p-5 lg:p-6"
           )}
         >
-          <div key={activePage.id} className="animate-in fade-in slide-in-from-bottom-4 duration-300 ease-out h-full">
+          <div key={activePage.id} className="animate-in fade-in slide-in-from-bottom-2 duration-200 ease-out h-full">
             {activePage.render()}
           </div>
         </div>

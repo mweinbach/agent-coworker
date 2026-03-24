@@ -9,7 +9,7 @@ function Textarea({ className, ...props }: React.ComponentProps<typeof HeroTextA
       data-slot="textarea"
       variant="secondary"
       className={cn(
-        "min-h-20 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground shadow-sm transition-colors placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
+        "min-h-20 w-full rounded-[10px] border border-border/70 bg-background/80 px-3 py-2 text-[13px] text-foreground shadow-none transition-colors placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
       {...props}

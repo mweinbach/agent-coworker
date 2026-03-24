@@ -60,13 +60,13 @@ function buttonVariants({
   className?: string;
 } = {}): string {
   return cn(
-    "transition-colors [&>[data-icon]]:pointer-events-none [&>[data-icon]]:shrink-0",
+    "rounded-[calc(var(--radius)*0.95)] font-medium shadow-none transition-colors [&>[data-icon]]:pointer-events-none [&>[data-icon]]:shrink-0",
     variant === "link" && "h-auto px-0 py-0 text-primary underline-offset-4 hover:underline",
-    size === "default" && "[&>[data-icon]]:size-4",
-    size === "sm" && "text-xs [&>[data-icon]]:size-3.5",
-    size === "lg" && "[&>[data-icon]]:size-4",
-    size === "icon" && "size-9 min-w-9 px-0 [&>[data-icon]]:size-4",
-    size === "icon-sm" && "size-8 min-w-8 px-0 [&>[data-icon]]:size-3.5",
+    size === "default" && "h-9 px-3.5 text-[13px] [&>[data-icon]]:size-4",
+    size === "sm" && "h-8 px-3 text-[12px] [&>[data-icon]]:size-3.5",
+    size === "lg" && "h-10 px-4 text-[13px] [&>[data-icon]]:size-4",
+    size === "icon" && "size-8 min-w-8 px-0 [&>[data-icon]]:size-4",
+    size === "icon-sm" && "size-7 min-w-7 px-0 [&>[data-icon]]:size-3.5",
     className,
   );
 }

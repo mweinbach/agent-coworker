@@ -21,7 +21,7 @@ function Card({ className, variant = "default", ...props }: CardProps) {
       data-slot="card"
       variant={variant}
       className={cn(
-        "rounded-xl border border-border/80 bg-card text-card-foreground",
+        "rounded-[calc(var(--radius)*1.35)] border border-border/70 bg-card text-card-foreground shadow-none",
         className,
       )}
       {...props}
@@ -33,7 +33,7 @@ function CardHeader({ className, ...props }: React.ComponentProps<typeof HeroCar
   return (
     <HeroCardHeader
       data-slot="card-header"
-      className={cn("flex flex-col gap-1.5 p-5", className)}
+      className={cn("flex flex-col gap-1.5 p-4", className)}
       {...props}
     />
   );
@@ -56,7 +56,7 @@ function CardDescription({
   return (
     <HeroCardDescription
       data-slot="card-description"
-      className={cn("text-sm text-muted-foreground", className)}
+      className={cn("text-[13px] text-muted-foreground", className)}
       {...props}
     />
   );
@@ -76,7 +76,7 @@ function CardContent({ className, ...props }: React.ComponentProps<typeof HeroCa
   return (
     <HeroCardContent
       data-slot="card-content"
-      className={cn("p-5 pt-0", className)}
+      className={cn("p-4 pt-0", className)}
       {...props}
     />
   );
@@ -86,7 +86,7 @@ function CardFooter({ className, ...props }: React.ComponentProps<typeof HeroCar
   return (
     <HeroCardFooter
       data-slot="card-footer"
-      className={cn("flex items-center p-5 pt-0", className)}
+      className={cn("flex items-center p-4 pt-0", className)}
       {...props}
     />
   );

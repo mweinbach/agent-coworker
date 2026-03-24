@@ -106,7 +106,7 @@ function SelectTrigger({
       data-size={size}
       data-slot="select-trigger"
       className={cn(
-        "flex w-fit min-w-40 items-center justify-between gap-2 rounded-md border border-border bg-background text-sm text-foreground shadow-sm outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        "flex w-fit min-w-40 items-center justify-between gap-2 rounded-[10px] border border-border/70 bg-background/80 text-sm text-foreground shadow-none outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50",
         size === "sm" ? "h-8 px-2.5 text-xs" : "h-9 px-3 py-2",
         className,
       )}

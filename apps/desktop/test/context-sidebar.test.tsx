@@ -123,7 +123,7 @@ describe("desktop context sidebar", () => {
       });
 
       const text = container.textContent ?? "";
-      expect(text).toContain("AGENTS");
+      expect(text).toContain("Agents");
       expect(text).toContain("Investigate parser test");
       expect(text).toContain("worker · depth 1 · gpt-5.4");
       expect(text).toContain("Checking the failing snapshot expectation.");

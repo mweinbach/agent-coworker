@@ -9,7 +9,7 @@
   --color-sidebar: var(--sidebar-bg);
   --color-panel: var(--panel-bg);
 
-  --color-card: color-mix(in srgb, var(--panel-bg) 88%, var(--app-bg));
+  --color-card: color-mix(in srgb, var(--panel-bg) 94%, var(--app-bg));
   --color-card-foreground: var(--text);
 
   --color-popover: var(--panel-bg);
@@ -18,9 +18,9 @@
   --color-primary: var(--accent);
   --color-primary-foreground: #ffffff;
 
-  --color-secondary: color-mix(in srgb, var(--accent) 16%, var(--panel-bg));
+  --color-secondary: color-mix(in srgb, var(--accent) 12%, var(--panel-bg));
   --color-secondary-foreground: var(--text);
-  --color-accent: color-mix(in srgb, var(--accent) 18%, var(--panel-bg));
+  --color-accent: color-mix(in srgb, var(--accent) 14%, var(--panel-bg));
   --color-accent-foreground: var(--text);
 
   --color-muted: color-mix(in srgb, var(--text) 6%, transparent);
@@ -33,7 +33,7 @@
   --color-destructive: var(--danger);
   --color-destructive-foreground: #ffffff;
 
-  --radius-sm: calc(var(--radius) - 0.25rem);
+  --radius-sm: calc(var(--radius) - 0.1875rem);
   --radius-md: var(--radius);
   --radius-lg: calc(var(--radius) + 0.125rem);
 }
@@ -43,7 +43,7 @@
     --background: var(--app-bg);
     --foreground: var(--text);
 
-    --surface: color-mix(in srgb, var(--panel-bg) 92%, var(--app-bg));
+    --surface: color-mix(in srgb, var(--panel-bg) 96%, var(--app-bg));
     --surface-foreground: var(--text);
 
     --overlay: color-mix(in srgb, var(--panel-bg) 96%, transparent);
@@ -52,16 +52,16 @@
     --muted: var(--muted);
     --scrollbar: color-mix(in srgb, var(--text) 18%, transparent);
 
-    --default: color-mix(in srgb, var(--panel-bg) 86%, var(--app-bg));
+    --default: color-mix(in srgb, var(--panel-bg) 92%, var(--app-bg));
     --default-foreground: var(--text);
 
     --accent: var(--accent);
     --accent-foreground: #ffffff;
 
-    --field-background: color-mix(in srgb, var(--panel-bg) 78%, var(--app-bg));
+    --field-background: color-mix(in srgb, var(--panel-bg) 90%, var(--app-bg));
     --field-foreground: var(--text);
     --field-placeholder: color-mix(in srgb, var(--muted) 86%, transparent);
-    --field-border: color-mix(in srgb, var(--border) 88%, transparent);
+    --field-border: color-mix(in srgb, var(--border) 76%, transparent);
 
     --success: oklch(0.69 0.16 151);
     --success-foreground: #ffffff;
@@ -81,7 +81,11 @@
     --link: var(--accent);
 
     --radius: var(--radius);
-    --field-radius: calc(var(--radius) * 0.95);
+    --field-radius: calc(var(--radius) * 0.9);
+
+    --surface-shadow: 0 1px 2px rgba(0, 0, 0, 0.035);
+    --overlay-shadow: 0 12px 30px rgba(0, 0, 0, 0.1);
+    --field-shadow: 0 0 0 0 transparent;
   }
 
   html.light,

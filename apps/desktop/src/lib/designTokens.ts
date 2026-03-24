@@ -15,10 +15,10 @@ export const designTokens = {
   },
   classes: {
     panelSurface:
-      "border border-border/80 bg-card/80 shadow-[0_1px_6px_rgba(0,0,0,0.04)] backdrop-blur-[1px]",
-    subtleSurface: "border border-border/70 bg-muted/35",
+      "border border-border/65 bg-card/92 shadow-none backdrop-blur-[1px]",
+    subtleSurface: "border border-border/60 bg-muted/20",
     mutedText: "text-muted-foreground",
-    pageTitle: "text-2xl font-semibold tracking-tight text-foreground",
+    pageTitle: "text-[1.75rem] font-semibold tracking-tight text-foreground",
   },
 } as const;
 

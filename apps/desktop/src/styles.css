@@ -30,8 +30,8 @@ body {
 
 /* Thin overlay-style scrollbars for Chromium 146+ */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -67,7 +67,7 @@ body {
 }
 
 .app-topbar--frame {
-  height: 3rem;
+  height: 2.75rem;
 }
 
 .app-topbar__controls {
@@ -86,10 +86,12 @@ body {
 
 .app-topbar__toolbar-button {
   color: var(--muted);
+  opacity: 0.82;
 }
 
 .app-topbar__toolbar-button:hover {
   color: var(--text);
+  opacity: 1;
 }
 
 .app-topbar__inline-sidebar-toggle {
@@ -151,7 +153,7 @@ body {
 }
 
 .app-main-content {
-  background: var(--glass-fill);
+  background: color-mix(in srgb, var(--content-surface) 90%, var(--panel-bg) 10%);
   border-left: 1px solid var(--glass-border);
 }
 
@@ -162,7 +164,7 @@ body {
 }
 
 .app-right-sidebar-pane {
-  background: var(--glass-fill);
+  background: color-mix(in srgb, var(--panel-bg) 76%, transparent);
 }
 
 /* Inline gridTemplateColumns on desktop; collapse to one column at small widths */
@@ -182,12 +184,10 @@ body {
 }
 
 .settings-shell__main [data-slot="card"] {
-  border-color: color-mix(in srgb, var(--glass-border) 82%, transparent);
-  background: color-mix(in srgb, var(--panel-bg) 88%, transparent);
-  box-shadow:
-    0 1px 1px color-mix(in srgb, var(--text) 3%, transparent),
-    0 10px 24px -18px color-mix(in srgb, var(--text) 16%, transparent);
-  backdrop-filter: blur(calc(var(--titlebar-blur) + 1px));
+  border-color: color-mix(in srgb, var(--glass-border) 78%, transparent);
+  background: color-mix(in srgb, var(--panel-bg) 94%, transparent);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--text) 6%, transparent);
+  backdrop-filter: blur(calc(var(--titlebar-blur) - 1px));
 }
 
 .settings-shell__main [data-slot="card"]:has([data-provider-card]) {
@@ -225,18 +225,10 @@ body {
 
 .sidebar-lift {
   transition:
-    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
     background-color 180ms ease,
     color 180ms ease,
-    opacity 180ms ease;
-}
-
-.sidebar-lift:hover {
-  transform: translateY(-1px);
-}
-
-.sidebar-lift:active {
-  transform: translateY(0);
+    opacity 180ms ease,
+    border-color 180ms ease;
 }
 
 .sidebar-chevron {
@@ -286,20 +278,14 @@ body {
 .sidebar-workspace-card {
   border: 1px solid transparent;
   transition:
-    transform 200ms cubic-bezier(0.22, 1, 0.36, 1),
     background-color 180ms ease,
     color 180ms ease,
     border-color 180ms ease,
     opacity 180ms ease;
 }
 
-.sidebar-workspace-card:hover {
-  transform: translateY(-1px);
-}
-
 .sidebar-workspace-card[data-dragging="true"] {
   opacity: 0.7;
-  transform: scale(0.985);
 }
 
 .sidebar-workspace-card[data-drop-target="true"] {
@@ -308,10 +294,10 @@ body {
 
 .sidebar-thread-item {
   transition:
-    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
     opacity 220ms ease,
     background-color 180ms ease,
-    color 180ms ease;
+    color 180ms ease,
+    border-color 180ms ease;
 }
 
 body.app-resizing-sidebars {
@@ -342,10 +328,10 @@ body.app-animating-sidebars .app-right-sidebar-pane,
 body.app-animating-sidebars .app-topbar__sidebar-fill,
 body.app-animating-sidebars .app-topbar__content-fill {
   transition:
-    width 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    left 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    border-right-width 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    border-left-width 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    width 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    left 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-right-width 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-left-width 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 body.app-animating-sidebars .app-left-sidebar-pane,

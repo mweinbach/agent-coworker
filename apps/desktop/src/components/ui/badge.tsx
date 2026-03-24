@@ -45,7 +45,7 @@ function Badge({ className, variant = "default", children, ...props }: BadgeProp
       color={BADGE_COLOR_MAP[variant]}
       size="sm"
       variant={BADGE_VARIANT_MAP[variant]}
-      className={cn("min-h-0", className)}
+      className={cn("min-h-0 rounded-md shadow-none", className)}
       {...props}
     >
       {children}

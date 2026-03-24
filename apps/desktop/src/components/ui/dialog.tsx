@@ -1,12 +1,15 @@
 import * as React from "react";
-import { Modal, useOverlayState } from "@heroui/react";
+import { Modal } from "@heroui/react";
 import { XIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
+const ModalDialogPrimitive = Modal.Dialog as unknown as React.ComponentType<Record<string, unknown>>;
+
 type DialogContextValue = {
-  state: ReturnType<typeof useOverlayState>;
+  open: boolean;
+  setOpen: (open: boolean) => void;
 };
 
 const DialogContext = React.createContext<DialogContextValue | null>(null);
@@ -26,18 +29,17 @@ type DialogProps = React.PropsWithChildren<{
 }>;
 
 function Dialog({ children, open, defaultOpen, onOpenChange }: DialogProps) {
-  const state = useOverlayState({
-    isOpen: open,
-    defaultOpen,
-    onOpenChange,
-  });
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false);
+  const isOpen = open ?? uncontrolledOpen;
+  const setOpen = React.useCallback((nextOpen: boolean) => {
+    if (open === undefined) {
+      setUncontrolledOpen(nextOpen);
+    }
+    onOpenChange?.(nextOpen);
+  }, [onOpenChange, open]);
 
   return (
-    <DialogContext.Provider value={{ state }}>
-      <Modal state={state}>
-        {children}
-      </Modal>
-    </DialogContext.Provider>
+    <DialogContext.Provider value={{ open: isOpen, setOpen }}>{children}</DialogContext.Provider>
   );
 }
 
@@ -78,7 +80,7 @@ function DialogContent({
   onKeyDown,
   ...props
 }: DialogContentProps) {
-  const { state } = useDialogContext();
+  const { open, setOpen } = useDialogContext();
   const allowDismissRef = React.useRef(true);
 
   const handleBackdropClick = React.useCallback(
@@ -105,12 +107,12 @@ function DialogContent({
         });
         onEscapeKeyDown?.(nativeEvent as KeyboardEvent);
         if (!event.defaultPrevented && allowDismissRef.current) {
-          state.close();
+          setOpen(false);
         }
       }
       onKeyDown?.(event);
     },
-    [onEscapeKeyDown, onKeyDown, state],
+    [onEscapeKeyDown, onKeyDown, setOpen],
   );
 
   return (
@@ -119,19 +121,22 @@ function DialogContent({
         data-slot="dialog-overlay"
         className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[1px]"
         isDismissable={false}
+        isKeyboardDismissDisabled
+        isOpen={open}
         onClick={(event) => {
           allowDismissRef.current = true;
           handleBackdropClick(event);
           if (!event.isDefaultPrevented() && allowDismissRef.current) {
-            state.close();
+            setOpen(false);
           }
         }}
+        onOpenChange={setOpen}
       >
         <Modal.Container
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
           placement="center"
         >
-          <div
+          <ModalDialogPrimitive
             data-slot="dialog-content"
             className={cn(
               "relative grid w-[min(96vw,42rem)] gap-4 rounded-xl border border-border/80 bg-card p-5 text-card-foreground shadow-xl",
@@ -146,13 +151,13 @@ function DialogContent({
                 className="absolute right-4 top-4 opacity-70 hover:opacity-100"
                 size="icon-sm"
                 variant="ghost"
-                onClick={() => state.close()}
+                onClick={() => setOpen(false)}
               >
                 <XIcon data-icon="close" />
                 <span className="sr-only">Close</span>
               </Button>
             ) : null}
-          </div>
+          </ModalDialogPrimitive>
         </Modal.Container>
       </Modal.Backdrop>
     </DialogPortal>
@@ -178,7 +183,7 @@ const DialogDescription = React.forwardRef<HTMLParagraphElement, React.Component
 );
 
 function DialogClose({ children, ...props }: React.ComponentProps<typeof Button>) {
-  const { state } = useDialogContext();
+  const { setOpen } = useDialogContext();
 
   return (
     <Button
@@ -186,7 +191,7 @@ function DialogClose({ children, ...props }: React.ComponentProps<typeof Button>
       onClick={(event) => {
         props.onClick?.(event);
         if (!event.defaultPrevented) {
-          state.close();
+          setOpen(false);
         }
       }}
     >

@@ -1,30 +1,20 @@
 import * as React from "react";
-import { CheckIcon, ChevronDownIcon } from "lucide-react";
+import { Header } from "react-aria-components";
+import { ListBox, Select as HeroSelect, Separator as HeroSeparator } from "@heroui/react";
 
 import { cn } from "@/lib/utils";
 
 type SelectSize = "default" | "sm";
-type SelectContextValue = {
-  size: SelectSize;
-  value?: string;
-  defaultValue?: string;
-  disabled?: boolean;
-  onValueChange?: (value: string) => void;
-  open: boolean;
-  setOpen: (open: boolean) => void;
-};
+type HeroSelectProps = React.ComponentProps<typeof HeroSelect>;
+type HeroSelectTriggerProps = React.ComponentProps<typeof HeroSelect.Trigger>;
+type HeroSelectValueProps = React.ComponentProps<typeof HeroSelect.Value>;
+type HeroSelectPopoverProps = React.ComponentProps<typeof HeroSelect.Popover>;
+type HeroSelectPlacement = HeroSelectPopoverProps["placement"];
 
-const SelectContext = React.createContext<SelectContextValue | null>(null);
-
-function useSelectContext(): SelectContextValue {
-  const context = React.useContext(SelectContext);
-  if (!context) {
-    throw new Error("Select components must be used within <Select>");
-  }
-  return context;
-}
-
-type SelectProps = {
+type SelectProps = Omit<
+  HeroSelectProps,
+  "children" | "defaultValue" | "isDisabled" | "onChange" | "value" | "variant"
+> & {
   value?: string;
   defaultValue?: string;
   disabled?: boolean;
@@ -32,158 +22,205 @@ type SelectProps = {
   onValueChange?: (value: string) => void;
 };
 
-function Select({ value, defaultValue, disabled, onValueChange, children }: SelectProps) {
-  const [internalOpen, setInternalOpen] = React.useState(false);
-
+function Select({
+  value,
+  defaultValue,
+  disabled,
+  children,
+  onValueChange,
+  ...props
+}: SelectProps) {
   return (
-    <SelectContext.Provider
-      value={{
-        value,
-        defaultValue,
-        disabled,
-        onValueChange,
-        size: "default",
-        open: internalOpen,
-        setOpen: setInternalOpen,
+    <HeroSelect
+      data-slot="select"
+      defaultValue={defaultValue}
+      isDisabled={disabled}
+      onChange={(nextValue) => {
+        if (nextValue == null || Array.isArray(nextValue)) {
+          return;
+        }
+        onValueChange?.(String(nextValue));
       }}
+      value={value}
+      variant="secondary"
+      {...props}
     >
-      <div className="relative">{children}</div>
-    </SelectContext.Provider>
-  );
-}
-
-function SelectGroup({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div data-slot="select-group" className={cn(className)} {...props}>
       {children}
-    </div>
+    </HeroSelect>
   );
 }
 
-function SelectValue({ placeholder, children, className, ...props }: React.HTMLAttributes<HTMLSpanElement> & { placeholder?: string }) {
-  const { value } = useSelectContext();
+type SelectGroupProps = {
+  children?: React.ReactNode;
+  className?: string;
+};
 
+function SelectGroup({ className, children }: SelectGroupProps) {
   return (
-    <span data-slot="select-value" className={cn("truncate", !value && "text-muted-foreground", className)} {...props}>
-      {value ?? placeholder ?? children}
-    </span>
+    <ListBox.Section data-slot="select-group" className={cn(className)}>
+      {children}
+    </ListBox.Section>
   );
 }
+
+type SelectValueProps = Omit<HeroSelectValueProps, "children"> & {
+  children?: React.ReactNode;
+  placeholder?: React.ReactNode;
+};
+
+function SelectValue({
+  className,
+  children,
+  placeholder,
+  ...props
+}: SelectValueProps) {
+  return (
+    <HeroSelect.Value
+      data-slot="select-value"
+      className={cn("truncate", className)}
+      {...props}
+    >
+      {(values: { defaultChildren?: React.ReactNode; isPlaceholder?: boolean }) => {
+        if (values.isPlaceholder && placeholder !== undefined) {
+          return placeholder;
+        }
+        return children ?? values.defaultChildren;
+      }}
+    </HeroSelect.Value>
+  );
+}
+
+type SelectTriggerProps = Omit<HeroSelectTriggerProps, "children"> & {
+  children?: React.ReactNode;
+  size?: SelectSize;
+};
 
 function SelectTrigger({
   className,
   children,
   size = "default",
-  onClick,
   ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  size?: SelectSize;
-}) {
-  const context = useSelectContext();
-
+}: SelectTriggerProps) {
   return (
-    <button
-      type="button"
+    <HeroSelect.Trigger
       data-size={size}
       data-slot="select-trigger"
-      aria-expanded={context.open}
       className={cn(
         "flex w-fit min-w-40 items-center justify-between gap-2 rounded-md border border-border bg-background text-sm text-foreground shadow-sm outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50",
         size === "sm" ? "h-8 px-2.5 text-xs" : "h-9 px-3 py-2",
         className,
       )}
-      disabled={context.disabled}
-      onClick={(event) => {
-        context.setOpen(!context.open);
-        onClick?.(event);
-      }}
       {...props}
     >
       {children}
-      <ChevronDownIcon className="size-4 opacity-60" />
-    </button>
+      <HeroSelect.Indicator className="size-4 opacity-60" />
+    </HeroSelect.Trigger>
   );
 }
 
-function SelectScrollUpButton({ className, ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="select-scroll-up-button" className={cn(className)} {...props} />;
+function SelectScrollUpButton() {
+  return null;
 }
 
-function SelectScrollDownButton({ className, ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="select-scroll-down-button" className={cn(className)} {...props} />;
+function SelectScrollDownButton() {
+  return null;
 }
 
-function SelectContent({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  const context = useSelectContext();
-  if (!context.open) {
-    return null;
-  }
+type SelectContentProps = {
+  children?: React.ReactNode;
+  className?: string;
+  placement?: HeroSelectPlacement;
+};
 
+function SelectContent({
+  className,
+  children,
+  placement = "bottom",
+  ...props
+}: SelectContentProps) {
   return (
-    <div
+    <HeroSelect.Popover
       data-slot="select-content"
-      className={cn(
-        "absolute left-0 top-[calc(100%+0.25rem)] z-[120] min-w-full rounded-md border border-border bg-popover text-popover-foreground shadow-md",
-        className,
-      )}
+      className={cn("min-w-full", className)}
+      placement={placement}
       {...props}
     >
-      <div data-slot="select-viewport" className="max-h-96 overflow-auto p-1">
+      <ListBox data-slot="select-viewport" className="max-h-96 overflow-auto p-1">
         {children}
-      </div>
-    </div>
+      </ListBox>
+    </HeroSelect.Popover>
   );
 }
 
-function SelectLabel({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+type SelectLabelProps = React.HTMLAttributes<HTMLDivElement>;
+
+function SelectLabel({
+  className,
+  children,
+  ...props
+}: SelectLabelProps) {
   return (
-    <div
+    <Header
       data-slot="select-label"
       className={cn("px-2 py-1.5 text-sm font-semibold", className)}
       {...props}
     >
       {children}
-    </div>
+    </Header>
   );
 }
 
-type SelectItemProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
+type SelectItemProps = {
+  children?: React.ReactNode;
+  className?: string;
+  textValue?: string;
   value: string;
 };
 
-function SelectItem({ className, children, value, onClick, ...props }: SelectItemProps) {
-  const context = useSelectContext();
-  const size = context.size;
+function flattenSelectItemText(children: React.ReactNode): string {
+  return React.Children.toArray(children)
+    .flatMap((child) => {
+      if (typeof child === "string" || typeof child === "number") {
+        return [String(child)];
+      }
+      if (React.isValidElement<{ children?: React.ReactNode }>(child) && child.props.children) {
+        return [flattenSelectItemText(child.props.children)];
+      }
+      return [];
+    })
+    .join(" ")
+    .trim();
+}
+
+function SelectItem({
+  className,
+  children,
+  textValue,
+  value,
+}: SelectItemProps) {
+  const resolvedTextValue = (textValue ?? flattenSelectItemText(children)) || value;
 
   return (
-    <button
-      type="button"
+    <ListBox.Item
       data-slot="select-item"
-      className={cn(
-        "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pr-8 pl-2 text-sm outline-none transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50",
-        size === "sm" ? "text-xs" : null,
-        className,
-      )}
-      onClick={(event) => {
-        context.onValueChange?.(value);
-        context.setOpen(false);
-        onClick?.(event);
-      }}
-      {...props}
+      id={value}
+      textValue={resolvedTextValue}
+      className={cn("text-sm", className)}
     >
       {children}
-      <span className="absolute right-2 flex size-3.5 items-center justify-center">
-        <CheckIcon className="size-4" />
-      </span>
-    </button>
+      <ListBox.ItemIndicator />
+    </ListBox.Item>
   );
 }
 
-function SelectSeparator({ className, ...props }: React.ComponentProps<"div">) {
+function SelectSeparator({
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof HeroSeparator>) {
   return (
-    <div
+    <HeroSeparator
       data-slot="select-separator"
-      className={cn("-mx-1 my-1 h-px bg-border", className)}
+      className={cn("-mx-1 my-1", className)}
       {...props}
     />
   );

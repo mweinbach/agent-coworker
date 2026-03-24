@@ -1,11 +1,11 @@
 import { memo } from "react";
 
 import { AlertCircleIcon, BotIcon, CheckCircle2Icon, CircleDashedIcon, CircleIcon, MinusCircleIcon } from "lucide-react";
-import { ScrollShadow } from "@heroui/react";
 
 import { useAppStore } from "../app/store";
 import type { ThreadAgentSummary } from "../app/types";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { ScrollShadow } from "../components/ui/scroll-shadow";
 import { cn } from "../lib/utils";
 import { WorkspaceFileExplorer } from "./file-explorer/WorkspaceFileExplorer";
 

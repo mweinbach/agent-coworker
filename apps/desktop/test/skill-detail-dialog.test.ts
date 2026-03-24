@@ -140,20 +140,32 @@ describe("skill detail dialog", () => {
         throw new Error("React basic render failed: canary div not found in JSDOM");
       }
 
-      // Now render the actual component
-      let renderError: unknown = null;
-      const origConsoleError = console.error;
-      console.error = (...args: unknown[]) => {
-        renderError = args.map(String).join(" ");
-        origConsoleError(...args);
-      };
-      try {
-        await act(async () => {
-          root.render(createElement(SkillDetailDialog, { workspaceId: "ws-1" }));
-        });
-      } finally {
-        console.error = origConsoleError;
+      // Verify Dialog mock is working by rendering a mock Dialog directly
+      await act(async () => {
+        const { Dialog } = await import("../src/components/ui/dialog");
+        root.render(createElement(Dialog, { open: true }, createElement("span", { id: "dialog-probe" }, "probe")));
+      });
+      const dialogProbe = harness.dom.window.document.getElementById("dialog-probe");
+      const dialogMockWorks = !!dialogProbe;
+
+      // Render a component that reads from the store to verify Zustand works in JSDOM
+      function StoreProbe() {
+        const wsRt = useAppStore((s) => s.workspaceRuntimeById);
+        const rt2 = wsRt["ws-1"];
+        return createElement("div", { id: "store-probe" },
+          `installationId=${rt2?.selectedSkillInstallationId ?? "null"}`
+        );
       }
+      await act(async () => {
+        root.render(createElement(StoreProbe));
+      });
+      const storeProbe = harness.dom.window.document.getElementById("store-probe");
+      const storeProbeText = storeProbe?.textContent ?? "(missing)";
+
+      // Now render the actual component
+      await act(async () => {
+        root.render(createElement(SkillDetailDialog, { workspaceId: "ws-1" }));
+      });
 
       const openFolderButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
         (button) => button.textContent?.includes("Open folder"),
@@ -161,18 +173,11 @@ describe("skill detail dialog", () => {
 
       if (!openFolderButton) {
         const html = harness.dom.window.document.getElementById("root")?.innerHTML ?? "(empty)";
-        const storeAfter = useAppStore.getState();
-        const rtAfter = storeAfter.workspaceRuntimeById["ws-1"];
-        // Check if the component's store is the same instance
-        const storeSubscriberCount = useAppStore.getState === useAppStore.getState ? "same-fn" : "diff-fn";
         throw new Error(
           `missing open folder button.` +
           ` DOM: ${html.slice(0, 300)}` +
-          ` | renderError: ${renderError}` +
-          ` | rt-after: ${rtAfter ? "exists" : "missing"}` +
-          ` | installationId-after: ${rtAfter?.selectedSkillInstallationId}` +
-          ` | installation-after: ${rtAfter?.selectedSkillInstallation ? "exists" : "null"}` +
-          ` | storeFn: ${storeSubscriberCount}`
+          ` | dialogMock: ${dialogMockWorks}` +
+          ` | storeProbe: ${storeProbeText}`
         );
       }
 

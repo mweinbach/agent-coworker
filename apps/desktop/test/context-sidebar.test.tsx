@@ -13,8 +13,52 @@ class MockResizeObserver {
 const { useAppStore } = await import("../src/app/store");
 const { ContextSidebar } = await import("../src/ui/ContextSidebar");
 
+function resetAppStore(overrides: Record<string, unknown>) {
+  const state = useAppStore.getState();
+  useAppStore.setState({
+    ...state,
+    ready: true,
+    bootstrapPending: false,
+    startupError: null,
+    view: "chat",
+    settingsPage: "providers",
+    lastNonSettingsView: "chat",
+    workspaces: [],
+    threads: [],
+    selectedWorkspaceId: null,
+    selectedThreadId: null,
+    workspaceRuntimeById: {},
+    threadRuntimeById: {},
+    latestTodosByThreadId: {},
+    workspaceExplorerById: {},
+    promptModal: null,
+    notifications: [],
+    providerStatusByName: {},
+    providerStatusLastUpdatedAt: null,
+    providerStatusRefreshing: false,
+    providerCatalog: [],
+    providerDefaultModelByProvider: {},
+    providerConnected: [],
+    providerAuthMethodsByProvider: {},
+    providerLastAuthChallenge: null,
+    providerLastAuthResult: null,
+    composerText: "",
+    injectContext: false,
+    developerMode: false,
+    showHiddenFiles: false,
+    perWorkspaceSettings: false,
+    onboardingVisible: false,
+    sidebarCollapsed: false,
+    contextSidebarCollapsed: false,
+    contextSidebarWidth: 300,
+    messageBarHeight: 120,
+    sidebarWidth: 248,
+    ...overrides,
+  } as any);
+}
+
 describe("desktop context sidebar", () => {
-  test("renders child-agent summaries for the selected thread", async () => {
+  test.serial("renders child-agent summaries for the selected thread", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true, extraGlobals: { ResizeObserver: MockResizeObserver } });
 
     try {
@@ -22,8 +66,7 @@ describe("desktop context sidebar", () => {
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
 
-      useAppStore.setState((state) => ({
-        ...state,
+      resetAppStore({
         selectedThreadId: "thread-1",
         selectedWorkspaceId: null,
         latestTodosByThreadId: {},
@@ -73,7 +116,7 @@ describe("desktop context sidebar", () => {
             transcriptOnly: false,
           },
         },
-      }) as any);
+      });
 
       await act(async () => {
         root.render(createElement(ContextSidebar));
@@ -94,7 +137,7 @@ describe("desktop context sidebar", () => {
     }
   });
 
-  test("keeps tasks and agents in scrollable sections so files can keep the remaining height", async () => {
+  test.serial("keeps tasks and agents in scrollable sections so files can keep the remaining height", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true, extraGlobals: { ResizeObserver: MockResizeObserver } });
 
     try {
@@ -102,8 +145,7 @@ describe("desktop context sidebar", () => {
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
 
-      useAppStore.setState((state) => ({
-        ...state,
+      resetAppStore({
         selectedThreadId: "thread-1",
         selectedWorkspaceId: null,
         latestTodosByThreadId: {
@@ -156,7 +198,7 @@ describe("desktop context sidebar", () => {
             transcriptOnly: false,
           },
         },
-      }) as any);
+      });
 
       await act(async () => {
         root.render(createElement(ContextSidebar));

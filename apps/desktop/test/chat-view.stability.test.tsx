@@ -31,12 +31,10 @@ class MockMutationObserver {
   takeRecords() { return []; }
 }
 
-const mockWindow = {
-  event: undefined as unknown,
-  requestAnimationFrame: (callback: FrameRequestCallback) =>
-    setTimeout(() => callback(Date.now()), 0) as unknown as number,
-  cancelAnimationFrame: (id: number) => clearTimeout(id),
-};
+const requestAnimationFrameMock = (callback: FrameRequestCallback) =>
+  setTimeout(() => callback(Date.now()), 0) as unknown as number;
+
+const cancelAnimationFrameMock = (id: number) => clearTimeout(id);
 
 mock.module("../src/lib/desktopCommands", () => ({
   appendTranscriptBatch: async () => {},
@@ -82,28 +80,20 @@ mock.module("../src/lib/agentSocket", () => ({
 function setupChatViewJsdom() {
   return setupJsdom({
     includeAnimationFrame: {
-      requestAnimationFrame: (callback: FrameRequestCallback) =>
-        setTimeout(() => callback(Date.now()), 0) as unknown as number,
-      cancelAnimationFrame: (id: number) => clearTimeout(id),
+      requestAnimationFrame: requestAnimationFrameMock,
+      cancelAnimationFrame: cancelAnimationFrameMock,
     },
     extraGlobals: { MutationObserver: MockMutationObserver },
     setupWindow: (dom) => {
-      dom.window.requestAnimationFrame = mockWindow.requestAnimationFrame;
-      dom.window.cancelAnimationFrame = mockWindow.cancelAnimationFrame;
-      Object.assign(mockWindow, { document: dom.window.document });
-      Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: mockWindow });
-      Object.defineProperty(globalThis, "document", { configurable: true, writable: true, value: dom.window.document });
-      Object.defineProperty(globalThis, "HTMLElement", { configurable: true, writable: true, value: dom.window.HTMLElement });
+      dom.window.requestAnimationFrame = requestAnimationFrameMock;
+      dom.window.cancelAnimationFrame = cancelAnimationFrameMock;
+      Object.assign(dom.window, { event: undefined });
       if (typeof dom.window.HTMLElement.prototype.attachEvent !== "function") {
         (dom.window.HTMLElement.prototype as { attachEvent?: (name: string, handler: unknown) => void }).attachEvent = () => {};
       }
       if (typeof dom.window.HTMLElement.prototype.detachEvent !== "function") {
         (dom.window.HTMLElement.prototype as { detachEvent?: (name: string, handler: unknown) => void }).detachEvent = () => {};
       }
-      Object.defineProperty(globalThis, "HTMLButtonElement", { configurable: true, writable: true, value: dom.window.HTMLButtonElement });
-      Object.defineProperty(globalThis, "HTMLInputElement", { configurable: true, writable: true, value: dom.window.HTMLInputElement });
-      Object.defineProperty(globalThis, "HTMLTextAreaElement", { configurable: true, writable: true, value: dom.window.HTMLTextAreaElement });
-      Object.defineProperty(globalThis, "HTMLSelectElement", { configurable: true, writable: true, value: dom.window.HTMLSelectElement });
     },
   });
 }
@@ -174,10 +164,11 @@ describe("desktop chat view stability", () => {
       consoleErrors.push(args.map((arg) => String(arg)).join(" "));
     };
 
+    let root: ReturnType<typeof createRoot> | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         root.render(
@@ -189,13 +180,14 @@ describe("desktop chat view stability", () => {
         );
       });
 
-      expect(container.textContent).toContain("Existing thread");
+      expect(container.textContent).toContain("Thread 1");
       expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(false);
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
       console.error = realError;
       harness.restore();
     }
@@ -436,10 +428,11 @@ describe("desktop chat view stability", () => {
     });
 
     const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         root.render(
@@ -454,11 +447,12 @@ describe("desktop chat view stability", () => {
       expect(container.textContent).toContain("Existing thread");
       expect(container.textContent).toContain("Loading thread");
       expect(container.textContent).not.toContain("Send a message to start.");
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
       harness.restore();
     }
   });
@@ -631,10 +625,11 @@ describe("desktop chat view stability", () => {
 
     const harness = setupChatViewJsdom();
 
+    let root: ReturnType<typeof createRoot> | null = null;
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
-      const root = createRoot(container);
+      root = createRoot(container);
 
       await act(async () => {
         root.render(createElement(StrictMode, null, createElement(ChatView)));
@@ -670,11 +665,12 @@ describe("desktop chat view stability", () => {
 
       expect(container.querySelector('[aria-label="Steer current response"]')).not.toBeNull();
       expect(container.textContent).toContain("Steer sent. Waiting for the running turn to accept it.");
-
-      await act(async () => {
-        root.unmount();
-      });
     } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
       harness.restore();
     }
   });

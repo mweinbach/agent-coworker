@@ -9,6 +9,7 @@ type JsdomGlobalKey =
   | "HTMLInputElement"
   | "HTMLTextAreaElement"
   | "HTMLSelectElement"
+  | "Image"
   | "MutationObserver"
   | "SVGElement"
   | "Node"
@@ -66,6 +67,7 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
     "HTMLInputElement",
     "HTMLTextAreaElement",
     "HTMLSelectElement",
+    "Image",
     "MutationObserver",
     "SVGElement",
     "Node",
@@ -84,6 +86,7 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
   setGlobalProperty("HTMLInputElement", dom.window.HTMLInputElement);
   setGlobalProperty("HTMLTextAreaElement", dom.window.HTMLTextAreaElement);
   setGlobalProperty("HTMLSelectElement", dom.window.HTMLSelectElement);
+  setGlobalProperty("Image", dom.window.Image);
   setGlobalProperty("MutationObserver", dom.window.MutationObserver);
   setGlobalProperty("SVGElement", dom.window.SVGElement);
   setGlobalProperty("Node", dom.window.Node);

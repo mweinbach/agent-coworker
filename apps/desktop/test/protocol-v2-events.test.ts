@@ -290,6 +290,15 @@ describe("desktop JSON-RPC event mapping", () => {
           }
         },
       },
+      setupWindow: (dom) => {
+        Object.assign(dom.window, { event: undefined });
+        if (typeof dom.window.HTMLElement.prototype.attachEvent !== "function") {
+          (dom.window.HTMLElement.prototype as { attachEvent?: (name: string, handler: unknown) => void }).attachEvent = () => {};
+        }
+        if (typeof dom.window.HTMLElement.prototype.detachEvent !== "function") {
+          (dom.window.HTMLElement.prototype as { detachEvent?: (name: string, handler: unknown) => void }).detachEvent = () => {};
+        }
+      },
     });
     const container = harness.dom.window.document.getElementById("root");
     if (!container) {
@@ -418,14 +427,14 @@ describe("desktop JSON-RPC event mapping", () => {
       showHiddenFiles: false,
     } as any);
 
-    void act(async () => {
+    act(() => {
       root?.render(createElement(ChatView));
     });
   });
 
   afterEach(() => {
     if (root) {
-      void act(async () => {
+      act(() => {
         root?.unmount();
       });
     }

@@ -94,6 +94,7 @@ const ChatShell = memo(function ChatShell({
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const newThread = useAppStore((s) => s.newThread);
   const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
   const toggleContextSidebar = useAppStore((s) => s.toggleContextSidebar);
   const hasAnimatedSidebarsRef = useRef(false);
@@ -127,6 +128,7 @@ const ChatShell = memo(function ChatShell({
       <AppTopBar
         busy={busy}
         onToggleSidebar={toggleSidebar}
+        onNewChat={() => void newThread()}
         sidebarCollapsed={sidebarCollapsed}
         sidebarWidth={sidebarWidth}
         contextSidebarCollapsed={contextSidebarCollapsed}

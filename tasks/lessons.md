@@ -177,6 +177,7 @@
 - For HeroUI buttons inside the desktop sidebar rail, add explicit `w-full` on the top-level nav actions; relying on grid stretch alone can leave Chat/Skills looking undersized next to the compose control.
 - For desktop “new chat” affordances in this shell, prefer a compose-style pen/paper icon over a generic plus so the action reads as “start writing” instead of “add another thing.”
 - When the user wants the compose affordance to read as one action, fold the pen icon into a single full-width `New Chat` rail button instead of splitting it across a label and a separate icon-only control.
+- When the left desktop sidebar is collapsed, keep `New Chat` reachable from the shell header itself; do not strand compose behind a hidden rail.
 - For desktop steering UX in this repo, do not stop at store/runtime support; the chat composer itself must stay editable during busy turns, route non-empty busy submits through `busyPolicy: "steer"`, and only show the stop control when the composer is empty.
 - When desktop steering is user-visible, distinguish `steer ready` from `steer pending` in the composer itself; a generic send icon is not enough once the draft is targeting the active run.
 - For desktop provider bootstrap, do not fire separate catalog/auth/status requests from the UI during cold start; let the control-socket `server_hello` bootstrap them and treat a missing control `sessionId` as handshaking, not a user-visible "Not connected" error.

@@ -1,4 +1,4 @@
-import { PanelLeftIcon, PanelRightIcon, LoaderCircleIcon } from "lucide-react";
+import { PanelLeftIcon, PanelRightIcon, LoaderCircleIcon, SquarePenIcon } from "lucide-react";
 
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -7,6 +7,7 @@ import { SidebarCollapseControl } from "./SidebarCollapseControl";
 interface AppTopBarProps {
   busy: boolean;
   onToggleSidebar: () => void;
+  onNewChat: () => void;
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   contextSidebarCollapsed: boolean;
@@ -16,6 +17,7 @@ interface AppTopBarProps {
 export function AppTopBar({
   busy,
   onToggleSidebar,
+  onNewChat,
   sidebarCollapsed,
   sidebarWidth,
   contextSidebarCollapsed,
@@ -36,7 +38,11 @@ export function AppTopBar({
         aria-hidden="true"
         style={{ left: sidebarCollapsed ? 0 : sidebarWidth }}
       />
-      <SidebarCollapseControl onToggleSidebar={onToggleSidebar} sidebarCollapsed={sidebarCollapsed} />
+      <SidebarCollapseControl
+        onToggleSidebar={onToggleSidebar}
+        onNewChat={onNewChat}
+        sidebarCollapsed={sidebarCollapsed}
+      />
       <div className="app-topbar__inline-sidebar-toggle app-topbar__toolbar app-topbar__controls absolute left-3 top-1/2 flex min-w-0 -translate-y-1/2 items-center gap-1">
         <Button
           size="icon-sm"
@@ -48,6 +54,18 @@ export function AppTopBar({
         >
           <PanelLeftIcon className="h-4 w-4" />
         </Button>
+        {sidebarCollapsed ? (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={onNewChat}
+            title="New Chat"
+            aria-label="New Chat"
+            className="app-topbar__toolbar-button text-muted-foreground hover:text-foreground"
+          >
+            <SquarePenIcon className="h-4 w-4" />
+          </Button>
+        ) : null}
       </div>
 
       <div className="app-topbar__title pointer-events-none absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">

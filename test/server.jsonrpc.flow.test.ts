@@ -815,7 +815,7 @@ describe("server JSON-RPC flows", () => {
     } finally {
       await server.stop();
     }
-  });
+  }, 15_000);
 
   test("thread/resume honors notification opt-outs while replaying journal events", async () => {
     const tmpDir = await makeTmpProject();

@@ -90,11 +90,11 @@ describe("skill detail dialog", () => {
     openPathMock.mockClear();
     revealPathMock.mockClear();
 
-    const previousState = useAppStore.getState();
     const installationRoot = "/home/test/.cowork/skills/example-skill";
 
-    useAppStore.setState({
+    useAppStore.setState((state) => ({
       workspaceRuntimeById: {
+        ...state.workspaceRuntimeById,
         [SKILL_DETAIL_WORKSPACE_ID]: {
           ...defaultWorkspaceRuntime(),
           selectedSkillContent: null,
@@ -118,7 +118,7 @@ describe("skill detail dialog", () => {
           },
         },
       },
-    });
+    }));
 
     const harness = setupJsdom();
 
@@ -154,7 +154,10 @@ describe("skill detail dialog", () => {
         root.unmount();
       });
     } finally {
-      useAppStore.setState(previousState);
+      useAppStore.setState((state) => {
+        const { [SKILL_DETAIL_WORKSPACE_ID]: _, ...rest } = state.workspaceRuntimeById;
+        return { workspaceRuntimeById: rest };
+      });
       harness.restore();
     }
   });
@@ -168,10 +171,11 @@ describe("skill detail dialog", () => {
     const selectSkillInstallationMock = mock(async () => {});
     const installationRoot = "/home/test/.cowork/skills/example-skill";
 
-    useAppStore.setState({
+    useAppStore.setState((state) => ({
       deleteSkillInstallation: deleteSkillInstallationMock as typeof previousState.deleteSkillInstallation,
       selectSkillInstallation: selectSkillInstallationMock as typeof previousState.selectSkillInstallation,
       workspaceRuntimeById: {
+        ...state.workspaceRuntimeById,
         [SKILL_DETAIL_WORKSPACE_ID]: {
           ...defaultWorkspaceRuntime(),
           selectedSkillContent: null,
@@ -195,7 +199,7 @@ describe("skill detail dialog", () => {
           },
         },
       },
-    });
+    }));
 
     const harness = setupJsdom();
 
@@ -231,7 +235,10 @@ describe("skill detail dialog", () => {
         root.unmount();
       });
     } finally {
-      useAppStore.setState(previousState);
+      useAppStore.setState((state) => {
+        const { [SKILL_DETAIL_WORKSPACE_ID]: _, ...rest } = state.workspaceRuntimeById;
+        return { workspaceRuntimeById: rest };
+      });
       harness.restore();
     }
   });

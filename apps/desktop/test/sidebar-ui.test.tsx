@@ -309,10 +309,28 @@ describe("desktop sidebar", () => {
         root.render(createElement(Sidebar));
       });
 
-      expect(container.textContent).toContain("Chat");
+      expect(container.textContent).toContain("New Chat");
       expect(container.textContent).toContain("Skills");
       expect(container.textContent).toContain("2 sessions");
       expect(container.textContent).toContain("viewing skills");
+
+      const newChatButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("New Chat"),
+      );
+      if (!(newChatButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing new chat button");
+      }
+      expect(newChatButton.className).toContain("w-full");
+
+      const skillsButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Skills"),
+      );
+      if (!(skillsButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing skills button");
+      }
+      expect(skillsButton.className).toContain("w-full");
+
+      expect(newChatButton.querySelector("svg")?.className.baseVal ?? "").toContain("lucide-square-pen");
     } finally {
       if (root) {
         await act(async () => {

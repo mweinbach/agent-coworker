@@ -2,12 +2,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent
 
 import {
   ChevronRightIcon,
-  CirclePlusIcon,
   FolderIcon,
   FolderOpenIcon,
   FolderPlusIcon,
   MessageSquareIcon,
   Settings2Icon,
+  SquarePenIcon,
   SparklesIcon,
 } from "lucide-react";
 
@@ -248,64 +248,26 @@ export const Sidebar = memo(function Sidebar() {
     }
   };
 
-  const handleOpenChat = useCallback(async () => {
-    const selectedThread = selectedThreadId ? threads.find((thread) => thread.id === selectedThreadId) ?? null : null;
-    const workspaceId = selectedWorkspaceId ?? selectedThread?.workspaceId ?? workspaces[0]?.id ?? null;
-
-    if (!workspaceId) {
-      await newThread();
-      return;
-    }
-
-    if (selectedThread?.workspaceId === workspaceId) {
-      await selectThread(selectedThread.id);
-      return;
-    }
-
-    const workspaceThreads = threadsByWorkspaceId.get(workspaceId) ?? [];
-    const nextThread = workspaceThreads[0] ?? null;
-
-    if (nextThread) {
-      await selectThread(nextThread.id);
-      return;
-    }
-
-    await newThread({ workspaceId });
-  }, [newThread, selectedThreadId, selectedWorkspaceId, selectThread, threads, threadsByWorkspaceId, workspaces]);
-
   return (
     <aside className="app-sidebar sidebar-rail-enter flex h-full w-full flex-col gap-1.5 px-2 pt-1.5 pb-3">
-      <nav className="grid gap-1.5">
-        <div className="grid grid-cols-[1fr_auto] gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            className={cn(
-              "sidebar-lift h-8 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
-              "hover:bg-foreground/[0.045] hover:text-foreground",
-              view === "chat" && "bg-foreground/[0.055] text-foreground",
-            )}
-            onClick={() => void handleOpenChat()}
-          >
-            <MessageSquareIcon className="h-4 w-4 text-muted-foreground" />
-            Chat
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="sidebar-lift h-8 w-8 rounded-lg text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground"
-            onClick={() => void newThread()}
-            aria-label="New thread"
-            title="New thread"
-          >
-            <CirclePlusIcon className="h-4 w-4" />
-          </Button>
-        </div>
+      <nav className="grid w-full gap-1.5">
         <Button
           variant="ghost"
           size="sm"
           className={cn(
-            "sidebar-lift h-8 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+            "hover:bg-foreground/[0.045] hover:text-foreground",
+          )}
+          onClick={() => void newThread()}
+        >
+          <SquarePenIcon className="h-4 w-4 text-muted-foreground" />
+          New Chat
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
             "hover:bg-foreground/[0.045] hover:text-foreground",
             view === "skills" && "bg-foreground/[0.055] text-foreground",
           )}

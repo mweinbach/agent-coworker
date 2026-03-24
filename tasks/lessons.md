@@ -174,6 +174,9 @@
 - When a desktop modal shares one wrapper with its backdrop, never leave a higher `z-*` class on the backdrop than on the dialog body; that makes the scrim sit over the popup and the modal reads like it is behind the page.
 - For desktop workspace navigation in this repo, keep `selectedWorkspaceId` and `selectedThreadId` aligned; selecting a workspace from Skills must not leave a chat from another workspace active under the hood.
 - When a desktop surface offers both Skills and Chat, treat Chat as its own destination instead of overloading `New thread`; reopening the already-selected thread from Skills still needs to force `view: "chat"`.
+- For HeroUI buttons inside the desktop sidebar rail, add explicit `w-full` on the top-level nav actions; relying on grid stretch alone can leave Chat/Skills looking undersized next to the compose control.
+- For desktop “new chat” affordances in this shell, prefer a compose-style pen/paper icon over a generic plus so the action reads as “start writing” instead of “add another thing.”
+- When the user wants the compose affordance to read as one action, fold the pen icon into a single full-width `New Chat` rail button instead of splitting it across a label and a separate icon-only control.
 - For desktop steering UX in this repo, do not stop at store/runtime support; the chat composer itself must stay editable during busy turns, route non-empty busy submits through `busyPolicy: "steer"`, and only show the stop control when the composer is empty.
 - When desktop steering is user-visible, distinguish `steer ready` from `steer pending` in the composer itself; a generic send icon is not enough once the draft is targeting the active run.
 - For desktop provider bootstrap, do not fire separate catalog/auth/status requests from the UI during cold start; let the control-socket `server_hello` bootstrap them and treat a missing control `sessionId` as handshaking, not a user-visible "Not connected" error.

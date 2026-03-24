@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
+import { createAgentRouteHandlers } from "../src/server/jsonrpc/routes/agents";
 import { createMcpRouteHandlers } from "../src/server/jsonrpc/routes/mcp";
 import { createMemoryRouteHandlers } from "../src/server/jsonrpc/routes/memory";
 import { createProviderRouteHandlers } from "../src/server/jsonrpc/routes/provider";
@@ -213,6 +214,66 @@ describe("JSON-RPC extracted route review fixes", () => {
 
     expect(response.error?.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
     expect(response.result).toBeUndefined();
+  });
+
+  test("session agent spawn rejects invalid role as invalidParams", async () => {
+    const threadSession = {
+      id: "thread-1",
+      createAgentSession: async () => {
+        throw new Error("createAgentSession should not run for invalid role");
+      },
+    };
+    const harness = createRouteHarness({}, [], { threadSession });
+    const handlers = createAgentRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/agent/spawn", {
+      threadId: "thread-1",
+      message: "hi",
+      role: "bogus",
+    });
+
+    expect(response.error?.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
+    expect(response.result).toBeUndefined();
+  });
+
+  test("session agent spawn rejects invalid reasoningEffort as invalidParams", async () => {
+    const threadSession = {
+      id: "thread-1",
+      createAgentSession: async () => {
+        throw new Error("createAgentSession should not run for invalid reasoningEffort");
+      },
+    };
+    const harness = createRouteHarness({}, [], { threadSession });
+    const handlers = createAgentRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/agent/spawn", {
+      threadId: "thread-1",
+      message: "hi",
+      reasoningEffort: "ultra",
+    });
+
+    expect(response.error?.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
+    expect(response.result).toBeUndefined();
+  });
+
+  test("session agent spawn forwards valid role and reasoningEffort", async () => {
+    let harness!: RouteHarness;
+    const threadSession = {
+      id: "thread-1",
+      createAgentSession: async (opts: { role?: string; reasoningEffort?: string }) => {
+        expect(opts.role).toBe("explorer");
+        expect(opts.reasoningEffort).toBe("low");
+      },
+    };
+    harness = createRouteHarness({}, [], { threadSession });
+
+    const handlers = createAgentRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/agent/spawn", {
+      threadId: "thread-1",
+      message: "hi",
+      role: "explorer",
+      reasoningEffort: "low",
+    });
+
+    expect(response.error).toBeUndefined();
   });
 
   test("session harness context set forwards valid payload to session", async () => {

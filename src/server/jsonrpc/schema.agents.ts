@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { agentReasoningEffortSchema, agentRoleSchema } from "../../shared/agents";
 import { nonEmptyTrimmedStringSchema, optionalNonEmptyTrimmedStringSchema } from "./schema.shared";
 
 export const agentListEventSchema = z.object({
@@ -34,9 +35,9 @@ export const jsonRpcAgentRequestSchemas = {
   "cowork/session/agent/spawn": z.object({
     threadId: nonEmptyTrimmedStringSchema,
     message: nonEmptyTrimmedStringSchema,
-    role: optionalNonEmptyTrimmedStringSchema,
+    role: agentRoleSchema.optional(),
     model: optionalNonEmptyTrimmedStringSchema,
-    reasoningEffort: optionalNonEmptyTrimmedStringSchema,
+    reasoningEffort: agentReasoningEffortSchema.optional(),
     forkContext: z.boolean().optional(),
   }).strict(),
   "cowork/session/agent/list": z.object({

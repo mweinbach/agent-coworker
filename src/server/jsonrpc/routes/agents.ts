@@ -1,5 +1,5 @@
-import type { AgentReasoningEffort, AgentRole } from "../../../shared/agents";
 import { JSONRPC_ERROR_CODES } from "../protocol";
+import { jsonRpcAgentRequestSchemas } from "../schema.agents";
 
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
@@ -9,11 +9,19 @@ export function createAgentRouteHandlers(
 ): JsonRpcRequestHandlerMap {
   return {
     "cowork/session/agent/spawn": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+      const parsed = jsonRpcAgentRequestSchemas["cowork/session/agent/spawn"].safeParse(message.params);
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+
+      const { threadId, message: prompt, role, model, reasoningEffort, forkContext } = parsed.data;
       const binding = context.threads.getLive(threadId);
       const session = binding?.session;
-      const prompt = typeof params.message === "string" ? params.message : "";
       if (!session || !prompt.trim()) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
@@ -24,12 +32,10 @@ export function createAgentRouteHandlers(
 
       await session.createAgentSession({
         message: prompt,
-        ...(typeof params.role === "string" ? { role: params.role as AgentRole } : {}),
-        ...(typeof params.model === "string" ? { model: params.model } : {}),
-        ...(typeof params.reasoningEffort === "string"
-          ? { reasoningEffort: params.reasoningEffort as AgentReasoningEffort }
-          : {}),
-        ...(typeof params.forkContext === "boolean" ? { forkContext: params.forkContext } : {}),
+        ...(role !== undefined ? { role } : {}),
+        ...(model !== undefined ? { model } : {}),
+        ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+        ...(forkContext !== undefined ? { forkContext } : {}),
       });
       context.jsonrpc.sendResult(ws, message.id, {});
     },

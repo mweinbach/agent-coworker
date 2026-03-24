@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { createElement } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -73,29 +73,21 @@ mock.module("../src/components/ui/dialog", () => ({
   DialogDescription: ({ children, ...props }: Record<string, unknown>) => createElement("p", props, children),
 }));
 
-const { reactivateWorkspaceJsonRpcState } = await import("../src/app/store.helpers");
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
 const { SkillDetailDialog } = await import("../src/ui/skills/SkillDetailDialog");
 
-/** Avoid `ws-1`, which many desktop tests use concurrently under `bun test --max-concurrency`. */
-const SKILL_DETAIL_WORKSPACE_ID = "ws-skill-detail-dialog";
-
 describe("skill detail dialog", () => {
-  beforeEach(() => {
-    reactivateWorkspaceJsonRpcState(SKILL_DETAIL_WORKSPACE_ID);
-  });
-
   test("reveals the installation folder for non-workspace skills", async () => {
     openPathMock.mockClear();
     revealPathMock.mockClear();
 
+    const previousState = useAppStore.getState();
     const installationRoot = "/home/test/.cowork/skills/example-skill";
 
-    useAppStore.setState((state) => ({
+    useAppStore.setState({
       workspaceRuntimeById: {
-        ...state.workspaceRuntimeById,
-        [SKILL_DETAIL_WORKSPACE_ID]: {
+        "ws-1": {
           ...defaultWorkspaceRuntime(),
           selectedSkillContent: null,
           selectedSkillInstallationId: "skill-1",
@@ -118,7 +110,7 @@ describe("skill detail dialog", () => {
           },
         },
       },
-    }));
+    });
 
     const harness = setupJsdom();
 
@@ -130,15 +122,16 @@ describe("skill detail dialog", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(SkillDetailDialog, { workspaceId: SKILL_DETAIL_WORKSPACE_ID }));
+        root.render(createElement(SkillDetailDialog, { workspaceId: "ws-1" }));
       });
 
-      const openFolderButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find((button) =>
-        (button.textContent ?? "").includes("Open folder"),
+      const openFolderButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent?.includes("Open folder"),
       );
 
       if (!openFolderButton) {
-        throw new Error("missing open folder button");
+        const html = harness.dom.window.document.getElementById("root")?.innerHTML ?? "(empty)";
+        throw new Error(`missing open folder button. DOM: ${html.slice(0, 500)}`);
       }
 
       await act(async () => {
@@ -154,10 +147,7 @@ describe("skill detail dialog", () => {
         root.unmount();
       });
     } finally {
-      useAppStore.setState((state) => {
-        const { [SKILL_DETAIL_WORKSPACE_ID]: _, ...rest } = state.workspaceRuntimeById;
-        return { workspaceRuntimeById: rest };
-      });
+      useAppStore.setState(previousState);
       harness.restore();
     }
   });
@@ -171,12 +161,11 @@ describe("skill detail dialog", () => {
     const selectSkillInstallationMock = mock(async () => {});
     const installationRoot = "/home/test/.cowork/skills/example-skill";
 
-    useAppStore.setState((state) => ({
+    useAppStore.setState({
       deleteSkillInstallation: deleteSkillInstallationMock as typeof previousState.deleteSkillInstallation,
       selectSkillInstallation: selectSkillInstallationMock as typeof previousState.selectSkillInstallation,
       workspaceRuntimeById: {
-        ...state.workspaceRuntimeById,
-        [SKILL_DETAIL_WORKSPACE_ID]: {
+        "ws-1": {
           ...defaultWorkspaceRuntime(),
           selectedSkillContent: null,
           selectedSkillInstallationId: "skill-1",
@@ -199,7 +188,7 @@ describe("skill detail dialog", () => {
           },
         },
       },
-    }));
+    });
 
     const harness = setupJsdom();
 
@@ -211,15 +200,16 @@ describe("skill detail dialog", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(SkillDetailDialog, { workspaceId: SKILL_DETAIL_WORKSPACE_ID }));
+        root.render(createElement(SkillDetailDialog, { workspaceId: "ws-1" }));
       });
 
-      const uninstallButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find((button) =>
-        (button.textContent ?? "").includes("Uninstall"),
+      const uninstallButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent?.includes("Uninstall"),
       );
 
       if (!uninstallButton) {
-        throw new Error("missing uninstall button");
+        const html = harness.dom.window.document.getElementById("root")?.innerHTML ?? "(empty)";
+        throw new Error(`missing uninstall button. DOM: ${html.slice(0, 500)}`);
       }
 
       await act(async () => {
@@ -235,10 +225,7 @@ describe("skill detail dialog", () => {
         root.unmount();
       });
     } finally {
-      useAppStore.setState((state) => {
-        const { [SKILL_DETAIL_WORKSPACE_ID]: _, ...rest } = state.workspaceRuntimeById;
-        return { workspaceRuntimeById: rest };
-      });
+      useAppStore.setState(previousState);
       harness.restore();
     }
   });

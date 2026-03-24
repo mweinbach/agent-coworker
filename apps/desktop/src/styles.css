@@ -194,28 +194,6 @@ body {
   background: color-mix(in srgb, var(--panel-bg) 84%, transparent);
 }
 
-@keyframes collapsible-open {
-  from {
-    height: 0;
-    opacity: 0;
-  }
-  to {
-    height: var(--radix-collapsible-content-height);
-    opacity: 1;
-  }
-}
-
-@keyframes collapsible-close {
-  from {
-    height: var(--radix-collapsible-content-height);
-    opacity: 1;
-  }
-  to {
-    height: 0;
-    opacity: 0;
-  }
-}
-
 @keyframes sidebarRailIn {
   from {
     opacity: 0.68;

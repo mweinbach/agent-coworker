@@ -455,14 +455,15 @@ export function McpServersPage() {
 
       <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
         <CollapsibleTrigger asChild>
-          <button
+          <Button
             type="button"
-            className="flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+            variant="ghost"
+            className="h-auto w-full justify-start gap-2 rounded-lg px-1 py-1.5 text-sm font-medium text-muted-foreground hover:bg-transparent hover:text-foreground"
           >
             <WrenchIcon className="size-4" />
             <span>Advanced</span>
             <ChevronDownIcon className={cn("ml-auto size-4 transition-transform", advancedOpen && "rotate-180")} />
-          </button>
+          </Button>
         </CollapsibleTrigger>
         <CollapsibleContent className="space-y-5 pt-2">
           <Card className="border-border/80 bg-card/85">

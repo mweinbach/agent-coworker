@@ -122,7 +122,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: { items:
         </CollapsibleTrigger>
 
         {/* ── Expanded timeline ─────────────────────────────────────────────── */}
-        <CollapsibleContent className="overflow-hidden data-[state=open]:animate-[collapsible-open_200ms_ease-out] data-[state=closed]:animate-[collapsible-close_200ms_ease-out]">
+        <CollapsibleContent className="overflow-hidden">
           <CardContent className="border-t border-border/50 px-3.5 pb-3 pt-2.5">
             <div className="max-h-[26rem] overflow-y-auto pr-1" style={{ maskImage: "linear-gradient(to bottom, black calc(100% - 1.5rem), transparent)" }}>
               {summary.entries.map((entry, i) => {

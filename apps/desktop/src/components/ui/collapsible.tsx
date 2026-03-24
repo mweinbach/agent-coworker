@@ -4,7 +4,9 @@ import { Disclosure as HeroDisclosure } from "@heroui/react";
 import { cn } from "@/lib/utils";
 
 type CollapsibleContextValue = {
+  disabled: boolean;
   open: boolean;
+  setOpen: (open: boolean) => void;
 };
 
 const CollapsibleContext = React.createContext<CollapsibleContextValue | null>(null);
@@ -20,7 +22,7 @@ function useCollapsibleContext() {
 type CollapsibleProps = Omit<
   React.ComponentProps<typeof HeroDisclosure>,
   "children" | "defaultExpanded" | "isDisabled" | "isExpanded" | "onExpandedChange"
-> & {
+> & React.HTMLAttributes<HTMLDivElement> & {
   children?: React.ReactNode;
   defaultOpen?: boolean;
   disabled?: boolean;
@@ -48,7 +50,7 @@ function Collapsible({
   }, [onOpenChange, open]);
 
   return (
-    <CollapsibleContext.Provider value={{ open: isOpen }}>
+    <CollapsibleContext.Provider value={{ disabled: disabled ?? false, open: isOpen, setOpen: handleOpenChange }}>
       <HeroDisclosure
         className={className}
         data-expanded={isOpen ? "true" : "false"}
@@ -75,9 +77,11 @@ function CollapsibleTrigger({
   className,
   ...props
 }: CollapsibleTriggerProps) {
-  const { open } = useCollapsibleContext();
+  const { disabled, open, setOpen } = useCollapsibleContext();
   const sharedProps = {
     ...props,
+    "aria-disabled": disabled ? "true" : undefined,
+    "aria-expanded": open,
     className,
     "data-expanded": open ? "true" : "false",
     "data-state": open ? "open" : "closed",
@@ -85,10 +89,12 @@ function CollapsibleTrigger({
 
   if (asChild && React.isValidElement(children)) {
     const child = children as React.ReactElement<{
+      "aria-disabled"?: string;
+      "aria-expanded"?: boolean;
       className?: string;
-      slot?: string;
       "data-expanded"?: string;
       "data-state"?: string;
+      onClick?: React.MouseEventHandler<HTMLElement>;
     }>;
 
     return (
@@ -96,7 +102,12 @@ function CollapsibleTrigger({
         {React.cloneElement(child, {
           ...sharedProps,
           className: cn(className, child.props.className),
-          slot: "trigger",
+          onClick: (event: React.MouseEvent<HTMLElement>) => {
+            child.props.onClick?.(event);
+            if (!event.defaultPrevented && !disabled) {
+              setOpen(!open);
+            }
+          },
         })}
       </HeroDisclosure.Heading>
     );

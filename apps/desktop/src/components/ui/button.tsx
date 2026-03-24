@@ -6,11 +6,14 @@ import { cn } from "@/lib/utils";
 type ButtonVariant = "default" | "secondary" | "destructive" | "outline" | "ghost" | "link";
 type ButtonSize = "default" | "sm" | "lg" | "icon" | "icon-sm";
 
+type HeroButtonPressEvent = Parameters<NonNullable<React.ComponentProps<typeof HeroButton>["onPress"]>>[0];
+
 type ButtonProps = Omit<React.ComponentProps<typeof HeroButton>, "variant" | "size" | "onPress" | "isDisabled"> & {
   variant?: ButtonVariant;
   size?: ButtonSize;
   asChild?: boolean;
   onClick?: React.MouseEventHandler<HTMLButtonElement>;
+  onPress?: React.ComponentProps<typeof HeroButton>["onPress"];
   disabled?: boolean;
   title?: string;
 };
@@ -74,6 +77,7 @@ function Button({
   size = "default",
   asChild = false,
   onClick,
+  onPress,
   disabled,
   children,
   ...props
@@ -97,6 +101,23 @@ function Button({
     return React.cloneElement(child, childProps);
   }
 
+  const handlePress = React.useCallback((event: HeroButtonPressEvent) => {
+    onPress?.(event);
+    if (!onClick) {
+      return;
+    }
+
+    const compatEvent = {
+      defaultPrevented: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+      stopPropagation() {},
+    } as React.MouseEvent<HTMLButtonElement>;
+
+    onClick(compatEvent);
+  }, [onClick, onPress]);
+
   return (
     <HeroButton
       {...props}
@@ -110,7 +131,7 @@ function Button({
       data-variant={variant}
       isDisabled={disabled}
       isIconOnly={size === "icon" || size === "icon-sm"}
-      onClick={onClick}
+      onPress={handlePress}
       size={mapSize(size)}
       variant={mapVariant(variant)}
     >

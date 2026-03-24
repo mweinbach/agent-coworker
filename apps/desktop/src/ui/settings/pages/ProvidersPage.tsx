@@ -1004,14 +1004,15 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
 
       <div className="relative mb-2 flex max-w-fit space-x-1 rounded-xl border border-border/70 bg-foreground/[0.04] p-1.5 shadow-sm backdrop-blur-sm">
         {(["models", "tools"] as const).map((tab) => (
-          <button
+          <Button
             key={tab}
-            type="button"
             onClick={() => { setActiveTab(tab); setExpandedSectionId(null); }}
             className={cn(
-              "relative z-10 rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors",
+              "relative z-10 h-auto rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors",
               activeTab === tab ? "text-foreground" : "text-muted-foreground hover:text-foreground"
             )}
+            type="button"
+            variant="ghost"
           >
             {activeTab === tab && (
               <motion.div
@@ -1021,7 +1022,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
               />
             )}
             {tab === "models" ? "Model Providers" : "Tool Providers"}
-          </button>
+          </Button>
         ))}
       </div>
 

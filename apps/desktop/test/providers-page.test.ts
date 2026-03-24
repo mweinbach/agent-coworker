@@ -164,8 +164,8 @@ describe("desktop providers page", () => {
       }),
     );
 
-    expect(html).toMatch(/class="[^"]*text-muted-foreground hover:text-foreground[^"]*">Model Providers<\/button>/);
-    expect(html).toMatch(/class="[^"]*text-foreground[^"]*">.*Tool Providers<\/button>/);
+    expect(html).toMatch(/class="[^"]*text-muted-foreground hover:text-foreground[^"]*"[^>]*>Model Providers<\/button>/);
+    expect(html).toMatch(/class="[^"]*text-foreground[^"]*"[^>]*>.*Tool Providers<\/button>/);
   });
 
   test("shows provider auth result while API key setup is still in editing mode", () => {

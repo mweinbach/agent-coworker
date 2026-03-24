@@ -713,16 +713,17 @@ function FirstThreadStep({ onComplete }: { onComplete: (firstMessage?: string) =
 
       <div className="space-y-2">
         {STARTER_PROMPTS.map((prompt) => (
-          <button
+          <Button
             key={prompt.label}
-            type="button"
-            disabled={creating}
-            className="w-full rounded-lg border border-border/80 bg-card/85 px-4 py-3 text-left transition-colors hover:border-primary/40 hover:bg-card disabled:opacity-50"
+            className="h-auto w-full justify-start rounded-lg border border-border/80 bg-card/85 px-4 py-3 text-left transition-colors hover:border-primary/40 hover:bg-card disabled:opacity-50"
             onClick={() => handleClick(prompt.message)}
+            type="button"
+            variant="ghost"
+            disabled={creating}
           >
             <div className="text-sm font-medium">{prompt.label}</div>
             <div className="mt-0.5 text-xs text-muted-foreground line-clamp-1">{prompt.message}</div>
-          </button>
+          </Button>
         ))}
       </div>
 

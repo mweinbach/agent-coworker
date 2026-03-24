@@ -216,19 +216,20 @@ export function MemoryPage() {
 
           <div className="flex rounded-md border border-border/70 overflow-hidden">
             {(["all", "workspace", "user"] as const).map((scope) => (
-              <button
+              <Button
                 key={scope}
-                type="button"
                 className={cn(
-                  "px-3 py-1.5 text-xs font-medium transition-colors",
+                  "h-auto rounded-none border-0 px-3 py-1.5 text-xs font-medium shadow-none transition-colors first:rounded-l-none last:rounded-r-none",
                   filterScope === scope
                     ? "bg-primary text-primary-foreground"
                     : "bg-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
                 )}
                 onClick={() => setFilterScope(scope)}
+                type="button"
+                variant="ghost"
               >
                 {scope === "all" ? "All" : scopeLabel(scope)}
-              </button>
+              </Button>
             ))}
           </div>
 

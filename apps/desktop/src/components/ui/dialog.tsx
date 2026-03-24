@@ -1,11 +1,9 @@
 import * as React from "react";
-import { Modal } from "@heroui/react";
+import { createPortal } from "react-dom";
 import { XIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-
-const ModalDialogPrimitive = Modal.Dialog as unknown as React.ComponentType<Record<string, unknown>>;
 
 type DialogContextValue = {
   open: boolean;
@@ -43,13 +41,43 @@ function Dialog({ children, open, defaultOpen, onOpenChange }: DialogProps) {
   );
 }
 
-type DialogTriggerProps = React.ComponentProps<typeof Modal.Trigger>;
+type DialogTriggerProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  asChild?: boolean;
+};
 
-function DialogTrigger({ children, ...props }: DialogTriggerProps) {
-  return <Modal.Trigger {...props}>{children}</Modal.Trigger>;
+function DialogTrigger({ children, asChild = false, onClick, type, ...props }: React.PropsWithChildren<DialogTriggerProps>) {
+  const { setOpen } = useDialogContext();
+
+  const handleClick = (event: React.MouseEvent<HTMLElement>) => {
+    onClick?.(event as unknown as React.MouseEvent<HTMLButtonElement>);
+    if (!event.defaultPrevented) {
+      setOpen(true);
+    }
+  };
+
+  if (asChild && React.isValidElement<{ onClick?: (event: React.MouseEvent<HTMLElement>) => void }>(children)) {
+    return React.cloneElement(children, {
+      onClick: (event: React.MouseEvent<HTMLElement>) => {
+        children.props.onClick?.(event);
+        handleClick(event);
+      },
+    });
+  }
+
+  return (
+    <button type={type ?? "button"} onClick={handleClick as React.MouseEventHandler<HTMLButtonElement>} {...props}>
+      {children}
+    </button>
+  );
 }
 
-const DialogPortal = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+const DialogPortal = ({ children }: { children: React.ReactNode }) => {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(children, document.body);
+};
 
 const DialogOverlay = React.forwardRef<HTMLDivElement, React.ComponentProps<"div">>(function DialogOverlay(
   { className, ...props },
@@ -59,7 +87,7 @@ const DialogOverlay = React.forwardRef<HTMLDivElement, React.ComponentProps<"div
     <div
       ref={ref}
       data-slot="dialog-overlay"
-      className={cn("fixed inset-0 z-50 bg-black/45 backdrop-blur-[1px]", className)}
+      className={cn("fixed inset-0 bg-foreground/18", className)}
       {...props}
     />
   );
@@ -82,6 +110,18 @@ function DialogContent({
 }: DialogContentProps) {
   const { open, setOpen } = useDialogContext();
   const allowDismissRef = React.useRef(true);
+
+  React.useEffect(() => {
+    if (!open || typeof document === "undefined") {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open]);
 
   const handleBackdropClick = React.useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -115,31 +155,30 @@ function DialogContent({
     [onEscapeKeyDown, onKeyDown, setOpen],
   );
 
+  if (!open) {
+    return null;
+  }
+
   return (
     <DialogPortal>
-      <Modal.Backdrop
-        data-slot="dialog-overlay"
-        className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[1px]"
-        isDismissable={false}
-        isKeyboardDismissDisabled
-        isOpen={open}
-        onClick={(event) => {
-          allowDismissRef.current = true;
-          handleBackdropClick(event);
-          if (!event.isDefaultPrevented() && allowDismissRef.current) {
-            setOpen(false);
-          }
-        }}
-        onOpenChange={setOpen}
-      >
-        <Modal.Container
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          placement="center"
-        >
-          <ModalDialogPrimitive
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+        <DialogOverlay
+          onClick={(event) => {
+            allowDismissRef.current = true;
+            handleBackdropClick(event);
+            if (!event.defaultPrevented && allowDismissRef.current) {
+              setOpen(false);
+            }
+          }}
+        />
+        <div className="relative z-10 flex w-full justify-center">
+          <div
             data-slot="dialog-content"
+            role="dialog"
+            aria-modal="true"
+            tabIndex={-1}
             className={cn(
-              "relative grid w-[min(96vw,42rem)] gap-4 rounded-xl border border-border/80 bg-card p-5 text-card-foreground shadow-xl",
+              "relative grid w-[min(96vw,42rem)] gap-4 rounded-xl border border-border/80 bg-card p-5 text-card-foreground shadow-lg",
               className,
             )}
             onKeyDown={handleKeyDown}
@@ -157,9 +196,9 @@ function DialogContent({
                 <span className="sr-only">Close</span>
               </Button>
             ) : null}
-          </ModalDialogPrimitive>
-        </Modal.Container>
-      </Modal.Backdrop>
+          </div>
+        </div>
+      </div>
     </DialogPortal>
   );
 }
@@ -172,8 +211,8 @@ function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
   return <div data-slot="dialog-footer" className={cn("flex flex-col-reverse gap-2 sm:flex-row sm:justify-end", className)} {...props} />;
 }
 
-function DialogTitle({ className, ...props }: React.ComponentProps<typeof Modal.Heading>) {
-  return <Modal.Heading data-slot="dialog-title" className={cn("text-lg font-semibold leading-none tracking-tight", className)} {...props} />;
+function DialogTitle({ className, ...props }: React.ComponentProps<"h2">) {
+  return <h2 data-slot="dialog-title" className={cn("text-lg font-semibold leading-none tracking-tight", className)} {...props} />;
 }
 
 const DialogDescription = React.forwardRef<HTMLParagraphElement, React.ComponentProps<"p">>(

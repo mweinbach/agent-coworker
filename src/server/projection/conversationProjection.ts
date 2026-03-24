@@ -320,6 +320,23 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     return Boolean(aggregate && aggregate === normalizeTranscriptReplayText(normalized));
   };
 
+  const emitProjectedUserMessage = (
+    turnId: string,
+    text: string,
+    clientMessageId: string | null,
+  ) => {
+    const item: ProjectedItem = {
+      id: clientMessageId
+        ? makeItemId("userMessage", `${turnId}:${clientMessageId}`)
+        : makeItemId("userMessage", `${turnId}:${crypto.randomUUID()}`),
+      type: "userMessage",
+      content: [{ type: "text", text }],
+      ...(clientMessageId ? { clientMessageId } : {}),
+    };
+    opts.sink.emitItemStarted(turnId, item);
+    opts.sink.emitItemCompleted(turnId, item);
+  };
+
   const ensureActiveAssistantState = (turnId: string) => {
     const existing = activeAssistantByTurn.get(turnId);
     if (existing) return existing;
@@ -807,6 +824,14 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     handle(event: ServerEvent) {
       switch (event.type) {
         case "user_message":
+          if (activeTurnId) {
+            emitProjectedUserMessage(
+              activeTurnId,
+              event.text,
+              typeof event.clientMessageId === "string" ? event.clientMessageId : null,
+            );
+            return;
+          }
           lastUserMessageText = event.text;
           lastUserMessageClientMessageId = typeof event.clientMessageId === "string" ? event.clientMessageId : null;
           return;
@@ -820,14 +845,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
             if (!activeTurnId) return;
             opts.sink.emitTurnStarted(activeTurnId);
             if (lastUserMessageText) {
-              const item: ProjectedItem = {
-                id: makeItemId("userMessage", activeTurnId),
-                type: "userMessage",
-                content: [{ type: "text", text: lastUserMessageText }],
-                ...(lastUserMessageClientMessageId ? { clientMessageId: lastUserMessageClientMessageId } : {}),
-              };
-              opts.sink.emitItemStarted(activeTurnId, item);
-              opts.sink.emitItemCompleted(activeTurnId, item);
+              emitProjectedUserMessage(activeTurnId, lastUserMessageText, lastUserMessageClientMessageId);
               lastUserMessageText = null;
               lastUserMessageClientMessageId = null;
             }

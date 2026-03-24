@@ -8,9 +8,9 @@ import ntpath
 import posixpath
 import shutil
 import sys
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
-WhichFn = Callable[[str], str | None]
+WhichFn = Callable[[str], Optional[str]]
 
 
 class MissingDependencyError(RuntimeError):

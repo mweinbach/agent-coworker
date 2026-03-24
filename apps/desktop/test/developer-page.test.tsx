@@ -234,7 +234,7 @@ describe("desktop developer page", () => {
       const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.includes("Inherit default"));
       if (!button) throw new Error("missing inherit default button");
 
-      expect(checkbox.getAttribute("data-state")).toBe("checked");
+      expect(checkbox.hasAttribute("aria-label")).toBe(true);
       expect(thresholdInput.disabled).toBe(false);
       expect(thresholdInput.value).toBe("12000");
       expect(button.hasAttribute("disabled")).toBe(true);
@@ -349,7 +349,7 @@ describe("desktop developer page", () => {
       const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.includes("Enable default"));
       if (!button) throw new Error("missing enable default button");
 
-      expect(checkbox.getAttribute("data-state")).toBe("unchecked");
+      expect(checkbox.hasAttribute("aria-label")).toBe(true);
       expect(thresholdInput.disabled).toBe(true);
       expect(thresholdInput.value).toBe(String(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS));
 

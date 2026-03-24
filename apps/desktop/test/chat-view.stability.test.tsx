@@ -25,6 +25,19 @@ const MOCK_UPDATE_STATE = {
   error: null,
 };
 
+class MockMutationObserver {
+  observe() {}
+  disconnect() {}
+  takeRecords() { return []; }
+}
+
+const mockWindow = {
+  event: undefined as unknown,
+  requestAnimationFrame: (callback: FrameRequestCallback) =>
+    setTimeout(() => callback(Date.now()), 0) as unknown as number,
+  cancelAnimationFrame: (id: number) => clearTimeout(id),
+};
+
 mock.module("../src/lib/desktopCommands", () => ({
   appendTranscriptBatch: async () => {},
   appendTranscriptEvent: async () => {},
@@ -73,13 +86,24 @@ function setupChatViewJsdom() {
         setTimeout(() => callback(Date.now()), 0) as unknown as number,
       cancelAnimationFrame: (id: number) => clearTimeout(id),
     },
+    extraGlobals: { MutationObserver: MockMutationObserver },
     setupWindow: (dom) => {
+      dom.window.requestAnimationFrame = mockWindow.requestAnimationFrame;
+      dom.window.cancelAnimationFrame = mockWindow.cancelAnimationFrame;
+      Object.assign(mockWindow, { document: dom.window.document });
+      Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: mockWindow });
+      Object.defineProperty(globalThis, "document", { configurable: true, writable: true, value: dom.window.document });
+      Object.defineProperty(globalThis, "HTMLElement", { configurable: true, writable: true, value: dom.window.HTMLElement });
       if (typeof dom.window.HTMLElement.prototype.attachEvent !== "function") {
         (dom.window.HTMLElement.prototype as { attachEvent?: (name: string, handler: unknown) => void }).attachEvent = () => {};
       }
       if (typeof dom.window.HTMLElement.prototype.detachEvent !== "function") {
         (dom.window.HTMLElement.prototype as { detachEvent?: (name: string, handler: unknown) => void }).detachEvent = () => {};
       }
+      Object.defineProperty(globalThis, "HTMLButtonElement", { configurable: true, writable: true, value: dom.window.HTMLButtonElement });
+      Object.defineProperty(globalThis, "HTMLInputElement", { configurable: true, writable: true, value: dom.window.HTMLInputElement });
+      Object.defineProperty(globalThis, "HTMLTextAreaElement", { configurable: true, writable: true, value: dom.window.HTMLTextAreaElement });
+      Object.defineProperty(globalThis, "HTMLSelectElement", { configurable: true, writable: true, value: dom.window.HTMLSelectElement });
     },
   });
 }
@@ -165,7 +189,7 @@ describe("desktop chat view stability", () => {
         );
       });
 
-      expect(container.textContent).toContain("Thread 1");
+      expect(container.textContent).toContain("Existing thread");
       expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(false);
 
       await act(async () => {

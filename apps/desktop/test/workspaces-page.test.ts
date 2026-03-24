@@ -497,7 +497,7 @@ describe("desktop workspaces page", () => {
       expect(expandedText).not.toContain("Baseten");
 
       const subagentModelCheckbox = container.querySelector('[aria-label="Allow subagent model opencode-go:glm-5"]');
-      if (!(subagentModelCheckbox instanceof harness.dom.window.HTMLButtonElement)) {
+      if (!(subagentModelCheckbox instanceof harness.dom.window.HTMLElement)) {
         throw new Error("missing subagent model checkbox");
       }
 

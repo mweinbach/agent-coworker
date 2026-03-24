@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { createElement } from "react";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
+import { setupJsdom } from "./jsdomHarness";
 
 const jsonRpcRequests: Array<{ method: string; params?: unknown }> = [];
 const jsonRpcHandlers = new Map<string, (params?: unknown) => unknown | Promise<unknown>>();
@@ -113,6 +117,7 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
+const { ChatView } = await import("../src/ui/ChatView");
 const { RUNTIME, defaultThreadRuntime } = await import("../src/app/store.helpers");
 
 function threadMeta(sessionId = "thread-session") {
@@ -219,6 +224,8 @@ describe("desktop JSON-RPC event mapping", () => {
   let workspaceId = "";
   let threadId = "";
   let sessionId = "";
+  let harness: ReturnType<typeof setupJsdom> | null = null;
+  let root: ReturnType<typeof createRoot> | null = null;
 
   async function reconnectThreadAndGetSocket() {
     await useAppStore.getState().reconnectThread(threadId);
@@ -272,6 +279,24 @@ describe("desktop JSON-RPC event mapping", () => {
   }
 
   beforeEach(() => {
+    harness = setupJsdom({
+      includeAnimationFrame: true,
+      extraGlobals: {
+        MutationObserver: class MockMutationObserver {
+          observe() {}
+          disconnect() {}
+          takeRecords() {
+            return [];
+          }
+        },
+      },
+    });
+    const container = harness.dom.window.document.getElementById("root");
+    if (!container) {
+      throw new Error("missing root");
+    }
+    root = createRoot(container);
+
     setJsonRpcSocketOverride(MockJsonRpcSocket);
     workspaceId = `ws-${crypto.randomUUID()}`;
     threadId = `thread-${crypto.randomUUID()}`;
@@ -392,9 +417,21 @@ describe("desktop JSON-RPC event mapping", () => {
       developerMode: false,
       showHiddenFiles: false,
     } as any);
+
+    void act(async () => {
+      root?.render(createElement(ChatView));
+    });
   });
 
   afterEach(() => {
+    if (root) {
+      void act(async () => {
+        root?.unmount();
+      });
+    }
+    root = null;
+    harness?.restore();
+    harness = null;
     clearJsonRpcSocketOverride();
   });
 

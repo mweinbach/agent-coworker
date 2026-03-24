@@ -5,6 +5,11 @@ type JsdomGlobalKey =
   | "document"
   | "navigator"
   | "HTMLElement"
+  | "HTMLButtonElement"
+  | "HTMLInputElement"
+  | "HTMLTextAreaElement"
+  | "HTMLSelectElement"
+  | "MutationObserver"
   | "SVGElement"
   | "Node"
   | "getComputedStyle"
@@ -57,6 +62,11 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
     "document",
     "navigator",
     "HTMLElement",
+    "HTMLButtonElement",
+    "HTMLInputElement",
+    "HTMLTextAreaElement",
+    "HTMLSelectElement",
+    "MutationObserver",
     "SVGElement",
     "Node",
     "getComputedStyle",
@@ -70,6 +80,11 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
   setGlobalProperty("document", dom.window.document);
   setGlobalProperty("navigator", dom.window.navigator);
   setGlobalProperty("HTMLElement", dom.window.HTMLElement);
+  setGlobalProperty("HTMLButtonElement", dom.window.HTMLButtonElement);
+  setGlobalProperty("HTMLInputElement", dom.window.HTMLInputElement);
+  setGlobalProperty("HTMLTextAreaElement", dom.window.HTMLTextAreaElement);
+  setGlobalProperty("HTMLSelectElement", dom.window.HTMLSelectElement);
+  setGlobalProperty("MutationObserver", dom.window.MutationObserver);
   setGlobalProperty("SVGElement", dom.window.SVGElement);
   setGlobalProperty("Node", dom.window.Node);
   setGlobalProperty("getComputedStyle", dom.window.getComputedStyle.bind(dom.window));

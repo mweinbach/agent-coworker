@@ -280,7 +280,7 @@ export function ChatThreadHeader(props: {
   const hasUsageSummary = Boolean(usageHeadline || usageBudgetLine);
 
   return (
-    <div className="absolute top-0 left-0 right-0 z-10 flex items-start justify-center pointer-events-none p-3 pb-8 bg-gradient-to-b from-panel via-panel/80 to-transparent">
+    <div className="pointer-events-none absolute top-0 left-0 right-0 z-10 flex items-start justify-center bg-gradient-to-b from-panel via-panel/88 to-transparent px-3 pt-2.5 pb-6">
       <div
         className={cn(
           "pointer-events-auto relative flex flex-col items-center outline-none",
@@ -290,7 +290,7 @@ export function ChatThreadHeader(props: {
       >
         <div
           className={cn(
-            "max-w-lg truncate rounded-full border border-border/50 bg-background/80 px-4 py-1.5 text-sm font-medium text-foreground shadow-sm backdrop-blur-md",
+            "max-w-lg truncate rounded-[calc(var(--radius)*1.35)] border border-border/45 bg-background/86 px-3 py-1 text-[13px] font-medium text-foreground shadow-none backdrop-blur-sm",
             hasUsageSummary
               ? "transition-[border-color,box-shadow,background-color] group-hover:border-border group-focus-within:border-border group-focus-within:ring-2 group-focus-within:ring-ring/40"
               : null,
@@ -301,7 +301,7 @@ export function ChatThreadHeader(props: {
         {hasUsageSummary ? (
           <div
             className={cn(
-              "absolute top-full mt-2 flex max-w-3xl flex-wrap items-center justify-center gap-2 rounded-full border px-4 py-1.5 text-xs shadow-sm backdrop-blur-md opacity-0 -translate-y-1 pointer-events-none transition-all duration-150 ease-out group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-y-0 group-focus-within:opacity-100",
+              "pointer-events-none absolute top-full mt-2 flex max-w-3xl flex-wrap items-center justify-center gap-2 rounded-[calc(var(--radius)*1.35)] border px-3 py-1 text-[11px] shadow-none backdrop-blur-sm opacity-0 -translate-y-1 transition-all duration-150 ease-out group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-y-0 group-focus-within:opacity-100",
               sessionUsageTone(sessionUsage),
             )}
           >
@@ -313,7 +313,7 @@ export function ChatThreadHeader(props: {
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-7 rounded-full px-3 text-[11px]"
+                className="h-6 rounded-md px-2.5 text-[11px]"
                 onClick={onClearHardCap}
               >
                 Clear hard cap
@@ -482,7 +482,7 @@ function DraftThreadModelSelector({
     >
       <SelectTrigger
         size="sm"
-        className="h-7 w-auto min-w-0 max-w-[220px] border-none bg-transparent px-1.5 text-xs text-muted-foreground shadow-none transition-colors hover:bg-muted/50 hover:text-foreground focus:ring-0"
+        className="h-6 w-auto min-w-0 max-w-[220px] rounded-md border-none bg-transparent px-1.5 text-[11px] text-muted-foreground shadow-none transition-colors hover:bg-muted/40 hover:text-foreground focus:ring-0"
       >
         <span className="truncate"><SelectValue placeholder="Model" /></span>
       </SelectTrigger>
@@ -523,7 +523,7 @@ function ThreadModelIndicator({
       variant="outline"
       title={title}
       aria-label={`Session model ${title}`}
-      className="h-7 max-w-[220px] rounded-full border-border/60 bg-muted/30 px-2.5 font-normal text-muted-foreground shadow-none"
+      className="h-6 max-w-[220px] rounded-md border-border/55 bg-muted/20 px-2 font-normal text-muted-foreground shadow-none"
     >
       <span className="truncate">{label}</span>
     </Badge>
@@ -743,15 +743,15 @@ export function ChatView() {
   if (!selectedThreadId || !thread) {
     return (
       <div className="flex h-full items-center justify-center px-6">
-        <div className="flex -translate-y-12 flex-col items-center justify-center gap-4 text-center">
+        <div className="flex -translate-y-10 flex-col items-center justify-center gap-3.5 text-center">
           <img
             src={coworkIconSvg}
             alt=""
             aria-hidden="true"
-            className="h-36 w-36 select-none object-contain"
+            className="h-24 w-24 select-none object-contain opacity-95"
           />
-          <h2 className="text-3xl font-semibold tracking-tight">Let&apos;s build</h2>
-          <p className="max-w-xl text-muted-foreground">Pick a workspace and start a new thread.</p>
+          <h2 className="text-[2rem] font-semibold tracking-tight">Let&apos;s build</h2>
+          <p className="max-w-xl text-sm text-muted-foreground">Pick a workspace and start a new thread.</p>
           <Button type="button" onClick={() => void newThread()}>New thread</Button>
         </div>
       </div>
@@ -767,7 +767,6 @@ export function ChatView() {
     showTokens: developerMode,
   });
   const usageBudgetLine = formatSessionBudgetLine(rt?.sessionUsage ?? null);
-  const hasUsageSummary = Boolean(usageHeadline || usageBudgetLine);
   const canClearHardCap = canClearSessionHardCap({
     sessionUsage: rt?.sessionUsage ?? null,
     transcriptOnly,
@@ -794,7 +793,7 @@ export function ChatView() {
 
   return (
     <ChatViewContext.Provider value={contextValue}>
-      <div className="flex h-full min-h-0 flex-col bg-panel relative">
+      <div className="relative flex h-full min-h-0 flex-col bg-panel">
         <ChatThreadHeader
           title={thread.title || "New thread"}
           sessionUsage={rt?.sessionUsage ?? null}
@@ -804,7 +803,7 @@ export function ChatView() {
           onClearHardCap={() => clearThreadUsageHardCap(selectedThreadId)}
         />
         <Conversation className="min-h-0" ref={feedRef}>
-          <ConversationContent className="pt-24">
+          <ConversationContent className="pt-20">
             {transcriptOnly ? (
               <Card className="max-w-3xl border-border/70 bg-muted/30">
                 <CardContent className="flex items-start gap-3 p-3">
@@ -863,9 +862,9 @@ export function ChatView() {
           </ConversationContent>
         </Conversation>
 
-      <div className="relative border-t border-border/60 px-4 py-1.5 flex flex-col shrink-0" style={{ height: messageBarHeight }}>
-        <MessageBarResizer />
-        <PromptInputRoot>
+        <div className="relative flex shrink-0 flex-col border-t border-border/55 bg-panel/78 px-3 py-1.5 backdrop-blur-sm" style={{ height: messageBarHeight }}>
+          <MessageBarResizer />
+          <PromptInputRoot>
             <PromptInputForm
               onSubmit={(event) => {
                 event.preventDefault();

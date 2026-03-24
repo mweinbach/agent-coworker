@@ -12,7 +12,7 @@ export function InstallationCardGrid({
   onSelect: (installationId: string) => void;
 }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {installations.map((installation) => {
         const displayName = installation.interface?.displayName || installation.name;
         const description = installation.interface?.shortDescription || installation.description;
@@ -22,12 +22,12 @@ export function InstallationCardGrid({
         return (
           <Card
             key={installation.installationId}
-            className="group relative flex cursor-pointer flex-col overflow-hidden border border-border/50 bg-card/50 p-4 transition-colors hover:bg-card/80 hover:border-border/80"
+            className="group relative flex cursor-pointer flex-col overflow-hidden border border-border/55 bg-card/44 p-3.5 transition-colors hover:border-border/75 hover:bg-card/68"
             onClick={() => onSelect(installation.installationId)}
           >
-            <div className="flex items-start justify-between gap-4 mb-3">
+            <div className="mb-2.5 flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted/50 border border-border/50 text-xl overflow-hidden">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/50 bg-muted/35 text-lg">
                   <SkillIcon icon={icon} />
                 </div>
                 <div className="min-w-0">
@@ -51,7 +51,7 @@ export function InstallationCardGrid({
                 </div>
               )}
             </div>
-            <div className="text-xs text-muted-foreground line-clamp-2 mb-3 flex-1">
+            <div className="mb-3 flex-1 line-clamp-2 text-xs text-muted-foreground">
               {description}
             </div>
             <div className="flex items-center gap-2 mt-auto">

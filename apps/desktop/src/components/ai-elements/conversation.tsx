@@ -17,7 +17,7 @@ export const Conversation = forwardRef<HTMLDivElement, ConversationProps>(functi
 export type ConversationContentProps = HTMLAttributes<HTMLDivElement>;
 
 export function ConversationContent({ className, ...props }: ConversationContentProps) {
-  return <div className={cn("mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 py-6", className)} {...props} />;
+  return <div className={cn("mx-auto flex w-full max-w-[56rem] flex-col gap-3.5 px-4 py-5", className)} {...props} />;
 }
 
 export type ConversationEmptyStateProps = HTMLAttributes<HTMLDivElement> & {
@@ -36,7 +36,7 @@ export function ConversationEmptyState({
 }: ConversationEmptyStateProps) {
   return (
     <div
-      className={cn("flex min-h-80 w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/70 p-8 text-center", className)}
+      className={cn("flex min-h-72 w-full flex-col items-center justify-center gap-2.5 rounded-[calc(var(--radius)*2)] border border-dashed border-border/55 bg-background/24 p-10 text-center", className)}
       {...props}
     >
       {children ?? (
@@ -65,7 +65,7 @@ export function ConversationScrollButton({ visible, onClick }: ConversationScrol
       type="button"
       size="icon"
       variant="outline"
-      className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-card/90 backdrop-blur"
+      className="absolute bottom-3.5 left-1/2 -translate-x-1/2 rounded-lg bg-card/88 backdrop-blur-sm"
       onClick={onClick}
       aria-label="Scroll to bottom"
     >

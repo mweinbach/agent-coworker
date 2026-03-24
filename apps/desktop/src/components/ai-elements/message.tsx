@@ -49,7 +49,7 @@ export function MessageContent({ className, ...props }: MessageContentProps) {
     <div
       className={cn(
         "select-text min-w-0 text-sm leading-6",
-        "group-[.is-user]:rounded-xl group-[.is-user]:border group-[.is-user]:border-primary/35 group-[.is-user]:bg-primary group-[.is-user]:text-primary-foreground group-[.is-user]:px-4 group-[.is-user]:py-3",
+        "group-[.is-user]:rounded-[calc(var(--radius)*1.75)] group-[.is-user]:border group-[.is-user]:border-primary/25 group-[.is-user]:bg-primary group-[.is-user]:text-primary-foreground group-[.is-user]:px-3.5 group-[.is-user]:py-2.5",
         "group-[.is-assistant]:text-foreground",
         className,
       )}

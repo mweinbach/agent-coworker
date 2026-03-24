@@ -16,15 +16,15 @@ export function HeaderAndFilters({
   const refreshSkillsCatalog = useAppStore((s) => s.refreshSkillsCatalog);
 
   return (
-    <div className="flex flex-col gap-6 mb-8">
-      <div className="flex items-center justify-between">
+    <div className="mb-6 flex flex-col gap-4">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight mb-1">Skills</h1>
-          <p className="text-muted-foreground">
+          <h1 className="mb-1 text-[2rem] font-semibold tracking-tight">Skills</h1>
+          <p className="text-sm text-muted-foreground">
             Give Codex superpowers. <a href="#" className="text-primary hover:underline">Learn more</a>
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <Button
             variant="ghost"
             size="sm"
@@ -34,11 +34,11 @@ export function HeaderAndFilters({
             <RefreshCwIcon className="mr-2 h-4 w-4" />
             Refresh
           </Button>
-          <div className="relative w-64">
+          <div className="relative w-60">
             <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search skills"
-              className="pl-9 h-9 bg-muted/50 border-transparent focus-visible:bg-background focus-visible:border-ring"
+              className="h-8 border-transparent bg-muted/30 pl-9 focus-visible:bg-background focus-visible:border-ring"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />

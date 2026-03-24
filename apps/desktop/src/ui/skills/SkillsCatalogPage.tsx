@@ -7,28 +7,28 @@ import { SkillDetailDialog } from "./SkillDetailDialog";
 export function SkillsCatalogPage({ workspaceId }: { workspaceId: string }) {
   const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
   const selectSkillInstallation = useAppStore((s) => s.selectSkillInstallation);
-  
+
   const [searchQuery, setSearchQuery] = useState("");
 
   const rt = wsRtById[workspaceId];
   const catalog = rt?.skillsCatalog ?? null;
   const skillCatalogLoading = rt?.skillCatalogLoading ?? false;
   const showLoadingState = skillCatalogLoading && catalog === null;
-  
+
   const installations = useMemo(() => {
     let items = [...(catalog?.installations ?? [])];
-    
+
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       items = items.filter(
-        (i) => 
-          i.name.toLowerCase().includes(q) || 
+        (i) =>
+          i.name.toLowerCase().includes(q) ||
           i.interface?.displayName?.toLowerCase().includes(q) ||
           i.description?.toLowerCase().includes(q) ||
           i.interface?.shortDescription?.toLowerCase().includes(q)
       );
     }
-    
+
     return items.sort((left, right) =>
       `${left.name}:${left.scope}:${left.installationId}`.localeCompare(`${right.name}:${right.scope}:${right.installationId}`),
     );
@@ -43,7 +43,7 @@ export function SkillsCatalogPage({ workspaceId }: { workspaceId: string }) {
   }, [installations]);
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto bg-background p-8">
+    <div className="h-full min-h-0 overflow-y-auto bg-background px-6 py-5">
       <div className="mx-auto max-w-6xl">
         <HeaderAndFilters
           workspaceId={workspaceId}
@@ -64,24 +64,24 @@ export function SkillsCatalogPage({ workspaceId }: { workspaceId: string }) {
 
           {otherSkills.length > 0 && (
             <section>
-              <h2 className="text-lg font-semibold mb-4 text-muted-foreground">Other Installations</h2>
+              <h2 className="mb-4 text-lg font-semibold text-muted-foreground">Other Installations</h2>
               <InstallationCardGrid
                 installations={otherSkills}
                 onSelect={(id) => void selectSkillInstallation(id)}
               />
             </section>
           )}
-          
+
           {showLoadingState && (
-            <div className="flex flex-col items-center justify-center py-12 text-center border border-dashed border-border/50 rounded-xl bg-muted/10">
-              <div className="text-lg font-medium mb-1">Loading...</div>
+            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-muted/10 py-10 text-center">
+              <div className="mb-1 text-base font-medium">Loading...</div>
               <div className="text-sm text-muted-foreground">Fetching skills catalog.</div>
             </div>
           )}
 
           {!showLoadingState && installations.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-12 text-center border border-dashed border-border/50 rounded-xl bg-muted/10">
-              <div className="text-lg font-medium mb-1">No skills found</div>
+            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-muted/10 py-10 text-center">
+              <div className="mb-1 text-base font-medium">No skills found</div>
               <div className="text-sm text-muted-foreground">
                 {searchQuery ? "Try adjusting your search query." : "Install a skill to give Codex superpowers."}
               </div>

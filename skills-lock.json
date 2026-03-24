@@ -31,6 +31,16 @@
       "sourceType": "github",
       "computedHash": "f0d51f45c0075be383a0891d239865223cab6cad63d88fde8f859e70c161ed34"
     },
+    "heroui-migration": {
+      "source": "heroui-inc/heroui",
+      "sourceType": "github",
+      "computedHash": "67d089e35519b4cdcbd910d64158bfe063b26ee5717f303889ba93962b15295e"
+    },
+    "heroui-react": {
+      "source": "heroui-inc/heroui",
+      "sourceType": "github",
+      "computedHash": "6116a849a6039e8b4d9dda3f6251c462e4ce8f583c53fda77838d0b2c124fe41"
+    },
     "shadcn": {
       "source": "shadcn/ui",
       "sourceType": "github",

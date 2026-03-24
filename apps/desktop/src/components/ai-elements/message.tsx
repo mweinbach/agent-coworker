@@ -21,7 +21,7 @@ import {
   normalizeDisplayCitationMarkers,
   type CitationSource,
 } from "../../../../../src/shared/displayCitationMarkers";
-import { confirmAction, openPath } from "../../lib/desktopCommands";
+import { confirmAction, openExternalUrl, openPath } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
@@ -59,6 +59,7 @@ export function MessageContent({ className, ...props }: MessageContentProps) {
 
 const streamdownPlugins = { cjk, code, math, mermaid };
 const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";
+const DESKTOP_EXTERNAL_URL_PROTOCOL = "cowork-external:";
 const CITATION_CHIP_TITLE_PREFIX = "__cowork_citation_sources__:";
 const CITATION_POPUP_MARGIN = 16;
 const CITATION_POPUP_GAP = 10;
@@ -74,7 +75,7 @@ const desktopSanitizeSchema: RehypeSanitizeOptions = {
   },
   protocols: {
     ...defaultSchema.protocols,
-    href: [...(defaultSchema.protocols?.href ?? []), "tel", "cowork-file"],
+    href: [...(defaultSchema.protocols?.href ?? []), "tel", "cowork-file", "cowork-external"],
   },
 };
 const defaultDesktopRehypePlugins: PluggableList = [
@@ -251,7 +252,7 @@ async function openExternalCitationSource(source: CitationSource): Promise<void>
     defaultAction: "cancel",
   });
   if (confirmed) {
-    window.open(source.url, "_blank", "noopener,noreferrer");
+    await openExternalUrl({ url: source.url });
   }
 }
 
@@ -486,13 +487,33 @@ function DesktopCitationChip({
   );
 }
 
-function isExternalMessageHref(rawHref: string): boolean {
+function classifyExternalMessageHref(rawHref: string): "browser" | "mail" | "app" | null {
   try {
     const parsed = new URL(rawHref);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:";
+    switch (parsed.protocol) {
+      case "http:":
+      case "https:":
+        return "browser";
+      case "mailto:":
+        return "mail";
+      case "file:":
+      case DESKTOP_LOCAL_FILE_PROTOCOL:
+      case DESKTOP_EXTERNAL_URL_PROTOCOL:
+      case "about:":
+      case "blob:":
+      case "data:":
+      case "javascript:":
+        return null;
+      default:
+        return "app";
+    }
   } catch {
-    return false;
+    return null;
   }
+}
+
+function isExternalMessageHref(rawHref: string): boolean {
+  return classifyExternalMessageHref(rawHref) !== null;
 }
 
 function desktopPathBasename(rawPath: string): string {
@@ -567,6 +588,12 @@ export function encodeDesktopLocalFileHref(rawHref: string): string | null {
   return `${DESKTOP_LOCAL_FILE_PROTOCOL}//open?path=${encodeURIComponent(path)}`;
 }
 
+export function encodeDesktopExternalHref(rawHref: string): string | null {
+  return classifyExternalMessageHref(rawHref) === "app"
+    ? `${DESKTOP_EXTERNAL_URL_PROTOCOL}//open?url=${encodeURIComponent(rawHref)}`
+    : null;
+}
+
 export function decodeDesktopLocalFileHref(rawHref?: string | null): string | null {
   if (!rawHref) {
     return null;
@@ -579,6 +606,23 @@ export function decodeDesktopLocalFileHref(rawHref?: string | null): string | nu
     }
     const path = parsed.searchParams.get("path");
     return path ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+export function decodeDesktopExternalHref(rawHref?: string | null): string | null {
+  if (!rawHref) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(rawHref);
+    if (parsed.protocol !== DESKTOP_EXTERNAL_URL_PROTOCOL) {
+      return null;
+    }
+    const url = parsed.searchParams.get("url");
+    return url ? url : null;
   } catch {
     return null;
   }
@@ -724,6 +768,11 @@ export function rewriteDesktopFileLinksInTree(node: HastNode): void {
     const rewrittenUrl = encodeDesktopLocalFileHref(node.url);
     if (rewrittenUrl) {
       node.url = rewrittenUrl;
+    } else {
+      const rewrittenExternalUrl = encodeDesktopExternalHref(node.url);
+      if (rewrittenExternalUrl) {
+        node.url = rewrittenExternalUrl;
+      }
     }
   }
 
@@ -737,6 +786,11 @@ export function rewriteDesktopFileLinksInTree(node: HastNode): void {
     const rewrittenHref = encodeDesktopLocalFileHref(href);
     if (rewrittenHref) {
       node.properties.href = rewrittenHref;
+    } else {
+      const rewrittenExternalHref = encodeDesktopExternalHref(href);
+      if (rewrittenExternalHref) {
+        node.properties.href = rewrittenExternalHref;
+      }
     }
   }
 
@@ -763,19 +817,31 @@ async function openDesktopMessageLink(href: string): Promise<void> {
     return;
   }
 
-  if (isExternalMessageHref(href)) {
+  const forwardedExternalHref = decodeDesktopExternalHref(href) ?? href;
+  const externalTarget = classifyExternalMessageHref(forwardedExternalHref);
+  if (externalTarget) {
     const confirmed = await confirmAction({
-      title: "Open external link?",
-      message: "This will open the link in your default browser.",
-      detail: href,
+      title: externalTarget === "browser"
+        ? "Open external link?"
+        : externalTarget === "mail"
+          ? "Open mail link?"
+          : "Open app link?",
+      message: externalTarget === "browser"
+        ? "This will open the link in your default browser."
+        : externalTarget === "mail"
+          ? "This will open the link in your default mail app."
+          : "This will open the link in another app on this Mac.",
+      detail: forwardedExternalHref,
       kind: "info",
-      confirmLabel: "Open link",
+      confirmLabel: externalTarget === "browser" ? "Open link" : "Open",
       cancelLabel: "Cancel",
       defaultAction: "cancel",
     });
     if (!confirmed) {
       return;
     }
+    await openExternalUrl({ url: forwardedExternalHref });
+    return;
   }
 
   window.open(href, "_blank", "noopener,noreferrer");
@@ -792,8 +858,9 @@ function DesktopMessageLink({
   ...props
 }: DesktopMessageLinkProps) {
   const localPath = decodeDesktopLocalFileHref(href);
+  const forwardedExternalHref = decodeDesktopExternalHref(href);
 
-  if (localPath) {
+  if (localPath || forwardedExternalHref) {
     return (
       <button
         className={cn("wrap-anywhere appearance-none bg-transparent p-0 text-left font-medium text-primary underline", className)}

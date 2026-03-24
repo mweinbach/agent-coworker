@@ -46,6 +46,10 @@ export type OpenPathInput = {
   path: string;
 };
 
+export type OpenExternalUrlInput = {
+  url: string;
+};
+
 export type PreviewOSFileInput = {
   path: string;
 };
@@ -208,6 +212,7 @@ export interface DesktopApi {
   readFile(opts: ReadFileInput): Promise<ReadFileOutput>;
   previewOSFile(opts: PreviewOSFileInput): Promise<void>;
   openPath(opts: OpenPathInput): Promise<void>;
+  openExternalUrl(opts: OpenExternalUrlInput): Promise<void>;
   revealPath(opts: RevealPathInput): Promise<void>;
   copyPath(opts: CopyPathInput): Promise<void>;
   createDirectory(opts: CreateDirectoryInput): Promise<void>;
@@ -245,6 +250,7 @@ export const DESKTOP_IPC_CHANNELS = {
   readFile: "desktop:readFile",
   previewOSFile: "desktop:previewOSFile",
   openPath: "desktop:openPath",
+  openExternalUrl: "desktop:openExternalUrl",
   revealPath: "desktop:revealPath",
   copyPath: "desktop:copyPath",
   createDirectory: "desktop:createDirectory",

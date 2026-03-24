@@ -18,6 +18,7 @@ import type {
   DesktopMenuCommand,
   DesktopNotificationInput,
   ListDirectoryInput,
+  OpenExternalUrlInput,
   OpenPathInput,
   PreviewOSFileInput,
   ReadFileInput,
@@ -147,6 +148,9 @@ export const listDirectoryInputSchema: z.ZodType<ListDirectoryInput> = z.object(
 });
 
 export const openPathInputSchema: z.ZodType<OpenPathInput> = sharedPathSchema;
+export const openExternalUrlInputSchema: z.ZodType<OpenExternalUrlInput> = z.object({
+  url: nonEmptyStringSchema,
+});
 export const previewOSFileInputSchema: z.ZodType<PreviewOSFileInput> = sharedPathSchema;
 export const readFileInputSchema: z.ZodType<ReadFileInput> = sharedPathSchema;
 export const revealPathInputSchema: z.ZodType<RevealPathInput> = sharedPathSchema;

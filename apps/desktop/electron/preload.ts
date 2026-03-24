@@ -12,6 +12,7 @@ import {
   type DesktopApi,
   type DesktopNotificationInput,
   type ListDirectoryInput,
+  type OpenExternalUrlInput,
   type OpenPathInput,
   type PreviewOSFileInput,
   type ReadFileInput,
@@ -37,6 +38,7 @@ import {
   desktopNotificationInputSchema,
   listDirectoryInputSchema,
   openPathInputSchema,
+  openExternalUrlInputSchema,
   previewOSFileInputSchema,
   readFileInputSchema,
   persistedStateInputSchema,
@@ -101,6 +103,10 @@ function assertPreviewOSFileInput(opts: PreviewOSFileInput): void {
 
 function assertOpenPathInput(opts: OpenPathInput): void {
   parseWithSchema(openPathInputSchema, opts, "openPath options");
+}
+
+function assertOpenExternalUrlInput(opts: OpenExternalUrlInput): void {
+  parseWithSchema(openExternalUrlInputSchema, opts, "openExternalUrl options");
 }
 
 function assertRevealPathInput(opts: RevealPathInput): void {
@@ -227,6 +233,11 @@ const desktopApi = Object.freeze<DesktopApi>({
   openPath: (opts: OpenPathInput) => {
     assertOpenPathInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.openPath, opts);
+  },
+
+  openExternalUrl: (opts: OpenExternalUrlInput) => {
+    assertOpenExternalUrlInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.openExternalUrl, opts);
   },
 
   revealPath: (opts: RevealPathInput) => {

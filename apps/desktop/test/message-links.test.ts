@@ -5,6 +5,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot } from "react-dom/client";
 
 import {
+  decodeDesktopExternalHref,
+  encodeDesktopExternalHref,
   decodeDesktopLocalFileHref,
   encodeDesktopLocalFileHref,
   fileUrlToDesktopPath,
@@ -31,6 +33,15 @@ describe("desktop message local file links", () => {
     expect(encodedHref).toBe("cowork-file://open?path=%2FUsers%2Fmweinbach%2FDesktop%2FCowork%20Test%2Fcreate_models.py");
     expect(decodeDesktopLocalFileHref(encodedHref)).toBe("/Users/mweinbach/Desktop/Cowork Test/create_models.py");
     expect(decodeDesktopLocalFileHref("https://example.com")).toBeNull();
+  });
+
+  test("round-trips encoded desktop external app hrefs", () => {
+    const encodedHref = encodeDesktopExternalHref("craftdocs://open?spaceId=abc&documentId=def");
+    expect(encodedHref).toBe(
+      "cowork-external://open?url=craftdocs%3A%2F%2Fopen%3FspaceId%3Dabc%26documentId%3Ddef",
+    );
+    expect(decodeDesktopExternalHref(encodedHref)).toBe("craftdocs://open?spaceId=abc&documentId=def");
+    expect(decodeDesktopExternalHref("https://example.com")).toBeNull();
   });
 
   test("rewrites file links in markdown trees without touching normal links", () => {
@@ -61,6 +72,30 @@ describe("desktop message local file links", () => {
       "cowork-file://open?path=%2FUsers%2Fmweinbach%2FDesktop%2FCowork%20Test%2Fcreate_models.py",
     );
     expect(tree.children[0]?.children[1]?.url).toBe("https://example.com/docs");
+  });
+
+  test("rewrites custom app links into desktop-safe hrefs before sanitize", () => {
+    const tree = {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            {
+              type: "link",
+              url: "craftdocs://open?spaceId=abc&documentId=def",
+              children: [{ type: "text", value: "Craft" }],
+            },
+          ],
+        },
+      ],
+    };
+
+    rewriteDesktopFileLinksInTree(tree);
+
+    expect(tree.children[0]?.children[0]?.url).toBe(
+      "cowork-external://open?url=craftdocs%3A%2F%2Fopen%3FspaceId%3Dabc%26documentId%3Ddef",
+    );
   });
 
   test("rewrites bare desktop file paths into local links with basename labels", () => {
@@ -133,6 +168,20 @@ describe("desktop message local file links", () => {
     );
 
     expect(html).toContain("create_models.py");
+    expect(html).toContain("<button");
+    expect(html).not.toContain("[blocked]");
+  });
+
+  test("renders custom app markdown links without blocked markers", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        MessageResponse,
+        null,
+        "[Intel Pro Day 2026](craftdocs://open?spaceId=abc&documentId=def)",
+      ),
+    );
+
+    expect(html).toContain("Intel Pro Day 2026");
     expect(html).toContain("<button");
     expect(html).not.toContain("[blocked]");
   });

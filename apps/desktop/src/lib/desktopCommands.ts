@@ -116,6 +116,10 @@ export async function openPath(opts: { path: string }): Promise<void> {
   await requireDesktopApi().openPath(opts);
 }
 
+export async function openExternalUrl(opts: { url: string }): Promise<void> {
+  await requireDesktopApi().openExternalUrl(opts);
+}
+
 export async function revealPath(opts: { path: string }): Promise<void> {
   await requireDesktopApi().revealPath(opts);
 }

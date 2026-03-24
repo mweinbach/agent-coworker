@@ -1,14 +1,16 @@
-import { BrowserWindow, Notification, dialog, nativeTheme } from "electron";
+import { BrowserWindow, Notification, dialog, nativeTheme, shell } from "electron";
 
 import {
   DESKTOP_IPC_CHANNELS,
   type ConfirmActionInput,
   type DesktopNotificationInput,
+  type OpenExternalUrlInput,
   type SetWindowAppearanceInput,
 } from "../../src/lib/desktopApi";
 import {
   confirmActionInputSchema,
   desktopNotificationInputSchema,
+  openExternalUrlInputSchema,
   setWindowAppearanceInputSchema,
 } from "../../src/lib/desktopSchemas";
 import { applyWindowAppearance, getSystemAppearanceSnapshot } from "../services/appearance";
@@ -41,6 +43,11 @@ export function registerSystemIpc(context: DesktopIpcModuleContext): void {
     });
     notification.show();
     return true;
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openExternalUrl, async (_event, args: OpenExternalUrlInput) => {
+    const input = parseWithSchema(openExternalUrlInputSchema, args, "openExternalUrl options");
+    await shell.openExternal(input.url);
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getUpdateState, async () => {

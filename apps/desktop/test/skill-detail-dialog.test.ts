@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { createElement } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -73,11 +73,19 @@ mock.module("../src/components/ui/dialog", () => ({
   DialogDescription: ({ children, ...props }: Record<string, unknown>) => createElement("p", props, children),
 }));
 
+const { reactivateWorkspaceJsonRpcState } = await import("../src/app/store.helpers");
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
 const { SkillDetailDialog } = await import("../src/ui/skills/SkillDetailDialog");
 
+/** Avoid `ws-1`, which many desktop tests use concurrently under `bun test --max-concurrency`. */
+const SKILL_DETAIL_WORKSPACE_ID = "ws-skill-detail-dialog";
+
 describe("skill detail dialog", () => {
+  beforeEach(() => {
+    reactivateWorkspaceJsonRpcState(SKILL_DETAIL_WORKSPACE_ID);
+  });
+
   test("reveals the installation folder for non-workspace skills", async () => {
     openPathMock.mockClear();
     revealPathMock.mockClear();
@@ -87,7 +95,7 @@ describe("skill detail dialog", () => {
 
     useAppStore.setState({
       workspaceRuntimeById: {
-        "ws-1": {
+        [SKILL_DETAIL_WORKSPACE_ID]: {
           ...defaultWorkspaceRuntime(),
           selectedSkillContent: null,
           selectedSkillInstallationId: "skill-1",
@@ -122,11 +130,11 @@ describe("skill detail dialog", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(SkillDetailDialog, { workspaceId: "ws-1" }));
+        root.render(createElement(SkillDetailDialog, { workspaceId: SKILL_DETAIL_WORKSPACE_ID }));
       });
 
-      const openFolderButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
-        (button) => button.textContent?.includes("Open folder"),
+      const openFolderButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find((button) =>
+        (button.textContent ?? "").includes("Open folder"),
       );
 
       if (!openFolderButton) {
@@ -164,7 +172,7 @@ describe("skill detail dialog", () => {
       deleteSkillInstallation: deleteSkillInstallationMock as typeof previousState.deleteSkillInstallation,
       selectSkillInstallation: selectSkillInstallationMock as typeof previousState.selectSkillInstallation,
       workspaceRuntimeById: {
-        "ws-1": {
+        [SKILL_DETAIL_WORKSPACE_ID]: {
           ...defaultWorkspaceRuntime(),
           selectedSkillContent: null,
           selectedSkillInstallationId: "skill-1",
@@ -199,11 +207,11 @@ describe("skill detail dialog", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(SkillDetailDialog, { workspaceId: "ws-1" }));
+        root.render(createElement(SkillDetailDialog, { workspaceId: SKILL_DETAIL_WORKSPACE_ID }));
       });
 
-      const uninstallButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
-        (button) => button.textContent?.includes("Uninstall"),
+      const uninstallButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find((button) =>
+        (button.textContent ?? "").includes("Uninstall"),
       );
 
       if (!uninstallButton) {

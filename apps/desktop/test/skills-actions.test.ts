@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
 const { createSkillActions } = await import("../src/app/store.actions/skills");
+const { reactivateWorkspaceJsonRpcState } = await import("../src/app/store.helpers");
 const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
 
-const workspaceId = "ws-skills";
+/** Distinct from control-socket tests (`ws-skills`) so parallel CI runs do not share disposed JSON-RPC state. */
+const workspaceId = "ws-skills-store-actions";
 
 function createState() {
   return {
@@ -56,6 +58,7 @@ describe("skill store actions", () => {
   beforeEach(() => {
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.skillInstallWaiters.clear();
+    reactivateWorkspaceJsonRpcState(workspaceId);
   });
 
   test("refreshSkillsCatalog clears loading when sendControl fails", async () => {

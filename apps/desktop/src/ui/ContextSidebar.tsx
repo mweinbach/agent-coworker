@@ -36,7 +36,7 @@ export const ContextSidebar = memo(function ContextSidebar() {
   const threadRuntime = useAppStore((s) => selectedThreadId ? s.threadRuntimeById[selectedThreadId] : null);
   const todos = useAppStore((s) => selectedThreadId ? s.latestTodosByThreadId[selectedThreadId] : null);
   const agents = threadRuntime?.agents ?? [];
-  const panelShellClassName = "rounded-[14px] border border-border/55 bg-background/18 shadow-none";
+  const panelShellClassName = "app-context-sidebar__panel rounded-[14px] border";
   const sectionLabelClassName = "text-[10px] font-semibold tracking-[0.16em] text-muted-foreground/78 uppercase";
   const compactSectionClassName = cn("flex-none", panelShellClassName);
   const compactSectionHeaderClassName = "px-3 pb-1 pt-2.5";
@@ -80,7 +80,7 @@ export const ContextSidebar = memo(function ContextSidebar() {
           <div className={cn(compactSectionBodyClassName, compactMutedCopyClassName)}>Select a thread to inspect agents</div>
         ) : threadRuntime?.sessionKind === "agent" ? (
           <div className={compactSectionBodyClassName}>
-            <div className="rounded-[10px] border border-border/45 bg-background/28 px-2.5 py-2 text-[11px] text-muted-foreground">
+            <div className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2 text-[11px] text-muted-foreground">
               <div className="flex items-center gap-2 text-foreground">
                 <BotIcon className="h-3.5 w-3.5" />
                 <span className="font-medium">This thread is a child agent</span>
@@ -95,7 +95,7 @@ export const ContextSidebar = memo(function ContextSidebar() {
           <ScrollShadow className={compactSectionScrollerClassName} data-sidebar-section="agents">
             <div className="space-y-1.5">
               {agents.map((agent) => (
-                <div key={agent.agentId} className="rounded-[10px] border border-border/45 bg-background/28 px-2.5 py-2">
+                <div key={agent.agentId} className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="truncate text-[11px] font-medium text-foreground">

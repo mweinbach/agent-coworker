@@ -123,11 +123,15 @@ describe("desktop context sidebar", () => {
       });
 
       const text = container.textContent ?? "";
+      const agentsPanel = container.querySelector('[data-sidebar-panel="agents"]');
+      const nestedAgentPanel = container.querySelector(".app-context-sidebar__nested-panel");
       expect(text).toContain("Agents");
       expect(text).toContain("Investigate parser test");
       expect(text).toContain("worker · depth 1 · gpt-5.4");
       expect(text).toContain("Checking the failing snapshot expectation.");
       expect(text).toContain("busy");
+      expect(agentsPanel?.className).toContain("app-context-sidebar__panel");
+      expect(nestedAgentPanel?.className).toContain("app-context-sidebar__nested-panel");
 
       await act(async () => {
         root.unmount();
@@ -216,8 +220,11 @@ describe("desktop context sidebar", () => {
       expect(agentsSection?.className).toContain("overflow-y-auto");
       expect(agentsSection?.className).toContain("max-h-[10.5rem]");
       expect(agentsSection?.className).toContain("overscroll-contain");
+      expect(tasksPanel?.className).toContain("app-context-sidebar__panel");
+      expect(agentsPanel?.className).toContain("app-context-sidebar__panel");
       expect(tasksPanel?.className).toContain("flex-none");
       expect(agentsPanel?.className).toContain("flex-none");
+      expect(filesPanel?.className).toContain("app-context-sidebar__panel");
       expect(filesPanel?.className).toContain("flex-1");
       expect(filesPanel?.className).toContain("overflow-hidden");
 

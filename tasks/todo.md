@@ -1,5 +1,18 @@
 # Task Plan
 
+## Keep Google Citation Enrichment Off Live Stream Path
+
+- [x] Confirm the reviewed regression is the synchronous `content.stop` await in the Google native interaction stream loop.
+- [x] Move citation enrichment onto a background path so `text-end` delivery is not blocked by network-backed citation resolution.
+- [x] Preserve enriched annotations in the final assistant payload by awaiting background work before the step returns.
+- [x] Add a focused regression for slow citation resolution on the Google stream path and rerun the targeted verification slice.
+
+## Keep Google Citation Enrichment Off Live Stream Path Review
+
+- `src/runtime/googleNativeInteractions.ts` no longer awaits citation enrichment inside the live `content.stop` event loop. The runtime now queues background annotation enrichment per completed text block, emits `text-end` immediately with the current block state, and only waits for the queued enrichment promises after stream delivery completes and before the final assistant payload is returned.
+- `test/runtime.google-interactions.test.ts` now covers the slow-fetch case explicitly: a stalled citation fetch no longer blocks `text-end` projection, but the underlying text block still ends up enriched once the queued work resolves.
+- Verification passed with `bun test test/runtime.google-interactions.test.ts test/citationMetadata.test.ts`, `bun run typecheck`, and `bun test` on 2026-03-23 (`2626 pass`, `3 skip`, `0 fail`).
+
 ## Google Citation Title Resolution
 
 - [x] Confirm whether real Google native citation data already contains article titles or only opaque redirect URLs plus domain-like labels.

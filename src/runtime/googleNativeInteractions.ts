@@ -637,6 +637,15 @@ async function enrichTextBlockAnnotations(
   }
 }
 
+function queueTextBlockAnnotationEnrichment(
+  pendingAnnotationEnrichments: Array<Promise<void>>,
+  block: AssistantContentBlock | undefined,
+): void {
+  const pending = enrichTextBlockAnnotations(block);
+  void pending.catch(() => undefined);
+  pendingAnnotationEnrichments.push(pending);
+}
+
 function ensureThinkingBlock(
   contentBlocks: Map<number, AssistantContentBlock>,
   index: number,
@@ -1125,6 +1134,7 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
 
   const contentBlocks = new Map<number, AssistantContentBlock>();
   const providerToolCallsById = new Map<string, ProviderToolCallState>();
+  const pendingAnnotationEnrichments: Array<Promise<void>> = [];
   let interactionId: string | undefined;
   let pendingEventDelivery = Promise.resolve();
   let usageData: Record<string, unknown> | undefined;
@@ -1179,7 +1189,10 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
         processStreamEvent(eventRecord, contentBlocks, providerToolCallsById);
         if (eventType === "content.stop") {
           const blockIndex = typeof eventRecord.index === "number" ? eventRecord.index : 0;
-          await enrichTextBlockAnnotations(contentBlocks.get(blockIndex));
+          queueTextBlockAnnotationEnrichment(
+            pendingAnnotationEnrichments,
+            contentBlocks.get(blockIndex),
+          );
         }
         for (const part of mapGoogleEventToStreamParts(eventRecord, contentBlocks, providerToolCallsById)) {
           pendingEventDelivery = queueEventDelivery(
@@ -1193,6 +1206,7 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
     }
 
     await pendingEventDelivery;
+    await Promise.all(pendingAnnotationEnrichments);
 
     if (opts.streamOptions.signal?.aborted) {
       throw new Error("Request was aborted");
@@ -1241,5 +1255,6 @@ export const __internal = {
   googleTurnMessagesToModelMessages,
   mapGoogleEventToStreamParts,
   processStreamEvent,
+  queueTextBlockAnnotationEnrichment,
   resolveGoogleApiKey,
 } as const;

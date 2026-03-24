@@ -37,3 +37,5 @@ uploads/
 __pycache__/
 /native
 tasks/todo.md
+# heroui-agents-md
+.heroui-docs/

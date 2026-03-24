@@ -89,6 +89,7 @@ describe("desktop app top bar", () => {
       expect(titleButton).not.toBeNull();
       expect(titleButton?.className).toContain("app-topbar__controls");
       expect(container.textContent).toContain("Refine desktop app UI");
+      expect(container.textContent).toContain("|");
       expect(container.textContent).toContain("agent-coworker");
       expect(contextToggle).not.toBeNull();
       expect(contextToggle?.className).toContain("app-topbar__toolbar-button");

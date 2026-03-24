@@ -184,7 +184,12 @@ export function AppTopBar({
             onClick={() => setDetailsOpen((open) => !open)}
           >
             <span className="app-topbar__thread-title truncate">{title}</span>
-            {subtitle ? <span className="app-topbar__thread-subtitle truncate">{subtitle}</span> : null}
+            {subtitle ? (
+              <>
+                <span className="app-topbar__thread-separator text-muted-foreground/52" aria-hidden="true">|</span>
+                <span className="app-topbar__thread-subtitle truncate">{subtitle}</span>
+              </>
+            ) : null}
             <ChevronDownIcon
               className={cn(
                 "app-topbar__thread-chevron h-3.5 w-3.5 shrink-0 text-muted-foreground/68 transition-transform duration-150 ease-out",

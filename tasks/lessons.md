@@ -187,6 +187,7 @@
 - When the user wants the right desktop inspector edge to disappear, remove the pane border and rely on a separate invisible resize hit area instead of a visible divider line.
 - When the user wants the desktop chat composer to blend into the transcript surface, remove the composer top border and keep the resize affordance as a larger invisible hit area instead of a hover-visible divider stripe.
 - When adding clickable title controls to the desktop topbar, keep `no-drag` scoped to the actual button or popover; marking the full title shell as interactive will kill window dragging across most of the bar.
+- For desktop topbar thread labels in this app, separate the thread title from workspace context with a muted `|`, keep the workspace name italic, and size both down slightly so the label reads like chrome metadata instead of a heavy page heading.
 - When the user wants the active chat title in the desktop titlebar, move the thread identity into `AppTopBar` itself with workspace context and a click-open usage popover; do not leave a second floating thread title header inside `ChatView`.
 - For desktop titlebar popovers, never keep `overflow-hidden` on the topbar shell; it clips the details surface and makes the interaction look broken even when state toggles correctly.
 - When the user wants the macOS desktop titlebar to visually disappear into chat, match the topbar content fill to the same `panel` surface token the chat canvas uses instead of a lighter shell blend.

@@ -123,17 +123,24 @@ body {
 .app-topbar__thread-title {
   flex: 0 1 auto;
   min-width: 0;
-  font-size: 0.86rem;
-  font-weight: 640;
+  font-size: 0.8rem;
+  font-weight: 620;
   letter-spacing: -0.02em;
   color: color-mix(in srgb, var(--text) 96%, transparent);
+}
+
+.app-topbar__thread-separator {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-weight: 560;
 }
 
 .app-topbar__thread-subtitle {
   flex: 0 1 auto;
   min-width: 0;
-  font-size: 0.8rem;
+  font-size: 0.74rem;
   font-weight: 560;
+  font-style: italic;
   color: color-mix(in srgb, var(--muted) 92%, transparent);
 }
 

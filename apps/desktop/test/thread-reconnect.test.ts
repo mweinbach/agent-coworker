@@ -106,6 +106,7 @@ mock.module("../src/lib/desktopCommands", () => ({
   readFile: async () => "",
   previewOSFile: async () => {},
   openPath: async () => {},
+  openExternalUrl: async () => {},
   revealPath: async () => {},
   copyPath: async () => {},
   createDirectory: async () => {},

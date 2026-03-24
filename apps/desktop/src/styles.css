@@ -102,10 +102,11 @@ body {
   display: none;
 }
 
-.app-topbar__sidebar-toggle-button {
+.app-topbar__plain-icon-button {
   background: transparent;
   box-shadow: none;
   border: 0;
+  outline: 0;
 }
 
 .app-topbar__sidebar-fill {

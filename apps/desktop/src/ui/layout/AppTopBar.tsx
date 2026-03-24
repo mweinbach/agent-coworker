@@ -50,7 +50,7 @@ export function AppTopBar({
           onClick={onToggleSidebar}
           title={sidebarLabel}
           aria-label={sidebarLabel}
-          className="app-topbar__toolbar-button app-topbar__sidebar-toggle-button text-muted-foreground hover:text-foreground"
+          className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
         >
           <PanelLeftIcon className="h-4 w-4" />
         </Button>
@@ -61,18 +61,18 @@ export function AppTopBar({
             onClick={onNewChat}
             title="New Chat"
             aria-label="New Chat"
-            className="app-topbar__toolbar-button text-muted-foreground hover:text-foreground"
+            className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
           >
             <SquarePenIcon className="h-4 w-4" />
           </Button>
         ) : null}
       </div>
 
-      <div className="app-topbar__title pointer-events-none absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+      <div className="app-topbar__title pointer-events-none absolute inset-y-0 left-1/2 flex -translate-x-1/2 items-center gap-2 text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
         Cowork
       </div>
 
-      <div className="app-topbar__toolbar app-topbar__toolbar--right app-topbar__controls absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-1.5">
+      <div className="app-topbar__toolbar app-topbar__toolbar--right app-topbar__controls absolute inset-y-0 right-3 flex items-center gap-1.5">
         {busy ? (
           <Badge variant="secondary" className="gap-1.5 rounded-md border-border/55 bg-muted/20 px-2 py-0 text-[11px] text-muted-foreground shadow-none">
             <LoaderCircleIcon className="h-3 w-3 animate-spin" />
@@ -85,7 +85,7 @@ export function AppTopBar({
           onClick={onToggleContextSidebar}
           title={rightSidebarLabel}
           aria-label={rightSidebarLabel}
-          className="app-topbar__toolbar-button text-muted-foreground hover:text-foreground"
+          className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
         >
           <PanelRightIcon className="h-4 w-4" />
         </Button>

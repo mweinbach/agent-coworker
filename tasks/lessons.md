@@ -178,6 +178,9 @@
 - For desktop “new chat” affordances in this shell, prefer a compose-style pen/paper icon over a generic plus so the action reads as “start writing” instead of “add another thing.”
 - When the user wants the compose affordance to read as one action, fold the pen icon into a single full-width `New Chat` rail button instead of splitting it across a label and a separate icon-only control.
 - When the left desktop sidebar is collapsed, keep `New Chat` reachable from the shell header itself; do not strand compose behind a hidden rail.
+- For macOS desktop topbar alignment, keep the title and right-side toolbar on full-height `inset-y-0` tracks instead of `top-1/2` translate wrappers; mixed positioning modes leave the right toggle visibly lower than the left controls.
+- For desktop macOS topbar icons, use one shared plain-icon class across left toggle, collapsed compose, and right context toggle; leaving one on default HeroUI ghost styling brings back the unwanted squircle chrome.
+- For the macOS collapsed-sidebar compose affordance, keep the `New Chat` button mounted and animate its width/opacity on the collapse state; conditional mount/unmount makes the icon pop in abruptly.
 - For desktop steering UX in this repo, do not stop at store/runtime support; the chat composer itself must stay editable during busy turns, route non-empty busy submits through `busyPolicy: "steer"`, and only show the stop control when the composer is empty.
 - When desktop steering is user-visible, distinguish `steer ready` from `steer pending` in the composer itself; a generic send icon is not enough once the draft is targeting the active run.
 - For desktop provider bootstrap, do not fire separate catalog/auth/status requests from the UI during cold start; let the control-socket `server_hello` bootstrap them and treat a missing control `sessionId` as handshaking, not a user-visible "Not connected" error.

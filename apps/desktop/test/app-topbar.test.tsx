@@ -31,18 +31,25 @@ describe("desktop app top bar", () => {
 
       const strip = container.querySelector(".app-topbar");
       const sidebarFill = container.querySelector(".app-topbar__sidebar-fill");
+      const title = container.querySelector(".app-topbar__title");
       const sidebarToggle = container.querySelector('button[aria-label="Hide sidebar"]');
       const contextToggle = container.querySelector('button[aria-label="Hide context"]');
       const newChatButton = container.querySelector('button[aria-label="New Chat"]');
+      const newChatReveal = newChatButton?.closest(".app-topbar__new-chat-reveal");
 
       expect(strip).not.toBeNull();
       expect(sidebarFill).not.toBeNull();
       expect(sidebarToggle).not.toBeNull();
-      expect(sidebarToggle?.className).toContain("app-topbar__sidebar-toggle-button");
-      expect(newChatButton).toBeNull();
+      expect(sidebarToggle?.className).toContain("app-topbar__plain-icon-button");
+      expect(newChatButton).not.toBeNull();
+      expect(newChatReveal?.getAttribute("aria-hidden")).toBe("true");
+      expect(newChatReveal?.className).toContain("max-w-0");
+      expect(newChatReveal?.className).toContain("opacity-0");
+      expect(title?.className).toContain("inset-y-0");
       expect(contextToggle).not.toBeNull();
       expect(contextToggle?.className).toContain("app-topbar__toolbar-button");
-      expect(contextToggle?.className).toContain("app-topbar__toolbar-button");
+      expect(contextToggle?.className).toContain("app-topbar__plain-icon-button");
+      expect(contextToggle?.closest(".app-topbar__toolbar--right")?.className).toContain("inset-y-0");
       expect(container.textContent).toContain("Busy");
       expect(container.textContent).toContain("Cowork");
 
@@ -79,10 +86,15 @@ describe("desktop app top bar", () => {
 
       const sidebarToggle = container.querySelector('button[aria-label="Show sidebar"]');
       const newChatButton = container.querySelector('button[aria-label="New Chat"]');
+      const newChatReveal = newChatButton?.closest(".app-topbar__new-chat-reveal");
 
       expect(sidebarToggle).not.toBeNull();
       expect(newChatButton).not.toBeNull();
       expect(newChatButton?.className).toContain("app-topbar__toolbar-button");
+      expect(newChatButton?.className).toContain("app-topbar__plain-icon-button");
+      expect(newChatReveal?.getAttribute("aria-hidden")).toBe("false");
+      expect(newChatReveal?.className).toContain("max-w-7");
+      expect(newChatReveal?.className).toContain("opacity-100");
 
       await act(async () => {
         newChatButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));

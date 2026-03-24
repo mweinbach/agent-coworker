@@ -15,8 +15,28 @@ const opaqueCitationRedirectHosts = new Set([
 ]);
 const citationResolutionTimeoutMs = 4_000;
 const citationResolutionMaxBytes = 96 * 1024;
+const DEFAULT_MAX_SETTLED_CITATION_CACHE_ENTRIES = 512;
+const DEFAULT_MAX_INFLIGHT_CITATION_RESOLUTIONS = 128;
+let maxSettledCitationCacheEntries = DEFAULT_MAX_SETTLED_CITATION_CACHE_ENTRIES;
+let maxInflightCitationResolutionEntries = DEFAULT_MAX_INFLIGHT_CITATION_RESOLUTIONS;
 const citationResolutionCache = new Map<string, Promise<ResolvedCitationReference | null>>();
 const settledCitationResolutionCache = new Map<string, ResolvedCitationReference | null>();
+
+function evictOldestInflightCitationResolutions(): void {
+  while (citationResolutionCache.size > maxInflightCitationResolutionEntries) {
+    const first = citationResolutionCache.keys().next().value;
+    if (first === undefined) break;
+    citationResolutionCache.delete(first);
+  }
+}
+
+function evictOldestSettledCitationEntries(): void {
+  while (settledCitationResolutionCache.size > maxSettledCitationCacheEntries) {
+    const first = settledCitationResolutionCache.keys().next().value;
+    if (first === undefined) break;
+    settledCitationResolutionCache.delete(first);
+  }
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -223,9 +243,11 @@ async function getResolvedCitationReference(url: string): Promise<ResolvedCitati
 
   const pending = resolveCitationReference(url).then((resolved) => {
     settledCitationResolutionCache.set(url, resolved);
+    evictOldestSettledCitationEntries();
     citationResolutionCache.delete(url);
     return resolved;
   });
+  evictOldestInflightCitationResolutions();
   citationResolutionCache.set(url, pending);
   try {
     return await pending;
@@ -453,4 +475,18 @@ export const __internal = {
   isOpaqueCitationRedirectUrl,
   needsCitationResolution,
   normalizeHostnameLikeLabel,
-} as const;
+  __testSetCitationCacheLimits: (limits: { maxSettled?: number; maxInflight?: number }) => {
+    if (typeof limits.maxSettled === "number" && Number.isFinite(limits.maxSettled) && limits.maxSettled > 0) {
+      maxSettledCitationCacheEntries = Math.floor(limits.maxSettled);
+    }
+    if (typeof limits.maxInflight === "number" && Number.isFinite(limits.maxInflight) && limits.maxInflight > 0) {
+      maxInflightCitationResolutionEntries = Math.floor(limits.maxInflight);
+    }
+  },
+  __testResetCitationCacheLimits: () => {
+    maxSettledCitationCacheEntries = DEFAULT_MAX_SETTLED_CITATION_CACHE_ENTRIES;
+    maxInflightCitationResolutionEntries = DEFAULT_MAX_INFLIGHT_CITATION_RESOLUTIONS;
+  },
+  __testGetSettledCacheSize: () => settledCitationResolutionCache.size,
+  __testGetInflightCacheSize: () => citationResolutionCache.size,
+};

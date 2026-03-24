@@ -1205,8 +1205,11 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
       }
     }
 
-    await pendingEventDelivery;
-    await Promise.all(pendingAnnotationEnrichments);
+    // Stream parts (including text-end) are emitted before citation fetches finish; see
+    // test "queueTextBlockAnnotationEnrichment keeps slow citation fetches off the text-end hot path".
+    // We still wait for enrichment before assembling assistant.content so follow-up Google steps
+    // receive resolved citation URLs/titles in history.
+    await Promise.all([pendingEventDelivery, Promise.all(pendingAnnotationEnrichments)]);
 
     if (opts.streamOptions.signal?.aborted) {
       throw new Error("Request was aborted");
@@ -1238,7 +1241,8 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
 
     return { assistant, interactionId };
   } catch (error) {
-    await pendingEventDelivery;
+    await pendingEventDelivery.catch(() => undefined);
+    await Promise.allSettled(pendingAnnotationEnrichments);
     await emitEvent({
       type: "error",
       error: error instanceof Error ? error.message : String(error),

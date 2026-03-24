@@ -42,6 +42,7 @@ function makeHtmlResponse(finalUrl: string, html: string): Response {
 }
 
 afterEach(() => {
+  citationMetadataInternal.__testResetCitationCacheLimits();
   restoreFetchStub();
   citationMetadataInternal.clearCitationResolutionCache();
 });
@@ -293,5 +294,31 @@ describe("citationMetadata", () => {
       ],
     });
     expect(user).toEqual(snapshot.feed[1]);
+  });
+
+  test("evicts oldest settled citation cache entries when over capacity", async () => {
+    citationMetadataInternal.__testSetCitationCacheLimits({ maxSettled: 3 });
+    installFetchStub(async (input: RequestInfo | URL) => {
+      const u = typeof input === "string" ? input : input.url;
+      const response = new Response(`<html><head><title>T ${u}</title></head></html>`, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+      Object.defineProperty(response, "url", { configurable: true, value: u });
+      return response;
+    });
+
+    for (let i = 0; i < 5; i++) {
+      await enrichCitationAnnotations([
+        {
+          type: "url_citation",
+          url: `https://vertexaisearch.cloud.google.com/grounding-api-redirect/u${i}`,
+          title: "host.test",
+          start_index: 0,
+          end_index: 1,
+        },
+      ]);
+    }
+
+    expect(citationMetadataInternal.__testGetSettledCacheSize()).toBe(3);
   });
 });

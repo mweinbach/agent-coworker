@@ -137,6 +137,7 @@ export function createThreadRouteHandlers(
         ? context.utils.buildThreadFromSession(binding.session)
         : context.utils.buildThreadFromRecord(context.threads.getPersisted(threadId)!);
       await context.journal.waitForIdle(threadId);
+      // Synchronous cache-only rewrite; network resolution runs in primeSessionSnapshotCitationCache (microtask).
       const enrichedSnapshot = enrichSessionSnapshotCitationsFromCache(snapshot);
       let journalTailSeq = 0;
       let turns: ReturnType<ReturnType<typeof createThreadTurnProjector>["build"]> | undefined;

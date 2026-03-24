@@ -32,6 +32,8 @@ export const jsonRpcAgentNotificationSchemas = {
 } as const;
 
 export const jsonRpcAgentRequestSchemas = {
+  // role / reasoningEffort use shared enums so malformed strings fail JSON-RPC invalidParams
+  // before createAgentSession (see test/jsonrpc.routes.review-fixes.test.ts).
   "cowork/session/agent/spawn": z.object({
     threadId: nonEmptyTrimmedStringSchema,
     message: nonEmptyTrimmedStringSchema,

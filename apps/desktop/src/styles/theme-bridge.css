@@ -1,4 +1,4 @@
-/* Maps design tokens to Tailwind v4 @theme (shadcn-style semantic colors) */
+/* Maps desktop design tokens to Tailwind v4 + HeroUI semantic variables */
 
 @theme inline {
   --font-sans: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -36,4 +36,61 @@
   --radius-sm: calc(var(--radius) - 0.25rem);
   --radius-md: var(--radius);
   --radius-lg: calc(var(--radius) + 0.125rem);
+}
+
+@layer base {
+  :root {
+    --background: var(--app-bg);
+    --foreground: var(--text);
+
+    --surface: color-mix(in srgb, var(--panel-bg) 92%, var(--app-bg));
+    --surface-foreground: var(--text);
+
+    --overlay: color-mix(in srgb, var(--panel-bg) 96%, transparent);
+    --overlay-foreground: var(--text);
+
+    --muted: var(--muted);
+    --scrollbar: color-mix(in srgb, var(--text) 18%, transparent);
+
+    --default: color-mix(in srgb, var(--panel-bg) 86%, var(--app-bg));
+    --default-foreground: var(--text);
+
+    --accent: var(--accent);
+    --accent-foreground: #ffffff;
+
+    --field-background: color-mix(in srgb, var(--panel-bg) 78%, var(--app-bg));
+    --field-foreground: var(--text);
+    --field-placeholder: color-mix(in srgb, var(--muted) 86%, transparent);
+    --field-border: color-mix(in srgb, var(--border) 88%, transparent);
+
+    --success: oklch(0.69 0.16 151);
+    --success-foreground: #ffffff;
+
+    --warning: oklch(0.78 0.16 80);
+    --warning-foreground: #2f2318;
+
+    --danger: var(--danger);
+    --danger-foreground: #ffffff;
+
+    --segment: color-mix(in srgb, var(--panel-bg) 88%, var(--app-bg));
+    --segment-foreground: var(--text);
+
+    --border: var(--border);
+    --separator: color-mix(in srgb, var(--border) 82%, transparent);
+    --focus: var(--accent);
+    --link: var(--accent);
+
+    --radius: var(--radius);
+    --field-radius: calc(var(--radius) * 0.95);
+  }
+
+  html.light,
+  html[data-theme="light"] {
+    color-scheme: light;
+  }
+
+  html.dark,
+  html[data-theme="dark"] {
+    color-scheme: dark;
+  }
 }

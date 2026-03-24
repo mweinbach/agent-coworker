@@ -193,11 +193,15 @@ export function UpdatesPage(props: UpdatesPageProps = {}) {
 
             {updateState.release.releasePageUrl ? (
               <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" asChild>
-                  <a href={updateState.release.releasePageUrl} target="_blank" rel="noreferrer">
-                    <DownloadIcon className="h-4 w-4" />
-                    Open release notes
-                  </a>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    window.open(updateState.release!.releasePageUrl, "_blank", "noopener,noreferrer");
+                  }}
+                >
+                  <DownloadIcon className="h-4 w-4" />
+                  Open release notes
                 </Button>
               </div>
             ) : null}

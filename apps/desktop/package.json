@@ -19,6 +19,8 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@heroui/react": "^3.0.1",
+    "@heroui/styles": "^3.0.1",
     "electron-updater": "^6.8.3",
     "zod": "^4.3.6"
   },

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "@heroui/styles";
 @import "./styles/tokens.css";
 @import "./styles/theme-bridge.css";
 @import "./styles/platform/darwin.css";

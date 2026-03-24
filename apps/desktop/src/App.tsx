@@ -271,12 +271,16 @@ export default function App() {
   useEffect(() => {
     function applySystemAppearance(appearance: SystemAppearance): void {
       const root = document.documentElement;
-      root.dataset.systemTheme = appearance.shouldUseDarkColors ? "dark" : "light";
+      const theme = appearance.shouldUseDarkColors ? "dark" : "light";
+      root.dataset.systemTheme = theme;
       root.dataset.systemUiTheme = appearance.shouldUseDarkColorsForSystemIntegratedUI ? "dark" : "light";
+      root.dataset.theme = theme;
       root.dataset.platform = appearance.platform;
       root.dataset.highContrast = appearance.shouldUseHighContrastColors || appearance.inForcedColorsMode ? "true" : "false";
       root.dataset.reducedTransparency = appearance.prefersReducedTransparency ? "true" : "false";
-      root.style.colorScheme = appearance.shouldUseDarkColors ? "dark" : "light";
+      root.style.colorScheme = theme;
+      root.classList.toggle("dark", theme === "dark");
+      root.classList.toggle("light", theme !== "dark");
     }
 
     const unsubscribe = onSystemAppearanceChanged(applySystemAppearance);

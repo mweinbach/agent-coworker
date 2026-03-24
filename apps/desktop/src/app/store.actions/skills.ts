@@ -173,14 +173,31 @@ export function createSkillActions(
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/read", { cwd, skillName });
-      if (!ok) return;
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
-          [workspaceId]: { ...s.workspaceRuntimeById[workspaceId], selectedSkillName: skillName, selectedSkillContent: null },
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            selectedSkillName: skillName,
+            selectedSkillContent: null,
+            selectedSkillInstallationId: null,
+            selectedSkillInstallation: null,
+            selectedSkillPreview: null,
+          },
         },
       }));
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/read", { cwd, skillName });
+      if (!ok) {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              selectedSkillName: null,
+            },
+          },
+        }));
+      }
     },
 
     selectSkillInstallation: async (installationId: string | null) => {
@@ -203,8 +220,6 @@ export function createSkillActions(
         return;
       }
       const cwd = workspacePath(workspaceId);
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/read", { cwd, installationId });
-      if (!ok) return;
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
@@ -212,10 +227,24 @@ export function createSkillActions(
             ...s.workspaceRuntimeById[workspaceId],
             selectedSkillInstallationId: installationId,
             selectedSkillInstallation: null,
+            selectedSkillName: null,
+            selectedSkillContent: null,
             selectedSkillPreview: null,
           },
         },
       }));
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/read", { cwd, installationId });
+      if (!ok) {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              selectedSkillInstallationId: null,
+            },
+          },
+        }));
+      }
     },
 
     previewSkillInstall: async (sourceInput: string, targetScope: "project" | "global") => {

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
+import { defaultWorkspaceRuntime } from "../src/app/store.helpers/runtimeState";
+
 const { createSkillActions } = await import("../src/app/store.actions/skills");
 const { reactivateWorkspaceJsonRpcState } = await import("../src/app/store.helpers");
 const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
@@ -173,6 +175,115 @@ describe("skill store actions", () => {
 
     expect(waiterPendingKey).toBe("install:global");
     expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
+  });
+
+  test("selectSkill preserves loaded content after the JSON-RPC read succeeds", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      skillCatalogLoading: false,
+      skillCatalogError: null,
+      skillMutationPendingKeys: {},
+      skillMutationError: null,
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+      skills: [{
+        name: "example-skill",
+        description: "Example skill",
+        source: "workspace",
+        enabled: true,
+        effective: true,
+        interface: null,
+        metadata: null,
+        path: "/tmp/workspace/skills/example-skill/SKILL.md",
+      }],
+    } as any;
+    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
+    const { get, set } = createStoreHarness(state);
+
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => ({
+        event: {
+          type: "skill_content",
+          sessionId: "jsonrpc-control",
+          skill: state.workspaceRuntimeById[workspaceId].skills[0],
+          content: "# Example skill",
+        },
+      }),
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    await createSkillActions(set as any, get as any).selectSkill("example-skill");
+
+    expect(state.workspaceRuntimeById[workspaceId].selectedSkillName).toBe("example-skill");
+    expect(state.workspaceRuntimeById[workspaceId].selectedSkillContent).toBe("# Example skill");
+  });
+
+  test("selectSkillInstallation enters loading state before the request and preserves loaded detail after success", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      skillCatalogLoading: false,
+      skillCatalogError: null,
+      skillMutationPendingKeys: {},
+      skillMutationError: null,
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+    } as any;
+    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
+    const { get, set } = createStoreHarness(state);
+
+    const installation = {
+      installationId: "inst-1",
+      name: "example-skill",
+      description: "Example skill",
+      scope: "global",
+      enabled: true,
+      writable: false,
+      managed: false,
+      effective: true,
+      state: "effective",
+      rootDir: "/tmp/workspace/skills/example-skill",
+      skillPath: "/tmp/workspace/skills/example-skill/SKILL.md",
+      path: "/tmp/workspace/skills/example-skill/SKILL.md",
+      triggers: [],
+      descriptionSource: "unknown",
+      diagnostics: [],
+    };
+
+    let resolveRequest!: (value: unknown) => void;
+    const requestPromise = new Promise((resolve) => {
+      resolveRequest = resolve;
+    });
+
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => await requestPromise,
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    const selectPromise = createSkillActions(set as any, get as any).selectSkillInstallation("inst-1");
+
+    expect(state.workspaceRuntimeById[workspaceId].selectedSkillInstallationId).toBe("inst-1");
+    expect(state.workspaceRuntimeById[workspaceId].selectedSkillInstallation).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].selectedSkillContent).toBeNull();
+
+    resolveRequest({
+      event: {
+        type: "skill_installation",
+        sessionId: "jsonrpc-control",
+        installation,
+        content: "# Example skill",
+      },
+    });
+    await selectPromise;
+
+    expect(state.workspaceRuntimeById[workspaceId].selectedSkillInstallationId).toBe("inst-1");
+    expect(state.workspaceRuntimeById[workspaceId].selectedSkillInstallation).toEqual(installation);
+    expect(state.workspaceRuntimeById[workspaceId].selectedSkillContent).toBe("# Example skill");
   });
 
   for (const { name, invoke } of failedSkillMutationActions) {

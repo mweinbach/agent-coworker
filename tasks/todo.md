@@ -536,3 +536,31 @@
 - `src/server/startServer.ts` and `src/server/jsonrpc/routes/skillsMemoryAndWorkspaceBackup.ts` now treat emitted validation errors from `cowork/skills/installation/read` and `cowork/skills/installation/{enable,disable,delete,update}` as terminal JSON-RPC errors instead of waiting for the capture timeout.
 - `apps/desktop/test/workspace-settings-sync.test.ts`, `test/jsonrpc.routes.review-fixes.test.ts`, and `test/server.jsonrpc.control.test.ts` now lock down the thread-response envelope state path plus the skill-installation error returns in both extracted-route and live-server coverage.
 - Verification passed with `bun test apps/desktop/test/workspace-settings-sync.test.ts`, `bun test test/jsonrpc.routes.review-fixes.test.ts`, `bun test test/server.jsonrpc.control.test.ts`, `bun run typecheck`, and `bun run test`.
+
+## Skills Detail Loading Regression
+
+- [x] Reproduce the real desktop regression where clicking a skill no longer loads the detail data/background content.
+- [x] Fix the skills store action sequencing so detail dialogs enter loading state before the request and retain the JSON-RPC-loaded installation/content after success.
+- [x] Add focused regressions for both `selectSkill` and `selectSkillInstallation`.
+- [x] Re-run focused desktop tests, repo typecheck, full `bun test`, and manual desktop validation.
+
+## Skills Detail Loading Regression Review
+
+- `apps/desktop/src/app/store.actions/skills.ts` no longer clears `selectedSkillContent` or `selectedSkillInstallation` after the JSON-RPC read succeeds. Instead, `selectSkillInstallation` now sets the selected installation id and loading state before issuing `cowork/skills/installation/read`, so the dialog opens immediately and then preserves the returned installation metadata and markdown content once the control event lands.
+- `apps/desktop/test/skills-actions.test.ts` now covers the regression directly: `selectSkill` retains the loaded markdown content after `cowork/skills/read`, and `selectSkillInstallation` enters a loading state before the request and keeps the returned installation + content after success.
+- Manual desktop validation passed in the running Electron app: clicking built-in skills opened the detail dialog and loaded the full documentation body again instead of staying stuck on loading.
+- Verification passed with `bun test apps/desktop/test/skills-actions.test.ts apps/desktop/test/skills-catalog-page.test.ts apps/desktop/test/skill-detail-dialog.test.ts`, `bun run typecheck`, `bun test`, and a manual Electron desktop walkthrough.
+
+## CI Fix: Desktop Release Validate lane
+
+- [x] Inspect the linked GitHub Actions Desktop Release run and identify the failing test from the `Validate` job logs.
+- [x] Reproduce or otherwise confirm the failure path locally against the same `HEAD` commit.
+- [x] Remove the leaking desktop test mock that nulls out `SkillDetailDialog` across adjacent Bun/Linux test files.
+- [x] Re-run the affected desktop regression slice, repo typecheck, and the full `bun test` lane.
+
+## CI Fix Review
+
+- GitHub Actions run `23473727870` failed in `Desktop Release -> Validate -> Unit tests`, not in packaging. The first actionable failure was `apps/desktop/test/skill-detail-dialog.test.ts`, where the dialog rendered as `null` and the `Open folder` button never appeared.
+- The root cause was a file-level `mock.module("../src/ui/skills/SkillDetailDialog", ...)` in `apps/desktop/test/skills-catalog-page.test.ts`. On Bun/Linux CI that mock can leak into the adjacent skill dialog test file, causing `SkillDetailDialog` to stay mocked as `null`.
+- `apps/desktop/test/skills-catalog-page.test.ts` no longer mocks `SkillDetailDialog`. Those catalog-page tests only assert loading and empty states while the dialog remains closed, so the extra mock was unnecessary and destabilized CI.
+- Verification passed with `bun test apps/desktop/test/skills-catalog-page.test.ts apps/desktop/test/skill-detail-dialog.test.ts --rerun-each 25`, `bun test apps/desktop/test/skill-detail-dialog.test.ts apps/desktop/test/protocol-v2-events.test.ts apps/desktop/test/thread-reconnect.test.ts apps/desktop/test/jsonrpc-single-connection.test.ts apps/desktop/test/bootstrap-cache.test.ts`, `bun run typecheck`, and `bun test`.

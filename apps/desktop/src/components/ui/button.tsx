@@ -71,7 +71,7 @@ function buttonVariants({
   );
 }
 
-function Button({
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button({
   className,
   variant = "default",
   size = "default",
@@ -81,7 +81,7 @@ function Button({
   disabled,
   children,
   ...props
-}: ButtonProps) {
+}, ref) {
   if (asChild && React.isValidElement(children)) {
     const child = children as React.ReactElement<React.HTMLAttributes<HTMLElement>>;
     const childProps = {
@@ -121,6 +121,7 @@ function Button({
   return (
     <HeroButton
       {...props}
+      ref={ref}
       className={buttonVariants({
         variant,
         size,
@@ -138,6 +139,8 @@ function Button({
       {children}
     </HeroButton>
   );
-}
+});
+
+Button.displayName = "Button";
 
 export { Button, buttonVariants };

@@ -1,5 +1,6 @@
 import { memo, useRef, useState, useCallback } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
+import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 import { confirmAction } from "../../lib/desktopCommands";
 
@@ -87,14 +88,16 @@ function FaviconImage({ url, className }: { url: string; className?: string }) {
   );
 }
 
-function SourceCard({ source, index }: { source: CitationSource; index: number }) {
+function SourceCard({ source }: { source: CitationSource }) {
   const title = displayTitle(source);
   const domain = displayDomain(source.url);
 
   return (
-    <button
+    <Button
       type="button"
-      className="flex w-44 shrink-0 cursor-pointer items-center gap-2.5 rounded-lg border border-border/70 bg-card px-3 py-2.5 text-left transition-colors hover:border-border hover:bg-accent/50"
+      variant="ghost"
+      size="sm"
+      className="h-auto w-44 shrink-0 justify-start gap-2.5 rounded-lg border border-border/70 bg-card px-3 py-2.5 text-left shadow-none transition-colors hover:border-border hover:bg-accent/50"
       onClick={() => void openSourceLink(source.url)}
     >
       <FaviconImage url={source.url} className="size-5 shrink-0" />
@@ -102,7 +105,7 @@ function SourceCard({ source, index }: { source: CitationSource; index: number }
         <div className="truncate text-xs font-medium text-foreground">{title}</div>
         <div className="truncate text-[10px] text-muted-foreground">{domain}</div>
       </div>
-    </button>
+    </Button>
   );
 }
 
@@ -154,32 +157,36 @@ export const SourcesCarousel = memo(function SourcesCarousel({ sources, classNam
           className="flex gap-2 overflow-x-auto scrollbar-none"
           onScroll={onScroll}
         >
-          {sources.map((source, index) => (
-            <SourceCard key={source.url} source={source} index={index} />
+          {sources.map((source) => (
+            <SourceCard key={source.url} source={source} />
           ))}
         </div>
 
         {canScrollLeft && (
-          <button
+          <Button
             type="button"
-            className="absolute -left-2 top-1/2 z-10 flex size-6 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card shadow-sm opacity-0 transition-opacity group-hover/carousel:opacity-100"
+            variant="ghost"
+            size="icon-sm"
+            className="absolute -left-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 shadow-sm transition-opacity group-hover/carousel:opacity-100"
             onClick={() => scrollBy(-180)}
           >
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-foreground">
               <path d="M7.5 2.5L4 6l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-          </button>
+          </Button>
         )}
         {canScrollRight && (
-          <button
+          <Button
             type="button"
-            className="absolute -right-2 top-1/2 z-10 flex size-6 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card shadow-sm opacity-0 transition-opacity group-hover/carousel:opacity-100"
+            variant="ghost"
+            size="icon-sm"
+            className="absolute -right-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 shadow-sm transition-opacity group-hover/carousel:opacity-100"
             onClick={() => scrollBy(180)}
           >
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-foreground">
               <path d="M4.5 2.5L8 6l-3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-          </button>
+          </Button>
         )}
       </div>
     </div>

@@ -21,6 +21,7 @@ import {
   normalizeDisplayCitationMarkers,
   type CitationSource,
 } from "../../../../../src/shared/displayCitationMarkers";
+import { Button } from "../ui/button";
 import { confirmAction, openExternalUrl, openPath } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
 
@@ -416,16 +417,18 @@ function DesktopCitationChip({
 
   return (
     <cite ref={rootRef} className={cn("relative ml-2 inline-flex not-italic", className)} {...props}>
-      <button
+      <Button
         ref={buttonRef}
         type="button"
-        className="inline-flex items-center rounded-full border border-border/70 bg-muted/60 px-2.5 py-0.5 text-[0.72rem] font-medium leading-none text-muted-foreground transition-colors hover:border-border hover:bg-muted"
+        variant="outline"
+        size="sm"
+        className="h-auto min-w-0 rounded-full border-border/70 bg-muted/60 px-2.5 py-0.5 text-[0.72rem] font-medium leading-none text-muted-foreground shadow-none transition-colors hover:border-border hover:bg-muted"
         aria-expanded={open}
         aria-haspopup="dialog"
         onClick={() => setOpen((value) => !value)}
       >
         {label}
-      </button>
+      </Button>
       {open && currentSource && typeof document !== "undefined"
         ? createPortal(
           <div
@@ -436,31 +439,37 @@ function DesktopCitationChip({
             style={popupPosition ? { left: popupPosition.left, top: popupPosition.top } : { left: 0, top: 0, visibility: "hidden" }}
           >
             <div className="flex items-center gap-0.5 border-b border-border/60 bg-muted/25 px-2.5 py-1.5">
-              <button
+              <Button
                 type="button"
-                className="flex size-7 items-center justify-center rounded-full transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border/40 disabled:cursor-not-allowed disabled:opacity-35"
+                variant="ghost"
+                size="icon-sm"
+                className="h-7 w-7 min-w-7 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
                 aria-label="Previous source"
                 disabled={sources.length <= 1}
                 onClick={() => setActiveIndex((index) => (index - 1 + sources.length) % sources.length)}
               >
                 <CitationArrow direction="left" />
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="flex size-7 items-center justify-center rounded-full transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border/40 disabled:cursor-not-allowed disabled:opacity-35"
+                variant="ghost"
+                size="icon-sm"
+                className="h-7 w-7 min-w-7 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
                 aria-label="Next source"
                 disabled={sources.length <= 1}
                 onClick={() => setActiveIndex((index) => (index + 1) % sources.length)}
               >
                 <CitationArrow direction="right" />
-              </button>
+              </Button>
               <div className="ml-auto text-xs font-medium text-muted-foreground">
                 {activeIndex + 1}/{sources.length}
               </div>
             </div>
-            <button
+            <Button
               type="button"
-              className="block w-full px-3.5 py-3 text-left transition-colors hover:bg-accent/35"
+              variant="ghost"
+              size="sm"
+              className="h-auto w-full justify-start px-3.5 py-3 text-left shadow-none transition-colors hover:bg-accent/35"
               onClick={() => {
                 setOpen(false);
                 void openExternalCitationSource(currentSource);
@@ -478,7 +487,7 @@ function DesktopCitationChip({
               {currentSourceDisplay?.displayUrl ? (
                 <div className="mt-2 break-all text-xs leading-5 text-muted-foreground">{currentSourceDisplay.displayUrl}</div>
               ) : null}
-            </button>
+            </Button>
           </div>,
           document.body,
         )
@@ -862,7 +871,10 @@ function DesktopMessageLink({
 
   if (localPath || forwardedExternalHref) {
     return (
-      <button
+      <Button
+        type="button"
+        variant="link"
+        size="sm"
         className={cn("wrap-anywhere appearance-none bg-transparent p-0 text-left font-medium text-primary underline", className)}
         data-streamdown="link"
         onClick={(event) => {
@@ -871,10 +883,9 @@ function DesktopMessageLink({
           }
           void openDesktopMessageLink(href);
         }}
-        type="button"
       >
         {children}
-      </button>
+      </Button>
     );
   }
 

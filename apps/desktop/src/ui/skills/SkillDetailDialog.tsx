@@ -100,9 +100,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                         type="button"
                         variant="link"
                         className="h-auto p-0 text-muted-foreground hover:text-foreground"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
+                        onClick={() => {
                           void revealPath({ path: selectedInstallation.rootDir });
                         }}
                       >

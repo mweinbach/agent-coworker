@@ -5,6 +5,7 @@ type JsdomGlobalKey =
   | "document"
   | "navigator"
   | "HTMLElement"
+  | "SVGElement"
   | "Node"
   | "getComputedStyle"
   | "requestAnimationFrame"
@@ -56,6 +57,7 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
     "document",
     "navigator",
     "HTMLElement",
+    "SVGElement",
     "Node",
     "getComputedStyle",
     "IS_REACT_ACT_ENVIRONMENT",
@@ -68,6 +70,7 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
   setGlobalProperty("document", dom.window.document);
   setGlobalProperty("navigator", dom.window.navigator);
   setGlobalProperty("HTMLElement", dom.window.HTMLElement);
+  setGlobalProperty("SVGElement", dom.window.SVGElement);
   setGlobalProperty("Node", dom.window.Node);
   setGlobalProperty("getComputedStyle", dom.window.getComputedStyle.bind(dom.window));
 

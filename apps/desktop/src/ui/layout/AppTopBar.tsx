@@ -1,7 +1,12 @@
-import { PanelLeftIcon, PanelRightIcon, LoaderCircleIcon, SquarePenIcon } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
+import { ChevronDownIcon, LoaderCircleIcon, PanelLeftIcon, PanelRightIcon, SquarePenIcon } from "lucide-react";
+
+import type { SessionUsageSnapshot, TurnUsageSnapshot } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { cn } from "../../lib/utils";
+import { formatCost, formatTokenCount } from "../../../../../src/session/pricing";
 import { SidebarCollapseControl } from "./SidebarCollapseControl";
 
 interface AppTopBarProps {
@@ -12,6 +17,12 @@ interface AppTopBarProps {
   sidebarWidth: number;
   contextSidebarCollapsed: boolean;
   onToggleContextSidebar: () => void;
+  title: string;
+  subtitle: string | null;
+  sessionUsage: SessionUsageSnapshot | null;
+  lastTurnUsage: TurnUsageSnapshot | null;
+  canClearHardCap?: boolean;
+  onClearHardCap?: () => void;
 }
 
 export function AppTopBar({
@@ -22,9 +33,92 @@ export function AppTopBar({
   sidebarWidth,
   contextSidebarCollapsed,
   onToggleContextSidebar,
+  title,
+  subtitle,
+  sessionUsage,
+  lastTurnUsage,
+  canClearHardCap = false,
+  onClearHardCap,
 }: AppTopBarProps) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsRef = useRef<HTMLDivElement | null>(null);
+  const detailsId = useId();
   const sidebarLabel = sidebarCollapsed ? "Show sidebar" : "Hide sidebar";
   const rightSidebarLabel = contextSidebarCollapsed ? "Show context" : "Hide context";
+  const hasUsage = sessionUsage !== null || lastTurnUsage !== null;
+  const estimatedCostLabel = useMemo(() => {
+    if (!sessionUsage) {
+      return "No usage yet";
+    }
+    if (sessionUsage.costTrackingAvailable && sessionUsage.estimatedTotalCostUsd !== null) {
+      return formatCost(sessionUsage.estimatedTotalCostUsd);
+    }
+    return sessionUsage.totalTurns > 0 ? "Unavailable" : "No usage yet";
+  }, [sessionUsage]);
+  const totalTokensLabel = useMemo(() => {
+    if (sessionUsage) {
+      return formatTokenCount(sessionUsage.totalTokens);
+    }
+    if (lastTurnUsage) {
+      return formatTokenCount(lastTurnUsage.usage.totalTokens);
+    }
+    return "—";
+  }, [lastTurnUsage, sessionUsage]);
+  const promptTokensLabel = sessionUsage ? formatTokenCount(sessionUsage.totalPromptTokens) : "—";
+  const completionTokensLabel = sessionUsage ? formatTokenCount(sessionUsage.totalCompletionTokens) : "—";
+  const totalTurnsLabel = sessionUsage ? `${sessionUsage.totalTurns}` : "0";
+  const lastTurnTokensLabel = lastTurnUsage ? formatTokenCount(lastTurnUsage.usage.totalTokens) : "—";
+  const lastTurnCostLabel = lastTurnUsage?.usage.estimatedCostUsd !== undefined
+    ? formatCost(lastTurnUsage.usage.estimatedCostUsd)
+    : "—";
+  const budgetLine = useMemo(() => {
+    const budget = sessionUsage?.budgetStatus;
+    if (!budget?.configured) {
+      return null;
+    }
+    if (budget.stopTriggered && budget.stopAtUsd !== null) {
+      return `Hard cap exceeded at ${formatCost(budget.stopAtUsd)}`;
+    }
+    if (budget.warningTriggered && budget.warnAtUsd !== null) {
+      return `Warning threshold reached at ${formatCost(budget.warnAtUsd)}`;
+    }
+
+    const parts: string[] = [];
+    if (budget.warnAtUsd !== null) parts.push(`Warn ${formatCost(budget.warnAtUsd)}`);
+    if (budget.stopAtUsd !== null) parts.push(`Cap ${formatCost(budget.stopAtUsd)}`);
+    return parts.length > 0 ? `Budget ${parts.join(" • ")}` : null;
+  }, [sessionUsage]);
+  const titleOffset = sidebarCollapsed ? 0 : sidebarWidth;
+  const titleRightInset = busy ? 8.75 * 16 : 4.75 * 16;
+
+  useEffect(() => {
+    setDetailsOpen(false);
+  }, [title, subtitle, sessionUsage?.sessionId, sidebarCollapsed]);
+
+  useEffect(() => {
+    if (!detailsOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (detailsRef.current && event.target instanceof Node && !detailsRef.current.contains(event.target)) {
+        setDetailsOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setDetailsOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [detailsOpen]);
 
   return (
     <div className="app-topbar app-topbar--frame relative flex w-full shrink-0 items-center justify-end overflow-hidden px-3">
@@ -68,8 +162,100 @@ export function AppTopBar({
         ) : null}
       </div>
 
-      <div className="app-topbar__title pointer-events-none absolute inset-y-0 left-1/2 flex -translate-x-1/2 items-center gap-2 text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-        Cowork
+      <div
+        className="app-topbar__thread-shell app-topbar__controls absolute inset-y-0 flex min-w-0 items-center"
+        style={{ left: titleOffset, right: titleRightInset }}
+      >
+        <div
+          ref={detailsRef}
+          className={cn(
+            "app-topbar__thread-anchor relative flex min-w-0",
+            sidebarCollapsed && "app-topbar__thread-anchor--collapsed",
+          )}
+        >
+          <button
+            type="button"
+            aria-label="Open thread details"
+            aria-haspopup="dialog"
+            aria-expanded={detailsOpen}
+            aria-controls={detailsId}
+            className="app-topbar__thread-button flex min-w-0 items-center gap-2"
+            data-open={detailsOpen ? "true" : "false"}
+            onClick={() => setDetailsOpen((open) => !open)}
+          >
+            <span className="app-topbar__thread-title truncate">{title}</span>
+            {subtitle ? <span className="app-topbar__thread-subtitle truncate">{subtitle}</span> : null}
+            <ChevronDownIcon
+              className={cn(
+                "app-topbar__thread-chevron h-3.5 w-3.5 shrink-0 text-muted-foreground/68 transition-transform duration-150 ease-out",
+                detailsOpen && "rotate-180",
+              )}
+            />
+          </button>
+
+          {detailsOpen ? (
+            <div
+              id={detailsId}
+              role="dialog"
+              aria-label="Thread details"
+              className="app-topbar__thread-popover absolute left-0 top-full mt-2 w-[24rem] max-w-[min(24rem,calc(100vw-2rem))]"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/72">Session details</div>
+                  <div className="mt-1 truncate text-[13px] font-medium text-foreground/84">
+                    {hasUsage ? `Estimated ${estimatedCostLabel} across ${totalTurnsLabel} turn${totalTurnsLabel === "1" ? "" : "s"}` : "No usage recorded yet"}
+                  </div>
+                </div>
+                {busy ? (
+                  <Badge variant="secondary" className="h-6 gap-1.5 rounded-full border-border/45 bg-background/40 px-2 text-[10px] text-muted-foreground shadow-none">
+                    <LoaderCircleIcon className="h-3 w-3 animate-spin" />
+                    Busy
+                  </Badge>
+                ) : null}
+              </div>
+
+              <div className="app-topbar__thread-metrics mt-4 grid grid-cols-2 gap-x-5 gap-y-3">
+                <TopBarMetric label="Estimated cost" value={estimatedCostLabel} />
+                <TopBarMetric label="Total tokens" value={totalTokensLabel} />
+                <TopBarMetric label="Prompt tokens" value={promptTokensLabel} />
+                <TopBarMetric label="Completion tokens" value={completionTokensLabel} />
+                <TopBarMetric label="Turns" value={totalTurnsLabel} />
+                <TopBarMetric label="Last turn" value={lastTurnTokensLabel} />
+              </div>
+
+              {lastTurnUsage ? (
+                <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/45 pt-3 text-[11px] text-muted-foreground">
+                  <span>Last turn estimate</span>
+                  <span className="font-medium text-foreground/84">{lastTurnCostLabel}</span>
+                </div>
+              ) : null}
+
+              {budgetLine ? (
+                <div className="mt-3 border-t border-border/45 pt-3 text-[11px] leading-5 text-muted-foreground">
+                  {budgetLine}
+                </div>
+              ) : null}
+
+              {canClearHardCap && onClearHardCap ? (
+                <div className="mt-4 flex justify-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 rounded-full px-3 text-[11px]"
+                    onClick={() => {
+                      onClearHardCap();
+                      setDetailsOpen(false);
+                    }}
+                  >
+                    Clear hard cap
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <div className="app-topbar__toolbar app-topbar__toolbar--right app-topbar__controls absolute inset-y-0 right-3 flex items-center gap-1.5">
@@ -90,6 +276,15 @@ export function AppTopBar({
           <PanelRightIcon className="h-4 w-4" />
         </Button>
       </div>
+    </div>
+  );
+}
+
+function TopBarMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/68">{label}</div>
+      <div className="mt-1 truncate text-[13px] font-semibold tracking-[-0.01em] text-foreground/88">{value}</div>
     </div>
   );
 }

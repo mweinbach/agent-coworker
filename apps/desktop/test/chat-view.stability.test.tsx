@@ -180,7 +180,7 @@ describe("desktop chat view stability", () => {
         );
       });
 
-      expect(container.textContent).toContain("Thread 1");
+      expect(container.textContent).toContain("Send a message to start.");
       expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(false);
     } finally {
       if (root) {
@@ -444,7 +444,6 @@ describe("desktop chat view stability", () => {
         );
       });
 
-      expect(container.textContent).toContain("Existing thread");
       expect(container.textContent).toContain("Loading thread");
       expect(container.textContent).not.toContain("Send a message to start.");
     } finally {

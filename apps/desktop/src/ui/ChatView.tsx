@@ -556,7 +556,6 @@ export function ChatView() {
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
   const cancelThread = useAppStore((s) => s.cancelThread);
-  const clearThreadUsageHardCap = useAppStore((s) => s.clearThreadUsageHardCap);
   const reconnectThread = useAppStore((s) => s.reconnectThread);
   const newThread = useAppStore((s) => s.newThread);
 
@@ -763,17 +762,6 @@ export function ChatView() {
   const transcriptOnly = rt?.transcriptOnly === true;
   const hydrating = rt?.hydrating === true || (bootstrapPending && Boolean(selectedThreadId) && Boolean(thread) && rt === null);
   const disconnected = !hydrating && !transcriptOnly && thread.status !== "active";
-  const usageHeadline = formatSessionUsageHeadline(rt?.sessionUsage ?? null, rt?.lastTurnUsage ?? null, {
-    showTokens: developerMode,
-  });
-  const usageBudgetLine = formatSessionBudgetLine(rt?.sessionUsage ?? null);
-  const canClearHardCap = canClearSessionHardCap({
-    sessionUsage: rt?.sessionUsage ?? null,
-    transcriptOnly,
-    connected: rt?.connected === true,
-    sessionId: rt?.sessionId ?? null,
-    threadStatus: thread.status,
-  });
   const composerSubmitState = getComposerSubmitState({
     busy,
     hasPromptModal,
@@ -794,16 +782,8 @@ export function ChatView() {
   return (
     <ChatViewContext.Provider value={contextValue}>
       <div className="relative flex h-full min-h-0 flex-col bg-panel">
-        <ChatThreadHeader
-          title={thread.title || "New thread"}
-          sessionUsage={rt?.sessionUsage ?? null}
-          usageHeadline={usageHeadline}
-          usageBudgetLine={usageBudgetLine}
-          canClearHardCap={canClearHardCap}
-          onClearHardCap={() => clearThreadUsageHardCap(selectedThreadId)}
-        />
         <Conversation className="min-h-0" ref={feedRef}>
-          <ConversationContent className="pt-20">
+          <ConversationContent className="pt-6">
             {transcriptOnly ? (
               <Card className="max-w-3xl border-border/70 bg-muted/30">
                 <CardContent className="flex items-start gap-3 p-3">

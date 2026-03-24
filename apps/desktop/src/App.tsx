@@ -88,6 +88,7 @@ const ChatShell = memo(function ChatShell({
   startupError: string | null;
 }) {
   const view = useAppStore((s) => s.view);
+  const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
@@ -95,6 +96,7 @@ const ChatShell = memo(function ChatShell({
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const newThread = useAppStore((s) => s.newThread);
+  const clearThreadUsageHardCap = useAppStore((s) => s.clearThreadUsageHardCap);
   const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
   const toggleContextSidebar = useAppStore((s) => s.toggleContextSidebar);
   const hasAnimatedSidebarsRef = useRef(false);
@@ -103,9 +105,24 @@ const ChatShell = memo(function ChatShell({
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
     [selectedThreadId, threads],
   );
+  const activeWorkspace = useMemo(() => {
+    if (!activeThread) {
+      return null;
+    }
+    return workspaces.find((workspace) => workspace.id === activeThread.workspaceId) ?? null;
+  }, [activeThread, workspaces]);
   const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
   const busy = runtime?.busy === true;
   const showContextSidebar = view === "chat" && activeThread !== null;
+  const topBarTitle = view === "skills"
+    ? "Skills"
+    : activeThread?.title?.trim() || "New thread";
+  const topBarSubtitle = activeWorkspace?.name ?? "Cowork";
+  const canClearHardCap = runtime?.sessionUsage?.budgetStatus.stopTriggered === true
+    && runtime?.transcriptOnly !== true
+    && runtime?.connected === true
+    && Boolean(runtime?.sessionId)
+    && activeThread?.status === "active";
 
   useEffect(() => {
     if (!hasAnimatedSidebarsRef.current) {
@@ -133,6 +150,12 @@ const ChatShell = memo(function ChatShell({
         sidebarWidth={sidebarWidth}
         contextSidebarCollapsed={contextSidebarCollapsed}
         onToggleContextSidebar={toggleContextSidebar}
+        title={topBarTitle}
+        subtitle={topBarSubtitle}
+        sessionUsage={view === "chat" ? (runtime?.sessionUsage ?? null) : null}
+        lastTurnUsage={view === "chat" ? (runtime?.lastTurnUsage ?? null) : null}
+        canClearHardCap={canClearHardCap}
+        onClearHardCap={selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined}
       />
       <div className="app-chat-body flex min-h-0 min-w-0 flex-1 flex-row">
         <LeftSidebarPane collapsed={sidebarCollapsed} />

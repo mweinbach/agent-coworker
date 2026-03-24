@@ -84,6 +84,70 @@ body {
   line-height: 1;
 }
 
+.app-topbar__thread-shell {
+  z-index: 1;
+}
+
+.app-topbar__thread-anchor {
+  min-width: 0;
+  width: 100%;
+  max-width: min(42rem, 100%);
+  padding-left: 1.25rem;
+}
+
+.app-topbar__thread-anchor--collapsed {
+  padding-left: 4.75rem;
+}
+
+.app-topbar__thread-button {
+  min-width: 0;
+  max-width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.9rem;
+  color: inherit;
+  box-shadow: none;
+  outline: 0;
+  text-align: left;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.app-topbar__thread-button:hover,
+.app-topbar__thread-button[data-open="true"] {
+  background: color-mix(in srgb, var(--glass-fill) 48%, transparent);
+}
+
+.app-topbar__thread-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 1.05rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: color-mix(in srgb, var(--text) 96%, transparent);
+}
+
+.app-topbar__thread-subtitle {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 0.92rem;
+  font-weight: 560;
+  color: color-mix(in srgb, var(--muted) 92%, transparent);
+}
+
+.app-topbar__thread-popover {
+  border: 1px solid color-mix(in srgb, var(--glass-border) 92%, transparent);
+  border-radius: 1.15rem;
+  background: color-mix(in srgb, var(--panel-bg) 88%, var(--glass-fill) 12%);
+  box-shadow:
+    0 18px 34px color-mix(in srgb, var(--panel-bg) 28%, transparent),
+    0 1px 0 color-mix(in srgb, var(--text) 8%, transparent);
+  backdrop-filter: blur(calc(var(--titlebar-blur) + 4px));
+  padding: 1rem 1.1rem 1.05rem;
+}
+
 .app-topbar__toolbar-button {
   color: var(--muted);
   opacity: 0.82;
@@ -116,9 +180,7 @@ body {
   left: 0;
   pointer-events: none;
   z-index: 0;
-  background: var(--sidebar-pane-surface);
-  border-right-style: solid;
-  border-right-color: var(--glass-border);
+  background: color-mix(in srgb, var(--sidebar-pane-surface) 86%, var(--glass-fill) 14%);
   backdrop-filter: blur(var(--sidebar-titlebar-blur));
 }
 
@@ -129,8 +191,7 @@ body {
   bottom: 0;
   pointer-events: none;
   z-index: 0;
-  background: var(--content-surface);
-  border-bottom: 1px solid var(--glass-border);
+  background: color-mix(in srgb, var(--content-surface) 82%, var(--glass-fill) 18%);
   backdrop-filter: blur(var(--titlebar-blur));
 }
 

@@ -1158,4 +1158,61 @@ describe("desktop providers page", () => {
       harness.restore();
     }
   });
+
+  test("aws-bedrock-proxy with empty models catalog is classified as a model provider, not a tool provider", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      providerCatalog: [
+        { id: "aws-bedrock-proxy", name: "AWS Bedrock Proxy", models: [], defaultModel: "" },
+      ] as any,
+      providerAuthMethodsByProvider: {
+        "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+      } as any,
+      providerUiState: {
+        ...useAppStore.getState().providerUiState,
+        awsBedrockProxy: { enabled: true },
+      },
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {}),
+    );
+
+    // Model Providers tab must be active (no muted class on the tab button text)
+    expect(html).toMatch(/class="[^"]*text-foreground[^"]*">.*Model Providers<\/button>/);
+    // Tool Providers tab must be inactive
+    expect(html).toMatch(/class="[^"]*text-muted-foreground hover:text-foreground[^"]*">Tool Providers<\/button>/);
+    // The AWS Bedrock Proxy card must appear somewhere in the rendered output
+    expect(html).toContain("AWS Bedrock Proxy");
+  });
+
+  test("deep link to provider:aws-bedrock-proxy with empty model discovery resolves to model tab", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      providerCatalog: [
+        { id: "aws-bedrock-proxy", name: "AWS Bedrock Proxy", models: [], defaultModel: "" },
+      ] as any,
+      providerAuthMethodsByProvider: {
+        "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+      } as any,
+      providerUiState: {
+        ...useAppStore.getState().providerUiState,
+        awsBedrockProxy: { enabled: true },
+      },
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:aws-bedrock-proxy",
+      }),
+    );
+
+    // Model Providers tab must be the selected tab
+    expect(html).toMatch(/class="[^"]*text-foreground[^"]*">.*Model Providers<\/button>/);
+    // Tool Providers tab must NOT be the selected tab
+    expect(html).toMatch(/class="[^"]*text-muted-foreground hover:text-foreground[^"]*">Tool Providers<\/button>/);
+    // The card itself must render its controls
+    expect(html).toContain("AWS Bedrock Proxy");
+    expect(html).toContain("Global proxy URL");
+  });
 });

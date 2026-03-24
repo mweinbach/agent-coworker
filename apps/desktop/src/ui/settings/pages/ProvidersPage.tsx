@@ -386,7 +386,9 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     const filtered = source.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider));
 
     const isModelProvider = (provider: ProviderName) =>
-      provider === "lmstudio" || (provider in modelChoices && modelChoices[provider]!.length > 0);
+      provider === "lmstudio" ||
+      provider === "aws-bedrock-proxy" ||
+      (provider in modelChoices && modelChoices[provider]!.length > 0);
 
     const sortProviders = (providers: ProviderName[]) => [...providers].sort((a, b) => {
       const aStatus = providerStatusByName[a];

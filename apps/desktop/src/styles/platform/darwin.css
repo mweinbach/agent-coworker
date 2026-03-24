@@ -27,7 +27,7 @@
 }
 
 :root[data-platform="darwin"] .app-topbar__thread-anchor--collapsed {
-  padding-left: 7.75rem;
+  padding-left: 7.25rem;
 }
 
 :root[data-platform="darwin"] .app-topbar__toolbar--right .app-topbar__toolbar-button {

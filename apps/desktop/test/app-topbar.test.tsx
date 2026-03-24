@@ -75,6 +75,7 @@ describe("desktop app top bar", () => {
       const newChatReveal = newChatButton?.closest(".app-topbar__new-chat-reveal");
 
       expect(strip).not.toBeNull();
+      expect(strip?.className).not.toContain("overflow-hidden");
       expect(sidebarFill).not.toBeNull();
       expect(sidebarToggle).not.toBeNull();
       expect(sidebarToggle?.className).toContain("app-topbar__plain-icon-button");

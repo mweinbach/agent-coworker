@@ -121,7 +121,7 @@ export function AppTopBar({
   }, [detailsOpen]);
 
   return (
-    <div className="app-topbar app-topbar--frame relative flex w-full shrink-0 items-center justify-end overflow-hidden px-3">
+    <div className="app-topbar app-topbar--frame relative flex w-full shrink-0 items-center justify-end px-3">
       <div
         className="app-topbar__sidebar-fill"
         aria-hidden="true"
@@ -198,7 +198,7 @@ export function AppTopBar({
               id={detailsId}
               role="dialog"
               aria-label="Thread details"
-              className="app-topbar__thread-popover absolute left-0 top-full mt-2 w-[24rem] max-w-[min(24rem,calc(100vw-2rem))]"
+              className="app-topbar__thread-popover absolute left-0 top-full mt-1.5 w-[21.5rem] max-w-[min(21.5rem,calc(100vw-2rem))]"
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
@@ -215,7 +215,7 @@ export function AppTopBar({
                 ) : null}
               </div>
 
-              <div className="app-topbar__thread-metrics mt-4 grid grid-cols-2 gap-x-5 gap-y-3">
+              <div className="app-topbar__thread-metrics mt-3.5 grid grid-cols-2 gap-x-4 gap-y-2.5">
                 <TopBarMetric label="Estimated cost" value={estimatedCostLabel} />
                 <TopBarMetric label="Total tokens" value={totalTokensLabel} />
                 <TopBarMetric label="Prompt tokens" value={promptTokensLabel} />

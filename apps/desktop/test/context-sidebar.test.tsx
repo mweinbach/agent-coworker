@@ -12,6 +12,7 @@ class MockResizeObserver {
 
 const { useAppStore } = await import("../src/app/store");
 const { ContextSidebar } = await import("../src/ui/ContextSidebar");
+const { ContextSidebarResizer } = await import("../src/ui/layout/ContextSidebarResizer");
 
 function resetAppStore(overrides: Record<string, unknown>) {
   const state = useAppStore.getState();
@@ -227,6 +228,38 @@ describe("desktop context sidebar", () => {
       expect(filesPanel?.className).toContain("app-context-sidebar__panel");
       expect(filesPanel?.className).toContain("flex-1");
       expect(filesPanel?.className).toContain("overflow-hidden");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("keeps the context sidebar resize rail invisible but easy to grab", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true, extraGlobals: { ResizeObserver: MockResizeObserver } });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      resetAppStore({
+        contextSidebarWidth: 300,
+      });
+
+      await act(async () => {
+        root.render(createElement(ContextSidebarResizer));
+      });
+
+      const separator = container.querySelector('[aria-label="Resize context sidebar"]');
+
+      expect(separator).not.toBeNull();
+      expect(separator?.className).toContain("-left-1");
+      expect(separator?.className).toContain("w-3");
+      expect(separator?.className).not.toContain("bg-primary/20");
+      expect(separator?.getAttribute("aria-valuenow")).toBe("300");
 
       await act(async () => {
         root.unmount();

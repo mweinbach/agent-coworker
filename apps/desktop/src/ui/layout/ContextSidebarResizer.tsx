@@ -96,7 +96,7 @@ export function ContextSidebarResizer() {
 
   return (
     <div
-      className={cn("absolute left-0 top-0 z-20 h-full w-2 cursor-col-resize", dragging && "bg-primary/20")}
+      className={cn("absolute -left-1 top-0 z-20 h-full w-3 cursor-col-resize", dragging && "bg-primary/20")}
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize context sidebar"

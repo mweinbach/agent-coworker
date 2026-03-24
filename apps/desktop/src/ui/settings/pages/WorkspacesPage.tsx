@@ -185,14 +185,22 @@ function AllowedDomainsField({ domains, onChange }: AllowedDomainsFieldProps) {
         <Badge variant="outline" className="h-4 rounded-sm px-1.5 text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
           Optional
         </Badge>
-        <button
-          type="button"
-          aria-label="Allowed domains help"
-          title="Open to all domains unless you add one or more domains here."
-          className="inline-flex size-4 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-        >
-          <InfoIcon className="size-3" />
-        </button>
+        <Tooltip delayDuration={0}>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Allowed domains help"
+              className="size-4 min-w-4 rounded-sm p-0 text-muted-foreground shadow-none transition-colors hover:text-foreground"
+            >
+              <InfoIcon className="size-3" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-xs text-xs">
+            Open to all domains unless you add one or more domains here.
+          </TooltipContent>
+        </Tooltip>
       </div>
 
       <div className="flex items-center gap-2">
@@ -231,14 +239,16 @@ function AllowedDomainsField({ domains, onChange }: AllowedDomainsFieldProps) {
             {domains.map((domain) => (
               <Badge key={domain} variant="outline" className="h-6 rounded-sm gap-1 pr-1 pl-1.5 text-[11px]">
                 <span className="max-w-[12rem] truncate">{domain}</span>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon-sm"
                   aria-label={`Remove allowed domain ${domain}`}
-                  className="inline-flex size-4 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  className="size-4 min-w-4 rounded-sm p-0 text-muted-foreground shadow-none transition-colors hover:bg-muted hover:text-foreground"
                   onClick={() => onChange(domains.filter((entry) => entry !== domain))}
                 >
                   <XIcon className="size-3" />
-                </button>
+                </Button>
               </Badge>
             ))}
           </div>
@@ -1127,24 +1137,26 @@ export function WorkspacesPage() {
 
           <div className="flex space-x-1 rounded-lg bg-muted p-1 border border-border/70 max-w-fit mb-2 relative">
             {(["general", "models", "profile", "advanced"] as const).map((tab) => (
-              <button
+              <Button
                 key={tab}
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => setActiveTab(tab)}
                 className={cn(
-                  "px-3 py-1.5 text-sm font-medium rounded-md transition-colors relative z-10",
+                  "relative h-auto rounded-md px-3 py-1.5 text-sm font-medium shadow-none transition-colors",
                   activeTab === tab ? "text-foreground" : "text-muted-foreground hover:text-foreground"
                 )}
               >
                 {activeTab === tab && (
                   <motion.div
                     layoutId="workspaces-active-tab"
-                    className="absolute inset-0 bg-background shadow-sm rounded-md -z-10 border border-border/50"
+                    className="pointer-events-none absolute inset-0 -z-10 rounded-md border border-border/50 bg-background shadow-sm"
                     transition={{ type: "spring", stiffness: 500, damping: 30 }}
                   />
                 )}
-                {tab.charAt(0).toUpperCase() + tab.slice(1)}
-              </button>
+                <span className="relative z-10">{tab.charAt(0).toUpperCase() + tab.slice(1)}</span>
+              </Button>
             ))}
           </div>
 

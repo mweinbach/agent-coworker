@@ -12,6 +12,7 @@ import {
 
 import { useAppStore } from "../../app/store";
 import type { ExplorerEntry } from "../../app/types";
+import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
 import { listDirectory, showContextMenu, confirmAction, showNotification, previewOSFile } from "../../lib/desktopCommands";
 
@@ -21,6 +22,7 @@ export type WorkspaceFileExplorerProps = {
 };
 
 const AUTO_REFRESH_INTERVAL_MS = 5000;
+const FILE_EXPLORER_CONTROL_SELECTOR = "[data-file-explorer-control='true']";
 
 type DirectorySnapshot = {
   entries: ExplorerEntry[];
@@ -46,6 +48,10 @@ export type ExplorerTreeRow =
       status: "loading" | "error" | "empty";
       message: string;
     };
+
+function isTreeRowControlTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest(FILE_EXPLORER_CONTROL_SELECTOR));
+}
 
 function sortExplorerEntries(entries: ExplorerEntry[]): ExplorerEntry[] {
   return [...entries].sort((a, b) => {
@@ -428,10 +434,8 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     };
   }, [refreshExpandedDirectories, rootPath]);
 
-  const handleContextMenu = useCallback(
-    async (e: React.MouseEvent, entry: ExplorerEntry) => {
-      e.preventDefault();
-      e.stopPropagation();
+  const openEntryMenu = useCallback(
+    async (entry: ExplorerEntry) => {
       const targetPath = entry.path;
       const normalizedPath = normalizeExplorerPath(targetPath);
       selectFile(workspaceId, targetPath);
@@ -490,6 +494,15 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     [workspaceId, selectFile, openFile, toggleDirectory, revealFile, copyPath, trashPath, refreshExpandedDirectories]
   );
 
+  const handleContextMenu = useCallback(
+    async (e: React.MouseEvent, entry: ExplorerEntry) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await openEntryMenu(entry);
+    },
+    [openEntryMenu]
+  );
+
   const handleOpenEntry = useCallback(
     (entry: ExplorerEntry) => {
       if (entry.isDirectory) {
@@ -533,14 +546,17 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         <div className="flex items-center gap-2 min-w-0">
           <div className="text-xs font-semibold tracking-wide text-muted-foreground/80 shrink-0">FILES</div>
           <div className="text-muted-foreground/40 text-xs shrink-0 font-light">/</div>
-          <button
+          <Button
             type="button"
-            className="truncate text-xs font-semibold text-foreground hover:underline focus:outline-none"
+            variant="link"
+            size="sm"
+            className="h-auto min-w-0 justify-start p-0 text-xs font-semibold text-foreground no-underline hover:underline"
+            data-file-explorer-control="true"
             onClick={() => void openFile(workspaceId, rootPath, false).catch(() => {})}
             title="Open in native explorer"
           >
             {rootLabel}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -597,10 +613,25 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                     entry.isHidden && "opacity-70"
                   )}
                   style={{ paddingLeft: `${depth * 0.85 + 0.35}rem` }}
-                  onClick={() => handleSelectEntry(entry)}
-                  onDoubleClick={() => handleOpenEntry(entry)}
+                  onDoubleClick={(event) => {
+                    if (isTreeRowControlTarget(event.target)) {
+                      return;
+                    }
+                    handleOpenEntry(entry);
+                  }}
                   onContextMenu={(event) => {
                     void handleContextMenu(event, entry);
+                  }}
+                  onMouseDown={(event) => {
+                    if (isTreeRowControlTarget(event.target)) {
+                      event.stopPropagation();
+                    }
+                  }}
+                  onClick={(event) => {
+                    if (isTreeRowControlTarget(event.target)) {
+                      return;
+                    }
+                    handleSelectEntry(entry);
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
@@ -626,20 +657,20 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                   title={entry.path}
                 >
                   {isDirectory ? (
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon-sm"
                       aria-label={row.expanded ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
                       className={cn(
-                        "inline-flex h-5 w-5 items-center justify-center rounded transition-colors select-none",
+                        "h-5 w-5 min-w-5 rounded p-0 transition-colors select-none shadow-none",
                         isSelected ? "hover:bg-accent-foreground/15" : "hover:bg-muted"
                       )}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleDirectory(entry.path);
-                      }}
+                      data-file-explorer-control="true"
+                      onPress={() => toggleDirectory(entry.path)}
                     >
                       {row.expanded ? <ChevronDownIcon className="h-3.5 w-3.5" /> : <ChevronRightIcon className="h-3.5 w-3.5" />}
-                    </button>
+                    </Button>
                   ) : (
                     <span className="inline-block h-5 w-5" aria-hidden />
                   )}
@@ -661,20 +692,20 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                     </div>
                   </div>
 
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="icon-sm"
                     aria-label={`More options for ${entry.name}`}
                     className={cn(
-                      "inline-flex h-6 w-6 items-center justify-center rounded opacity-0 transition-opacity select-none",
+                      "h-6 w-6 min-w-6 rounded p-0 opacity-0 transition-opacity select-none shadow-none",
                       isSelected ? "opacity-100 hover:bg-accent-foreground/15" : "group-hover:opacity-100 hover:bg-muted"
                     )}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void handleContextMenu(event, entry);
-                    }}
+                    data-file-explorer-control="true"
+                    onPress={() => void openEntryMenu(entry)}
                   >
                     <MoreVerticalIcon className="h-3.5 w-3.5" />
-                  </button>
+                  </Button>
                 </div>
               );
             })}

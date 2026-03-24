@@ -155,10 +155,13 @@ function BackupSidebar({
 
           return (
             <div key={entry.targetSessionId} className="mb-1">
-              <button
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => onSelectEntry(entry.targetSessionId)}
                 className={cn(
-                  "flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-all",
+                  "h-auto w-full justify-start gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm shadow-none transition-all",
                   isBackupSelected
                     ? "border border-border/65 bg-background/72 font-medium text-foreground"
                     : "border border-transparent text-foreground hover:bg-background/35"
@@ -172,7 +175,7 @@ function BackupSidebar({
                   </Badge>
                 ) : null}
                 {entry.status === "failed" && <AlertTriangleIcon className="w-3.5 h-3.5 text-destructive shrink-0" />}
-              </button>
+              </Button>
 
               <div className="ml-4 border-l-2 border-border/40 pl-3 mt-0.5 space-y-0.5">
                 {entry.checkpoints.length === 0 ? (
@@ -181,11 +184,14 @@ function BackupSidebar({
                   [...entry.checkpoints].reverse().map((cp) => {
                     const isCpSelected = entry.targetSessionId === selectedTargetSessionId && selectedCheckpointId === cp.id;
                     return (
-                      <button
+                      <Button
                         key={cp.id}
+                        type="button"
+                        variant="ghost"
+                        size="sm"
                         onClick={() => onSelectCheckpoint(entry.targetSessionId, cp.id)}
                         className={cn(
-                          "flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs transition-all",
+                          "h-auto w-full justify-between rounded-md px-2.5 py-1.5 text-left text-xs shadow-none transition-all",
                           isCpSelected
                             ? "border border-border/55 bg-background/60 font-medium text-foreground"
                             : "border border-transparent text-muted-foreground hover:bg-background/28"
@@ -195,7 +201,7 @@ function BackupSidebar({
                           <FileTextIcon className="w-3.5 h-3.5 shrink-0 text-muted-foreground/60" />
                           <span className="font-mono truncate">{cp.id}</span>
                         </div>
-                      </button>
+                      </Button>
                     );
                   })
                 )}

@@ -536,3 +536,17 @@
 - `src/server/startServer.ts` and `src/server/jsonrpc/routes/skillsMemoryAndWorkspaceBackup.ts` now treat emitted validation errors from `cowork/skills/installation/read` and `cowork/skills/installation/{enable,disable,delete,update}` as terminal JSON-RPC errors instead of waiting for the capture timeout.
 - `apps/desktop/test/workspace-settings-sync.test.ts`, `test/jsonrpc.routes.review-fixes.test.ts`, and `test/server.jsonrpc.control.test.ts` now lock down the thread-response envelope state path plus the skill-installation error returns in both extracted-route and live-server coverage.
 - Verification passed with `bun test apps/desktop/test/workspace-settings-sync.test.ts`, `bun test test/jsonrpc.routes.review-fixes.test.ts`, `bun test test/server.jsonrpc.control.test.ts`, `bun run typecheck`, and `bun run test`.
+
+## CI Fix: Desktop Release Validate lane
+
+- [x] Inspect the linked GitHub Actions Desktop Release run and identify the failing test from the `Validate` job logs.
+- [x] Reproduce or otherwise confirm the failure path locally against the same `HEAD` commit.
+- [x] Remove the leaking desktop test mock that nulls out `SkillDetailDialog` across adjacent Bun/Linux test files.
+- [x] Re-run the affected desktop regression slice, repo typecheck, and the full `bun test` lane.
+
+## CI Fix Review
+
+- GitHub Actions run `23473727870` failed in `Desktop Release -> Validate -> Unit tests`, not in packaging. The first actionable failure was `apps/desktop/test/skill-detail-dialog.test.ts`, where the dialog rendered as `null` and the `Open folder` button never appeared.
+- The root cause was a file-level `mock.module("../src/ui/skills/SkillDetailDialog", ...)` in `apps/desktop/test/skills-catalog-page.test.ts`. On Bun/Linux CI that mock can leak into the adjacent skill dialog test file, causing `SkillDetailDialog` to stay mocked as `null`.
+- `apps/desktop/test/skills-catalog-page.test.ts` no longer mocks `SkillDetailDialog`. Those catalog-page tests only assert loading and empty states while the dialog remains closed, so the extra mock was unnecessary and destabilized CI.
+- Verification passed with `bun test apps/desktop/test/skills-catalog-page.test.ts apps/desktop/test/skill-detail-dialog.test.ts --rerun-each 25`, `bun test apps/desktop/test/skill-detail-dialog.test.ts apps/desktop/test/protocol-v2-events.test.ts apps/desktop/test/thread-reconnect.test.ts apps/desktop/test/jsonrpc-single-connection.test.ts apps/desktop/test/bootstrap-cache.test.ts`, `bun run typecheck`, and `bun test`.

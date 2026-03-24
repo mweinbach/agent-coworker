@@ -140,32 +140,27 @@ describe("skill detail dialog", () => {
         throw new Error("React basic render failed: canary div not found in JSDOM");
       }
 
-      // Verify Dialog mock is working by rendering a mock Dialog directly
-      await act(async () => {
-        const { Dialog } = await import("../src/components/ui/dialog");
-        root.render(createElement(Dialog, { open: true }, createElement("span", { id: "dialog-probe" }, "probe")));
-      });
-      const dialogProbe = harness.dom.window.document.getElementById("dialog-probe");
-      const dialogMockWorks = !!dialogProbe;
-
-      // Render a component that reads from the store to verify Zustand works in JSDOM
-      function StoreProbe() {
-        const wsRt = useAppStore((s) => s.workspaceRuntimeById);
-        const rt2 = wsRt["ws-1"];
-        return createElement("div", { id: "store-probe" },
-          `installationId=${rt2?.selectedSkillInstallationId ?? "null"}`
+      // Render SkillDetailDialog inside a wrapper that also dumps debug state
+      function Wrapper() {
+        const wsRtById2 = useAppStore((s) => s.workspaceRuntimeById);
+        const rt2 = wsRtById2["ws-1"];
+        const installationId = rt2?.selectedSkillInstallationId ?? "null";
+        const hasInstallation = rt2?.selectedSkillInstallation ? "yes" : "no";
+        const selectedName = rt2?.selectedSkillName ?? "null";
+        return createElement("div", null,
+          createElement("div", { id: "wrapper-debug" },
+            `id=${installationId}|inst=${hasInstallation}|name=${selectedName}`
+          ),
+          createElement(SkillDetailDialog, { workspaceId: "ws-1" }),
         );
       }
-      await act(async () => {
-        root.render(createElement(StoreProbe));
-      });
-      const storeProbe = harness.dom.window.document.getElementById("store-probe");
-      const storeProbeText = storeProbe?.textContent ?? "(missing)";
 
-      // Now render the actual component
       await act(async () => {
-        root.render(createElement(SkillDetailDialog, { workspaceId: "ws-1" }));
+        root.render(createElement(Wrapper));
       });
+
+      const debugEl = harness.dom.window.document.getElementById("wrapper-debug");
+      const debugText = debugEl?.textContent ?? "(wrapper-debug missing)";
 
       const openFolderButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
         (button) => button.textContent?.includes("Open folder"),
@@ -175,9 +170,8 @@ describe("skill detail dialog", () => {
         const html = harness.dom.window.document.getElementById("root")?.innerHTML ?? "(empty)";
         throw new Error(
           `missing open folder button.` +
-          ` DOM: ${html.slice(0, 300)}` +
-          ` | dialogMock: ${dialogMockWorks}` +
-          ` | storeProbe: ${storeProbeText}`
+          ` wrapperDebug: ${debugText}` +
+          ` | DOM: ${html.slice(0, 500)}`
         );
       }
 

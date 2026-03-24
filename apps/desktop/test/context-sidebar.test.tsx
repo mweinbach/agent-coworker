@@ -4,12 +4,18 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { setupJsdom } from "./jsdomHarness";
 
+class MockResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
 const { useAppStore } = await import("../src/app/store");
 const { ContextSidebar } = await import("../src/ui/ContextSidebar");
 
 describe("desktop context sidebar", () => {
   test("renders child-agent summaries for the selected thread", async () => {
-    const harness = setupJsdom();
+    const harness = setupJsdom({ includeAnimationFrame: true, extraGlobals: { ResizeObserver: MockResizeObserver } });
 
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -89,7 +95,7 @@ describe("desktop context sidebar", () => {
   });
 
   test("keeps tasks and agents in scrollable sections so files can keep the remaining height", async () => {
-    const harness = setupJsdom();
+    const harness = setupJsdom({ includeAnimationFrame: true, extraGlobals: { ResizeObserver: MockResizeObserver } });
 
     try {
       const container = harness.dom.window.document.getElementById("root");

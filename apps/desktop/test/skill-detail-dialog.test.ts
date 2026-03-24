@@ -69,6 +69,7 @@ mock.module("../src/components/ui/dialog", () => ({
   Dialog: ({ children }: { children: unknown }) => createElement("div", null, children),
   DialogContent: ({ children, ...props }: Record<string, unknown>) => createElement("div", props, children),
   DialogHeader: ({ children, ...props }: Record<string, unknown>) => createElement("div", props, children),
+  DialogFooter: ({ children, ...props }: Record<string, unknown>) => createElement("div", props, children),
   DialogTitle: ({ children, ...props }: Record<string, unknown>) => createElement("h2", props, children),
   DialogDescription: ({ children, ...props }: Record<string, unknown>) => createElement("p", props, children),
 }));

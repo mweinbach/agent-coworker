@@ -1,6 +1,7 @@
 import { memo } from "react";
 
 import { AlertCircleIcon, BotIcon, CheckCircle2Icon, CircleDashedIcon, CircleIcon, MinusCircleIcon } from "lucide-react";
+import { ScrollShadow } from "@heroui/react";
 
 import { useAppStore } from "../app/store";
 import type { ThreadAgentSummary } from "../app/types";
@@ -45,7 +46,8 @@ export const ContextSidebar = memo(function ContextSidebar() {
         <CardHeader className="pb-0 pt-3 px-3 flex-none">
           <CardTitle className="text-xs font-semibold tracking-wide text-muted-foreground/80">TASKS</CardTitle>
         </CardHeader>
-        <CardContent className={scrollSectionContentClassName} data-sidebar-section="tasks">
+        <CardContent className="p-0">
+          <ScrollShadow className={scrollSectionContentClassName} data-sidebar-section="tasks">
           {!todos || todos.length === 0 ? (
             <div className="py-3 text-center text-xs text-muted-foreground">No active tasks</div>
           ) : (
@@ -62,6 +64,7 @@ export const ContextSidebar = memo(function ContextSidebar() {
               </div>
             ))
           )}
+          </ScrollShadow>
         </CardContent>
       </Card>
 
@@ -69,7 +72,8 @@ export const ContextSidebar = memo(function ContextSidebar() {
         <CardHeader className="pb-0 pt-3 px-3 flex-none">
           <CardTitle className="text-xs font-semibold tracking-wide text-muted-foreground/80">AGENTS</CardTitle>
         </CardHeader>
-        <CardContent className={scrollSectionContentClassName} data-sidebar-section="agents">
+        <CardContent className="p-0">
+          <ScrollShadow className={scrollSectionContentClassName} data-sidebar-section="agents">
           {!selectedThreadId ? (
             <div className="py-3 text-center text-xs text-muted-foreground">Select a thread to inspect agents</div>
           ) : threadRuntime?.sessionKind === "agent" ? (
@@ -108,6 +112,7 @@ export const ContextSidebar = memo(function ContextSidebar() {
               </div>
             ))
           )}
+          </ScrollShadow>
         </CardContent>
       </Card>
 

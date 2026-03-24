@@ -207,3 +207,5 @@ export {
   DialogTitle,
   DialogTrigger,
 };
+
+export type { DialogContentProps };

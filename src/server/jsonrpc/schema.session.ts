@@ -64,6 +64,16 @@ export const harnessContextEventSchema = z.object({
   type: z.literal("harness_context"),
 }).passthrough();
 
+/** Matches `HarnessContextPayload` — validated before `normalizeHarnessContextPayload`. */
+export const harnessContextPayloadSchema = z.object({
+  runId: nonEmptyTrimmedStringSchema,
+  taskId: optionalNonEmptyTrimmedStringSchema,
+  objective: nonEmptyTrimmedStringSchema,
+  acceptanceCriteria: z.array(z.string()),
+  constraints: z.array(z.string()),
+  metadata: z.record(z.string(), z.string()).optional(),
+}).strict();
+
 export const sessionDeletedEventSchema = z.object({
   type: z.literal("session_deleted"),
 }).passthrough();
@@ -95,7 +105,7 @@ export const jsonRpcSessionRequestSchemas = {
   }).strict(),
   "cowork/session/harnessContext/set": z.object({
     threadId: nonEmptyTrimmedStringSchema,
-    context: anyObjectSchema,
+    context: harnessContextPayloadSchema,
   }).strict(),
   "cowork/session/defaults/apply": z.object({
     cwd: nonEmptyTrimmedStringSchema,

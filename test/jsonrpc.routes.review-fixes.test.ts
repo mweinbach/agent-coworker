@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { JSONRPC_ERROR_CODES } from "../src/server/jsonrpc/protocol";
 import { createMcpRouteHandlers } from "../src/server/jsonrpc/routes/mcp";
 import { createMemoryRouteHandlers } from "../src/server/jsonrpc/routes/memory";
 import { createProviderRouteHandlers } from "../src/server/jsonrpc/routes/provider";
@@ -194,6 +195,59 @@ describe("JSON-RPC extracted route review fixes", () => {
     });
 
     expect((response.result as any).event).toEqual(currentConfigEvent);
+  });
+
+  test("session harness context set rejects malformed context as invalidParams", async () => {
+    const threadSession = {
+      id: "thread-1",
+      setHarnessContext: async () => {
+        throw new Error("setHarnessContext should not run for invalid payload");
+      },
+    };
+    const harness = createRouteHarness({}, [], { threadSession });
+    const handlers = createSessionRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/harnessContext/set", {
+      threadId: "thread-1",
+      context: {},
+    });
+
+    expect(response.error?.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
+    expect(response.result).toBeUndefined();
+  });
+
+  test("session harness context set forwards valid payload to session", async () => {
+    let harness!: RouteHarness;
+    const threadSession = {
+      id: "thread-1",
+      setHarnessContext: async () => {
+        harness.emitted.push({
+          type: "harness_context",
+          sessionId: "thread-1",
+          context: {
+            runId: "run-1",
+            objective: "Do the thing",
+            acceptanceCriteria: ["done"],
+            constraints: [],
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        });
+      },
+    };
+    harness = createRouteHarness({}, [], { threadSession });
+
+    const handlers = createSessionRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/harnessContext/set", {
+      threadId: "thread-1",
+      context: {
+        runId: "run-1",
+        objective: "Do the thing",
+        acceptanceCriteria: ["done"],
+        constraints: [],
+      },
+    });
+
+    expect(response.error).toBeUndefined();
+    expect((response.result as { event: { type: string } }).event.type).toBe("harness_context");
   });
 
   test("session usage budget forwards emitted validation errors", async () => {

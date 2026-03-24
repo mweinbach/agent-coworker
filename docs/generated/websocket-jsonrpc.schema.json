@@ -350,10 +350,48 @@
             },
             "context": {
               "type": "object",
-              "propertyNames": {
-                "type": "string"
+              "properties": {
+                "runId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "taskId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "objective": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "acceptanceCriteria": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "constraints": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "metadata": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
               },
-              "additionalProperties": {}
+              "required": [
+                "runId",
+                "objective",
+                "acceptanceCriteria",
+                "constraints"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [

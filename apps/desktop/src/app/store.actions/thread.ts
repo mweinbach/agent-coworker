@@ -469,6 +469,11 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       }
       const rt = get().threadRuntimeById[threadId];
       if (get().selectedThreadId === threadId && (RUNTIME.threadSelectionRequests.has(threadId) || rt?.connected)) {
+        set({
+          selectedWorkspaceId: thread.workspaceId,
+          view: "chat",
+        });
+        syncDesktopStateCache(get);
         return;
       }
 

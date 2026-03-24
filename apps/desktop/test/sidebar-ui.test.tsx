@@ -287,4 +287,39 @@ describe("desktop sidebar", () => {
       harness.restore();
     }
   });
+
+  test.serial("shows chat navigation and clear workspace scope labels in the sidebar", async () => {
+    const harness = setupSidebarJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      resetAppStore({
+        view: "skills",
+        workspaces: [makeWorkspace()],
+        threads: makeThreads(2),
+        selectedWorkspaceId: "ws-1",
+        selectedThreadId: "thread-2",
+      });
+
+      await act(async () => {
+        root.render(createElement(Sidebar));
+      });
+
+      expect(container.textContent).toContain("Chat");
+      expect(container.textContent).toContain("Skills");
+      expect(container.textContent).toContain("2 sessions");
+      expect(container.textContent).toContain("viewing skills");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
 });

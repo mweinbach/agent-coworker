@@ -6,6 +6,7 @@ import {
   FolderIcon,
   FolderOpenIcon,
   FolderPlusIcon,
+  MessageSquareIcon,
   Settings2Icon,
   SparklesIcon,
 } from "lucide-react";
@@ -17,7 +18,33 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/utils";
 import { formatSidebarRelativeAge, getVisibleSidebarThreads, shouldEmphasizeWorkspaceRow } from "./sidebarHelpers";
+
 const MAX_VISIBLE_THREADS = 10;
+
+function formatWorkspaceMeta(opts: {
+  threadCount: number;
+  isActive: boolean;
+  view: "chat" | "skills" | "settings";
+  isCurrentThreadWorkspace: boolean;
+  isStarting: boolean;
+  hasError: boolean;
+}): string {
+  if (opts.hasError) return "Connection issue";
+  if (opts.isStarting) return "Starting workspace";
+
+  const sessionLabel = opts.threadCount === 1 ? "1 session" : `${opts.threadCount} sessions`;
+
+  if (opts.isActive && opts.view === "skills") {
+    return `${sessionLabel} · viewing skills`;
+  }
+  if (opts.isCurrentThreadWorkspace) {
+    return `${sessionLabel} · current chat`;
+  }
+  if (opts.threadCount === 0) {
+    return "No sessions yet";
+  }
+  return sessionLabel;
+}
 
 export const Sidebar = memo(function Sidebar() {
   const view = useAppStore((s) => s.view);
@@ -25,6 +52,7 @@ export const Sidebar = memo(function Sidebar() {
   const threads = useAppStore((s) => s.threads);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
+  const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
 
   const addWorkspace = useAppStore((s) => s.addWorkspace);
@@ -220,23 +248,59 @@ export const Sidebar = memo(function Sidebar() {
     }
   };
 
+  const handleOpenChat = useCallback(async () => {
+    const selectedThread = selectedThreadId ? threads.find((thread) => thread.id === selectedThreadId) ?? null : null;
+    const workspaceId = selectedWorkspaceId ?? selectedThread?.workspaceId ?? workspaces[0]?.id ?? null;
+
+    if (!workspaceId) {
+      await newThread();
+      return;
+    }
+
+    if (selectedThread?.workspaceId === workspaceId) {
+      await selectThread(selectedThread.id);
+      return;
+    }
+
+    const workspaceThreads = threadsByWorkspaceId.get(workspaceId) ?? [];
+    const nextThread = workspaceThreads[0] ?? null;
+
+    if (nextThread) {
+      await selectThread(nextThread.id);
+      return;
+    }
+
+    await newThread({ workspaceId });
+  }, [newThread, selectedThreadId, selectedWorkspaceId, selectThread, threads, threadsByWorkspaceId, workspaces]);
+
   return (
     <aside className="app-sidebar sidebar-rail-enter flex h-full w-full flex-col gap-1.5 px-2 pt-1.5 pb-3">
-      <nav className="grid gap-1">
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "sidebar-lift h-8 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
-            "hover:bg-foreground/[0.045] hover:text-foreground",
-            view === "chat" && "bg-foreground/[0.055] text-foreground",
-          )}
-          onClick={() => void newThread()}
-        >
-          <CirclePlusIcon className="h-4 w-4 text-muted-foreground" />
-          New thread
-        </Button>
-
+      <nav className="grid gap-1.5">
+        <div className="grid grid-cols-[1fr_auto] gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn(
+              "sidebar-lift h-8 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+              "hover:bg-foreground/[0.045] hover:text-foreground",
+              view === "chat" && "bg-foreground/[0.055] text-foreground",
+            )}
+            onClick={() => void handleOpenChat()}
+          >
+            <MessageSquareIcon className="h-4 w-4 text-muted-foreground" />
+            Chat
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="sidebar-lift h-8 w-8 rounded-lg text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground"
+            onClick={() => void newThread()}
+            aria-label="New thread"
+            title="New thread"
+          >
+            <CirclePlusIcon className="h-4 w-4" />
+          </Button>
+        </div>
         <Button
           variant="ghost"
           size="sm"
@@ -279,7 +343,11 @@ export const Sidebar = memo(function Sidebar() {
             workspaces.map((workspace) => {
               const active = workspace.id === selectedWorkspaceId;
               const expanded = expandedWorkspaceSections[workspace.id] ?? false;
+              const workspaceRuntime = workspaceRuntimeById[workspace.id];
               const workspaceThreads = threadsByWorkspaceId.get(workspace.id) ?? [];
+              const threadCount = workspaceThreads.length;
+              const isCurrentThreadWorkspace = selectedThreadId !== null
+                && workspaceThreads.some((thread) => thread.id === selectedThreadId);
               const emphasizeWorkspace = shouldEmphasizeWorkspaceRow(
                 active,
                 selectedThreadId,
@@ -291,6 +359,14 @@ export const Sidebar = memo(function Sidebar() {
                 showAllThreads,
                 MAX_VISIBLE_THREADS,
               );
+              const workspaceMeta = formatWorkspaceMeta({
+                threadCount,
+                isActive: active,
+                view,
+                isCurrentThreadWorkspace,
+                isStarting: workspaceRuntime?.starting === true,
+                hasError: workspaceRuntime?.error !== null && workspaceRuntime?.error !== undefined,
+              });
 
               return (
                 <Collapsible
@@ -317,12 +393,12 @@ export const Sidebar = memo(function Sidebar() {
                 >
                   <div
                     className={cn(
-                      "sidebar-workspace-card flex items-center gap-1 rounded-lg px-1 py-0.5",
+                      "sidebar-workspace-card flex items-center gap-1 rounded-lg px-1 py-1",
                       emphasizeWorkspace
-                        ? "bg-foreground/[0.05] text-foreground"
+                        ? "border-border/45 bg-foreground/[0.05] text-foreground"
                         : active
                           ? "text-foreground hover:bg-foreground/[0.03]"
-                        : "text-foreground/78 hover:bg-foreground/[0.03] hover:text-foreground",
+                          : "text-foreground/78 hover:bg-foreground/[0.03] hover:text-foreground",
                       dropTargetWorkspaceId === workspace.id &&
                         draggedWorkspaceId !== workspace.id &&
                         "bg-foreground/[0.08] ring-1 ring-foreground/10",
@@ -349,18 +425,23 @@ export const Sidebar = memo(function Sidebar() {
                       </Button>
                     </CollapsibleTrigger>
                     <Button
-                      className="sidebar-lift flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-left"
+                      className="sidebar-lift flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left"
                       onClick={() => void selectWorkspace(workspace.id)}
                       title={workspace.path}
                       type="button"
                       variant="ghost"
                     >
-                      <span className="truncate text-[13px] font-medium tracking-[-0.015em]">{workspace.name}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-medium tracking-[-0.015em]">{workspace.name}</span>
+                        <span className="mt-0.5 block truncate text-[11px] font-medium text-muted-foreground">
+                          {workspaceMeta}
+                        </span>
+                      </span>
                     </Button>
                   </div>
 
                   <CollapsibleContent className="sidebar-thread-region overflow-hidden">
-                    <div className="space-y-1 pl-2 pt-1">
+                    <div className="ml-3 space-y-1 border-l border-border/45 pl-3 pt-1">
                       {workspaceThreads.length === 0 ? (
                         <div
                           className={cn(

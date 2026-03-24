@@ -58,6 +58,24 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
     sendThread(get, threadId, (sessionId) => ({ type: "session_close", sessionId }));
   };
 
+  const preferredThreadIdForWorkspace = (workspaceId: string): string | null => {
+    const state = get();
+    const currentThreadId = state.selectedThreadId;
+    const currentThread = currentThreadId
+      ? state.threads.find((thread) => thread.id === currentThreadId) ?? null
+      : null;
+
+    if (currentThread?.workspaceId === workspaceId) {
+      return currentThread.id;
+    }
+
+    const workspaceThreads = state.threads
+      .filter((thread) => thread.workspaceId === workspaceId)
+      .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt));
+
+    return workspaceThreads[0]?.id ?? null;
+  };
+
   return {
     addWorkspace: async () => {
       if (RUNTIME.workspacePickerOpen) return;
@@ -161,9 +179,11 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
 
     selectWorkspace: async (workspaceId: string) => {
       const wasSelected = get().selectedWorkspaceId === workspaceId;
+      const nextThreadId = preferredThreadIdForWorkspace(workspaceId);
       set((s) => ({
         selectedWorkspaceId: workspaceId,
-        view: s.view === "settings" ? "settings" : "chat",
+        selectedThreadId: nextThreadId,
+        view: s.view === "settings" ? "settings" : s.view,
       }));
       ensureWorkspaceRuntime(get, set, workspaceId);
   

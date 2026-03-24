@@ -163,7 +163,7 @@ export function AppTopBar({
       </div>
 
       <div
-        className="app-topbar__thread-shell app-topbar__controls absolute inset-y-0 flex min-w-0 items-center"
+        className="app-topbar__thread-shell absolute inset-y-0 flex min-w-0 items-center"
         style={{ left: titleOffset, right: titleRightInset }}
       >
         <div
@@ -179,7 +179,7 @@ export function AppTopBar({
             aria-haspopup="dialog"
             aria-expanded={detailsOpen}
             aria-controls={detailsId}
-            className="app-topbar__thread-button flex min-w-0 items-center gap-2"
+            className="app-topbar__thread-button app-topbar__controls flex min-w-0 items-center gap-2"
             data-open={detailsOpen ? "true" : "false"}
             onClick={() => setDetailsOpen((open) => !open)}
           >

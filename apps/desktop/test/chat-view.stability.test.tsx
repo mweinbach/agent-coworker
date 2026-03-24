@@ -280,6 +280,98 @@ describe("desktop chat view stability", () => {
     }
   });
 
+  test("keeps the message bar resize rail invisible and the composer shell borderless", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Thread 1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:00.000Z",
+          status: "active",
+          sessionId: "session-1",
+          lastEventSeq: 0,
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          wsUrl: null,
+          connected: true,
+          sessionId: "session-1",
+          config: {
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+          sessionConfig: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: false,
+          busySince: null,
+          feed: [],
+          pendingSteer: null,
+          transcriptOnly: false,
+        },
+      },
+      composerText: "",
+      messageBarHeight: 144,
+    });
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(
+            StrictMode,
+            null,
+            createElement(ChatView),
+          ),
+        );
+      });
+
+      const separator = container.querySelector('[aria-label="Resize message bar"]');
+      const composerShell = separator?.parentElement;
+
+      expect(separator).not.toBeNull();
+      expect(separator?.className).toContain("-top-1");
+      expect(separator?.className).toContain("h-3");
+      expect(separator?.className).not.toContain("hover:bg-border/80");
+      expect(separator?.getAttribute("aria-valuenow")).toBe("144");
+      expect(composerShell?.className).not.toContain("border-t");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("shows the pending draft model in an editable footer selector before the first message", async () => {
     useAppStore.setState({
       ready: true,

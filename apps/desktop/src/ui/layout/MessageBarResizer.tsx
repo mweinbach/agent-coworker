@@ -66,7 +66,7 @@ export function MessageBarResizer() {
 
   return (
     <div
-      className={cn("absolute top-0 left-0 right-0 -mt-[1px] h-[3px] cursor-row-resize bg-transparent hover:bg-border/80 transition-colors z-20", dragging && "bg-primary/20 hover:bg-primary/20")}
+      className={cn("absolute -top-1 left-0 right-0 z-20 h-3 cursor-row-resize bg-transparent transition-colors", dragging && "bg-primary/20")}
       role="separator"
       aria-orientation="horizontal"
       aria-label="Resize message bar"

@@ -842,7 +842,7 @@ export function ChatView() {
           </ConversationContent>
         </Conversation>
 
-        <div className="relative flex shrink-0 flex-col border-t border-border/55 bg-panel/78 px-3 py-1.5 backdrop-blur-sm" style={{ height: messageBarHeight }}>
+        <div className="relative flex shrink-0 flex-col bg-panel/78 px-3 py-1.5 backdrop-blur-sm" style={{ height: messageBarHeight }}>
           <MessageBarResizer />
           <PromptInputRoot>
             <PromptInputForm

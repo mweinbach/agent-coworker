@@ -85,7 +85,9 @@ describe("desktop app top bar", () => {
       expect(newChatReveal?.className).toContain("opacity-0");
       expect(titleShell).not.toBeNull();
       expect(titleShell?.getAttribute("style")).toContain("left: 280px");
+      expect(titleShell?.className).not.toContain("app-topbar__controls");
       expect(titleButton).not.toBeNull();
+      expect(titleButton?.className).toContain("app-topbar__controls");
       expect(container.textContent).toContain("Refine desktop app UI");
       expect(container.textContent).toContain("agent-coworker");
       expect(contextToggle).not.toBeNull();

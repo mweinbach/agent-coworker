@@ -84,13 +84,22 @@ describe("raw-loop final contract validation", () => {
     const runDir = await makeRunDir();
     const outsideDir = await makeRunDir();
     const outsidePath = path.join(outsideDir, "outside-report.md");
-    const symlinkPath = path.join(runDir, "report.md");
+    const linkPath = path.join(runDir, "external");
+    const escapedReportPath = path.join(linkPath, "outside-report.md");
     await fs.writeFile(outsidePath, "# outside\n", "utf-8");
-    await fs.symlink(outsidePath, symlinkPath);
+
+    try {
+      const symlinkType = process.platform === "win32" ? "junction" : "dir";
+      await fs.symlink(outsideDir, linkPath, symlinkType);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") return;
+      throw err;
+    }
 
     const result = await validateFinalContract({
       finalText: JSON.stringify({
-        report: symlinkPath,
+        report: escapedReportPath,
         end: "<<END_RUN>>",
       }),
       runDir,

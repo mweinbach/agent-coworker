@@ -1358,7 +1358,7 @@ export function WorkspacesPage() {
                                   <InfoIcon className="size-3.5 text-muted-foreground" />
                                 </span>
                               </TooltipTrigger>
-                              <TooltipContent side="top">
+                              <TooltipContent>
                                 {childModelRoutingMode === "same-provider"
                                   ? "Subagents use your default model by default. This setting preselects which model from the same provider to suggest instead."
                                   : "If a selected subagent model isn't available, your default model will be used instead."}

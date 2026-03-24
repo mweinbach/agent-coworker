@@ -1,4 +1,7 @@
+import { isIP } from "node:net";
+
 import type { SessionFeedItem, SessionSnapshot } from "../shared/sessionSnapshot";
+import { resolveSafeWebUrl, type SafeWebResolution } from "../utils/webSafety";
 
 export type CitationReference = {
   url: string;
@@ -15,6 +18,7 @@ const opaqueCitationRedirectHosts = new Set([
 ]);
 const citationResolutionTimeoutMs = 4_000;
 const citationResolutionMaxBytes = 96 * 1024;
+const citationResolutionMaxRedirects = 5;
 const DEFAULT_MAX_SETTLED_CITATION_CACHE_ENTRIES = 512;
 const DEFAULT_MAX_INFLIGHT_CITATION_RESOLUTIONS = 128;
 let maxSettledCitationCacheEntries = DEFAULT_MAX_SETTLED_CITATION_CACHE_ENTRIES;
@@ -75,6 +79,32 @@ function isOpaqueCitationRedirectUrl(url: string): boolean {
     return opaqueCitationRedirectHosts.has(parsed.hostname) && parsed.pathname.startsWith("/grounding-api-redirect/");
   } catch {
     return false;
+  }
+}
+
+function resolveCitationFinalUrl(currentUrl: string, responseUrl: string | undefined): string {
+  const candidate = asNonEmptyString(responseUrl);
+  if (!candidate) {
+    return currentUrl;
+  }
+
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return currentUrl;
+    }
+    if (parsed.username || parsed.password) {
+      return currentUrl;
+    }
+    if (isIP(parsed.hostname) !== 0) {
+      return currentUrl;
+    }
+    if (isOpaqueCitationRedirectUrl(candidate)) {
+      return currentUrl;
+    }
+    return parsed.toString();
+  } catch {
+    return currentUrl;
   }
 }
 
@@ -156,6 +186,58 @@ function createTimeoutController(timeoutMs: number): { controller: AbortControll
   };
 }
 
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function buildPinnedCitationUrl(resolved: SafeWebResolution): { pinnedUrl: URL; hostHeader: string } {
+  const address = resolved.addresses[0];
+  if (!address) {
+    throw new Error(`Blocked unresolved host: ${resolved.url.hostname}`);
+  }
+
+  const pinnedUrl = new URL(resolved.url.toString());
+  const hostHeader = pinnedUrl.host;
+  pinnedUrl.hostname = address.family === 6 ? `[${address.address}]` : address.address;
+  return { pinnedUrl, hostHeader };
+}
+
+async function fetchCitationWithSafeRedirects(
+  url: string,
+  signal: AbortSignal
+): Promise<{ response: Response; finalUrl: string }> {
+  let current = await resolveSafeWebUrl(url);
+
+  for (let hop = 0; hop < citationResolutionMaxRedirects; hop++) {
+    const { pinnedUrl, hostHeader } = buildPinnedCitationUrl(current);
+    const response = await globalThis.fetch(pinnedUrl, {
+      redirect: "manual",
+      signal,
+      headers: {
+        Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+        Host: hostHeader,
+        "User-Agent": "Mozilla/5.0 (compatible; Cowork/1.0)",
+      },
+    });
+
+    if (!isRedirectStatus(response.status)) {
+      return {
+        response,
+        finalUrl: resolveCitationFinalUrl(current.url.toString(), response.url),
+      };
+    }
+
+    const location = response.headers.get("location");
+    if (!location) {
+      throw new Error(`Redirect missing location header: ${current.url.toString()}`);
+    }
+
+    current = await resolveSafeWebUrl(new URL(location, current.url).toString());
+  }
+
+  throw new Error(`Too many redirects while resolving citation: ${url}`);
+}
+
 async function readResponsePrefix(response: Response, maxBytes: number): Promise<string> {
   const body = response.body;
   if (!body || typeof body.getReader !== "function") {
@@ -198,16 +280,7 @@ async function resolveCitationReference(url: string): Promise<ResolvedCitationRe
 
   const { controller, dispose } = createTimeoutController(citationResolutionTimeoutMs);
   try {
-    const response = await globalThis.fetch(url, {
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
-        "User-Agent": "Mozilla/5.0 (compatible; Cowork/1.0)",
-      },
-    });
-
-    const finalUrl = asNonEmptyString(response.url) ?? url;
+    const { response, finalUrl } = await fetchCitationWithSafeRedirects(url, controller.signal);
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
     if (!contentType.includes("text/html") && !contentType.includes("application/xhtml+xml")) {
       return { url: finalUrl };
@@ -472,6 +545,7 @@ export const __internal = {
     settledCitationResolutionCache.clear();
   },
   extractDocumentTitle,
+  fetchCitationWithSafeRedirects,
   isOpaqueCitationRedirectUrl,
   needsCitationResolution,
   normalizeHostnameLikeLabel,

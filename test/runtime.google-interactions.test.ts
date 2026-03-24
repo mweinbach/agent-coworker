@@ -1013,22 +1013,36 @@ describe("google native interactions request building", () => {
 
   test("enrichTextBlockAnnotations resolves Google grounding redirects for final text blocks", async () => {
     const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
-    const response = new Response(
-      `<html><head><title>LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure</title></head></html>`,
-      {
-        headers: {
-          "content-type": "text/html; charset=utf-8",
-        },
-      },
-    );
-    Object.defineProperty(response, "url", {
-      configurable: true,
-      value: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
-    });
+    let fetchCalls = 0;
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
       writable: true,
-      value: async () => response,
+      value: async (input: RequestInfo | URL) => {
+        fetchCalls += 1;
+        const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+        if (url.includes("/grounding-api-redirect/example")) {
+          return new Response(null, {
+            status: 302,
+            headers: {
+              location: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
+            },
+          });
+        }
+
+        const response = new Response(
+          `<html><head><title>LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure</title></head></html>`,
+          {
+            headers: {
+              "content-type": "text/html; charset=utf-8",
+            },
+          },
+        );
+        Object.defineProperty(response, "url", {
+          configurable: true,
+          value: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
+        });
+        return response;
+      },
     });
 
     try {
@@ -1047,6 +1061,7 @@ describe("google native interactions request building", () => {
       };
 
       await googleNativeInternal.enrichTextBlockAnnotations(block);
+      expect(fetchCalls).toBe(2);
 
       expect(block.annotations).toEqual([
         {
@@ -1069,11 +1084,23 @@ describe("google native interactions request building", () => {
     const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
     const fetchStarted = Promise.withResolvers<void>();
     const responseGate = Promise.withResolvers<Response>();
+    let fetchCalls = 0;
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
       writable: true,
-      value: async () => {
-        fetchStarted.resolve();
+      value: async (input: RequestInfo | URL) => {
+        fetchCalls += 1;
+        const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+        if (url.includes("/grounding-api-redirect/slow-example")) {
+          fetchStarted.resolve();
+          return new Response(null, {
+            status: 302,
+            headers: {
+              location: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
+            },
+          });
+        }
+
         return await responseGate.promise;
       },
     });
@@ -1098,6 +1125,7 @@ describe("google native interactions request building", () => {
 
       googleNativeInternal.queueTextBlockAnnotationEnrichment(pendingAnnotationEnrichments, block);
       await fetchStarted.promise;
+      expect(fetchCalls).toBe(1);
 
       expect(googleNativeInternal.mapGoogleEventToStreamParts(
         { event_type: "content.stop", index: 0 },
@@ -1134,6 +1162,7 @@ describe("google native interactions request building", () => {
       responseGate.resolve(response);
 
       await Promise.all(pendingAnnotationEnrichments);
+      expect(fetchCalls).toBe(2);
 
       expect(block.annotations).toEqual([
         {

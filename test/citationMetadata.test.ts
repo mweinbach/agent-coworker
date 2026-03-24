@@ -50,8 +50,18 @@ afterEach(() => {
 describe("citationMetadata", () => {
   test("enrichCitationAnnotations resolves opaque Google redirects to final article titles and urls", async () => {
     let fetchCalls = 0;
-    installFetchStub(async () => {
+    installFetchStub(async (input: RequestInfo | URL) => {
       fetchCalls += 1;
+      const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      if (url.includes("/grounding-api-redirect/example")) {
+        return new Response(null, {
+          status: 302,
+          headers: {
+            location: resolvedArticleUrl,
+          },
+        });
+      }
+
       return makeHtmlResponse(
         resolvedArticleUrl,
         `<html><head><meta property="og:title" content="${resolvedArticleTitle}"></head><body>ok</body></html>`,
@@ -75,7 +85,7 @@ describe("citationMetadata", () => {
       },
     ]);
 
-    expect(fetchCalls).toBe(1);
+    expect(fetchCalls).toBe(2);
     expect(annotations).toEqual([
       {
         type: "url_citation",
@@ -95,10 +105,22 @@ describe("citationMetadata", () => {
   });
 
   test("enrichSessionSnapshotCitations only rewrites assistant annotations", async () => {
-    installFetchStub(async () => makeHtmlResponse(
-      resolvedArticleUrl,
-      `<html><head><title>${resolvedArticleTitle}</title></head><body>ok</body></html>`,
-    ));
+    installFetchStub(async (input: RequestInfo | URL) => {
+      const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      if (url.includes("/grounding-api-redirect/example")) {
+        return new Response(null, {
+          status: 302,
+          headers: {
+            location: resolvedArticleUrl,
+          },
+        });
+      }
+
+      return makeHtmlResponse(
+        resolvedArticleUrl,
+        `<html><head><title>${resolvedArticleTitle}</title></head><body>ok</body></html>`,
+      );
+    });
 
     const snapshot: SessionSnapshot = {
       sessionId: "thread-1",
@@ -189,10 +211,22 @@ describe("citationMetadata", () => {
   });
 
   test("enrichSessionSnapshotCitationsFromCache only rewrites assistant annotations from cached metadata", async () => {
-    installFetchStub(async () => makeHtmlResponse(
-      resolvedArticleUrl,
-      `<html><head><title>${resolvedArticleTitle}</title></head><body>ok</body></html>`,
-    ));
+    installFetchStub(async (input: RequestInfo | URL) => {
+      const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      if (url.includes("/grounding-api-redirect/example")) {
+        return new Response(null, {
+          status: 302,
+          headers: {
+            location: resolvedArticleUrl,
+          },
+        });
+      }
+
+      return makeHtmlResponse(
+        resolvedArticleUrl,
+        `<html><head><title>${resolvedArticleTitle}</title></head><body>ok</body></html>`,
+      );
+    });
 
     await enrichCitationAnnotations([
       {
@@ -320,5 +354,110 @@ describe("citationMetadata", () => {
     }
 
     expect(citationMetadataInternal.__testGetSettledCacheSize()).toBe(3);
+  });
+
+  test("does not fetch citations for blocked private-network targets", async () => {
+    let fetchCalls = 0;
+    installFetchStub(async () => {
+      fetchCalls += 1;
+      throw new Error("blocked citation should not be fetched");
+    });
+
+    const annotations = await enrichCitationAnnotations([
+      {
+        type: "url_citation",
+        url: "http://127.0.0.1/admin",
+        title: "internal.test",
+        start_index: 0,
+        end_index: 6,
+      },
+    ]);
+
+    expect(fetchCalls).toBe(0);
+    expect(annotations).toEqual([
+      {
+        type: "url_citation",
+        url: "http://127.0.0.1/admin",
+        title: "internal.test",
+        start_index: 0,
+        end_index: 6,
+      },
+    ]);
+  });
+
+  test("blocks citation redirects to private-network targets", async () => {
+    let fetchCalls = 0;
+    installFetchStub(async () => {
+      fetchCalls += 1;
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: "http://127.0.0.1/admin",
+        },
+      });
+    });
+
+    const annotations = await enrichCitationAnnotations([
+      {
+        type: "url_citation",
+        url: googleRedirectUrl,
+        title: "public.example",
+        start_index: 0,
+        end_index: 6,
+      },
+    ]);
+
+    expect(fetchCalls).toBe(1);
+    expect(annotations).toEqual([
+      {
+        type: "url_citation",
+        url: googleRedirectUrl,
+        title: "public.example",
+        start_index: 0,
+        end_index: 6,
+      },
+    ]);
+  });
+
+  test("follows allowed public citation redirects and resolves the final title", async () => {
+    let fetchCalls = 0;
+    installFetchStub(async (input: RequestInfo | URL) => {
+      fetchCalls += 1;
+      const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      if (url.includes("/grounding-api-redirect/example")) {
+        return new Response(null, {
+          status: 302,
+          headers: {
+            location: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
+          },
+        });
+      }
+
+      return makeHtmlResponse(
+        resolvedArticleUrl,
+        `<html><head><title>${resolvedArticleTitle}</title></head><body>ok</body></html>`,
+      );
+    });
+
+    const annotations = await enrichCitationAnnotations([
+      {
+        type: "url_citation",
+        url: googleRedirectUrl,
+        title: "public.example",
+        start_index: 0,
+        end_index: 6,
+      },
+    ]);
+
+    expect(fetchCalls).toBe(2);
+    expect(annotations).toEqual([
+      {
+        type: "url_citation",
+        url: resolvedArticleUrl,
+        title: resolvedArticleTitle,
+        start_index: 0,
+        end_index: 6,
+      },
+    ]);
   });
 });

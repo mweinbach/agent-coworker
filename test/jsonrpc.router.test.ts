@@ -483,23 +483,33 @@ describe("JSON-RPC request router", () => {
   test("thread/read uses cached citation annotations when available", async () => {
     const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
     let fetchCalls = 0;
-    const response = new Response(
-      "<html><head><title>LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure</title></head></html>",
-      {
-        headers: {
-          "content-type": "text/html; charset=utf-8",
-        },
-      },
-    );
-    Object.defineProperty(response, "url", {
-      configurable: true,
-      value: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
-    });
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
       writable: true,
-      value: async () => {
+      value: async (input: RequestInfo | URL) => {
         fetchCalls += 1;
+        const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+        if (url.includes("/grounding-api-redirect/example")) {
+          return new Response(null, {
+            status: 302,
+            headers: {
+              location: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
+            },
+          });
+        }
+
+        const response = new Response(
+          "<html><head><title>LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure</title></head></html>",
+          {
+            headers: {
+              "content-type": "text/html; charset=utf-8",
+            },
+          },
+        );
+        Object.defineProperty(response, "url", {
+          configurable: true,
+          value: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
+        });
         return response;
       },
     });
@@ -514,7 +524,7 @@ describe("JSON-RPC request router", () => {
           end_index: 5,
         },
       ]);
-      expect(fetchCalls).toBe(1);
+      expect(fetchCalls).toBe(2);
 
       Object.defineProperty(globalThis, "fetch", {
         configurable: true,
@@ -593,9 +603,19 @@ describe("JSON-RPC request router", () => {
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
       writable: true,
-      value: async () => {
+      value: async (input: RequestInfo | URL) => {
         fetchCalls += 1;
-        fetchStarted.resolve();
+        const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+        if (url.includes("/grounding-api-redirect/example")) {
+          fetchStarted.resolve();
+          return new Response(null, {
+            status: 302,
+            headers: {
+              location: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
+            },
+          });
+        }
+
         return await responseGate.promise;
       },
     });
@@ -680,7 +700,7 @@ describe("JSON-RPC request router", () => {
           end_index: 5,
         },
       ]);
-      expect(fetchCalls).toBe(1);
+      expect(fetchCalls).toBe(2);
 
       Object.defineProperty(globalThis, "fetch", {
         configurable: true,

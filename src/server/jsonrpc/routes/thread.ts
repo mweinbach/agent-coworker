@@ -1,5 +1,8 @@
 import type { AgentConfig } from "../../../types";
-import { enrichSessionSnapshotCitations } from "../../citationMetadata";
+import {
+  enrichSessionSnapshotCitationsFromCache,
+  primeSessionSnapshotCitationCache,
+} from "../../citationMetadata";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { createThreadTurnProjector } from "../threadReadProjector";
 
@@ -134,7 +137,7 @@ export function createThreadRouteHandlers(
         ? context.utils.buildThreadFromSession(binding.session)
         : context.utils.buildThreadFromRecord(context.threads.getPersisted(threadId)!);
       await context.journal.waitForIdle(threadId);
-      const enrichedSnapshot = await enrichSessionSnapshotCitations(snapshot);
+      const enrichedSnapshot = enrichSessionSnapshotCitationsFromCache(snapshot);
       let journalTailSeq = 0;
       let turns: ReturnType<ReturnType<typeof createThreadTurnProjector>["build"]> | undefined;
       if (params.includeTurns === true) {
@@ -168,6 +171,9 @@ export function createThreadRouteHandlers(
         ...(params.includeTurns === true
           ? { journalTailSeq }
           : {}),
+      });
+      queueMicrotask(() => {
+        primeSessionSnapshotCitationCache(enrichedSnapshot);
       });
     },
 

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   __internal as citationMetadataInternal,
   enrichCitationAnnotations,
+  enrichSessionSnapshotCitationsFromCache,
   enrichSessionSnapshotCitations,
 } from "../src/server/citationMetadata";
 import type { SessionSnapshot } from "../src/shared/sessionSnapshot";
@@ -164,6 +165,114 @@ describe("citationMetadata", () => {
     };
 
     const enriched = await enrichSessionSnapshotCitations(snapshot);
+    const assistant = enriched.feed[0];
+    const user = enriched.feed[1];
+
+    expect(assistant).toEqual({
+      id: "assistant-1",
+      kind: "message",
+      role: "assistant",
+      ts: "2026-03-23T00:00:01.000Z",
+      text: "Answer",
+      annotations: [
+        {
+          type: "url_citation",
+          url: resolvedArticleUrl,
+          title: resolvedArticleTitle,
+          start_index: 0,
+          end_index: 6,
+        },
+      ],
+    });
+    expect(user).toEqual(snapshot.feed[1]);
+  });
+
+  test("enrichSessionSnapshotCitationsFromCache only rewrites assistant annotations from cached metadata", async () => {
+    installFetchStub(async () => makeHtmlResponse(
+      resolvedArticleUrl,
+      `<html><head><title>${resolvedArticleTitle}</title></head><body>ok</body></html>`,
+    ));
+
+    await enrichCitationAnnotations([
+      {
+        type: "url_citation",
+        url: googleRedirectUrl,
+        title: "foxnews.com",
+        start_index: 0,
+        end_index: 6,
+      },
+    ]);
+
+    installFetchStub(async () => {
+      throw new Error("cache-only snapshot enrichment should not fetch");
+    });
+
+    const snapshot: SessionSnapshot = {
+      sessionId: "thread-1",
+      title: "Thread 1",
+      titleSource: "manual",
+      titleModel: null,
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      sessionKind: "root",
+      parentSessionId: null,
+      role: null,
+      mode: null,
+      depth: null,
+      nickname: null,
+      requestedModel: null,
+      effectiveModel: null,
+      requestedReasoningEffort: null,
+      effectiveReasoningEffort: null,
+      executionState: null,
+      lastMessagePreview: null,
+      createdAt: "2026-03-23T00:00:00.000Z",
+      updatedAt: "2026-03-23T00:00:00.000Z",
+      messageCount: 2,
+      lastEventSeq: 2,
+      feed: [
+        {
+          id: "assistant-1",
+          kind: "message",
+          role: "assistant",
+          ts: "2026-03-23T00:00:01.000Z",
+          text: "Answer",
+          annotations: [
+            {
+              type: "url_citation",
+              url: googleRedirectUrl,
+              title: "foxnews.com",
+              start_index: 0,
+              end_index: 6,
+            },
+          ],
+        },
+        {
+          id: "user-1",
+          kind: "message",
+          role: "user",
+          ts: "2026-03-23T00:00:02.000Z",
+          text: "Thanks",
+          annotations: [
+            {
+              type: "url_citation",
+              url: googleRedirectUrl,
+              title: "foxnews.com",
+              start_index: 0,
+              end_index: 6,
+            },
+          ],
+        },
+      ],
+      agents: [],
+      todos: [],
+      sessionUsage: null,
+      lastTurnUsage: null,
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    };
+
+    const enriched = enrichSessionSnapshotCitationsFromCache(snapshot);
     const assistant = enriched.feed[0];
     const user = enriched.feed[1];
 

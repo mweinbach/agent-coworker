@@ -16,6 +16,7 @@ const opaqueCitationRedirectHosts = new Set([
 const citationResolutionTimeoutMs = 4_000;
 const citationResolutionMaxBytes = 96 * 1024;
 const citationResolutionCache = new Map<string, Promise<ResolvedCitationReference | null>>();
+const settledCitationResolutionCache = new Map<string, ResolvedCitationReference | null>();
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -202,20 +203,43 @@ async function resolveCitationReference(url: string): Promise<ResolvedCitationRe
   }
 }
 
+function getCachedResolvedCitationReference(url: string): ResolvedCitationReference | null | undefined {
+  if (!settledCitationResolutionCache.has(url)) {
+    return undefined;
+  }
+  return settledCitationResolutionCache.get(url) ?? null;
+}
+
 async function getResolvedCitationReference(url: string): Promise<ResolvedCitationReference | null> {
+  const cached = getCachedResolvedCitationReference(url);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   const existing = citationResolutionCache.get(url);
   if (existing) {
     return await existing;
   }
 
-  const pending = resolveCitationReference(url);
+  const pending = resolveCitationReference(url).then((resolved) => {
+    settledCitationResolutionCache.set(url, resolved);
+    citationResolutionCache.delete(url);
+    return resolved;
+  });
   citationResolutionCache.set(url, pending);
   try {
     return await pending;
   } catch {
     citationResolutionCache.delete(url);
+    settledCitationResolutionCache.delete(url);
     return null;
   }
+}
+
+function primeCitationReference(url: string): void {
+  void getResolvedCitationReference(url).catch(() => {
+    // Best-effort background cache warm.
+  });
 }
 
 export async function enrichCitationReferences<T extends CitationReference>(references: readonly T[]): Promise<T[]> {
@@ -245,6 +269,51 @@ export async function enrichCitationReferences<T extends CitationReference>(refe
       ...(nextTitle ? { title: nextTitle } : {}),
     };
   }));
+}
+
+export function enrichCitationAnnotationsFromCache(
+  annotations: unknown,
+): Array<Record<string, unknown>> | undefined {
+  const entries = asRecordArray(annotations);
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  let changed = false;
+  const nextEntries = entries.map((entry) => {
+    const url = asNonEmptyString(entry.url);
+    if (!url) {
+      return entry;
+    }
+    if (entry.type !== "url_citation" && entry.type !== "place_citation") {
+      return entry;
+    }
+
+    const title = asNonEmptyString(entry.title);
+    if (!needsCitationResolution({ url, title })) {
+      return entry;
+    }
+
+    const resolved = getCachedResolvedCitationReference(url);
+    if (resolved === undefined || !resolved) {
+      return entry;
+    }
+
+    const nextTitle = resolved.title ?? title;
+    const nextUrl = resolved.url || url;
+    if (nextUrl === url && nextTitle === title) {
+      return entry;
+    }
+
+    changed = true;
+    return {
+      ...entry,
+      url: nextUrl,
+      ...(nextTitle ? { title: nextTitle } : {}),
+    };
+  });
+
+  return changed ? nextEntries : entries;
 }
 
 export async function enrichCitationAnnotations(
@@ -296,6 +365,58 @@ function annotationsEqual(
   return left.every((entry, index) => JSON.stringify(entry) === JSON.stringify(right[index]));
 }
 
+export function primeSessionSnapshotCitationCache(snapshot: SessionSnapshot): void {
+  for (const item of snapshot.feed) {
+    if (item.kind !== "message" || item.role !== "assistant" || !Array.isArray(item.annotations) || item.annotations.length === 0) {
+      continue;
+    }
+
+    for (const entry of asRecordArray(item.annotations)) {
+      const url = asNonEmptyString(entry.url);
+      if (!url) {
+        continue;
+      }
+      if (entry.type !== "url_citation" && entry.type !== "place_citation") {
+        continue;
+      }
+
+      const title = asNonEmptyString(entry.title);
+      if (!needsCitationResolution({ url, title })) {
+        continue;
+      }
+
+      primeCitationReference(url);
+    }
+  }
+}
+
+export function enrichSessionSnapshotCitationsFromCache(snapshot: SessionSnapshot): SessionSnapshot {
+  let changed = false;
+  const feed = snapshot.feed.map((item) => {
+    if (item.kind !== "message" || item.role !== "assistant" || !Array.isArray(item.annotations) || item.annotations.length === 0) {
+      return item;
+    }
+
+    const nextAnnotations = enrichCitationAnnotationsFromCache(item.annotations);
+    if (annotationsEqual(item.annotations, nextAnnotations)) {
+      return item;
+    }
+
+    changed = true;
+    return {
+      ...item,
+      ...(nextAnnotations ? { annotations: nextAnnotations } : {}),
+    };
+  });
+
+  return changed
+    ? {
+        ...snapshot,
+        feed,
+      }
+    : snapshot;
+}
+
 export async function enrichSessionSnapshotCitations(snapshot: SessionSnapshot): Promise<SessionSnapshot> {
   let changed = false;
   const feed = await Promise.all(snapshot.feed.map(async (item) => {
@@ -324,7 +445,10 @@ export async function enrichSessionSnapshotCitations(snapshot: SessionSnapshot):
 }
 
 export const __internal = {
-  clearCitationResolutionCache: () => citationResolutionCache.clear(),
+  clearCitationResolutionCache: () => {
+    citationResolutionCache.clear();
+    settledCitationResolutionCache.clear();
+  },
   extractDocumentTitle,
   isOpaqueCitationRedirectUrl,
   needsCitationResolution,

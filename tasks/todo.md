@@ -1,5 +1,19 @@
 # Task Plan
 
+## Keep thread/read Citation Enrichment Off the Response Path
+
+- [x] Confirm `thread/read` is awaiting network-backed citation enrichment before responding.
+- [x] Add a cache-only snapshot enrichment path plus background cache priming for unresolved citations.
+- [x] Update `thread/read` to return the local snapshot immediately, using cached citation metadata only and warming unresolved citations asynchronously.
+- [x] Add focused citation/JSON-RPC regressions and rerun targeted verification.
+
+## Keep thread/read Citation Enrichment Off the Response Path Review
+
+- `src/server/citationMetadata.ts` now keeps a settled citation-resolution cache alongside the in-flight promise cache, exposes a cache-only assistant snapshot enrichment path, and adds a best-effort background cache-prime helper for unresolved assistant citation annotations.
+- `src/server/jsonrpc/routes/thread.ts` no longer awaits network-backed citation resolution during `thread/read`. The route now rewrites snapshot assistant annotations only from already-cached citation metadata, sends the snapshot immediately, and then schedules background cache warming in a microtask for any still-unresolved Google redirect citations.
+- `test/citationMetadata.test.ts` now covers cache-only snapshot enrichment, and `test/jsonrpc.router.test.ts` now covers both cache-hit enrichment and the “return immediately, then warm the cache for later reads” behavior.
+- Verification passed with `bun test test/citationMetadata.test.ts test/jsonrpc.router.test.ts`, `bun run typecheck`, and `bun test` on 2026-03-23 (`2628 pass`, `3 skip`, `0 fail`).
+
 ## Keep Google Citation Enrichment Off Live Stream Path
 
 - [x] Confirm the reviewed regression is the synchronous `content.stop` await in the Google native interaction stream loop.

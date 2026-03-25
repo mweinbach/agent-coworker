@@ -76,6 +76,8 @@ function buildShellExecutionPlan(platform: NodeJS.Platform, command: string): Ar
   }
 
   return [
+    { file: "/bin/bash", args: ["-lc", command] },
+    { file: "/bin/sh", args: ["-lc", command] },
     { file: "bash", args: ["-lc", command] },
     { file: "sh", args: ["-lc", command] },
   ];

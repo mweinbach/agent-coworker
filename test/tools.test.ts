@@ -550,6 +550,11 @@ describe("bash tool", () => {
   test("executes simple command and returns stdout", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
+    bashInternal.setRunShellCommandForTests(async () => ({
+      stdout: "hello\n",
+      stderr: "",
+      exitCode: 0,
+    }));
     const res = await t.execute({ command: "echo hello" });
     expect(res.stdout.trim()).toBe("hello");
     expect(res.exitCode).toBe(0);

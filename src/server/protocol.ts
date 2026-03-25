@@ -90,12 +90,22 @@ export type SessionConfigState = {
     details: string;
   };
 };
+/**
+ * Patch object for updating user config.
+ * Set a field to `null` to explicitly clear/remove the value.
+ * Omit a field (undefined) to leave it unchanged.
+ */
 export type UserConfigPatch = {
   awsBedrockProxyBaseUrl?: string | null;
   /** @deprecated Legacy alias accepted for backward compatibility. */
   openaiProxyBaseUrl?: string | null;
 };
 
+/**
+ * Current user config state.
+ * Absent fields (undefined) indicate no value is stored.
+ * Values are never null — cleared fields are simply omitted.
+ */
 export type UserConfigState = {
   awsBedrockProxyBaseUrl?: string;
   /** @deprecated Legacy alias accepted for backward compatibility. */

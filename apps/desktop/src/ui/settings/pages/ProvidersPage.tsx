@@ -25,6 +25,13 @@ type ProviderStatus = Extract<ServerEvent, { type: "provider_status" }>["provide
 const EXA_AUTH_METHOD_ID = "exa_api_key";
 export const EXA_SECTION_ID = "provider:exa-search";
 
+/**
+ * UI-side timeout for the Bedrock model refresh operation.
+ * Set higher than the backend discovery timeout (DEFAULT_DISCOVERY_TIMEOUT_MS = 7500ms)
+ * to allow for network overhead before the UI gives up.
+ */
+const BEDROCK_MODEL_REFRESH_TIMEOUT_MS = 10_000;
+
 type ProvidersPageProps = {
   initialExpandedSectionId?: string | null;
 };
@@ -372,9 +379,11 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const [savingOpenAiProxyBaseUrl, setSavingOpenAiProxyBaseUrl] = useState(false);
   const [dismissedRestartPrompt, setDismissedRestartPrompt] = useState(false);
   const [providerCatalogVersion, setProviderCatalogVersion] = useState(0);
-  const [bedrockModelsRefreshing, setBedrockModelsRefreshing] = useState(false);
-  const [bedrockModelsRefreshStartVersion, setBedrockModelsRefreshStartVersion] = useState(0);
-  const [bedrockModelsRefreshResult, setBedrockModelsRefreshResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [bedrockRefresh, setBedrockRefresh] = useState<
+    | { status: "idle" }
+    | { status: "refreshing"; startVersion: number }
+    | { status: "done"; result: { ok: boolean; message: string } }
+  >({ status: "idle" });
 
   const modelChoices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
 
@@ -451,50 +460,54 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   }, [providerCatalog]);
 
   useEffect(() => {
-    if (!bedrockModelsRefreshing) return;
-    if (providerCatalogVersion <= bedrockModelsRefreshStartVersion) return;
-    setBedrockModelsRefreshing(false);
+    if (bedrockRefresh.status !== "refreshing") return;
+    if (providerCatalogVersion <= bedrockRefresh.startVersion) return;
     const entry = providerCatalog.find((candidate) => candidate.id === "aws-bedrock-proxy");
     if (!entry) {
-      setBedrockModelsRefreshResult({
-        ok: false,
-        message: "Model catalog refreshed, but the AWS Bedrock Proxy entry was missing.",
+      setBedrockRefresh({
+        status: "done",
+        result: { ok: false, message: "Model catalog refreshed, but the AWS Bedrock Proxy entry was missing." },
       });
       return;
     }
     if (entry.state === "unreachable") {
-      setBedrockModelsRefreshResult({
-        ok: false,
-        message: typeof entry.message === "string" && entry.message.trim()
-          ? entry.message
-          : "Model fetch failed. Check proxy URL/token and try again.",
+      setBedrockRefresh({
+        status: "done",
+        result: {
+          ok: false,
+          message: typeof entry.message === "string" && entry.message.trim()
+            ? entry.message
+            : "Model fetch failed. Check proxy URL/token and try again.",
+        },
       });
       return;
     }
     if (!Array.isArray(entry.models) || entry.models.length === 0) {
-      setBedrockModelsRefreshResult({
-        ok: false,
-        message: "Model catalog refreshed, but no models were reported by the proxy.",
+      setBedrockRefresh({
+        status: "done",
+        result: { ok: false, message: "Model catalog refreshed, but no models were reported by the proxy." },
       });
       return;
     }
-    setBedrockModelsRefreshResult({
-      ok: true,
-      message: `Model catalog refreshed (${entry.models.length} model${entry.models.length === 1 ? "" : "s"}).`,
+    setBedrockRefresh({
+      status: "done",
+      result: {
+        ok: true,
+        message: `Model catalog refreshed (${entry.models.length} model${entry.models.length === 1 ? "" : "s"}).`,
+      },
     });
-  }, [bedrockModelsRefreshStartVersion, bedrockModelsRefreshing, providerCatalog, providerCatalogVersion]);
+  }, [bedrockRefresh, providerCatalog, providerCatalogVersion]);
 
   useEffect(() => {
-    if (!bedrockModelsRefreshing) return;
+    if (bedrockRefresh.status !== "refreshing") return;
     const timeout = setTimeout(() => {
-      setBedrockModelsRefreshing(false);
-      setBedrockModelsRefreshResult({
-        ok: false,
-        message: "Model fetch timed out. Check proxy URL/token and try again.",
+      setBedrockRefresh({
+        status: "done",
+        result: { ok: false, message: "Model fetch timed out. Check proxy URL/token and try again." },
       });
-    }, 8_000);
+    }, BEDROCK_MODEL_REFRESH_TIMEOUT_MS);
     return () => clearTimeout(timeout);
-  }, [bedrockModelsRefreshing]);
+  }, [bedrockRefresh]);
 
   useEffect(() => {
     if (!userConfigLastResult) return;
@@ -1165,16 +1178,14 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                       variant="outline"
                       type="button"
                       size="sm"
-                      disabled={!canConnectProvider || bedrockModelsRefreshing}
+                      disabled={!canConnectProvider || bedrockRefresh.status === "refreshing"}
                       title={!canConnectProvider ? "Add a workspace first." : undefined}
                       onClick={() => {
-                        setBedrockModelsRefreshResult(null);
-                        setBedrockModelsRefreshStartVersion(providerCatalogVersion);
-                        setBedrockModelsRefreshing(true);
+                        setBedrockRefresh({ status: "refreshing", startVersion: providerCatalogVersion });
                         void requestProviderCatalog();
                       }}
                     >
-                      {bedrockModelsRefreshing ? "Fetching..." : "Fetch models"}
+                      {bedrockRefresh.status === "refreshing" ? "Fetching..." : "Fetch models"}
                     </Button>
                   ) : null}
                 </div>
@@ -1187,9 +1198,9 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                 ) : (
                   <div className="text-xs text-muted-foreground">No models loaded yet.</div>
                 )}
-                {isOpenAiProxy && bedrockModelsRefreshResult ? (
-                  <div className={cn("text-xs", bedrockModelsRefreshResult.ok ? "text-emerald-600" : "text-destructive")}>
-                    {bedrockModelsRefreshResult.message}
+                {isOpenAiProxy && bedrockRefresh.status === "done" ? (
+                  <div className={cn("text-xs", bedrockRefresh.result.ok ? "text-emerald-600" : "text-destructive")}>
+                    {bedrockRefresh.result.message}
                   </div>
                 ) : null}
               </div>

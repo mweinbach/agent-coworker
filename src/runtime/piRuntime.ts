@@ -168,6 +168,8 @@ export type ResolvedPiRuntimeModel = {
   apiKey?: string;
   headers?: Record<string, string>;
   accountId?: string;
+  /** Resolved metadata from model config, when available (e.g. aws-bedrock-proxy). */
+  resolvedMetadata?: { providerOptionsDefaults: Record<string, unknown> };
 };
 
 const PI_PLACEHOLDER_COST = Object.freeze({
@@ -479,6 +481,10 @@ type OpenAiProxyFetchRewriteContext = {
   baseUrl: string;
   modelId: string;
   streamOptions: Record<string, unknown>;
+  /** Structured capability flag from model metadata. When set, bypasses string-based model ID heuristics. */
+  promptCachingCapable?: boolean;
+  /** Structured capability flag from model metadata. When set, bypasses string-based model ID heuristics for 1h TTL support. */
+  promptCachingOneHourCapable?: boolean;
 };
 
 function asBoolean(value: unknown): boolean | undefined {
@@ -506,13 +512,15 @@ function resolveOpenAiProxyPromptCachingConfig(context: OpenAiProxyFetchRewriteC
     ? context.streamOptions.openAiProxyPromptCachingTtl
     : undefined;
 
-  const claudeLikeModel = isClaudeLikeOpenAiProxyModel(context.modelId);
+  // Prefer structured capability flags from model metadata; fall back to string-based heuristics.
+  const claudeLikeModel = context.promptCachingCapable ?? isClaudeLikeOpenAiProxyModel(context.modelId);
   const enabled = enabledOverride ?? claudeLikeModel;
   if (!enabled || !claudeLikeModel) {
     return { enabled: false, ttl: "5m" };
   }
 
-  const ttl = ttlOverride === "1h" && supportsOpenAiProxyPromptCachingOneHour(context.modelId) ? "1h" : "5m";
+  const supportsOneHour = context.promptCachingOneHourCapable ?? supportsOpenAiProxyPromptCachingOneHour(context.modelId);
+  const ttl = ttlOverride === "1h" && supportsOneHour ? "1h" : "5m";
   return { enabled: true, ttl };
 }
 
@@ -687,9 +695,9 @@ async function withPatchedFetch<T>(
 
   const inheritedEntries = FETCH_REWRITE_CONTEXT.getStore() ?? [];
   const activeEntries = [...inheritedEntries, entry];
-  state.activeInvocationCount += 1;
 
   return await FETCH_REWRITE_CONTEXT.run(activeEntries, async () => {
+    state.activeInvocationCount += 1;
     try {
       return await run();
     } finally {
@@ -827,6 +835,9 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
       }),
       apiKey,
       headers: awsBedrockProxyForcedHeaders(),
+      resolvedMetadata: {
+        providerOptionsDefaults: resolvedMetadata.providerOptionsDefaults,
+      },
     };
   }
 
@@ -1346,11 +1357,20 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             if (params.config.provider === "nvidia") {
               await withPatchedNvidiaFetch(runModelStep);
             } else if (params.config.provider === "aws-bedrock-proxy") {
+              const providerDefaults = resolved.resolvedMetadata?.providerOptionsDefaults;
+              const promptCachingDefaults = providerDefaults && typeof providerDefaults === "object"
+                ? (providerDefaults as Record<string, unknown>).promptCaching
+                : undefined;
+              const pcDefaults = promptCachingDefaults && typeof promptCachingDefaults === "object"
+                ? (promptCachingDefaults as Record<string, unknown>)
+                : undefined;
               await withPatchedOpenAiProxyFetch(
                 {
                   baseUrl: resolved.model.baseUrl,
                   modelId: resolved.model.id,
                   streamOptions: stepState.streamOptions,
+                  promptCachingCapable: pcDefaults?.enabled === true ? true : undefined,
+                  promptCachingOneHourCapable: pcDefaults?.ttl === "1h" ? true : undefined,
                 },
                 runModelStep,
               );

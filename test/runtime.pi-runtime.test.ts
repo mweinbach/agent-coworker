@@ -1612,6 +1612,42 @@ describe("pi runtime regressions", () => {
     }
   });
 
+  test("resolveOpenAiProxyPromptCachingConfig prefers structured capability flags over string matching", () => {
+    const { resolveOpenAiProxyPromptCachingConfig } = piRuntimeInternal;
+
+    // A non-Claude model ID that would normally fail string matching, but has structured flag set.
+    const nonClaudeContext = {
+      baseUrl: "https://proxy.internal/v1",
+      modelId: "my-custom-finetuned-model",
+      streamOptions: {},
+      promptCachingCapable: true,
+    };
+    const result = resolveOpenAiProxyPromptCachingConfig(nonClaudeContext);
+    expect(result.enabled).toBe(true);
+    expect(result.ttl).toBe("5m");
+
+    // Same non-Claude model ID with 1h capability flag and explicit TTL override.
+    const oneHourContext = {
+      baseUrl: "https://proxy.internal/v1",
+      modelId: "my-custom-finetuned-model",
+      streamOptions: { openAiProxyPromptCachingTtl: "1h" },
+      promptCachingCapable: true,
+      promptCachingOneHourCapable: true,
+    };
+    const oneHourResult = resolveOpenAiProxyPromptCachingConfig(oneHourContext);
+    expect(oneHourResult.enabled).toBe(true);
+    expect(oneHourResult.ttl).toBe("1h");
+
+    // Without structured flags, non-Claude model should not get caching.
+    const fallbackContext = {
+      baseUrl: "https://proxy.internal/v1",
+      modelId: "my-custom-finetuned-model",
+      streamOptions: {},
+    };
+    const fallbackResult = resolveOpenAiProxyPromptCachingConfig(fallbackContext);
+    expect(fallbackResult.enabled).toBe(false);
+  });
+
   test.serial("concurrent aws-bedrock-proxy runs do not leak prompt-caching context", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-fetch-concurrent-"));
     const captured: Array<{ label: string; ttl: PromptCachingTtl | null }> = [];

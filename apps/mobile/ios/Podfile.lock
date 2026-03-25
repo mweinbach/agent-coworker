@@ -242,9 +242,6 @@ PODS:
     - Yoga
   - ExpoSecureStore (15.0.8):
     - ExpoModulesCore
-  - ExpoUI (55.0.5):
-    - ExpoModulesCore
-    - React-RCTFabric
   - EXUpdatesInterface (2.0.0):
     - ExpoModulesCore
   - FBLazyVector (0.81.5)
@@ -2092,7 +2089,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - RNWorklets (0.8.1):
+  - RNWorklets (0.5.1):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2114,10 +2111,9 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
-    - RNWorklets/apple (= 0.8.1)
-    - RNWorklets/common (= 0.8.1)
+    - RNWorklets/worklets (= 0.5.1)
     - Yoga
-  - RNWorklets/apple (0.8.1):
+  - RNWorklets/worklets (0.5.1):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2139,8 +2135,9 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
+    - RNWorklets/worklets/apple (= 0.5.1)
     - Yoga
-  - RNWorklets/common (0.8.1):
+  - RNWorklets/worklets/apple (0.5.1):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2186,9 +2183,8 @@ DEPENDENCIES:
   - ExpoHead (from `../node_modules/expo-router/ios`)
   - ExpoKeepAwake (from `../node_modules/expo-keep-awake/ios`)
   - ExpoLinking (from `../node_modules/expo-linking/ios`)
-  - ExpoModulesCore (from `../node_modules/expo-modules-core`)
+  - ExpoModulesCore (from `../node_modules/expo/node_modules/expo-modules-core`)
   - ExpoSecureStore (from `../node_modules/expo-secure-store/ios`)
-  - "ExpoUI (from `../node_modules/@expo/ui/ios`)"
   - EXUpdatesInterface (from `../node_modules/expo-updates-interface/ios`)
   - FBLazyVector (from `../node_modules/react-native/Libraries/FBLazyVector`)
   - hermes-engine (from `../node_modules/react-native/sdks/hermes-engine/hermes-engine.podspec`)
@@ -2300,11 +2296,9 @@ EXTERNAL SOURCES:
   ExpoLinking:
     :path: "../node_modules/expo-linking/ios"
   ExpoModulesCore:
-    :path: "../node_modules/expo-modules-core"
+    :path: "../node_modules/expo/node_modules/expo-modules-core"
   ExpoSecureStore:
     :path: "../node_modules/expo-secure-store/ios"
-  ExpoUI:
-    :path: "../node_modules/@expo/ui/ios"
   EXUpdatesInterface:
     :path: "../node_modules/expo-updates-interface/ios"
   FBLazyVector:
@@ -2471,7 +2465,6 @@ SPEC CHECKSUMS:
   ExpoLinking: 8f0aaf69aa56f832913030503b6263dc6f647f37
   ExpoModulesCore: f3da4f1ab5a8375d0beafab763739dbee8446583
   ExpoSecureStore: d32f751874a2ceb5aaeebeb3578e165c1ba2b24a
-  ExpoUI: 4115369b63e2907e878fc6fd36a4498c40ebc268
   EXUpdatesInterface: 5adf50cb41e079c861da6d9b4b954c3db9a50734
   FBLazyVector: e95a291ad2dadb88e42b06e0c5fb8262de53ec12
   hermes-engine: 9f4dfe93326146a1c99eb535b1cb0b857a3cd172
@@ -2543,7 +2536,7 @@ SPEC CHECKSUMS:
   RNGestureHandler: 2914750df066d89bf9d8f48a10ad5f0051108ac3
   RNReanimated: 41f496c18437fd0aa841234917af84e98fd5b9a2
   RNScreens: d8d6f1792f6e7ac12b0190d33d8d390efc0c1845
-  RNWorklets: bf1b71c9d21741508451cc31240eba37366831d9
+  RNWorklets: 76fce72926e28e304afb44f0da23b2d24f2c1fa0
   Yoga: 5934998fbeaef7845dbf698f698518695ab4cd1a
   ZXingObjC: 8898711ab495761b2dbbdec76d90164a6d7e14c5
 

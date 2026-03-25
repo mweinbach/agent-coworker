@@ -25,7 +25,7 @@ export default function UsageScreen() {
   const threads = useThreadStore((s) => s.threads);
   const snapshots = useThreadStore((s) => s.snapshots);
   const activeWorkspaceName = useWorkspaceStore((s) => s.activeWorkspaceName);
-  const sessionState = useWorkspaceStore((s) => s.sessionState);
+  const controlSnapshot = useWorkspaceStore((s) => s.controlSnapshot);
   const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
 
   // Aggregate usage from thread snapshots
@@ -57,7 +57,7 @@ export default function UsageScreen() {
     <Screen scroll contentStyle={{ gap: 18 }}>
       <SectionCard
         title={activeWorkspaceName ?? "Workspace"}
-        description={`${sessionState?.provider ?? "provider"} / ${sessionState?.effectiveModel ?? sessionState?.model ?? "model"}`}
+        description={`${controlSnapshot?.config?.provider ?? "provider"} / ${controlSnapshot?.config?.model ?? "model"}`}
       >
         <View>
           <UsageRow label="Threads" value={String(threads.length)} />

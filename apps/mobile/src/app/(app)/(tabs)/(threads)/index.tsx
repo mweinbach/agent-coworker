@@ -22,13 +22,13 @@ export default function ThreadsScreen() {
   const threads = useThreadStore((state) => state.threads);
   const connectionState = usePairingStore((state) => state.connectionState);
   const activeWorkspaceName = useWorkspaceStore((state) => state.activeWorkspaceName);
-  const sessionState = useWorkspaceStore((state) => state.sessionState);
+  const controlSnapshot = useWorkspaceStore((state) => state.controlSnapshot);
   const workspaces = useWorkspaceStore((state) => state.workspaces);
   const [switcherVisible, setSwitcherVisible] = useState(false);
   const connectionTone = toneForTransportState(connectionState);
   const isConnected = isWorkspaceConnectionReady(connectionState);
 
-  const modelLabel = sessionState?.effectiveModel ?? sessionState?.model ?? null;
+  const modelLabel = controlSnapshot?.config?.model ?? null;
 
   return (
     <Screen scroll contentStyle={{ gap: 18 }}>
@@ -37,7 +37,7 @@ export default function ThreadsScreen() {
         description={
           isConnected
             ? modelLabel
-              ? `${sessionState?.provider ?? "provider"} / ${modelLabel}`
+              ? `${controlSnapshot?.config?.provider ?? "provider"} / ${modelLabel}`
               : "Connected to desktop"
             : connectionState.transportMode === "fallback" && connectionState.status === "connected"
               ? "Fallback demo transport is active. Workspace controls stay disabled until native transport is available."

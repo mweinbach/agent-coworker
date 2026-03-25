@@ -26,7 +26,7 @@ export default function ConnectionStackLayout() {
       <Stack.Screen
         name="index"
         options={{
-          title: "Connection",
+          title: "Remote Access",
         }}
       />
     </Stack>

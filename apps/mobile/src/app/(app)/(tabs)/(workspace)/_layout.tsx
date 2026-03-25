@@ -24,9 +24,10 @@ export default function WorkspaceStackLayout() {
       }}
     >
       <Stack.Screen name="index" options={{ title: "Workspace" }} />
+      <Stack.Screen name="general" options={{ title: "General" }} />
       <Stack.Screen name="skills" options={{ title: "Skills" }} />
       <Stack.Screen name="memory" options={{ title: "Memory" }} />
-      <Stack.Screen name="backups" options={{ title: "Backups" }} />
+      <Stack.Screen name="backups" options={{ title: "Backup" }} />
     </Stack>
   );
 }

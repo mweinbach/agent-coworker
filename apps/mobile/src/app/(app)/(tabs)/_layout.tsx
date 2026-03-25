@@ -20,7 +20,7 @@ export default function AppTabsLayout() {
         <Icon sf={{ default: "gearshape", selected: "gearshape.fill" }} />
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="(connection)">
-        <Label>Connection</Label>
+        <Label>Remote Access</Label>
         <Icon sf={{ default: "wifi", selected: "wifi" }} />
       </NativeTabs.Trigger>
     </NativeTabs>

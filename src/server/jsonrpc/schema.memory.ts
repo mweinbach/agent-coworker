@@ -1,36 +1,17 @@
-import { z } from "zod";
-
 import {
-  legacyEventEnvelope,
-  nonEmptyTrimmedStringSchema,
-  workspaceMemoryScopeSchema,
-} from "./schema.shared";
-
-export const memoryListEventSchema = z.object({
-  type: z.literal("memory_list"),
-  memories: z.array(z.unknown()),
-}).passthrough();
+  jsonRpcControlRequestSchemas,
+  jsonRpcControlResultSchemas,
+  memoryListEventSchema,
+} from "../../shared/jsonrpcControlSchemas";
 
 export const jsonRpcMemoryRequestSchemas = {
-  "cowork/memory/list": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    scope: workspaceMemoryScopeSchema.optional(),
-  }).strict(),
-  "cowork/memory/upsert": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    scope: workspaceMemoryScopeSchema,
-    id: z.string().optional(),
-    content: z.string(),
-  }).strict(),
-  "cowork/memory/delete": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    scope: workspaceMemoryScopeSchema,
-    id: nonEmptyTrimmedStringSchema,
-  }).strict(),
+  "cowork/memory/list": jsonRpcControlRequestSchemas["cowork/memory/list"],
+  "cowork/memory/upsert": jsonRpcControlRequestSchemas["cowork/memory/upsert"],
+  "cowork/memory/delete": jsonRpcControlRequestSchemas["cowork/memory/delete"],
 } as const;
 
 export const jsonRpcMemoryResultSchemas = {
-  "cowork/memory/list": legacyEventEnvelope(memoryListEventSchema),
-  "cowork/memory/upsert": legacyEventEnvelope(memoryListEventSchema),
-  "cowork/memory/delete": legacyEventEnvelope(memoryListEventSchema),
+  "cowork/memory/list": jsonRpcControlResultSchemas["cowork/memory/list"],
+  "cowork/memory/upsert": jsonRpcControlResultSchemas["cowork/memory/upsert"],
+  "cowork/memory/delete": jsonRpcControlResultSchemas["cowork/memory/delete"],
 } as const;

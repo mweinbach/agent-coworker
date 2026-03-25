@@ -1,29 +1,25 @@
 import { create } from "zustand";
 
+import type { JsonRpcControlRequest } from "../../../../../src/shared/jsonrpcControlSchemas";
+import { callParsedControlMethod, parseWorkspaceControlSnapshot, type WorkspaceControlSnapshot } from "./controlRpc";
 import type { CoworkJsonRpcClient } from "./jsonRpcClient";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
 import type { WorkspaceSummary, WorkspaceListResult, WorkspaceSwitchResult } from "./protocolTypes";
 import { workspaceListResultSchema, workspaceSwitchResultSchema } from "./protocolTypes";
-
-type WorkspaceSessionState = {
-  provider: string | null;
-  model: string | null;
-  effectiveModel: string | null;
-  reasoningEffort: string | null;
-};
 
 type WorkspaceStoreState = {
   workspaces: WorkspaceSummary[];
   activeWorkspaceId: string | null;
   activeWorkspaceName: string | null;
   activeWorkspaceCwd: string | null;
-  sessionState: WorkspaceSessionState | null;
+  controlSnapshot: WorkspaceControlSnapshot | null;
   loading: boolean;
   error: string | null;
 
   fetchWorkspaces(): Promise<void>;
   switchWorkspace(workspaceId: string): Promise<void>;
-  fetchSessionState(): Promise<void>;
+  fetchControlState(): Promise<void>;
+  applyWorkspaceDefaults(patch: Omit<JsonRpcControlRequest<"cowork/session/defaults/apply">, "cwd">): Promise<void>;
   setActiveFromCwd(cwd: string): void;
   clear(): void;
 };
@@ -41,7 +37,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
   activeWorkspaceId: null,
   activeWorkspaceName: null,
   activeWorkspaceCwd: null,
-  sessionState: null,
+  controlSnapshot: null,
   loading: false,
   error: null,
 
@@ -86,7 +82,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
         activeWorkspaceName: parsed.name,
         activeWorkspaceCwd: parsed.path,
         loading: false,
-        sessionState: null,
+        controlSnapshot: null,
       });
     } catch (error) {
       set({
@@ -96,30 +92,37 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
     }
   },
 
-  async fetchSessionState() {
+  async fetchControlState() {
     const client = getClient();
     const { activeWorkspaceCwd } = get();
     if (!activeWorkspaceCwd) return;
     try {
-      const result = await client.call<Record<string, unknown>>("cowork/session/state/read", {
+      const result = await callParsedControlMethod(client, "cowork/session/state/read", {
         cwd: activeWorkspaceCwd,
       });
-      const events = Array.isArray(result?.events) ? result.events as Record<string, unknown>[] : [];
-      let provider: string | null = null;
-      let model: string | null = null;
-      let effectiveModel: string | null = null;
-      let reasoningEffort: string | null = null;
-      for (const event of events) {
-        if (typeof event.provider === "string") provider = event.provider;
-        if (typeof event.model === "string") model = event.model;
-        if (typeof event.effectiveModel === "string") effectiveModel = event.effectiveModel;
-        if (typeof event.effectiveReasoningEffort === "string") reasoningEffort = event.effectiveReasoningEffort;
-      }
       set({
-        sessionState: { provider, model, effectiveModel, reasoningEffort },
+        controlSnapshot: parseWorkspaceControlSnapshot(result),
       });
     } catch {
       // Non-critical — session state is supplemental
+    }
+  },
+
+  async applyWorkspaceDefaults(patch) {
+    const client = getClient();
+    const { activeWorkspaceCwd } = get();
+    if (!activeWorkspaceCwd) {
+      set({ error: "No active workspace." });
+      return;
+    }
+    try {
+      await callParsedControlMethod(client, "cowork/session/defaults/apply", {
+        cwd: activeWorkspaceCwd,
+        ...patch,
+      });
+      await get().fetchControlState();
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
 
@@ -143,7 +146,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
       activeWorkspaceId: null,
       activeWorkspaceName: null,
       activeWorkspaceCwd: null,
-      sessionState: null,
+      controlSnapshot: null,
       loading: false,
       error: null,
     });

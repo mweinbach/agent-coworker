@@ -14,8 +14,8 @@ export type PairingStoreState = {
   bootstrap(): Promise<void>;
   syncTrustedMacs(trustedMacs: RelayTrustedDesktop[]): void;
   setConnectionState(connectionState: SecureTransportSnapshot): void;
-  attachNativeListeners(): void;
-  resetNativeListeners(): void;
+  attachTransportListeners(): void;
+  resetTransportListeners(): void;
   connectWithQr(payload: PairingQrPayload): Promise<void>;
   reconnectTrusted(macDeviceId: string): Promise<void>;
   disconnect(): Promise<void>;
@@ -49,8 +49,8 @@ export const usePairingStore = create<PairingStoreState>((set, get) => ({
   setConnectionState(connectionState) {
     set({ connectionState });
   },
-  attachNativeListeners() {
-    get().resetNativeListeners();
+  attachTransportListeners() {
+    get().resetTransportListeners();
 
     const unsubscribe = defaultSecureTransportClient.subscribe({
       onStateChanged: (connectionState) => {
@@ -84,7 +84,7 @@ export const usePairingStore = create<PairingStoreState>((set, get) => ({
       ],
     });
   },
-  resetNativeListeners() {
+  resetTransportListeners() {
     for (const cleanup of get().listenerCleanup) {
       cleanup();
     }

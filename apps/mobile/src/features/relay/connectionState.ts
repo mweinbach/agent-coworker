@@ -14,7 +14,7 @@ export function describeTransportMode(mode: RelayTransportMode): string {
       return "Unsupported";
     case "native":
     default:
-      return "Native relay";
+      return "Secure relay";
   }
 }
 

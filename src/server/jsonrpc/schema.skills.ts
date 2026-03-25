@@ -1,114 +1,46 @@
-import { z } from "zod";
-
 import {
-  legacyEventEnvelope,
-  nonEmptyTrimmedStringSchema,
-  targetScopeSchema,
-} from "./schema.shared";
-
-export const skillsCatalogEventSchema = z.object({
-  type: z.literal("skills_catalog"),
-}).passthrough();
-
-export const skillsListEventSchema = z.object({
-  type: z.literal("skills_list"),
-  skills: z.array(z.unknown()),
-}).passthrough();
-
-export const skillContentEventSchema = z.object({
-  type: z.literal("skill_content"),
-}).passthrough();
-
-export const skillInstallationEventSchema = z.object({
-  type: z.literal("skill_installation"),
-}).passthrough();
-
-export const skillInstallPreviewEventSchema = z.object({
-  type: z.literal("skill_install_preview"),
-}).passthrough();
-
-export const skillInstallUpdateCheckEventSchema = z.object({
-  type: z.literal("skill_installation_update_check"),
-}).passthrough();
+  jsonRpcControlRequestSchemas,
+  jsonRpcControlResultSchemas,
+  skillContentEventSchema,
+  skillInstallationEventSchema,
+  skillInstallPreviewEventSchema,
+  skillInstallUpdateCheckEventSchema,
+  skillsCatalogEventSchema,
+  skillsListEventSchema,
+} from "../../shared/jsonrpcControlSchemas";
 
 export const jsonRpcSkillsRequestSchemas = {
-  "cowork/skills/catalog/read": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-  }).strict(),
-  "cowork/skills/list": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-  }).strict(),
-  "cowork/skills/read": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    skillName: nonEmptyTrimmedStringSchema,
-  }).strict(),
-  "cowork/skills/disable": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    skillName: nonEmptyTrimmedStringSchema,
-  }).strict(),
-  "cowork/skills/enable": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    skillName: nonEmptyTrimmedStringSchema,
-  }).strict(),
-  "cowork/skills/delete": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    skillName: nonEmptyTrimmedStringSchema,
-  }).strict(),
-  "cowork/skills/installation/read": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    installationId: nonEmptyTrimmedStringSchema,
-  }).strict(),
-  "cowork/skills/install/preview": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    sourceInput: z.string(),
-    targetScope: targetScopeSchema,
-  }).strict(),
-  "cowork/skills/install": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    sourceInput: z.string(),
-    targetScope: targetScopeSchema,
-  }).strict(),
-  "cowork/skills/installation/enable": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    installationId: nonEmptyTrimmedStringSchema,
-  }).strict(),
-  "cowork/skills/installation/disable": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    installationId: nonEmptyTrimmedStringSchema,
-  }).strict(),
-  "cowork/skills/installation/delete": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    installationId: nonEmptyTrimmedStringSchema,
-  }).strict(),
-  "cowork/skills/installation/update": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    installationId: nonEmptyTrimmedStringSchema,
-  }).strict(),
-  "cowork/skills/installation/copy": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    installationId: nonEmptyTrimmedStringSchema,
-    targetScope: targetScopeSchema,
-  }).strict(),
-  "cowork/skills/installation/checkUpdate": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    installationId: nonEmptyTrimmedStringSchema,
-  }).strict(),
+  "cowork/skills/catalog/read": jsonRpcControlRequestSchemas["cowork/skills/catalog/read"],
+  "cowork/skills/list": jsonRpcControlRequestSchemas["cowork/skills/list"],
+  "cowork/skills/read": jsonRpcControlRequestSchemas["cowork/skills/read"],
+  "cowork/skills/disable": jsonRpcControlRequestSchemas["cowork/skills/disable"],
+  "cowork/skills/enable": jsonRpcControlRequestSchemas["cowork/skills/enable"],
+  "cowork/skills/delete": jsonRpcControlRequestSchemas["cowork/skills/delete"],
+  "cowork/skills/installation/read": jsonRpcControlRequestSchemas["cowork/skills/installation/read"],
+  "cowork/skills/install/preview": jsonRpcControlRequestSchemas["cowork/skills/install/preview"],
+  "cowork/skills/install": jsonRpcControlRequestSchemas["cowork/skills/install"],
+  "cowork/skills/installation/enable": jsonRpcControlRequestSchemas["cowork/skills/installation/enable"],
+  "cowork/skills/installation/disable": jsonRpcControlRequestSchemas["cowork/skills/installation/disable"],
+  "cowork/skills/installation/delete": jsonRpcControlRequestSchemas["cowork/skills/installation/delete"],
+  "cowork/skills/installation/update": jsonRpcControlRequestSchemas["cowork/skills/installation/update"],
+  "cowork/skills/installation/copy": jsonRpcControlRequestSchemas["cowork/skills/installation/copy"],
+  "cowork/skills/installation/checkUpdate": jsonRpcControlRequestSchemas["cowork/skills/installation/checkUpdate"],
 } as const;
 
 export const jsonRpcSkillsResultSchemas = {
-  "cowork/skills/catalog/read": legacyEventEnvelope(skillsCatalogEventSchema),
-  "cowork/skills/list": legacyEventEnvelope(skillsListEventSchema),
-  "cowork/skills/read": legacyEventEnvelope(skillContentEventSchema),
-  "cowork/skills/disable": legacyEventEnvelope(skillsListEventSchema),
-  "cowork/skills/enable": legacyEventEnvelope(skillsListEventSchema),
-  "cowork/skills/delete": legacyEventEnvelope(skillsListEventSchema),
-  "cowork/skills/installation/read": legacyEventEnvelope(skillInstallationEventSchema),
-  "cowork/skills/install/preview": legacyEventEnvelope(skillInstallPreviewEventSchema),
-  "cowork/skills/install": legacyEventEnvelope(skillsCatalogEventSchema),
-  "cowork/skills/installation/enable": legacyEventEnvelope(skillsCatalogEventSchema),
-  "cowork/skills/installation/disable": legacyEventEnvelope(skillsCatalogEventSchema),
-  "cowork/skills/installation/delete": legacyEventEnvelope(skillsCatalogEventSchema),
-  "cowork/skills/installation/update": legacyEventEnvelope(skillsCatalogEventSchema),
-  "cowork/skills/installation/copy": legacyEventEnvelope(skillsCatalogEventSchema),
-  "cowork/skills/installation/checkUpdate": legacyEventEnvelope(skillInstallUpdateCheckEventSchema),
+  "cowork/skills/catalog/read": jsonRpcControlResultSchemas["cowork/skills/catalog/read"],
+  "cowork/skills/list": jsonRpcControlResultSchemas["cowork/skills/list"],
+  "cowork/skills/read": jsonRpcControlResultSchemas["cowork/skills/read"],
+  "cowork/skills/disable": jsonRpcControlResultSchemas["cowork/skills/disable"],
+  "cowork/skills/enable": jsonRpcControlResultSchemas["cowork/skills/enable"],
+  "cowork/skills/delete": jsonRpcControlResultSchemas["cowork/skills/delete"],
+  "cowork/skills/installation/read": jsonRpcControlResultSchemas["cowork/skills/installation/read"],
+  "cowork/skills/install/preview": jsonRpcControlResultSchemas["cowork/skills/install/preview"],
+  "cowork/skills/install": jsonRpcControlResultSchemas["cowork/skills/install"],
+  "cowork/skills/installation/enable": jsonRpcControlResultSchemas["cowork/skills/installation/enable"],
+  "cowork/skills/installation/disable": jsonRpcControlResultSchemas["cowork/skills/installation/disable"],
+  "cowork/skills/installation/delete": jsonRpcControlResultSchemas["cowork/skills/installation/delete"],
+  "cowork/skills/installation/update": jsonRpcControlResultSchemas["cowork/skills/installation/update"],
+  "cowork/skills/installation/copy": jsonRpcControlResultSchemas["cowork/skills/installation/copy"],
+  "cowork/skills/installation/checkUpdate": jsonRpcControlResultSchemas["cowork/skills/installation/checkUpdate"],
 } as const;

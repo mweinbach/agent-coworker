@@ -1,6 +1,7 @@
 import { Modal, Pressable, Text, View, ActivityIndicator, ScrollView } from "react-native";
 
 import { StatusPill } from "@/components/ui/status-pill";
+import { refreshWorkspaceBoundStores } from "@/features/cowork/workspaceBootstrap";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
@@ -42,7 +43,6 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
   const workspaces = useWorkspaceStore((state) => state.workspaces);
   const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspaceId);
   const switchWorkspace = useWorkspaceStore((state) => state.switchWorkspace);
-  const fetchSessionState = useWorkspaceStore((state) => state.fetchSessionState);
   const loading = useWorkspaceStore((state) => state.loading);
 
   const handleSwitch = async (workspaceId: string) => {
@@ -64,7 +64,7 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
         for (const thread of list.threads) {
           threadStore.hydrate(createThreadSnapshot(thread));
         }
-        await fetchSessionState();
+        await refreshWorkspaceBoundStores();
       } catch {
         // Session init failed — workspace switched but threads may be stale
       }

@@ -25,8 +25,7 @@ export default function SettingsStackLayout() {
     >
       <Stack.Screen name="index" options={{ title: "Settings" }} />
       <Stack.Screen name="providers" options={{ title: "Providers" }} />
-      <Stack.Screen name="models" options={{ title: "Models" }} />
-      <Stack.Screen name="mcp" options={{ title: "MCP Servers" }} />
+      <Stack.Screen name="mcp" options={{ title: "Integrations" }} />
       <Stack.Screen name="usage" options={{ title: "Usage" }} />
     </Stack>
   );

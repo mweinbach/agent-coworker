@@ -1,67 +1,53 @@
-import type { ComponentProps } from "react";
-import { Link } from "expo-router";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 
+import { HubLinkRow } from "@/components/ui/hub-link-row";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
-import { useAppTheme } from "@/theme/use-app-theme";
-
-type SettingsHref = ComponentProps<typeof Link>["href"];
-
-function SettingsRow({ label, detail, href }: { label: string; detail?: string; href: SettingsHref }) {
-  const theme = useAppTheme();
-  return (
-    <Link href={href} asChild>
-      <Pressable
-        style={({ pressed }) => ({
-          flexDirection: "row",
-          justifyContent: "space-between",
-          alignItems: "center",
-          paddingVertical: 14,
-          paddingHorizontal: 16,
-          borderRadius: 16,
-          borderCurve: "continuous",
-          backgroundColor: pressed ? theme.surfaceMuted : theme.surfaceElevated,
-          borderWidth: 1,
-          borderColor: pressed ? theme.primary : theme.borderMuted,
-        })}
-      >
-        <Text style={{ color: theme.text, fontSize: 16, fontWeight: "600" }}>{label}</Text>
-        {detail ? (
-          <Text style={{ color: theme.textSecondary, fontSize: 14 }}>{detail}</Text>
-        ) : null}
-      </Pressable>
-    </Link>
-  );
-}
 
 export default function SettingsHubScreen() {
-  const sessionState = useWorkspaceStore((state) => state.sessionState);
+  const activeWorkspaceName = useWorkspaceStore((state) => state.activeWorkspaceName);
+  const activeWorkspaceCwd = useWorkspaceStore((state) => state.activeWorkspaceCwd);
+  const controlSnapshot = useWorkspaceStore((state) => state.controlSnapshot);
 
   return (
     <Screen scroll contentStyle={{ gap: 18 }}>
       <SectionCard
-        title="Configuration"
-        description="Manage providers, models, integrations, and usage for the active workspace."
+        title="Settings"
+        description={activeWorkspaceCwd ?? "Connect to a desktop to manage workspace-level settings."}
+      >
+        <Text selectable style={{ fontSize: 14, lineHeight: 21 }}>
+          {activeWorkspaceName ?? "No workspace selected"}
+        </Text>
+      </SectionCard>
+
+      <SectionCard
+        title="Models & Tools"
+        description="Provider auth, model defaults, and MCP integrations for this workspace."
       >
         <View style={{ gap: 10 }}>
-          <SettingsRow
+          <HubLinkRow
             label="Providers"
-            detail={sessionState?.provider ?? undefined}
+            description="API keys, OAuth, account state, and rate limits."
+            detail={controlSnapshot?.config?.provider}
             href="/(app)/(tabs)/(settings)/providers"
           />
-          <SettingsRow
-            label="Models"
-            detail={sessionState?.effectiveModel ?? sessionState?.model ?? undefined}
-            href="/(app)/(tabs)/(settings)/models"
-          />
-          <SettingsRow
-            label="MCP Servers"
+          <HubLinkRow
+            label="Integrations"
+            description="Add, validate, authenticate, and migrate MCP servers."
             href="/(app)/(tabs)/(settings)/mcp"
           />
-          <SettingsRow
+        </View>
+      </SectionCard>
+
+      <SectionCard
+        title="Recovery & Data"
+        description="Usage rolls up from the live workspace snapshot."
+      >
+        <View style={{ gap: 10 }}>
+          <HubLinkRow
             label="Usage"
+            description="Threads, token totals, and estimated spend."
             href="/(app)/(tabs)/(settings)/usage"
           />
         </View>

@@ -1,8 +1,9 @@
 import { create } from "zustand";
 
+import type { MemoryEntry } from "../../../../../src/shared/jsonrpcControlSchemas";
+import { callParsedControlMethod } from "./controlRpc";
 import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
 import { useWorkspaceStore } from "./workspaceStore";
-import type { MemoryEntry } from "./protocolTypes";
 
 type MemoryStoreState = {
   entries: MemoryEntry[];
@@ -35,12 +36,9 @@ export const useMemoryStore = create<MemoryStoreState>((set, get) => ({
     const { client, cwd } = getClientAndCwd();
     set({ loading: true, error: null });
     try {
-      const result = await client.call<{ event: { memories: MemoryEntry[] } }>(
-        "cowork/memory/list",
-        { cwd },
-      );
+      const result = await callParsedControlMethod(client, "cowork/memory/list", { cwd });
       set({
-        entries: result?.event?.memories ?? [],
+        entries: result.event.memories,
         loading: false,
       });
     } catch (error) {
@@ -51,8 +49,13 @@ export const useMemoryStore = create<MemoryStoreState>((set, get) => ({
   async upsertMemory(scope: "workspace" | "user", id: string | undefined, content: string) {
     const { client, cwd } = getClientAndCwd();
     try {
-      await client.call("cowork/memory/upsert", { cwd, scope, id, content });
-      await get().fetchMemories();
+      const result = await callParsedControlMethod(client, "cowork/memory/upsert", {
+        cwd,
+        scope,
+        id: id?.trim() ? id.trim() : "hot",
+        content,
+      });
+      set({ entries: result.event.memories });
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error) });
     }
@@ -61,8 +64,8 @@ export const useMemoryStore = create<MemoryStoreState>((set, get) => ({
   async deleteMemory(scope: "workspace" | "user", id: string) {
     const { client, cwd } = getClientAndCwd();
     try {
-      await client.call("cowork/memory/delete", { cwd, scope, id });
-      await get().fetchMemories();
+      const result = await callParsedControlMethod(client, "cowork/memory/delete", { cwd, scope, id });
+      set({ entries: result.event.memories });
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error) });
     }

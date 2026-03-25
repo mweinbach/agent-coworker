@@ -57,9 +57,10 @@ export default function MemoryScreen() {
   const upsertMemory = useMemoryStore((s) => s.upsertMemory);
   const deleteMemory = useMemoryStore((s) => s.deleteMemory);
   const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
-  const [adding, setAdding] = useState(false);
-  const [newScope, setNewScope] = useState<"workspace" | "user">("workspace");
-  const [newContent, setNewContent] = useState("");
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [draftScope, setDraftScope] = useState<"workspace" | "user">("workspace");
+  const [draftId, setDraftId] = useState("");
+  const [draftContent, setDraftContent] = useState("");
 
   useEffect(() => {
     if (isConnected) {
@@ -71,11 +72,13 @@ export default function MemoryScreen() {
     ? entries
     : entries.filter((e) => e.scope === filterScope);
 
-  const handleAdd = async () => {
-    if (!newContent.trim()) return;
-    await upsertMemory(newScope, undefined, newContent.trim());
-    setNewContent("");
-    setAdding(false);
+  const handleSave = async () => {
+    if (!draftContent.trim()) return;
+    await upsertMemory(draftScope, draftId.trim() || "hot", draftContent.trim());
+    setDraftId("");
+    setDraftContent("");
+    setDraftScope("workspace");
+    setEditorOpen(false);
   };
 
   const handleDelete = (entry: (typeof entries)[number]) => {
@@ -87,6 +90,19 @@ export default function MemoryScreen() {
         onPress: () => void deleteMemory(entry.scope, entry.id),
       },
     ]);
+  };
+
+  const openEditor = (entry?: (typeof entries)[number]) => {
+    if (entry) {
+      setDraftScope(entry.scope);
+      setDraftId(entry.id);
+      setDraftContent(entry.content);
+    } else {
+      setDraftScope("workspace");
+      setDraftId("");
+      setDraftContent("");
+    }
+    setEditorOpen(true);
   };
 
   if (!isConnected) {
@@ -111,41 +127,66 @@ export default function MemoryScreen() {
 
       <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 4 }}>
         <ScopeFilter />
-        <Pressable
-          onPress={() => setAdding(!adding)}
-          style={({ pressed }) => ({
-            borderRadius: 999,
-            backgroundColor: pressed ? theme.accent : theme.primary,
-            paddingHorizontal: 14,
-            paddingVertical: 9,
-          })}
-        >
-          <Text style={{ color: theme.primaryText, fontWeight: "700", fontSize: 13 }}>
-            {adding ? "Cancel" : "Add"}
-          </Text>
-        </Pressable>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <Pressable
+            onPress={() => {
+              void fetchMemories();
+            }}
+            style={({ pressed }) => ({
+              borderRadius: 999,
+              borderWidth: 1,
+              borderColor: theme.border,
+              backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+              paddingHorizontal: 14,
+              paddingVertical: 9,
+            })}
+          >
+            <Text style={{ color: theme.text, fontWeight: "700", fontSize: 13 }}>Refresh</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              if (editorOpen) {
+                setEditorOpen(false);
+                setDraftId("");
+                setDraftContent("");
+                return;
+              }
+              openEditor();
+            }}
+            style={({ pressed }) => ({
+              borderRadius: 999,
+              backgroundColor: pressed ? theme.accent : theme.primary,
+              paddingHorizontal: 14,
+              paddingVertical: 9,
+            })}
+          >
+            <Text style={{ color: theme.primaryText, fontWeight: "700", fontSize: 13 }}>
+              {editorOpen ? "Cancel" : "Add"}
+            </Text>
+          </Pressable>
+        </View>
       </View>
 
-      {adding ? (
-        <SectionCard title="New memory" description="Add a workspace or user memory entry.">
+      {editorOpen ? (
+        <SectionCard title="Memory editor" description="Blank IDs default to hot so the current workspace cache updates immediately.">
           <View style={{ gap: 10 }}>
             <View style={{ flexDirection: "row", gap: 8 }}>
               {(["workspace", "user"] as const).map((scope) => (
                 <Pressable
                   key={scope}
-                  onPress={() => setNewScope(scope)}
+                  onPress={() => setDraftScope(scope)}
                   style={{
                     borderRadius: 999,
                     borderWidth: 1,
-                    borderColor: scope === newScope ? theme.primary : theme.border,
-                    backgroundColor: scope === newScope ? theme.primary : "transparent",
+                    borderColor: scope === draftScope ? theme.primary : theme.border,
+                    backgroundColor: scope === draftScope ? theme.primary : "transparent",
                     paddingHorizontal: 14,
                     paddingVertical: 7,
                   }}
                 >
                   <Text
                     style={{
-                      color: scope === newScope ? theme.primaryText : theme.text,
+                      color: scope === draftScope ? theme.primaryText : theme.text,
                       fontSize: 13,
                       fontWeight: "600",
                       textTransform: "capitalize",
@@ -157,8 +198,26 @@ export default function MemoryScreen() {
               ))}
             </View>
             <TextInput
-              value={newContent}
-              onChangeText={setNewContent}
+              value={draftId}
+              onChangeText={setDraftId}
+              placeholder="Entry ID (defaults to hot)"
+              placeholderTextColor={theme.textTertiary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={{
+                borderRadius: 16,
+                borderWidth: 1,
+                borderColor: theme.border,
+                backgroundColor: theme.surfaceMuted,
+                color: theme.text,
+                paddingHorizontal: 12,
+                paddingVertical: 10,
+                fontSize: 14,
+              }}
+            />
+            <TextInput
+              value={draftContent}
+              onChangeText={setDraftContent}
               placeholder="Memory content..."
               placeholderTextColor={theme.textTertiary}
               multiline
@@ -175,7 +234,7 @@ export default function MemoryScreen() {
               }}
             />
             <Pressable
-              onPress={() => void handleAdd()}
+              onPress={() => void handleSave()}
               style={({ pressed }) => ({
                 alignSelf: "flex-start",
                 borderRadius: 999,
@@ -200,7 +259,6 @@ export default function MemoryScreen() {
             {filtered.map((entry) => (
               <Pressable
                 key={entry.id}
-                onLongPress={() => handleDelete(entry)}
                 style={{
                   gap: 6,
                   borderRadius: 18,
@@ -223,11 +281,39 @@ export default function MemoryScreen() {
                 >
                   {entry.content}
                 </Text>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                  <Pressable
+                    onPress={() => openEditor(entry)}
+                    style={({ pressed }) => ({
+                      borderRadius: 999,
+                      borderWidth: 1,
+                      borderColor: theme.border,
+                      backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                    })}
+                  >
+                    <Text style={{ color: theme.text, fontSize: 12, fontWeight: "600" }}>Edit</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => handleDelete(entry)}
+                    style={({ pressed }) => ({
+                      borderRadius: 999,
+                      borderWidth: 1,
+                      borderColor: theme.danger,
+                      backgroundColor: pressed ? theme.dangerMuted : "transparent",
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                    })}
+                  >
+                    <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "600" }}>Delete</Text>
+                  </Pressable>
+                </View>
               </Pressable>
             ))}
           </View>
         </SectionCard>
-      ) : !loading && !adding ? (
+      ) : !loading && !editorOpen ? (
         <SectionCard title="No entries" description="No memory entries found for this filter." />
       ) : null}
     </Screen>

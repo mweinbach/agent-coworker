@@ -50,8 +50,8 @@ function describeHero(
   switch (status) {
     case "connected":
       return {
-        title: "Your computer is connected",
-        body: `${connectedDesktop ?? "Cowork Desktop"} is live. Open threads, answer prompts, and keep the session moving from your phone.`,
+        title: "Remote access is live",
+        body: `${connectedDesktop ?? "Cowork Desktop"} is available now. Open threads, answer prompts, and keep the session moving from your phone.`,
       };
     case "pairing":
       return {
@@ -78,7 +78,7 @@ function describeHero(
     case "idle":
     default:
       return {
-        title: "Connect your computer to start",
+        title: "Connect a desktop to start",
         body: hasTrustedDesktop
           ? "Reconnect a saved desktop or scan a new QR from Cowork Desktop to unlock live threads on this phone."
           : "Cowork Mobile is a companion to Cowork Desktop. Start on your computer, show the pairing QR, then scan it here.",
@@ -380,7 +380,7 @@ export default function PairingIndexRoute() {
       </SectionCard>
 
       <SectionCard
-        title="Connection status"
+        title="Remote access status"
         description={isConnected
           ? "This phone is ready to browse threads and answer prompts."
           : connectionState.transportMode === "fallback" && connectionState.status === "connected"

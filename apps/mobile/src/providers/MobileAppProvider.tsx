@@ -7,11 +7,10 @@ import type { SessionSnapshotLike } from "../features/cowork/protocolTypes";
 import { usePairingStore } from "../features/pairing/pairingStore";
 import { useThreadStore } from "../features/cowork/threadStore";
 import { useWorkspaceStore } from "../features/cowork/workspaceStore";
-import { useSkillsStore } from "../features/cowork/skillsStore";
-import { useMemoryStore } from "../features/cowork/memoryStore";
-import { useBackupStore } from "../features/cowork/backupStore";
-import { useProviderStore } from "../features/cowork/providerStore";
-import { useMcpStore } from "../features/cowork/mcpStore";
+import {
+  clearWorkspaceBoundStores,
+  hydrateWorkspaceBoundStores,
+} from "../features/cowork/workspaceBootstrap";
 import { isWorkspaceConnectionReady } from "../features/relay/connectionState";
 import { defaultSecureTransportClient } from "../features/relay/secureTransportClient";
 
@@ -42,8 +41,8 @@ function createThreadSnapshot(thread: {
 
 export function MobileAppProvider({ children }: PropsWithChildren) {
   const bootstrapPairing = usePairingStore((state) => state.bootstrap);
-  const attachPairingListeners = usePairingStore((state) => state.attachNativeListeners);
-  const resetPairingListeners = usePairingStore((state) => state.resetNativeListeners);
+  const attachPairingListeners = usePairingStore((state) => state.attachTransportListeners);
+  const resetPairingListeners = usePairingStore((state) => state.resetTransportListeners);
   const seedThread = useThreadStore((state) => state.seedThread);
 
   useEffect(() => {
@@ -130,12 +129,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
     const resetClientSession = () => {
       sessionReady = false;
       client.resetTransportSession();
-      useWorkspaceStore.getState().clear();
-      useSkillsStore.getState().clear();
-      useMemoryStore.getState().clear();
-      useBackupStore.getState().clear();
-      useProviderStore.getState().clear();
-      useMcpStore.getState().clear();
+      clearWorkspaceBoundStores();
     };
 
     const hydrateRemoteThreads = async () => {
@@ -146,10 +140,8 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
     };
 
     const hydrateWorkspaceContext = async () => {
-      const workspaceStore = useWorkspaceStore.getState();
       try {
-        await workspaceStore.fetchWorkspaces();
-        await workspaceStore.fetchSessionState();
+        await hydrateWorkspaceBoundStores();
       } catch {
         // Non-critical — workspace context is supplemental
       }
@@ -174,7 +166,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
         void client.handleIncoming(text);
       },
       onStateChanged(state) {
-        if (!isWorkspaceConnectionReady(state) && state.transportMode !== "fallback") {
+        if (!isWorkspaceConnectionReady(state)) {
           return;
         }
         void ensureConnectedSession();
@@ -189,7 +181,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
 
     void defaultSecureTransportClient.getSnapshot()
       .then((snapshot) => {
-        if (isWorkspaceConnectionReady(snapshot) || snapshot.transportMode === "fallback") {
+        if (isWorkspaceConnectionReady(snapshot)) {
           void ensureConnectedSession();
         }
       })

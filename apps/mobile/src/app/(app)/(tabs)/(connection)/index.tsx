@@ -12,6 +12,13 @@ import {
 } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
+function formatFingerprint(value: string) {
+  const trimmed = value.replace(/\s+/g, "");
+  return trimmed.length > 16
+    ? `${trimmed.slice(0, 16)}…${trimmed.slice(-8)}`
+    : trimmed;
+}
+
 export default function ConnectionScreen() {
   const theme = useAppTheme();
   const trustedDesktops = usePairingStore((state) => state.trustedMacs);
@@ -23,8 +30,8 @@ export default function ConnectionScreen() {
   return (
     <Screen scroll>
       <SectionCard
-        title="Secure transport"
-        description="Your pairing and trust state live in the native relay module, so reconnecting here keeps desktop access portable across sessions."
+        title="Remote Access"
+        description="Relay status, session identity, and trusted desktops for the Remodex-backed mobile link."
         action={<StatusPill label={describeTransportStatus(connectionState)} tone={tone} />}
       >
         <View style={{ gap: 10 }}>
@@ -34,6 +41,14 @@ export default function ConnectionScreen() {
               {describeTransportMode(connectionState.transportMode)}
             </Text>
           </View>
+          {connectionState.sessionId ? (
+            <View style={{ gap: 4 }}>
+              <Text selectable style={{ color: theme.textSecondary, fontSize: 13 }}>Session</Text>
+              <Text selectable style={{ color: theme.text, fontSize: 14, fontVariant: ["tabular-nums"] }}>
+                {connectionState.sessionId}
+              </Text>
+            </View>
+          ) : null}
           <View style={{ gap: 4 }}>
             <Text selectable style={{ color: theme.textSecondary, fontSize: 13 }}>Connected desktop</Text>
             <Text selectable style={{ color: theme.text, fontSize: 16, fontWeight: "600" }}>
@@ -121,7 +136,7 @@ export default function ConnectionScreen() {
                       fontVariant: ["tabular-nums"],
                     }}
                   >
-                    {trustedMac.fingerprint}
+                    {formatFingerprint(trustedMac.fingerprint)}
                   </Text>
                 </View>
                 <StatusPill label={trustedMac.lastConnectedAt ? "recent" : "saved"} tone="primary" />

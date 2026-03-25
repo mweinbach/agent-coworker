@@ -1,54 +1,24 @@
-import { z } from "zod";
-
 import {
-  legacyEventEnvelope,
-  nonEmptyTrimmedStringSchema,
-} from "./schema.shared";
-
-export const workspaceBackupsEventSchema = z.object({
-  type: z.literal("workspace_backups"),
-  workspacePath: z.string(),
-  backups: z.array(z.unknown()),
-}).passthrough();
-
-export const workspaceBackupDeltaEventSchema = z.object({
-  type: z.literal("workspace_backup_delta"),
-}).passthrough();
+  jsonRpcControlRequestSchemas,
+  jsonRpcControlResultSchemas,
+  workspaceBackupDeltaEventSchema,
+  workspaceBackupsEventSchema,
+} from "../../shared/jsonrpcControlSchemas";
 
 export const jsonRpcBackupsRequestSchemas = {
-  "cowork/backups/workspace/read": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-  }).strict(),
-  "cowork/backups/workspace/delta/read": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    targetSessionId: nonEmptyTrimmedStringSchema,
-    checkpointId: nonEmptyTrimmedStringSchema,
-  }).strict(),
-  "cowork/backups/workspace/checkpoint": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    targetSessionId: nonEmptyTrimmedStringSchema,
-  }).strict(),
-  "cowork/backups/workspace/restore": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    targetSessionId: nonEmptyTrimmedStringSchema,
-    checkpointId: z.string().optional(),
-  }).strict(),
-  "cowork/backups/workspace/deleteCheckpoint": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    targetSessionId: nonEmptyTrimmedStringSchema,
-    checkpointId: nonEmptyTrimmedStringSchema,
-  }).strict(),
-  "cowork/backups/workspace/deleteEntry": z.object({
-    cwd: nonEmptyTrimmedStringSchema.optional(),
-    targetSessionId: nonEmptyTrimmedStringSchema,
-  }).strict(),
+  "cowork/backups/workspace/read": jsonRpcControlRequestSchemas["cowork/backups/workspace/read"],
+  "cowork/backups/workspace/delta/read": jsonRpcControlRequestSchemas["cowork/backups/workspace/delta/read"],
+  "cowork/backups/workspace/checkpoint": jsonRpcControlRequestSchemas["cowork/backups/workspace/checkpoint"],
+  "cowork/backups/workspace/restore": jsonRpcControlRequestSchemas["cowork/backups/workspace/restore"],
+  "cowork/backups/workspace/deleteCheckpoint": jsonRpcControlRequestSchemas["cowork/backups/workspace/deleteCheckpoint"],
+  "cowork/backups/workspace/deleteEntry": jsonRpcControlRequestSchemas["cowork/backups/workspace/deleteEntry"],
 } as const;
 
 export const jsonRpcBackupsResultSchemas = {
-  "cowork/backups/workspace/read": legacyEventEnvelope(workspaceBackupsEventSchema),
-  "cowork/backups/workspace/delta/read": legacyEventEnvelope(workspaceBackupDeltaEventSchema),
-  "cowork/backups/workspace/checkpoint": legacyEventEnvelope(workspaceBackupsEventSchema),
-  "cowork/backups/workspace/restore": legacyEventEnvelope(workspaceBackupsEventSchema),
-  "cowork/backups/workspace/deleteCheckpoint": legacyEventEnvelope(workspaceBackupsEventSchema),
-  "cowork/backups/workspace/deleteEntry": legacyEventEnvelope(workspaceBackupsEventSchema),
+  "cowork/backups/workspace/read": jsonRpcControlResultSchemas["cowork/backups/workspace/read"],
+  "cowork/backups/workspace/delta/read": jsonRpcControlResultSchemas["cowork/backups/workspace/delta/read"],
+  "cowork/backups/workspace/checkpoint": jsonRpcControlResultSchemas["cowork/backups/workspace/checkpoint"],
+  "cowork/backups/workspace/restore": jsonRpcControlResultSchemas["cowork/backups/workspace/restore"],
+  "cowork/backups/workspace/deleteCheckpoint": jsonRpcControlResultSchemas["cowork/backups/workspace/deleteCheckpoint"],
+  "cowork/backups/workspace/deleteEntry": jsonRpcControlResultSchemas["cowork/backups/workspace/deleteEntry"],
 } as const;

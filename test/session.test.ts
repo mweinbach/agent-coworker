@@ -195,6 +195,20 @@ function makeSession(
         clearToolOutputOverflowChars?: boolean;
       }
     ) => Promise<void> | void;
+    readUserConfigImpl: () => Promise<{
+      awsBedrockProxyBaseUrl?: string;
+      openaiProxyBaseUrl?: string;
+    }> | {
+      awsBedrockProxyBaseUrl?: string;
+      openaiProxyBaseUrl?: string;
+    };
+    persistUserConfigPatchImpl: (patch: {
+      awsBedrockProxyBaseUrl?: string | null;
+      openaiProxyBaseUrl?: string | null;
+    }) => Promise<{
+      awsBedrockProxyBaseUrl?: string;
+      openaiProxyBaseUrl?: string;
+    }>;
     loadSystemPromptWithSkillsImpl: (config: AgentConfig) => Promise<{
       prompt: string;
       discoveredSkills: Array<{ name: string; description: string }>;
@@ -232,6 +246,8 @@ function makeSession(
     sessionBackupFactory,
     persistModelSelectionImpl: overrides?.persistModelSelectionImpl,
     persistProjectConfigPatchImpl: overrides?.persistProjectConfigPatchImpl,
+    readUserConfigImpl: overrides?.readUserConfigImpl,
+    persistUserConfigPatchImpl: overrides?.persistUserConfigPatchImpl,
     generateSessionTitleImpl: overrides?.generateSessionTitleImpl ?? mockGenerateSessionTitle,
     writePersistedSessionSnapshotImpl:
       overrides?.writePersistedSessionSnapshotImpl ?? mockWritePersistedSessionSnapshot,
@@ -1762,6 +1778,36 @@ describe("AgentSession", () => {
         expect(evt.methodId).toBe("oauth_cli");
         expect(evt.challenge.method).toBe("auto");
         expect(evt.challenge.url).toBeUndefined();
+      }
+    });
+  });
+
+  describe("user config actions", () => {
+    test("setUserConfig persists global user config when persistence impl is provided", async () => {
+      const persistUserConfigPatchImpl = mock(async (patch: {
+        awsBedrockProxyBaseUrl?: string | null;
+      }) => ({
+        awsBedrockProxyBaseUrl: patch.awsBedrockProxyBaseUrl ?? undefined,
+      }));
+      const { session, events } = makeSession({
+        persistUserConfigPatchImpl,
+      });
+
+      await session.setUserConfig({
+        awsBedrockProxyBaseUrl: "https://proxy.example.com/v1",
+      });
+
+      expect(persistUserConfigPatchImpl).toHaveBeenCalledTimes(1);
+      expect(persistUserConfigPatchImpl).toHaveBeenCalledWith({
+        awsBedrockProxyBaseUrl: "https://proxy.example.com/v1",
+      });
+      const resultEvent = events.find((evt) => evt.type === "user_config_result");
+      expect(resultEvent).toBeDefined();
+      if (resultEvent && resultEvent.type === "user_config_result") {
+        expect(resultEvent.ok).toBe(true);
+        expect(resultEvent.config).toEqual({
+          awsBedrockProxyBaseUrl: "https://proxy.example.com/v1",
+        });
       }
     });
   });
@@ -5413,6 +5459,88 @@ describe("AgentSession", () => {
 
       const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
       expect(call.config.providerOptions).toEqual(providerOptions);
+    });
+
+    test("rehydrates persisted lmstudio sessions without a static fallback model", () => {
+      const { emit } = makeEmit();
+
+      const session = AgentSession.fromPersisted({
+        persisted: {
+          sessionId: "persisted-lmstudio",
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          title: "Persisted LM Studio",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "lmstudio",
+          model: "local/qwen-2.5-coder",
+          workingDirectory: "/tmp/persisted",
+          enableMcp: true,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          updatedAt: "2026-03-09T00:00:01.000Z",
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          messageCount: 1,
+          lastEventSeq: 1,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello" }] as any,
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+        baseConfig: makeConfig("/tmp/persisted"),
+        emit,
+        sessionBackupFactory: makeSessionBackupFactory(),
+        getProviderStatusesImpl: async () => [],
+      });
+
+      expect(session.getPublicConfig().provider).toBe("lmstudio");
+      expect(session.getPublicConfig().model).toBe("local/qwen-2.5-coder");
+      expect(session.getSessionInfoEvent().model).toBe("local/qwen-2.5-coder");
+    });
+
+    test("rehydrates persisted aws-bedrock-proxy sessions without a static fallback model", () => {
+      const { emit } = makeEmit();
+
+      const session = AgentSession.fromPersisted({
+        persisted: {
+          sessionId: "persisted-aws-bedrock-proxy",
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          title: "Persisted AWS Bedrock Proxy",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "aws-bedrock-proxy",
+          model: "anthropic.claude-sonnet-4-5",
+          workingDirectory: "/tmp/persisted",
+          enableMcp: true,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          updatedAt: "2026-03-09T00:00:01.000Z",
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          messageCount: 1,
+          lastEventSeq: 1,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello" }] as any,
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+        baseConfig: makeConfig("/tmp/persisted"),
+        emit,
+        sessionBackupFactory: makeSessionBackupFactory(),
+        getProviderStatusesImpl: async () => [],
+      });
+
+      expect(session.getPublicConfig().provider).toBe("aws-bedrock-proxy");
+      expect(session.getPublicConfig().model).toBe("anthropic.claude-sonnet-4-5");
+      expect(session.getSessionInfoEvent().model).toBe("anthropic.claude-sonnet-4-5");
     });
 
     test("migrates unsupported persisted models to provider default and persists the upgraded snapshot", async () => {

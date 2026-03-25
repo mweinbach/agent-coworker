@@ -11,6 +11,7 @@ import { lmstudioProvider } from "./lmstudio";
 import { nvidiaProvider } from "./nvidia";
 import { opencodeGoProvider } from "./opencode-go";
 import { opencodeZenProvider } from "./opencode-zen";
+import { awsBedrockProxyProvider } from "./aws-bedrock-proxy";
 import { openaiProvider } from "./openai";
 import { togetherProvider } from "./together";
 export { DEFAULT_PROVIDER_OPTIONS } from "./providerOptions";
@@ -58,6 +59,7 @@ const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   "opencode-zen": opencodeZenProvider,
   "codex-cli": codexCliProvider,
   google: googleProvider,
+  "aws-bedrock-proxy": awsBedrockProxyProvider,
   openai: openaiProvider,
 };
 
@@ -72,6 +74,7 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   "opencode-zen": { ...PROVIDER_RUNTIMES["opencode-zen"], ...PROVIDER_MODEL_CATALOG["opencode-zen"] },
   "codex-cli": { ...PROVIDER_RUNTIMES["codex-cli"], ...PROVIDER_MODEL_CATALOG["codex-cli"] },
   google: { ...PROVIDER_RUNTIMES.google, ...PROVIDER_MODEL_CATALOG.google },
+  "aws-bedrock-proxy": { ...PROVIDER_RUNTIMES["aws-bedrock-proxy"], ...PROVIDER_MODEL_CATALOG["aws-bedrock-proxy"] },
   openai: { ...PROVIDER_RUNTIMES.openai, ...PROVIDER_MODEL_CATALOG.openai },
 };
 

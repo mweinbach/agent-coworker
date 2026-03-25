@@ -140,15 +140,17 @@ describe("desktop workspaces page", () => {
       }),
     );
 
-    expect(html).toContain("OpenAI &amp; ChatGPT Settings");
-    expect(html).toContain("Workspace defaults for ChatGPT Subscription and OpenAI API models.");
+    expect(html).toContain("OpenAI-Compatible Settings");
+    expect(html).toContain("Workspace defaults for ChatGPT Subscription, OpenAI API, and AWS Bedrock Proxy models.");
     expect(html).toContain("OpenAI API");
     expect(html).toContain("ChatGPT Subscription");
+    expect(html).toContain("AWS Bedrock Proxy");
     expect(html).toContain("Verbosity");
     expect(html).toContain("Reasoning effort");
     expect(html).toContain("Reasoning summary");
     expect(html).toContain("Web search");
     expect(html).toContain("Advanced options");
+    expect(html).toContain("Prompt caching");
     expect(html).toContain("OpenAI API");
   });
 

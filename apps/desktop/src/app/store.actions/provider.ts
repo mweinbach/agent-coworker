@@ -43,6 +43,7 @@ import {
   sendUserMessageToThread,
   normalizeThreadTitleSource,
   truncateTitle,
+  waitForControlSession,
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
@@ -88,17 +89,32 @@ export async function refreshProviderStatusForWorkspace(
   }));
 }
 
-export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "connectProvider" | "setProviderApiKey" | "copyProviderApiKey" | "authorizeProviderAuth" | "logoutProviderAuth" | "callbackProviderAuth" | "requestProviderCatalog" | "requestProviderAuthMethods" | "refreshProviderStatus" | "setLmStudioEnabled" | "setLmStudioModelVisible"> {
+export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "connectProvider" | "setProviderApiKey" | "copyProviderApiKey" | "authorizeProviderAuth" | "logoutProviderAuth" | "callbackProviderAuth" | "requestProviderCatalog" | "requestProviderAuthMethods" | "refreshProviderStatus" | "requestUserConfig" | "setGlobalOpenAiProxyBaseUrl" | "setAwsBedrockProxyEnabled" | "setLmStudioEnabled" | "setLmStudioModelVisible"> {
   const resolveProviderWorkspaceId = (): string | null =>
     get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
 
-  const ensureProviderControlReady = async (): Promise<string | null> => {
+  const notifyProviderControlUnavailable = (detail: string) => {
+    set((s) => ({
+      notifications: pushNotification(s.notifications, {
+        id: makeId(),
+        ts: nowIso(),
+        kind: "error",
+        title: "Not connected",
+        detail,
+      }),
+    }));
+  };
+
+  const ensureProviderControlReady = async (opts?: { notifyDetail?: string }): Promise<string | null> => {
     const workspaceId = resolveProviderWorkspaceId();
-    if (!workspaceId) return null;
+    if (!workspaceId) {
+      if (opts?.notifyDetail) notifyProviderControlUnavailable(opts.notifyDetail);
+      return null;
+    }
 
     await ensureServerRunning(get, set, workspaceId);
-    const socket = ensureControlSocket(get, set, workspaceId);
-    if (!socket || !get().workspaceRuntimeById[workspaceId]?.controlSessionId) {
+    const ready = await waitForControlSession(get, set, workspaceId);
+    if (!ready) {
       return null;
     }
 
@@ -427,17 +443,123 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
         }));
       }
     },
-  
 
-    refreshProviderStatus: async () => {
+    requestUserConfig: async () => {
       const workspaceId = await ensureProviderControlReady();
+      if (!workspaceId) return;
+
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/userConfig/read", { cwd });
+      if (!ok) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to request global user config.",
+          }),
+        }));
+      }
+    },
+
+  
+    refreshProviderStatus: async () => {
+      const workspaceId = await ensureProviderControlReady({
+        notifyDetail: "Unable to refresh provider status.",
+      });
       if (!workspaceId) return;
 
       const path = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
       await refreshProviderStatusForWorkspace(get, set, workspaceId, path);
     },
 
+    setGlobalOpenAiProxyBaseUrl: async (baseUrl) => {
+      const workspaceId = await ensureProviderControlReady({
+        notifyDetail: "Unable to update global user config.",
+      });
+      if (!workspaceId) {
+        set(() => ({
+          pendingUserConfigSave: null,
+          userConfigLastResult: {
+            type: "user_config_result",
+            sessionId: "",
+            ok: false,
+            message: "Unable to update global user config.",
+          },
+        }));
+        return;
+      }
+
+      const normalizedBaseUrl = typeof baseUrl === "string" ? baseUrl.trim() : "";
+      const cwd = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+      set(() => ({
+        pendingUserConfigSave: { workspaceId, sessionId: "" },
+        userConfigLastResult: null,
+      }));
+
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/userConfig/set", {
+        cwd,
+        config: {
+          awsBedrockProxyBaseUrl: normalizedBaseUrl ? normalizedBaseUrl : null,
+        },
+      });
+      if (!ok) {
+        set((s) => ({
+          pendingUserConfigSave: null,
+          userConfigLastResult: {
+            type: "user_config_result",
+            sessionId: "",
+            ok: false,
+            message: "Unable to update global user config.",
+          },
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to update global user config.",
+          }),
+        }));
+      }
+    },
+
+    setAwsBedrockProxyEnabled: async (enabled) => {
+      const previousEnabled = get().providerUiState.awsBedrockProxy.enabled;
+      set((s) => ({
+        providerUiState: {
+          ...s.providerUiState,
+          awsBedrockProxy: {
+            ...s.providerUiState.awsBedrockProxy,
+            enabled,
+          },
+        },
+      }));
+      try {
+        await persistNow(get);
+      } catch (error) {
+        console.error("Failed to persist AWS Bedrock Proxy enabled state", error);
+        set((s) => ({
+          providerUiState: {
+            ...s.providerUiState,
+            awsBedrockProxy: {
+              ...s.providerUiState.awsBedrockProxy,
+              enabled: previousEnabled,
+            },
+          },
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Save failed",
+            detail: "Unable to save AWS Bedrock Proxy settings.",
+          }),
+        }));
+      }
+    },
+
     setLmStudioEnabled: async (enabled) => {
+      const previousEnabled = get().providerUiState.lmstudio.enabled;
       set((s) => ({
         providerUiState: {
           ...s.providerUiState,
@@ -447,7 +569,28 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
           },
         },
       }));
-      await persistNow(get);
+      try {
+        await persistNow(get);
+      } catch (error) {
+        console.error("Failed to persist LM Studio enabled state", error);
+        set((s) => ({
+          providerUiState: {
+            ...s.providerUiState,
+            lmstudio: {
+              ...s.providerUiState.lmstudio,
+              enabled: previousEnabled,
+            },
+          },
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Save failed",
+            detail: "Unable to save LM Studio settings.",
+          }),
+        }));
+        return;
+      }
       if (enabled) {
         await get().refreshProviderStatus();
       }
@@ -456,6 +599,7 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
     setLmStudioModelVisible: async (modelId, visible) => {
       const normalizedModelId = modelId.trim();
       if (!normalizedModelId) return;
+      const previousHiddenModels = get().providerUiState.lmstudio.hiddenModels;
       set((s) => {
         const hiddenModels = new Set(s.providerUiState.lmstudio.hiddenModels);
         if (visible) {
@@ -473,7 +617,27 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
           },
         };
       });
-      await persistNow(get);
+      try {
+        await persistNow(get);
+      } catch (error) {
+        console.error("Failed to persist LM Studio model visibility", error);
+        set((s) => ({
+          providerUiState: {
+            ...s.providerUiState,
+            lmstudio: {
+              ...s.providerUiState.lmstudio,
+              hiddenModels: previousHiddenModels,
+            },
+          },
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Save failed",
+            detail: "Unable to save LM Studio model visibility.",
+          }),
+        }));
+      }
     },
   
   };

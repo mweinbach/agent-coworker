@@ -756,6 +756,59 @@
           ],
           "additionalProperties": false
         },
+        "cowork/provider/userConfig/read": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "cwd"
+          ],
+          "additionalProperties": false
+        },
+        "cowork/provider/userConfig/set": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "minLength": 1
+            },
+            "config": {
+              "type": "object",
+              "properties": {
+                "awsBedrockProxyBaseUrl": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "openaiProxyBaseUrl": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "cwd",
+            "config"
+          ],
+          "additionalProperties": false
+        },
         "cowork/mcp/servers/read": {
           "type": "object",
           "properties": {
@@ -1418,6 +1471,8 @@
         "cowork/provider/auth/callback",
         "cowork/provider/auth/setApiKey",
         "cowork/provider/auth/copyApiKey",
+        "cowork/provider/userConfig/read",
+        "cowork/provider/userConfig/set",
         "cowork/mcp/servers/read",
         "cowork/mcp/server/upsert",
         "cowork/mcp/server/delete",
@@ -2180,6 +2235,7 @@
                       "enum": [
                         "google",
                         "openai",
+                        "aws-bedrock-proxy",
                         "anthropic",
                         "baseten",
                         "together",
@@ -2772,6 +2828,7 @@
                             "enum": [
                               "google",
                               "openai",
+                              "aws-bedrock-proxy",
                               "anthropic",
                               "baseten",
                               "together",
@@ -2916,6 +2973,7 @@
                                     "enum": [
                                       "google",
                                       "openai",
+                                      "aws-bedrock-proxy",
                                       "anthropic",
                                       "baseten",
                                       "together",
@@ -2998,6 +3056,7 @@
                                     "enum": [
                                       "google",
                                       "openai",
+                                      "aws-bedrock-proxy",
                                       "anthropic",
                                       "baseten",
                                       "together",
@@ -3920,6 +3979,81 @@
           ],
           "additionalProperties": false
         },
+        "cowork/provider/userConfig/read": {
+          "type": "object",
+          "properties": {
+            "event": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "user_config"
+                },
+                "sessionId": {
+                  "type": "string"
+                },
+                "config": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                }
+              },
+              "required": [
+                "type",
+                "sessionId",
+                "config"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "event"
+          ],
+          "additionalProperties": false
+        },
+        "cowork/provider/userConfig/set": {
+          "type": "object",
+          "properties": {
+            "event": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "user_config_result"
+                },
+                "sessionId": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "config": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                }
+              },
+              "required": [
+                "type",
+                "sessionId",
+                "ok",
+                "message"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "event"
+          ],
+          "additionalProperties": false
+        },
         "cowork/mcp/servers/read": {
           "type": "object",
           "properties": {
@@ -4795,6 +4929,8 @@
         "cowork/provider/auth/callback",
         "cowork/provider/auth/setApiKey",
         "cowork/provider/auth/copyApiKey",
+        "cowork/provider/userConfig/read",
+        "cowork/provider/userConfig/set",
         "cowork/mcp/servers/read",
         "cowork/mcp/server/upsert",
         "cowork/mcp/server/delete",

@@ -6,6 +6,7 @@ import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
 
 import { useAppStore } from "../app/store";
 import type { FeedItem, ThreadAgentSummary, ThreadPendingSteer, ThreadStatus } from "../app/types";
+import { hiddenProviderNamesFromUiState } from "../app/providerUiState";
 import {
   Conversation,
   ConversationContent,
@@ -427,6 +428,7 @@ const FeedRow = memo(function FeedRow(props: {
 const PROVIDER_LABELS: Record<ProviderName, string> = {
   google: "Google",
   openai: "OpenAI",
+  "aws-bedrock-proxy": "AWS Bedrock Proxy",
   anthropic: "Anthropic",
   baseten: "Baseten",
   together: "Together AI",
@@ -460,7 +462,7 @@ function DraftThreadModelSelector({
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerUiState = useAppStore((s) => s.providerUiState);
   const chatCatalogVisibility = useMemo<CatalogVisibilityOptions>(() => ({
-    hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
+    hiddenProviders: hiddenProviderNamesFromUiState(providerUiState),
     hiddenModelsByProvider: {
       lmstudio: providerUiState.lmstudio.hiddenModels,
     },

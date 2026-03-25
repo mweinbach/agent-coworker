@@ -116,8 +116,13 @@ export type LmStudioUiState = {
   hiddenModels: string[];
 };
 
+export type AwsBedrockProxyUiState = {
+  enabled: boolean;
+};
+
 export type PersistedProviderUiState = {
   lmstudio: LmStudioUiState;
+  awsBedrockProxy: AwsBedrockProxyUiState;
 };
 
 export type OnboardingStatus = "pending" | "dismissed" | "completed";

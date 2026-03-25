@@ -3,7 +3,11 @@ import {
   resolveDefaultLmStudioModelMetadata,
   resolveLmStudioDiscoveredModelMetadata,
 } from "../providers/lmstudio/catalog";
-import type { ProviderName } from "../types";
+import {
+  resolveAwsBedrockProxyDiscoveredModel,
+  type AwsBedrockProxyResolutionConfig,
+} from "../providers/awsBedrockProxyShared";
+import type { AgentConfig, ProviderName } from "../types";
 import {
   assertSupportedModel,
   defaultSupportedModel,
@@ -25,8 +29,26 @@ function toResolvedStaticModel(provider: ProviderName, modelId: string, source =
   };
 }
 
-export function isDynamicModelProvider(provider: ProviderName): provider is "lmstudio" {
-  return provider === "lmstudio";
+function toResolvedDynamicModel(
+  provider: ProviderName,
+  modelId: string,
+  overrides: Partial<Pick<ResolvedModelMetadata, "displayName" | "knowledgeCutoff" | "supportsImageInput">> = {},
+): ResolvedModelMetadata {
+  const fallback = defaultSupportedModel(provider);
+  return {
+    id: modelId,
+    provider,
+    displayName: overrides.displayName ?? modelId,
+    knowledgeCutoff: overrides.knowledgeCutoff ?? fallback.knowledgeCutoff,
+    supportsImageInput: overrides.supportsImageInput ?? fallback.supportsImageInput,
+    promptTemplate: fallback.promptTemplate,
+    providerOptionsDefaults: { ...fallback.providerOptionsDefaults },
+    source: "dynamic",
+  };
+}
+
+export function isDynamicModelProvider(provider: ProviderName): provider is "lmstudio" | "aws-bedrock-proxy" {
+  return provider === "lmstudio" || provider === "aws-bedrock-proxy";
 }
 
 export function normalizeModelIdForProvider(
@@ -38,7 +60,7 @@ export function normalizeModelIdForProvider(
   if (!trimmed) {
     throw new Error(`${source} is required.`);
   }
-  if (provider === "lmstudio") {
+  if (isDynamicModelProvider(provider)) {
     return trimmed;
   }
   return assertSupportedModel(provider, trimmed, source).id;
@@ -52,6 +74,9 @@ export function getResolvedModelMetadataSync(
   if (provider === "lmstudio") {
     return buildLmStudioPlaceholderMetadata(normalizeModelIdForProvider(provider, modelId, source));
   }
+  if (provider === "aws-bedrock-proxy") {
+    return toResolvedDynamicModel(provider, normalizeModelIdForProvider(provider, modelId, source));
+  }
   return toResolvedStaticModel(provider, modelId, source);
 }
 
@@ -60,6 +85,13 @@ export async function resolveModelMetadata(
   modelId: string,
   opts: {
     allowPlaceholder?: boolean;
+    /** Session/config slice so global `awsBedrockProxyBaseUrl` matches runtime discovery precedence. */
+    config?: AgentConfig | AwsBedrockProxyResolutionConfig;
+    /**
+     * Connection-store API key for `aws-bedrock-proxy` so `/models` discovery matches runtime auth
+     * when the token is not in env. Combined with `env` inside `resolveAwsBedrockProxyApiKey`.
+     */
+    awsBedrockProxySavedApiKey?: string;
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
     fetchImpl?: typeof fetch;
@@ -67,6 +99,25 @@ export async function resolveModelMetadata(
     log?: (line: string) => void;
   } = {},
 ): Promise<ResolvedModelMetadata> {
+  if (provider === "aws-bedrock-proxy") {
+    const normalizedModelId = normalizeModelIdForProvider(provider, modelId, opts.source);
+    const discovered = await resolveAwsBedrockProxyDiscoveredModel({
+      modelId: normalizedModelId,
+      apiKey: opts.awsBedrockProxySavedApiKey,
+      config: opts.config,
+      providerOptions: opts.providerOptions,
+      env: opts.env,
+      fetchImpl: opts.fetchImpl,
+    });
+    if (discovered) {
+      return toResolvedDynamicModel(provider, discovered.id, {
+        displayName: discovered.displayName,
+        knowledgeCutoff: discovered.knowledgeCutoff,
+        supportsImageInput: discovered.supportsImageInput,
+      });
+    }
+    return toResolvedDynamicModel(provider, normalizedModelId);
+  }
   if (provider !== "lmstudio") {
     return toResolvedStaticModel(provider, modelId, opts.source);
   }
@@ -120,6 +171,9 @@ export function getKnownResolvedModelMetadata(
 ): ResolvedModelMetadata | null {
   if (provider === "lmstudio") {
     return buildLmStudioPlaceholderMetadata(modelId);
+  }
+  if (provider === "aws-bedrock-proxy") {
+    return toResolvedDynamicModel(provider, modelId);
   }
   const model = getSupportedModel(provider, modelId);
   if (!model) return null;

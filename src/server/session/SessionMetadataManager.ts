@@ -6,7 +6,7 @@ import {
 } from "../../shared/openaiCompatibleOptions";
 import { effectiveToolOutputOverflowChars } from "../../shared/toolOutputOverflow";
 import type { AgentConfig, HarnessContextPayload } from "../../types";
-import type { SessionConfigPatch } from "../protocol";
+import type { SessionConfigPatch, UserConfigPatch, UserConfigState } from "../protocol";
 import { DEFAULT_SESSION_TITLE, heuristicTitleFromQuery, type SessionTitleSource } from "../sessionTitleService";
 import type { SessionContext } from "./SessionContext";
 
@@ -387,6 +387,64 @@ export class SessionMetadataManager {
       titleSource: "manual",
       titleModel: null,
     });
+  }
+
+  private async readUserConfig(): Promise<UserConfigState> {
+    if (!this.context.deps.readUserConfigImpl) return {};
+    const next = await this.context.deps.readUserConfigImpl();
+    return next ?? {};
+  }
+
+  async emitUserConfig() {
+    try {
+      const config = await this.readUserConfig();
+      this.context.emit({
+        type: "user_config",
+        sessionId: this.context.id,
+        config,
+      });
+    } catch (err) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to read global user config: ${String(err)}`,
+      );
+    }
+  }
+
+  async setUserConfig(patch: UserConfigPatch) {
+    if (!this.context.deps.persistUserConfigPatchImpl) {
+      this.context.emit({
+        type: "user_config_result",
+        sessionId: this.context.id,
+        ok: false,
+        message: "Global user config persistence is unavailable for this session.",
+      });
+      return;
+    }
+
+    try {
+      const next = await this.context.deps.persistUserConfigPatchImpl(patch);
+      this.context.emit({
+        type: "user_config_result",
+        sessionId: this.context.id,
+        ok: true,
+        message: "Saved globally to ~/.agent/config.json. Restart running workspaces to apply.",
+        config: next,
+      });
+      this.context.emit({
+        type: "user_config",
+        sessionId: this.context.id,
+        config: next,
+      });
+    } catch (err) {
+      this.context.emit({
+        type: "user_config_result",
+        sessionId: this.context.id,
+        ok: false,
+        message: `Failed to save global user config: ${String(err)}`,
+      });
+    }
   }
 
   async prepareConfigUpdate(

@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { getSavedProviderApiKey } from "./config";
 import type { AgentConfig } from "./types";
 import { discoverSkills } from "./skills";
-import { getResolvedModelMetadataSync, resolveModelMetadata } from "./models/metadata";
+import { getResolvedModelMetadataSync, isDynamicModelProvider, resolveModelMetadata } from "./models/metadata";
 import type { ResolvedModelMetadata } from "./models/metadataTypes";
 import { getChildAgentModelInfo, listChildAgentModelsWithInfo } from "./models/childAgentModelInfo";
 import { parseChildModelRef } from "./models/childModelRouting";
@@ -18,13 +19,10 @@ import {
 import { isUserFacingProviderEnabled } from "./providers/catalog";
 import type { ProviderName } from "./types";
 
-async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
-  const modelMetadata = await resolveModelMetadata(config.provider, config.model, {
-    allowPlaceholder: true,
-    providerOptions: config.providerOptions,
-    source: "model",
-    log: (line) => console.warn(line),
-  });
+async function resolveSystemTemplatePath(
+  config: AgentConfig,
+  modelMetadata: ResolvedModelMetadata,
+): Promise<string> {
   const modelSystemPath = path.join(config.builtInDir, "prompts", modelMetadata.promptTemplate);
   try {
     await fs.access(modelSystemPath);
@@ -168,6 +166,7 @@ function renderGoogleNativeToolsPrompt(prompt: string, config: AgentConfig): str
 const PROVIDER_DISPLAY_NAMES: Record<ProviderName, string> = {
   google: "Google",
   openai: "OpenAI",
+  "aws-bedrock-proxy": "AWS Bedrock Proxy",
   anthropic: "Anthropic",
   baseten: "Baseten",
   together: "Together AI",
@@ -203,9 +202,11 @@ function buildSpawnAgentPromptBody(config: AgentConfig): string {
   const providerSupportsUserFacingModels = isUserFacingProviderEnabled(config.provider);
   const modelLines = config.childModelRoutingMode === "cross-provider-allowlist" && crossProviderRefs.length > 0
     ? crossProviderRefs.join("\n")
-    : config.provider === "lmstudio"
-      ? "- Any LM Studio LLM key discovered at runtime is allowed. Use either the bare key or `lmstudio:<modelKey>`."
-    : !providerSupportsUserFacingModels
+    : isDynamicModelProvider(config.provider)
+      ? config.provider === "lmstudio"
+        ? "- Any LM Studio LLM key discovered at runtime is allowed. Use either the bare key or `lmstudio:<modelKey>`."
+        : "- Any provider-compatible model id discovered at runtime is allowed. Use either the bare key or `aws-bedrock-proxy:<modelKey>`."
+      : !providerSupportsUserFacingModels
       ? "- No user-facing child model overrides are available for this provider."
       : listChildAgentModelsWithInfo(config.provider)
           .map((model) => `- **${model.displayName}** (\`${model.id}\`): ${model.bestFor ?? "general-purpose work on this provider"}.`)
@@ -335,11 +336,15 @@ export interface SystemPromptResult {
 export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<SystemPromptResult> {
   const supportedModel = await resolveModelMetadata(config.provider, config.model, {
     allowPlaceholder: true,
+    config,
     providerOptions: config.providerOptions,
+    ...(config.provider === "aws-bedrock-proxy"
+      ? { awsBedrockProxySavedApiKey: getSavedProviderApiKey(config, "aws-bedrock-proxy") }
+      : {}),
     source: "model",
     log: (line) => console.warn(line),
   });
-  const systemPath = await resolveSystemTemplatePath(config);
+  const systemPath = await resolveSystemTemplatePath(config, supportedModel);
   let prompt = await fs.readFile(systemPath, "utf-8");
 
   const skills = await discoverSkills(config.skillsDirs);

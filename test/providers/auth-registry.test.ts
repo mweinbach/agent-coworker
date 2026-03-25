@@ -1,4 +1,4 @@
-import { describe, expect, test, mock } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,8 +14,13 @@ import {
   resolveProviderAuthMethod,
   setProviderApiKey,
 } from "../../src/providers/authRegistry";
+import { __clearAwsBedrockProxyDiscoveryCacheForTests } from "../../src/providers/awsBedrockProxyShared";
 
 describe("providers/authRegistry", () => {
+  beforeEach(() => {
+    __clearAwsBedrockProxyDiscoveryCacheForTests();
+  });
+
   test("lists auth methods for all providers", () => {
     const methods = listProviderAuthMethods();
     expect(methods.openai?.some((m) => m.id === "api_key")).toBe(true);
@@ -158,6 +163,100 @@ describe("providers/authRegistry", () => {
 
     const store = await readConnectionStore(paths);
     expect(store.toolApiKeys?.exa).toBe("exa-secret-key");
+  });
+
+  test("setProviderApiKey for aws-bedrock-proxy requires a proxy base URL", async () => {
+    const connect = mock(async (opts: any) => ({
+      ok: true as const,
+      provider: opts.provider,
+      mode: "api_key" as const,
+      storageFile: "/tmp/connections.json",
+      message: "saved",
+      maskedApiKey: "prox...oken",
+    }));
+
+    const result = await setProviderApiKey({
+      provider: "aws-bedrock-proxy",
+      methodId: "api_key",
+      apiKey: "proxy-token",
+      providerOptions: {},
+      connect,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe("Set the AWS Bedrock Proxy URL before saving a proxy token.");
+    }
+    expect(connect).toHaveBeenCalledTimes(0);
+  });
+
+  test("setProviderApiKey for aws-bedrock-proxy surfaces unauthorized guidance and skips connect", async () => {
+    const connect = mock(async (opts: any) => ({
+      ok: true as const,
+      provider: opts.provider,
+      mode: "api_key" as const,
+      storageFile: "/tmp/connections.json",
+      message: "saved",
+      maskedApiKey: "prox...oken",
+    }));
+
+    const result = await setProviderApiKey({
+      provider: "aws-bedrock-proxy",
+      methodId: "api_key",
+      apiKey: "proxy-token",
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.example.com",
+        },
+      },
+      fetchImpl: (async () => new Response(JSON.stringify({ error: "forbidden" }), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch,
+      connect,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain("Proxy token rejected by /models");
+      expect(result.message).toContain("Use your LiteLLM proxy token");
+    }
+    expect(connect).toHaveBeenCalledTimes(0);
+  });
+
+  test("setProviderApiKey for aws-bedrock-proxy validates /models before saving", async () => {
+    const connect = mock(async (opts: any) => ({
+      ok: true as const,
+      provider: opts.provider,
+      mode: "api_key" as const,
+      storageFile: "/tmp/connections.json",
+      message: "saved",
+      maskedApiKey: "prox...oken",
+    }));
+
+    const result = await setProviderApiKey({
+      provider: "aws-bedrock-proxy",
+      methodId: "api_key",
+      apiKey: "  proxy-token  ",
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.example.com",
+        },
+      },
+      fetchImpl: (async () => new Response(JSON.stringify({
+        object: "list",
+        data: [{ id: "router", object: "model" }],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch,
+      connect,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(connect.mock.calls[0]?.[0]?.provider).toBe("aws-bedrock-proxy");
+    expect(connect.mock.calls[0]?.[0]?.apiKey).toBe("proxy-token");
   });
 
   test("callbackProviderAuth calls connect handler for oauth method", async () => {

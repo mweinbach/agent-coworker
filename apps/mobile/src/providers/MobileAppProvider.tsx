@@ -10,6 +10,8 @@ import { useWorkspaceStore } from "../features/cowork/workspaceStore";
 import { useSkillsStore } from "../features/cowork/skillsStore";
 import { useMemoryStore } from "../features/cowork/memoryStore";
 import { useBackupStore } from "../features/cowork/backupStore";
+import { useProviderStore } from "../features/cowork/providerStore";
+import { useMcpStore } from "../features/cowork/mcpStore";
 import { defaultSecureTransportClient } from "../features/relay/secureTransportClient";
 
 function createThreadSnapshot(thread: {
@@ -131,6 +133,8 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
       useSkillsStore.getState().clear();
       useMemoryStore.getState().clear();
       useBackupStore.getState().clear();
+      useProviderStore.getState().clear();
+      useMcpStore.getState().clear();
     };
 
     const hydrateRemoteThreads = async () => {

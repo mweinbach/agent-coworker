@@ -7,10 +7,10 @@ import { WebSocket } from "ws";
 import type { ServerManager } from "./serverManager";
 import type {
   MobileRelayBridgeState,
+  MobileRelayIdentityState,
   MobileRelayPairingPayload,
   MobileRelaySnapshot,
   MobileRelayStatus,
-  MobileRelayStoreState,
   MobileRelayTrustedPhoneRecord,
   MobileRelayWorkspaceRecord,
 } from "./mobileRelayTypes";
@@ -20,8 +20,12 @@ import {
   persistMobileRelayStoreState,
   rememberTrustedPhoneRecord,
 } from "./mobileRelayStore";
+import {
+  forgetRemodexTrustedPhoneRecord,
+  readResolvedRemodexState,
+  rememberRemodexTrustedPhoneRecord,
+} from "./remodexState";
 
-const DEFAULT_RELAY_URL = "ws://127.0.0.1:7338/relay";
 const RELAY_RECONNECT_DELAY_MS = 1_000;
 const PAIRING_QR_VERSION = 2;
 
@@ -31,6 +35,7 @@ type MobileRelayBridgeOptions = {
   serverManager: ServerManager;
   relayUrl?: string;
   userDataPath?: string;
+  remodexStateDir?: string;
   getAppName?: () => string;
   getWorkspaceList?: () => MobileRelayWorkspaceRecord[];
   createSidecarSocket?: (url: string) => BridgeSocket;
@@ -44,7 +49,7 @@ type PendingPhoneHandshake = {
 
 function normalizeRelayUrl(value: string | undefined): string {
   const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed.replace(/\/+$/, "") : DEFAULT_RELAY_URL;
+  return trimmed && trimmed.length > 0 ? trimmed.replace(/\/+$/, "") : "";
 }
 
 function decodeSocketMessage(raw: unknown): string {
@@ -75,6 +80,11 @@ function buildInitialState(): MobileRelayBridgeState {
     status: "idle",
     workspaceId: null,
     workspacePath: null,
+    relaySource: "unavailable",
+    relaySourceMessage: "Remodex relay configuration has not been loaded yet.",
+    relayServiceStatus: "unknown",
+    relayServiceMessage: null,
+    relayServiceUpdatedAt: null,
     relayUrl: null,
     sessionId: null,
     pairingPayload: null,
@@ -86,15 +96,16 @@ function buildInitialState(): MobileRelayBridgeState {
 
 export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelaySnapshot] }> {
   private readonly serverManager: ServerManager;
-  private readonly relayUrl: string;
   private readonly userDataPath?: string;
+  private readonly remodexStateDir?: string;
+  private readonly relayUrlOverride: string;
   private readonly getAppName: () => string;
   private getWorkspaceList: () => MobileRelayWorkspaceRecord[];
   private readonly createSidecarSocket: (url: string) => BridgeSocket;
   private readonly createRelaySocket: (url: string, headers: Record<string, string>) => BridgeSocket;
 
   private state: MobileRelayBridgeState = buildInitialState();
-  private storeState: MobileRelayStoreState;
+  private identityState: MobileRelayIdentityState | null = null;
   private sidecarSocket: BridgeSocket | null = null;
   private relaySocket: BridgeSocket | null = null;
   private sidecarUrl: string | null = null;
@@ -106,14 +117,14 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   constructor(options: MobileRelayBridgeOptions) {
     super();
     this.serverManager = options.serverManager;
-    this.relayUrl = normalizeRelayUrl(options.relayUrl ?? process.env.COWORK_MOBILE_RELAY_URL);
     this.userDataPath = options.userDataPath;
+    this.remodexStateDir = options.remodexStateDir;
+    this.relayUrlOverride = normalizeRelayUrl(options.relayUrl ?? process.env.COWORK_MOBILE_RELAY_URL);
     this.getAppName = options.getAppName ?? (() => app.getName());
     this.getWorkspaceList = options.getWorkspaceList ?? (() => []);
     this.createSidecarSocket = options.createSidecarSocket ?? ((url: string) => new WebSocket(url, "cowork.jsonrpc.v1"));
     this.createRelaySocket = options.createRelaySocket ?? ((url, headers) => new WebSocket(url, { headers }));
-    this.storeState = loadOrCreateMobileRelayStoreState(this.userDataPath);
-    this.syncTrustedPhoneSummary();
+    this.refreshRelayConfiguration();
   }
 
   private emitStateChanged(): void {
@@ -121,7 +132,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }
 
   private getTrustedPhone(): MobileRelayTrustedPhoneRecord | null {
-    return this.storeState.trustedPhone;
+    return this.identityState?.trustedPhone ?? null;
   }
 
   private syncTrustedPhoneSummary(): void {
@@ -133,8 +144,57 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     };
   }
 
-  private async persistStoreState(): Promise<void> {
-    this.storeState = await persistMobileRelayStoreState(this.storeState, this.userDataPath);
+  private refreshRelayConfiguration(): void {
+    if (this.relayUrlOverride) {
+      const storeState = loadOrCreateMobileRelayStoreState(this.userDataPath);
+      this.identityState = {
+        macDeviceId: storeState.macDeviceId,
+        macIdentityPublicKey: storeState.macIdentityPublicKey,
+        macIdentityPrivateKey: storeState.macIdentityPrivateKey,
+        trustedPhone: storeState.trustedPhone,
+      };
+      this.state = {
+        ...this.state,
+        relaySource: "override",
+        relaySourceMessage: "Using the explicit COWORK_MOBILE_RELAY_URL override.",
+        relayServiceStatus: "unknown",
+        relayServiceMessage: "Override mode bypasses Remodex daemon health checks.",
+        relayServiceUpdatedAt: null,
+        relayUrl: this.relayUrlOverride,
+      };
+      this.syncTrustedPhoneSummary();
+      return;
+    }
+
+    try {
+      const resolved = readResolvedRemodexState({
+        stateDir: this.remodexStateDir,
+      });
+      this.identityState = resolved.identityState;
+      this.state = {
+        ...this.state,
+        relaySource: "remodex",
+        relaySourceMessage: `Using Remodex state from ${resolved.stateDir}.`,
+        relayServiceStatus: resolved.serviceStatus,
+        relayServiceMessage: resolved.serviceMessage,
+        relayServiceUpdatedAt: resolved.serviceUpdatedAt,
+        relayUrl: resolved.relayUrl,
+      };
+      this.syncTrustedPhoneSummary();
+    } catch (error) {
+      this.identityState = null;
+      this.state = {
+        ...this.state,
+        relaySource: "remodex",
+        relaySourceMessage: error instanceof Error ? error.message : String(error),
+        relayServiceStatus: "unavailable",
+        relayServiceMessage: null,
+        relayServiceUpdatedAt: null,
+        relayUrl: null,
+        trustedPhoneDeviceId: null,
+        trustedPhoneFingerprint: null,
+      };
+    }
   }
 
   getSnapshot(): MobileRelaySnapshot {
@@ -154,17 +214,20 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.clearReconnectTimer();
     this.closeConnections();
     this.stopping = false;
-    this.state = {
-      ...this.state,
-      status: "starting",
-      workspaceId: opts.workspaceId,
-      workspacePath: opts.workspacePath,
-      relayUrl: this.relayUrl,
-      lastError: null,
-    };
-    this.emitStateChanged();
-
     try {
+      this.refreshRelayConfiguration();
+      if (!this.state.relayUrl || !this.identityState) {
+        throw new Error(this.state.relaySourceMessage ?? "Remote access relay configuration is unavailable.");
+      }
+      this.state = {
+        ...this.state,
+        status: "starting",
+        workspaceId: opts.workspaceId,
+        workspacePath: opts.workspacePath,
+        relayUrl: this.state.relayUrl,
+        lastError: null,
+      };
+      this.emitStateChanged();
       const { url } = await this.serverManager.startWorkspaceServer({
         workspaceId: opts.workspaceId,
         workspacePath: opts.workspacePath,
@@ -187,8 +250,15 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.clearReconnectTimer();
     this.closeConnections();
     this.sidecarUrl = null;
+    this.refreshRelayConfiguration();
     this.state = {
       ...buildInitialState(),
+      relaySource: this.state.relaySource,
+      relaySourceMessage: this.state.relaySourceMessage,
+      relayServiceStatus: this.state.relayServiceStatus,
+      relayServiceMessage: this.state.relayServiceMessage,
+      relayServiceUpdatedAt: this.state.relayServiceUpdatedAt,
+      relayUrl: this.state.relayUrl,
       trustedPhoneDeviceId: this.getTrustedPhone()?.phoneDeviceId ?? null,
       trustedPhoneFingerprint: this.getTrustedPhone()?.fingerprint ?? null,
     };
@@ -220,8 +290,26 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }
 
   async forgetTrustedPhone(): Promise<MobileRelaySnapshot> {
-    this.storeState = forgetTrustedPhoneRecord(this.storeState);
-    await this.persistStoreState();
+    const trustedPhone = this.getTrustedPhone();
+    if (!trustedPhone) {
+      return this.getSnapshot();
+    }
+    if (this.relayUrlOverride) {
+      const storeState = loadOrCreateMobileRelayStoreState(this.userDataPath);
+      const nextStoreState = forgetTrustedPhoneRecord(storeState);
+      const persistedState = await persistMobileRelayStoreState(nextStoreState, this.userDataPath);
+      this.identityState = {
+        macDeviceId: persistedState.macDeviceId,
+        macIdentityPublicKey: persistedState.macIdentityPublicKey,
+        macIdentityPrivateKey: persistedState.macIdentityPrivateKey,
+        trustedPhone: persistedState.trustedPhone,
+      };
+    } else {
+      this.identityState = await forgetRemodexTrustedPhoneRecord(trustedPhone.phoneDeviceId, {
+        stateDir: this.remodexStateDir,
+      });
+      this.refreshRelayConfiguration();
+    }
     this.syncTrustedPhoneSummary();
     if (this.relaySocket?.readyState === WebSocket.OPEN) {
       this.sendRelayRegistrationUpdate();
@@ -278,10 +366,10 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     const sessionId = randomUUID();
     const pairingPayload: MobileRelayPairingPayload = {
       v: PAIRING_QR_VERSION,
-      relay: this.relayUrl,
+      relay: this.state.relayUrl ?? "",
       sessionId,
-      macDeviceId: this.storeState.macDeviceId,
-      macIdentityPublicKey: this.storeState.macIdentityPublicKey,
+      macDeviceId: this.identityState?.macDeviceId ?? "",
+      macIdentityPublicKey: this.identityState?.macIdentityPublicKey ?? "",
       expiresAt: Date.now() + 5 * 60_000,
     };
 
@@ -297,7 +385,10 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }
 
   private async connectRelaySocket(sessionId: string): Promise<void> {
-    const relaySessionUrl = `${this.relayUrl}/${sessionId}`;
+    if (!this.state.relayUrl) {
+      throw new Error("Remote access relay URL is unavailable.");
+    }
+    const relaySessionUrl = `${this.state.relayUrl}/${sessionId}`;
     await new Promise<void>((resolve, reject) => {
       const socket = this.createRelaySocket(relaySessionUrl, {
         "x-role": "mac",
@@ -364,10 +455,13 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }
 
   private buildMacRegistrationHeaders(): Record<string, string> {
+    if (!this.identityState) {
+      return {};
+    }
     const trustedPhone = this.getTrustedPhone();
     const headers: Record<string, string> = {
-      "x-mac-device-id": this.storeState.macDeviceId,
-      "x-mac-identity-public-key": this.storeState.macIdentityPublicKey,
+      "x-mac-device-id": this.identityState.macDeviceId,
+      "x-mac-identity-public-key": this.identityState.macIdentityPublicKey,
       "x-machine-name": this.getAppName(),
     };
     if (trustedPhone) {
@@ -381,13 +475,16 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     if (!this.relaySocket || this.relaySocket.readyState !== WebSocket.OPEN) {
       return;
     }
+    if (!this.identityState) {
+      return;
+    }
     const trustedPhone = this.getTrustedPhone();
     this.relaySocket.send(JSON.stringify({
       kind: "relayMacRegistration",
       registration: {
         sessionId: this.state.sessionId,
-        macDeviceId: this.storeState.macDeviceId,
-        macIdentityPublicKey: this.storeState.macIdentityPublicKey,
+        macDeviceId: this.identityState.macDeviceId,
+        macIdentityPublicKey: this.identityState.macIdentityPublicKey,
         displayName: this.getAppName(),
         trustedPhoneDeviceId: trustedPhone?.phoneDeviceId ?? null,
         trustedPhonePublicKey: trustedPhone?.phoneIdentityPublicKey ?? null,
@@ -552,13 +649,30 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }
 
   private async persistTrustedPhoneFromHandshake(handshake: PendingPhoneHandshake): Promise<void> {
-    this.storeState = rememberTrustedPhoneRecord(this.storeState, {
-      phoneDeviceId: handshake.trustedPhoneDeviceId,
-      phoneIdentityPublicKey: handshake.trustedPhonePublicKey,
-      lastConnectedAt: new Date().toISOString(),
-    });
+    if (this.relayUrlOverride) {
+      const storeState = loadOrCreateMobileRelayStoreState(this.userDataPath);
+      const nextStoreState = rememberTrustedPhoneRecord(storeState, {
+        phoneDeviceId: handshake.trustedPhoneDeviceId,
+        phoneIdentityPublicKey: handshake.trustedPhonePublicKey,
+        lastConnectedAt: new Date().toISOString(),
+      });
+      const persistedState = await persistMobileRelayStoreState(nextStoreState, this.userDataPath);
+      this.identityState = {
+        macDeviceId: persistedState.macDeviceId,
+        macIdentityPublicKey: persistedState.macIdentityPublicKey,
+        macIdentityPrivateKey: persistedState.macIdentityPrivateKey,
+        trustedPhone: persistedState.trustedPhone,
+      };
+    } else {
+      this.identityState = await rememberRemodexTrustedPhoneRecord({
+        phoneDeviceId: handshake.trustedPhoneDeviceId,
+        phoneIdentityPublicKey: handshake.trustedPhonePublicKey,
+      }, {
+        stateDir: this.remodexStateDir,
+      });
+      this.refreshRelayConfiguration();
+    }
     this.syncTrustedPhoneSummary();
     this.emitStateChanged();
-    await this.persistStoreState();
   }
 }

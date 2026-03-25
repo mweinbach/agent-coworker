@@ -14,6 +14,36 @@ import {
   stopMobileRelay,
 } from "../../../lib/desktopCommands";
 
+function describeRelaySource(source: Awaited<ReturnType<typeof getMobileRelayState>>["relaySource"]): string {
+  switch (source) {
+    case "remodex":
+      return "Remodex-backed";
+    case "override":
+      return "Custom override";
+    case "unavailable":
+    default:
+      return "Unavailable";
+  }
+}
+
+function describeRelayServiceStatus(
+  status: Awaited<ReturnType<typeof getMobileRelayState>>["relayServiceStatus"],
+): string {
+  switch (status) {
+    case "running":
+      return "running";
+    case "not-running":
+      return "not running";
+    case "disconnected":
+      return "disconnected";
+    case "unavailable":
+      return "unavailable";
+    case "unknown":
+    default:
+      return "unknown";
+  }
+}
+
 export function RemoteAccessPage() {
   const selectedWorkspace = useAppStore((state) =>
     state.workspaces.find((workspace) => workspace.id === state.selectedWorkspaceId) ?? null,
@@ -121,6 +151,28 @@ export function RemoteAccessPage() {
             <div className="mt-1 text-muted-foreground">
               {loading ? "Loading…" : state?.status ?? "idle"}
             </div>
+            <div className="mt-2 text-xs text-muted-foreground">
+              Relay source: {describeRelaySource(state?.relaySource ?? "unavailable")}
+            </div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              Remodex service: {describeRelayServiceStatus(state?.relayServiceStatus ?? "unknown")}
+            </div>
+            {state?.relayUrl ? (
+              <div className="mt-1 text-xs text-muted-foreground">
+                Relay URL: {state.relayUrl}
+              </div>
+            ) : null}
+            {state?.relayServiceUpdatedAt ? (
+              <div className="mt-1 text-xs text-muted-foreground">
+                Service heartbeat: {state.relayServiceUpdatedAt}
+              </div>
+            ) : null}
+            {state?.relaySourceMessage ? (
+              <div className="mt-2 text-xs text-muted-foreground">{state.relaySourceMessage}</div>
+            ) : null}
+            {state?.relayServiceMessage ? (
+              <div className="mt-1 text-xs text-muted-foreground">{state.relayServiceMessage}</div>
+            ) : null}
             {state?.lastError ? (
               <div className="mt-2 text-xs text-destructive">{state.lastError}</div>
             ) : null}

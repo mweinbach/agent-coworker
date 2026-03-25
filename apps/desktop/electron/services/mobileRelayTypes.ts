@@ -6,6 +6,18 @@ export type MobileRelayStatus =
   | "reconnecting"
   | "error";
 
+export type MobileRelaySource =
+  | "remodex"
+  | "override"
+  | "unavailable";
+
+export type MobileRelayServiceStatus =
+  | "unknown"
+  | "running"
+  | "not-running"
+  | "disconnected"
+  | "unavailable";
+
 export type MobileRelayPairingPayload = {
   v: number;
   relay: string;
@@ -32,6 +44,11 @@ export type MobileRelayStoreState = {
   trustedPhone: MobileRelayTrustedPhoneRecord | null;
 };
 
+export type MobileRelayIdentityState = Pick<
+  MobileRelayStoreState,
+  "macDeviceId" | "macIdentityPublicKey" | "macIdentityPrivateKey" | "trustedPhone"
+>;
+
 export type MobileRelayWorkspaceRecord = {
   id: string;
   name: string;
@@ -48,6 +65,11 @@ export type MobileRelayBridgeState = {
   status: MobileRelayStatus;
   workspaceId: string | null;
   workspacePath: string | null;
+  relaySource: MobileRelaySource;
+  relaySourceMessage: string | null;
+  relayServiceStatus: MobileRelayServiceStatus;
+  relayServiceMessage: string | null;
+  relayServiceUpdatedAt: string | null;
   relayUrl: string | null;
   sessionId: string | null;
   pairingPayload: MobileRelayPairingPayload | null;

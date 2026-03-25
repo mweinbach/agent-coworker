@@ -60,6 +60,7 @@ function asNonEmptyString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/** Normalizes and validates a base URL string. Returns `null` if the URL is invalid, empty, or uses a non-HTTP(S) protocol. */
 function normalizeBaseUrl(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
@@ -237,6 +238,11 @@ function providerOptionsBaseUrl(config: AwsBedrockProxyResolutionConfig | AgentC
   return undefined;
 }
 
+/**
+ * Resolves the AWS Bedrock Proxy base URL from multiple sources in priority order:
+ * explicit `baseUrl` > provider options > session config > environment variables.
+ * Returns `undefined` if no base URL is configured from any source.
+ */
 export function resolveAwsBedrockProxyBaseUrl(opts: {
   baseUrl?: string;
   config?: AwsBedrockProxyResolutionConfig | AgentConfig;

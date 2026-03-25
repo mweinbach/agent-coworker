@@ -123,7 +123,7 @@ export function AppTopBar({
   return (
     <div className="app-topbar app-topbar--frame relative flex w-full shrink-0 items-center justify-end px-3">
       <div
-        className="app-topbar__sidebar-fill"
+        className="app-topbar__sidebar-fill border-r border-border/70"
         aria-hidden="true"
         style={{ width: sidebarCollapsed ? 0 : sidebarWidth, borderRightWidth: sidebarCollapsed ? 0 : 1 }}
       />

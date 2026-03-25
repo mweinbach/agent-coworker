@@ -226,7 +226,6 @@ body {
 
 .app-main-content {
   background: color-mix(in srgb, var(--content-surface) 90%, var(--panel-bg) 10%);
-  border-left: 1px solid var(--glass-border);
 }
 
 .app-left-sidebar-pane {

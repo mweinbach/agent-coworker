@@ -77,6 +77,8 @@ describe("desktop app top bar", () => {
       expect(strip).not.toBeNull();
       expect(strip?.className).not.toContain("overflow-hidden");
       expect(sidebarFill).not.toBeNull();
+      expect(sidebarFill?.className).toContain("border-r");
+      expect(sidebarFill?.className).toContain("border-border/70");
       expect(sidebarToggle).not.toBeNull();
       expect(sidebarToggle?.className).toContain("app-topbar__plain-icon-button");
       expect(newChatButton).not.toBeNull();

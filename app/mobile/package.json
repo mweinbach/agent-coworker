@@ -1,0 +1,35 @@
+{
+  "name": "cowork-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "expo": "54.0.33",
+    "expo-barcode-scanner": "13.0.1",
+    "expo-camera": "17.0.10",
+    "expo-constants": "18.0.13",
+    "expo-dev-client": "6.0.20",
+    "expo-linking": "8.0.11",
+    "expo-router": "6.0.23",
+    "expo-secure-store": "15.0.8",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-gesture-handler": "2.28.0",
+    "react-native-reanimated": "4.1.7",
+    "react-native-safe-area-context": "5.6.2",
+    "react-native-screens": "4.16.0",
+    "remodex-secure-transport": "file:modules/remodex-secure-transport",
+    "zod": "4.3.6",
+    "zustand": "5.0.12"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.17",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "Cowork Mobile",
+    "slug": "cowork-mobile",
+    "scheme": "cowork-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0f1a"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "co.weinbach.cowork.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Cowork Mobile uses the camera to scan remote access pairing QR codes."
+      }
+    },
+    "android": {
+      "package": "co.weinbach.cowork.mobile",
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-dev-client",
+      "expo-camera",
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }

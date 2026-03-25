@@ -3,147 +3,65 @@ import { Pressable, Text, View } from "react-native";
 
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
-import { StatusPill } from "@/components/ui/status-pill";
-import { usePairingStore } from "@/features/pairing/pairingStore";
+import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { useAppTheme } from "@/theme/use-app-theme";
 
-export default function ConnectionSettingsScreen() {
+function SettingsRow({ label, detail, href }: { label: string; detail?: string; href: string }) {
   const theme = useAppTheme();
-  const trustedDesktops = usePairingStore((state) => state.trustedMacs);
-  const connectionState = usePairingStore((state) => state.connectionState);
-  const disconnect = usePairingStore((state) => state.disconnect);
-  const forgetTrustedMac = usePairingStore((state) => state.forgetTrustedMac);
-  const tone = connectionState.status === "connected"
-    ? "success"
-    : connectionState.status === "error"
-      ? "danger"
-      : connectionState.status === "connecting" || connectionState.status === "reconnecting" || connectionState.status === "pairing"
-        ? "warning"
-        : "neutral";
+  return (
+    <Link href={href as `/${string}`} asChild>
+      <Pressable
+        style={({ pressed }) => ({
+          flexDirection: "row",
+          justifyContent: "space-between",
+          alignItems: "center",
+          paddingVertical: 14,
+          paddingHorizontal: 16,
+          borderRadius: 16,
+          borderCurve: "continuous",
+          backgroundColor: pressed ? theme.surfaceMuted : theme.surfaceElevated,
+          borderWidth: 1,
+          borderColor: pressed ? theme.primary : theme.borderMuted,
+        })}
+      >
+        <Text style={{ color: theme.text, fontSize: 16, fontWeight: "600" }}>{label}</Text>
+        {detail ? (
+          <Text style={{ color: theme.textSecondary, fontSize: 14 }}>{detail}</Text>
+        ) : null}
+      </Pressable>
+    </Link>
+  );
+}
+
+export default function SettingsHubScreen() {
+  const sessionState = useWorkspaceStore((state) => state.sessionState);
 
   return (
-    <Screen scroll>
+    <Screen scroll contentStyle={{ gap: 18 }}>
       <SectionCard
-        title="Secure transport"
-        description="Your pairing and trust state live in the native relay module, so reconnecting here keeps desktop access portable across sessions."
-        action={<StatusPill label={connectionState.status} tone={tone} />}
+        title="Configuration"
+        description="Manage providers, models, integrations, and usage for the active workspace."
       >
         <View style={{ gap: 10 }}>
-          <View style={{ gap: 4 }}>
-            <Text selectable style={{ color: theme.textSecondary, fontSize: 13 }}>Connected desktop</Text>
-            <Text selectable style={{ color: theme.text, fontSize: 16, fontWeight: "600" }}>
-              {connectionState.connectedMacDeviceId ?? "Not connected"}
-            </Text>
-          </View>
-          <View style={{ gap: 4 }}>
-            <Text selectable style={{ color: theme.textSecondary, fontSize: 13 }}>Relay URL</Text>
-            <Text selectable style={{ color: theme.text, fontSize: 14 }}>
-              {connectionState.relayUrl ?? "No active relay session"}
-            </Text>
-          </View>
-          {connectionState.lastError ? (
-            <Text selectable style={{ color: theme.danger, fontSize: 14, lineHeight: 21 }}>
-              {connectionState.lastError}
-            </Text>
-          ) : null}
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-            <Link href="/(pairing)/scan" asChild>
-              <Pressable
-                style={({ pressed }) => ({
-                  borderRadius: 999,
-                  borderCurve: "continuous",
-                  backgroundColor: pressed ? theme.accent : theme.primary,
-                  paddingHorizontal: 16,
-                  paddingVertical: 11,
-                })}
-              >
-                <Text style={{ color: theme.primaryText, fontWeight: "700" }}>Pair another desktop</Text>
-              </Pressable>
-            </Link>
-            <Pressable
-              onPress={() => {
-                void disconnect();
-              }}
-              style={({ pressed }) => ({
-                borderRadius: 999,
-                borderCurve: "continuous",
-                borderWidth: 1,
-                borderColor: theme.border,
-                backgroundColor: pressed ? theme.surfaceMuted : "transparent",
-                paddingHorizontal: 16,
-                paddingVertical: 11,
-              })}
-            >
-              <Text style={{ color: theme.text, fontWeight: "700" }}>Disconnect</Text>
-            </Pressable>
-          </View>
+          <SettingsRow
+            label="Providers"
+            detail={sessionState?.provider ?? undefined}
+            href="/(app)/(tabs)/(settings)/providers"
+          />
+          <SettingsRow
+            label="Models"
+            detail={sessionState?.effectiveModel ?? sessionState?.model ?? undefined}
+            href="/(app)/(tabs)/(settings)/models"
+          />
+          <SettingsRow
+            label="MCP Servers"
+            href="/(app)/(tabs)/(settings)/mcp"
+          />
+          <SettingsRow
+            label="Usage"
+            href="/(app)/(tabs)/(settings)/usage"
+          />
         </View>
-      </SectionCard>
-
-      <SectionCard
-        title="Trusted desktops"
-        description={trustedDesktops.length === 0 ? "Nothing saved yet" : `${trustedDesktops.length} remembered desktops`}
-      >
-        {trustedDesktops.length === 0 ? (
-          <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
-            Pair your first desktop from the scanner to start syncing conversations and approvals onto mobile.
-          </Text>
-        ) : (
-          trustedDesktops.map((trustedMac) => (
-            <View
-              key={trustedMac.macDeviceId}
-              style={{
-                gap: 10,
-                borderRadius: 22,
-                borderCurve: "continuous",
-                borderWidth: 1,
-                borderColor: theme.borderMuted,
-                backgroundColor: theme.surfaceElevated,
-                paddingHorizontal: 16,
-                paddingVertical: 14,
-              }}
-            >
-              <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 12 }}>
-                <View style={{ flex: 1, gap: 4 }}>
-                  <Text selectable style={{ color: theme.text, fontSize: 16, fontWeight: "700" }}>
-                    {trustedMac.displayName}
-                  </Text>
-                  <Text
-                    selectable
-                    style={{
-                      color: theme.textSecondary,
-                      fontSize: 13,
-                      fontVariant: ["tabular-nums"],
-                    }}
-                  >
-                    {trustedMac.fingerprint}
-                  </Text>
-                </View>
-                <StatusPill label={trustedMac.lastConnectedAt ? "recent" : "saved"} tone="primary" />
-              </View>
-              <Text selectable style={{ color: theme.textTertiary, fontSize: 12 }}>
-                Last connected: {trustedMac.lastConnectedAt ?? "Never"}
-              </Text>
-              <Pressable
-                onPress={() => {
-                  void forgetTrustedMac(trustedMac.macDeviceId);
-                }}
-                style={({ pressed }) => ({
-                  alignSelf: "flex-start",
-                  borderRadius: 999,
-                  borderCurve: "continuous",
-                  borderWidth: 1,
-                  borderColor: theme.danger,
-                  backgroundColor: pressed ? theme.dangerMuted : "transparent",
-                  paddingHorizontal: 14,
-                  paddingVertical: 9,
-                })}
-              >
-                <Text style={{ color: theme.danger, fontWeight: "700" }}>Forget desktop</Text>
-              </Pressable>
-            </View>
-          ))
-        )}
       </SectionCard>
     </Screen>
   );

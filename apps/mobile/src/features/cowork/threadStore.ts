@@ -66,6 +66,7 @@ type ThreadStoreState = {
   setComposerDraft(threadId: string, text: string): void;
   submitComposer(threadId: string): void;
   interruptThread(threadId: string): void;
+  clearAll(): void;
 };
 
 function ensureThreadSnapshot(threadId: string, existing?: SessionSnapshotLike): SessionSnapshotLike {
@@ -374,6 +375,14 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         },
         threads: updateThreadList(state, threadId, nextSnapshot),
       };
+    });
+  },
+  clearAll() {
+    set({
+      snapshots: {},
+      threads: [],
+      selectedThreadId: null,
+      pendingRequests: {},
     });
   },
 }));

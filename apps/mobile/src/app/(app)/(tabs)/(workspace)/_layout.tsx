@@ -2,7 +2,7 @@ import { Stack } from "expo-router";
 
 import { useAppTheme } from "@/theme/use-app-theme";
 
-export default function SettingsStackLayout() {
+export default function WorkspaceStackLayout() {
   const theme = useAppTheme();
 
   return (
@@ -23,11 +23,10 @@ export default function SettingsStackLayout() {
         },
       }}
     >
-      <Stack.Screen name="index" options={{ title: "Settings" }} />
-      <Stack.Screen name="providers" options={{ title: "Providers" }} />
-      <Stack.Screen name="models" options={{ title: "Models" }} />
-      <Stack.Screen name="mcp" options={{ title: "MCP Servers" }} />
-      <Stack.Screen name="usage" options={{ title: "Usage" }} />
+      <Stack.Screen name="index" options={{ title: "Workspace" }} />
+      <Stack.Screen name="skills" options={{ title: "Skills" }} />
+      <Stack.Screen name="memory" options={{ title: "Memory" }} />
+      <Stack.Screen name="backups" options={{ title: "Backups" }} />
     </Stack>
   );
 }

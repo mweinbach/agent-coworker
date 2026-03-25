@@ -11,9 +11,17 @@ export default function AppTabsLayout() {
         <Label>Threads</Label>
         <Icon sf={{ default: "bubble.left", selected: "bubble.left.fill" }} />
       </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="(workspace)">
+        <Label>Workspace</Label>
+        <Icon sf={{ default: "square.grid.2x2", selected: "square.grid.2x2.fill" }} />
+      </NativeTabs.Trigger>
       <NativeTabs.Trigger name="(settings)">
-        <Label>Connection</Label>
+        <Label>Settings</Label>
         <Icon sf={{ default: "gearshape", selected: "gearshape.fill" }} />
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="(connection)">
+        <Label>Connection</Label>
+        <Icon sf={{ default: "wifi", selected: "wifi" }} />
       </NativeTabs.Trigger>
     </NativeTabs>
   );

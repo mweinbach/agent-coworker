@@ -50,6 +50,43 @@ type NativeSecureTransportModule = {
 
 const nativeModule = requireOptionalNativeModule<NativeSecureTransportModule>("RemodexSecureTransport");
 
+type MockFeedItem =
+  | {
+      id: string;
+      kind: "message";
+      role: "user" | "assistant";
+      ts: string;
+      text: string;
+    }
+  | {
+      id: string;
+      kind: "system";
+      ts: string;
+      line: string;
+    };
+
+type MockThreadRecord = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  lastEventSeq: number;
+  feed: MockFeedItem[];
+};
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function queueMessage(
+  emitter: RemodexSecureTransportFallback,
+  payload: unknown,
+): void {
+  queueMicrotask(() => {
+    emitter.emitPlaintext(JSON.stringify(payload));
+  });
+}
+
 class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransportEvents> {
   private state: RemodexSecureTransportState = {
     status: "idle",
@@ -59,6 +96,114 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
     trustedMacs: [],
     lastError: null,
   };
+  private threads: MockThreadRecord[] = [];
+
+  private emitStateChanged(): void {
+    (this as unknown as { emit: (eventName: "stateChanged", payload: RemodexSecureTransportState) => void }).emit(
+      "stateChanged",
+      this.state,
+    );
+  }
+
+  private emitSecureError(message: string): void {
+    (this as unknown as { emit: (eventName: "secureError", payload: { message: string }) => void }).emit(
+      "secureError",
+      { message },
+    );
+  }
+
+  private emitSocketClosed(reason: string | null): void {
+    (this as unknown as { emit: (eventName: "socketClosed", payload: { reason?: string | null }) => void }).emit(
+      "socketClosed",
+      { reason },
+    );
+  }
+
+  emitPlaintext(text: string): void {
+    (this as unknown as { emit: (eventName: "plaintextMessage", payload: { text: string }) => void }).emit(
+      "plaintextMessage",
+      { text },
+    );
+  }
+
+  private ensureDemoThreads(): void {
+    if (this.threads.length > 0) {
+      return;
+    }
+    const createdAt = nowIso();
+    this.threads = [{
+      id: "mobile-demo-thread",
+      title: "Remote Access Demo",
+      createdAt,
+      updatedAt: createdAt,
+      lastEventSeq: 2,
+      feed: [
+        {
+          id: "mobile-demo:system",
+          kind: "system",
+          ts: createdAt,
+          line: "Remote Access demo thread hydrated from the secure transport fallback.",
+        },
+        {
+          id: "mobile-demo:assistant:welcome",
+          kind: "message",
+          role: "assistant",
+          ts: createdAt,
+          text: "You are connected to the mock Remodex transport. Send a prompt to exercise the mobile JSON-RPC flow.",
+        },
+      ],
+    }];
+  }
+
+  private threadSummary(thread: MockThreadRecord) {
+    const lastMessage = [...thread.feed].reverse().find((entry) => entry.kind === "message");
+    return {
+      id: thread.id,
+      title: thread.title,
+      preview: lastMessage?.text ?? "",
+      modelProvider: "opencode",
+      model: "mobile-fallback",
+      cwd: "/workspace",
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+      messageCount: thread.feed.filter((entry) => entry.kind === "message").length,
+      lastEventSeq: thread.lastEventSeq,
+      status: { type: "idle" },
+    };
+  }
+
+  private threadReadResult(thread: MockThreadRecord) {
+    return {
+      thread: this.threadSummary(thread),
+      coworkSnapshot: {
+        sessionId: thread.id,
+        title: thread.title,
+        titleSource: "manual",
+        provider: "opencode",
+        model: "mobile-fallback",
+        sessionKind: "primary",
+        createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
+        messageCount: thread.feed.filter((entry) => entry.kind === "message").length,
+        lastEventSeq: thread.lastEventSeq,
+        feed: thread.feed,
+        agents: [],
+        todos: [],
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+      },
+      journalTailSeq: thread.lastEventSeq,
+    };
+  }
+
+  private emitThreadNotification(thread: MockThreadRecord): void {
+    queueMessage(this, {
+      method: "thread/started",
+      params: {
+        thread: this.threadSummary(thread),
+      },
+    });
+  }
 
   async listTrustedMacs(): Promise<RemodexTrustedMacSummary[]> {
     return this.state.trustedMacs;
@@ -69,11 +214,12 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
       ...this.state,
       trustedMacs: this.state.trustedMacs.filter((entry) => entry.macDeviceId !== macDeviceId),
     };
-    this.emit("stateChanged", this.state);
+    this.emitStateChanged();
     return this.state;
   }
 
   async connectFromQr(payload: RemodexQrPairingPayload): Promise<RemodexSecureTransportState> {
+    this.ensureDemoThreads();
     const trustedMac: RemodexTrustedMacSummary = {
       macDeviceId: payload.macDeviceId,
       macIdentityPublicKey: payload.macIdentityPublicKey,
@@ -89,11 +235,12 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
       trustedMacs: [trustedMac],
       lastError: null,
     };
-    this.emit("stateChanged", this.state);
+    this.emitStateChanged();
     return this.state;
   }
 
   async connectTrusted(macDeviceId: string): Promise<RemodexSecureTransportState> {
+    this.ensureDemoThreads();
     const trusted = this.state.trustedMacs.find((entry) => entry.macDeviceId === macDeviceId) ?? null;
     if (!trusted) {
       this.state = {
@@ -101,8 +248,8 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
         status: "error",
         lastError: "Trusted desktop not found.",
       };
-      this.emit("secureError", { message: this.state.lastError ?? "Trusted desktop not found." });
-      this.emit("stateChanged", this.state);
+      this.emitSecureError(this.state.lastError ?? "Trusted desktop not found.");
+      this.emitStateChanged();
       return this.state;
     }
     this.state = {
@@ -113,7 +260,7 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
       sessionId: this.state.sessionId ?? `trusted-${trusted.macDeviceId}`,
       lastError: null,
     };
-    this.emit("stateChanged", this.state);
+    this.emitStateChanged();
     return this.state;
   }
 
@@ -126,13 +273,232 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
       sessionId: null,
       lastError: null,
     };
-    this.emit("socketClosed", { reason: "manual disconnect" });
-    this.emit("stateChanged", this.state);
+    this.emitSocketClosed("manual disconnect");
+    this.emitStateChanged();
     return this.state;
   }
 
   async sendPlaintext(text: string): Promise<void> {
-    this.emit("plaintextMessage", { text });
+    let message: unknown;
+    try {
+      message = JSON.parse(text);
+    } catch {
+      this.emitPlaintext(text);
+      return;
+    }
+
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      return;
+    }
+
+    const envelope = message as Record<string, unknown>;
+    const method = typeof envelope.method === "string" ? envelope.method : "";
+    const id = typeof envelope.id === "string" || typeof envelope.id === "number"
+      ? envelope.id
+      : null;
+
+    if (!method) {
+      return;
+    }
+
+    this.ensureDemoThreads();
+
+    if (method === "initialize" && id !== null) {
+      queueMessage(this, {
+        id,
+        result: {
+          protocolVersion: "0.1",
+          serverInfo: {
+            name: "cowork-mobile-fallback",
+            subprotocol: "cowork.jsonrpc.v1",
+          },
+          capabilities: {
+            experimentalApi: false,
+          },
+          transport: {
+            type: "websocket",
+            protocolMode: "jsonrpc",
+          },
+        },
+      });
+      return;
+    }
+
+    if (method === "initialized") {
+      for (const thread of this.threads) {
+        this.emitThreadNotification(thread);
+      }
+      return;
+    }
+
+    if (method === "thread/list" && id !== null) {
+      queueMessage(this, {
+        id,
+        result: {
+          threads: this.threads.map((thread) => this.threadSummary(thread)),
+        },
+      });
+      return;
+    }
+
+    if (method === "thread/read" && id !== null) {
+      const params = envelope.params && typeof envelope.params === "object"
+        ? envelope.params as Record<string, unknown>
+        : {};
+      const threadId = typeof params.threadId === "string" ? params.threadId : "";
+      const thread = this.threads.find((entry) => entry.id === threadId) ?? this.threads[0];
+      if (!thread) {
+        queueMessage(this, {
+          id,
+          error: {
+            code: -32000,
+            message: "Unknown thread",
+          },
+        });
+        return;
+      }
+      queueMessage(this, {
+        id,
+        result: this.threadReadResult(thread),
+      });
+      return;
+    }
+
+    if (method === "turn/start" && id !== null) {
+      const params = envelope.params && typeof envelope.params === "object"
+        ? envelope.params as Record<string, unknown>
+        : {};
+      const threadId = typeof params.threadId === "string" ? params.threadId : this.threads[0]?.id ?? "mobile-demo-thread";
+      const input = Array.isArray(params.input) ? params.input : [];
+      const textPart = input.find((entry) => entry && typeof entry === "object" && (entry as Record<string, unknown>).type === "text") as
+        | { text?: unknown }
+        | undefined;
+      const prompt = typeof textPart?.text === "string" ? textPart.text : "Hello from mobile";
+      const thread = this.threads.find((entry) => entry.id === threadId) ?? this.threads[0];
+      if (!thread) {
+        return;
+      }
+
+      const turnId = `turn-${Date.now()}`;
+      const userItemId = `${turnId}:user`;
+      const assistantItemId = `${turnId}:assistant`;
+      const ts = nowIso();
+      const userItem = {
+        id: userItemId,
+        type: "userMessage",
+        content: [{ type: "text", text: prompt }],
+      };
+      const assistantItem = {
+        id: assistantItemId,
+        type: "agentMessage",
+        text: `Mock remote reply: ${prompt}`,
+      };
+
+      thread.lastEventSeq += 1;
+      thread.feed.push({
+        id: userItemId,
+        kind: "message",
+        role: "user",
+        ts,
+        text: prompt,
+      });
+      thread.lastEventSeq += 1;
+      thread.feed.push({
+        id: assistantItemId,
+        kind: "message",
+        role: "assistant",
+        ts,
+        text: assistantItem.text,
+      });
+      thread.updatedAt = ts;
+
+      queueMessage(this, {
+        id,
+        result: {
+          turn: {
+            id: turnId,
+            threadId: thread.id,
+            status: "running",
+            items: [userItem],
+          },
+        },
+      });
+      queueMessage(this, {
+        method: "turn/started",
+        params: {
+          threadId: thread.id,
+          turn: {
+            id: turnId,
+            status: "running",
+            items: [userItem],
+          },
+        },
+      });
+      queueMessage(this, {
+        method: "item/started",
+        params: {
+          threadId: thread.id,
+          turnId,
+          item: userItem,
+        },
+      });
+      queueMessage(this, {
+        method: "item/completed",
+        params: {
+          threadId: thread.id,
+          turnId,
+          item: userItem,
+        },
+      });
+      queueMessage(this, {
+        method: "item/started",
+        params: {
+          threadId: thread.id,
+          turnId,
+          item: {
+            id: assistantItemId,
+            type: "agentMessage",
+            text: "",
+          },
+        },
+      });
+      queueMessage(this, {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: thread.id,
+          turnId,
+          itemId: assistantItemId,
+          delta: assistantItem.text,
+        },
+      });
+      queueMessage(this, {
+        method: "item/completed",
+        params: {
+          threadId: thread.id,
+          turnId,
+          item: assistantItem,
+        },
+      });
+      queueMessage(this, {
+        method: "turn/completed",
+        params: {
+          threadId: thread.id,
+          turn: {
+            id: turnId,
+            status: "completed",
+          },
+        },
+      });
+      return;
+    }
+
+    if (method === "turn/interrupt" && id !== null) {
+      queueMessage(this, {
+        id,
+        result: {},
+      });
+      return;
+    }
   }
 
   async getState(): Promise<RemodexSecureTransportState> {

@@ -6,6 +6,7 @@ export const PROVIDER_NAMES = [
   "anthropic",
   "baseten",
   "together",
+  "fireworks",
   "nvidia",
   "lmstudio",
   "opencode-go",

@@ -29,6 +29,7 @@ import {
   resolveOpenCodeApiKey,
   type OpenCodeProviderName,
 } from "../providers/opencodeShared";
+import { getFireworksModelSpec, resolveFireworksApiKey } from "../providers/fireworksShared";
 import { getTogetherModelSpec, resolveTogetherApiKey } from "../providers/togetherShared";
 import type { ModelMessage, ProviderName } from "../types";
 import { getResolvedModelMetadataSync } from "../models/metadata";
@@ -313,6 +314,29 @@ function getTogetherPiModel(modelId: string): PiModel | null {
   };
 }
 
+function getFireworksPiModel(modelId: string): PiModel | null {
+  const modelSpec = getFireworksModelSpec(modelId);
+  if (!modelSpec) return null;
+
+  return {
+    id: modelSpec.id,
+    name: modelSpec.name,
+    api: "openai-completions",
+    provider: "fireworks",
+    baseUrl: modelSpec.baseUrl,
+    reasoning: modelSpec.reasoning,
+    input: [...modelSpec.input],
+    cost: {
+      input: modelSpec.pricing.input,
+      output: modelSpec.pricing.output,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: modelSpec.contextWindow,
+    maxTokens: modelSpec.maxTokens,
+  };
+}
+
 function getNvidiaPiModel(modelId: string): PiModel | null {
   const modelSpec = getNvidiaModelSpec(modelId);
   if (!modelSpec) return null;
@@ -514,6 +538,17 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveTogetherApiKey({
         savedKey: getSavedProviderApiKey(params.config, "together"),
+      }),
+    };
+  }
+
+  if (provider === "fireworks") {
+    const model = getFireworksPiModel(modelId);
+    if (!model) throw new Error(`No PI model metadata available for provider fireworks (model: ${modelId}).`);
+    return {
+      model: applySupportedModelMetadata(model, provider, modelId),
+      apiKey: resolveFireworksApiKey({
+        savedKey: getSavedProviderApiKey(params.config, "fireworks"),
       }),
     };
   }

@@ -14,6 +14,7 @@
  *   - https://www.anthropic.com/pricing
  *   - https://docs.baseten.co/docs/model-apis/overview
  *   - https://docs.together.ai/docs/serverless-models
+ *   - https://fireworks.ai (serverless model pricing)
  *
  * Override or extend entries at runtime with
  * `COWORK_MODEL_PRICING_OVERRIDES='{"provider:model":{"inputPerMillion":...,"outputPerMillion":...}}'`.
@@ -86,6 +87,18 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
   "together:zai-org/GLM-5": {
     inputPerMillion: 1,
     outputPerMillion: 3.2,
+  },
+  "fireworks:accounts/fireworks/models/glm-5": {
+    inputPerMillion: 1,
+    outputPerMillion: 3.2,
+  },
+  "fireworks:accounts/fireworks/models/kimi-k2p5": {
+    inputPerMillion: 0.6,
+    outputPerMillion: 3,
+  },
+  "fireworks:accounts/fireworks/models/minimax-m2p5": {
+    inputPerMillion: 0.3,
+    outputPerMillion: 1.2,
   },
   // OpenCode Go is intentionally excluded from local pricing estimates.
   "opencode-zen:glm-5": {
@@ -254,6 +267,7 @@ function isPricingOverrideKey(value: string): value is `${ProviderName}:${string
     || provider === "anthropic"
     || provider === "baseten"
     || provider === "together"
+    || provider === "fireworks"
     || provider === "opencode-zen"
     || provider === "codex-cli";
 }

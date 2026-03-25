@@ -52,6 +52,7 @@ const PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> = {
   anthropic: [{ id: "api_key", type: "api", label: "API key" }],
   baseten: [{ id: "api_key", type: "api", label: "API key" }],
   together: [{ id: "api_key", type: "api", label: "API key" }],
+  fireworks: [{ id: "api_key", type: "api", label: "API key" }],
   nvidia: [{ id: "api_key", type: "api", label: "API key" }],
   lmstudio: [{ id: "api_key", type: "api", label: "API token (optional)" }],
   "opencode-go": [{ id: "api_key", type: "api", label: "API key" }],

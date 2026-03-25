@@ -5,8 +5,8 @@ import { isProviderName, PROVIDER_NAMES, resolveProviderName } from "../src/type
 // PROVIDER_NAMES
 // ---------------------------------------------------------------------------
 describe("PROVIDER_NAMES", () => {
-  test("contains exactly 10 providers", () => {
-    expect(PROVIDER_NAMES).toHaveLength(10);
+  test("contains exactly 11 providers", () => {
+    expect(PROVIDER_NAMES).toHaveLength(11);
   });
 
   test("contains expected provider names", () => {
@@ -15,6 +15,7 @@ describe("PROVIDER_NAMES", () => {
     expect(PROVIDER_NAMES).toContain("anthropic");
     expect(PROVIDER_NAMES).toContain("baseten");
     expect(PROVIDER_NAMES).toContain("together");
+    expect(PROVIDER_NAMES).toContain("fireworks");
     expect(PROVIDER_NAMES).toContain("nvidia");
     expect(PROVIDER_NAMES).toContain("lmstudio");
     expect(PROVIDER_NAMES).toContain("opencode-go");
@@ -30,6 +31,7 @@ describe("resolveProviderName", () => {
     expect(resolveProviderName("anthropic")).toBe("anthropic");
     expect(resolveProviderName("baseten")).toBe("baseten");
     expect(resolveProviderName("together")).toBe("together");
+    expect(resolveProviderName("fireworks")).toBe("fireworks");
     expect(resolveProviderName("nvidia")).toBe("nvidia");
     expect(resolveProviderName("lmstudio")).toBe("lmstudio");
     expect(resolveProviderName("opencode-go")).toBe("opencode-go");
@@ -67,6 +69,10 @@ describe("isProviderName", () => {
 
     test("together", () => {
       expect(isProviderName("together")).toBe(true);
+    });
+
+    test("fireworks", () => {
+      expect(isProviderName("fireworks")).toBe(true);
     });
 
     test("nvidia", () => {

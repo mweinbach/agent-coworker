@@ -171,6 +171,7 @@ const PROVIDER_DISPLAY_NAMES: Record<ProviderName, string> = {
   anthropic: "Anthropic",
   baseten: "Baseten",
   together: "Together AI",
+  fireworks: "Fireworks AI",
   nvidia: "NVIDIA",
   lmstudio: "LM Studio",
   "opencode-go": "OpenCode Go",

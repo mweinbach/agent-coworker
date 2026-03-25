@@ -1,0 +1,10 @@
+{
+  "id": "accounts/fireworks/models/kimi-k2p5",
+  "provider": "fireworks",
+  "displayName": "Kimi K2.5",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

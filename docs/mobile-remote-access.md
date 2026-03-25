@@ -50,9 +50,17 @@ Included scaffolded areas:
 The current mobile implementation is a scaffolded vertical slice:
 
 - the secure transport module exposes the intended JS/native API surface
-- the fallback JS path simulates trust/connect flows for development
+- the fallback JS path simulates trust/connect flows plus a mock Cowork JSON-RPC sidecar for development
 - the thread UI is wired around `coworkSnapshot.feed`-compatible types and reducers
-- end-to-end secure transport + raw Cowork JSON-RPC wiring is still the next integration step
+- the mobile fallback can now exercise:
+  - `initialize` / `initialized`
+  - `thread/list`
+  - `thread/read`
+  - `turn/start`
+  - `turn/interrupt`
+  - approval request round-trips
+  - ask-for-input round-trips
+- end-to-end native secure transport parity with the real Remodex wire protocol is still the next step
 
 ## Commands
 
@@ -86,7 +94,20 @@ bun run app:mobile:typecheck
 4. Enable remote access.
 5. Scan the QR from the mobile app pairing flow.
 
-At this stage, the QR payload and trusted-device state flow are scaffolded and typed end-to-end, while the final secure relay transport and raw Cowork JSON-RPC bridge on mobile still need to be completed.
+At this stage, the QR payload and trusted-device state flow are scaffolded and typed end-to-end. The Expo fallback path can demo the secure-transport-facing JSON-RPC client and approval/input UX locally on Linux, while the final native secure relay transport parity still needs to be completed.
+
+## Local mobile fallback demo
+
+The Expo-side fallback transport now acts like a tiny mock desktop session once you pair:
+
+1. Open the mobile app and scan the desktop QR.
+2. The fallback transport will hydrate a demo thread list.
+3. Open the demo thread and send prompts.
+4. Use prompts containing:
+   - `approval` to trigger a command approval request
+   - `input` to trigger an ask-for-input request
+
+This gives a local end-to-end demo of the mobile JSON-RPC client, thread hydration, turn streaming, and server-request response handling without requiring iOS/Xcode or the full native Remodex transport to be present on this Linux VM.
 
 ## Scope notes
 
@@ -95,7 +116,8 @@ Current implementation status:
 - desktop bridge/service/UI: implemented
 - mobile Expo project scaffold: implemented
 - native secure-transport module surface: scaffolded
-- mobile transcript/thread UI shell: scaffolded
+- mobile JSON-RPC client + fallback transport integration: implemented
+- mobile transcript/thread UI shell: implemented for fallback/demo path
 - final secure transport handshake parity with Remodex references: pending
 - raw Cowork JSON-RPC over encrypted mobile transport: pending
 
@@ -104,7 +126,7 @@ Current implementation status:
 The current slices were validated with:
 
 ```bash
-bun test test/server.jsonrpc.flow.test.ts test/jsonrpc.codegen.test.ts test/docs.check.test.ts apps/desktop/test/mobile-relay-bridge.test.ts apps/desktop/test/remote-access-page.test.ts apps/desktop/test/settings-nav.test.ts apps/desktop/test/desktop-schemas.test.ts
+bun test test/server.jsonrpc.flow.test.ts test/mobile.pairing-qrcode.test.ts test/mobile.jsonrpc-client.test.ts test/mobile.transport-integration.test.ts apps/desktop/test/mobile-relay-bridge.test.ts apps/desktop/test/remote-access-page.test.ts apps/desktop/test/settings-nav.test.ts apps/desktop/test/desktop-schemas.test.ts
 bun run typecheck
 bun run app:mobile:typecheck
 ```

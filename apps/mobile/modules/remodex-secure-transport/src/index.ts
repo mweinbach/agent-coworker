@@ -51,6 +51,42 @@ type NativeSecureTransportModule = {
 
 const nativeModule = requireOptionalNativeModule<NativeSecureTransportModule>("RemodexSecureTransport");
 
+type SecureStoreLike = {
+  getItemAsync(key: string): Promise<string | null>;
+  setItemAsync(key: string, value: string): Promise<void>;
+  deleteItemAsync?(key: string): Promise<void>;
+};
+
+type PersistedPhoneIdentity = {
+  phoneDeviceId: string;
+  phoneIdentityPublicKey: string;
+};
+
+type PersistedTrustedMacRecord = RemodexTrustedMacSummary & {
+  lastSessionId: string | null;
+};
+
+type PersistedRelayTransportState = {
+  phoneIdentity: PersistedPhoneIdentity | null;
+  trustedMacs: PersistedTrustedMacRecord[];
+};
+
+type RuntimeWebSocket = {
+  readonly readyState: number;
+  close(code?: number, reason?: string): void;
+  send(data: string): void;
+  onopen: ((event: unknown) => void) | null;
+  onmessage: ((event: { data: unknown }) => void) | null;
+  onerror: ((event: { message?: string }) => void) | null;
+  onclose: ((event: { code?: number; reason?: string | null }) => void) | null;
+};
+
+const REMODEX_SECURE_TRANSPORT_STORAGE_KEY = "cowork.remodex.secureTransport";
+const RELAY_RECONNECT_DELAY_MS = 1_000;
+
+let secureStorePromise: Promise<SecureStoreLike | null> | null = null;
+let persistedRelayTransportState: PersistedRelayTransportState | null = null;
+
 type MockFeedItem =
   | {
       id: string;
@@ -100,6 +136,164 @@ type PendingServerRequestRecord =
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function normalizeNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizeRelayUrl(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+function randomToken(prefix: string): string {
+  const cryptoObject = typeof globalThis === "object" && globalThis
+    ? (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
+    : undefined;
+  const suffix = typeof cryptoObject?.randomUUID === "function"
+    ? cryptoObject.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${suffix}`;
+}
+
+function encodeBase64Ascii(value: string): string {
+  if (typeof globalThis.btoa === "function") {
+    return globalThis.btoa(value);
+  }
+  return value;
+}
+
+function cloneTrustedMacRecord(record: PersistedTrustedMacRecord): PersistedTrustedMacRecord {
+  return {
+    macDeviceId: record.macDeviceId,
+    macIdentityPublicKey: record.macIdentityPublicKey,
+    relay: record.relay,
+    displayName: record.displayName,
+    lastResolvedAt: record.lastResolvedAt,
+    lastSessionId: record.lastSessionId,
+  };
+}
+
+function clonePersistedRelayTransportState(state: PersistedRelayTransportState): PersistedRelayTransportState {
+  return {
+    phoneIdentity: state.phoneIdentity
+      ? {
+          phoneDeviceId: state.phoneIdentity.phoneDeviceId,
+          phoneIdentityPublicKey: state.phoneIdentity.phoneIdentityPublicKey,
+        }
+      : null,
+    trustedMacs: state.trustedMacs.map(cloneTrustedMacRecord),
+  };
+}
+
+function createEmptyPersistedRelayTransportState(): PersistedRelayTransportState {
+  return {
+    phoneIdentity: null,
+    trustedMacs: [],
+  };
+}
+
+function normalizePersistedTrustedMacRecord(value: unknown): PersistedTrustedMacRecord | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const macDeviceId = normalizeNonEmptyString(record.macDeviceId);
+  const macIdentityPublicKey = normalizeNonEmptyString(record.macIdentityPublicKey);
+  const relay = normalizeNonEmptyString(record.relay);
+  if (!macDeviceId || !macIdentityPublicKey || !relay) {
+    return null;
+  }
+  return {
+    macDeviceId,
+    macIdentityPublicKey,
+    relay,
+    displayName: normalizeNonEmptyString(record.displayName),
+    lastResolvedAt: normalizeNonEmptyString(record.lastResolvedAt),
+    lastSessionId: normalizeNonEmptyString(record.lastSessionId),
+  };
+}
+
+function normalizePersistedRelayTransportState(value: unknown): PersistedRelayTransportState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return createEmptyPersistedRelayTransportState();
+  }
+  const record = value as Record<string, unknown>;
+  const phoneIdentityValue = record.phoneIdentity;
+  const phoneIdentity = phoneIdentityValue && typeof phoneIdentityValue === "object" && !Array.isArray(phoneIdentityValue)
+    ? (() => {
+        const phoneRecord = phoneIdentityValue as Record<string, unknown>;
+        const phoneDeviceId = normalizeNonEmptyString(phoneRecord.phoneDeviceId);
+        const phoneIdentityPublicKey = normalizeNonEmptyString(phoneRecord.phoneIdentityPublicKey);
+        if (!phoneDeviceId || !phoneIdentityPublicKey) {
+          return null;
+        }
+        return {
+          phoneDeviceId,
+          phoneIdentityPublicKey,
+        };
+      })()
+    : null;
+  const trustedMacs = Array.isArray(record.trustedMacs)
+    ? record.trustedMacs
+      .map((entry) => normalizePersistedTrustedMacRecord(entry))
+      .filter((entry): entry is PersistedTrustedMacRecord => entry !== null)
+    : [];
+  return {
+    phoneIdentity,
+    trustedMacs,
+  };
+}
+
+async function loadSecureStore(): Promise<SecureStoreLike | null> {
+  if (secureStorePromise) {
+    return await secureStorePromise;
+  }
+  secureStorePromise = (async () => {
+    try {
+      const module = await import("expo-secure-store");
+      if (
+        typeof module.getItemAsync === "function"
+        && typeof module.setItemAsync === "function"
+      ) {
+        return module;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  })();
+  return await secureStorePromise;
+}
+
+async function readPersistedRelayTransportState(): Promise<PersistedRelayTransportState> {
+  if (persistedRelayTransportState) {
+    return clonePersistedRelayTransportState(persistedRelayTransportState);
+  }
+  const secureStore = await loadSecureStore();
+  if (!secureStore) {
+    persistedRelayTransportState = createEmptyPersistedRelayTransportState();
+    return clonePersistedRelayTransportState(persistedRelayTransportState);
+  }
+  try {
+    const raw = await secureStore.getItemAsync(REMODEX_SECURE_TRANSPORT_STORAGE_KEY);
+    persistedRelayTransportState = raw
+      ? normalizePersistedRelayTransportState(JSON.parse(raw))
+      : createEmptyPersistedRelayTransportState();
+  } catch {
+    persistedRelayTransportState = createEmptyPersistedRelayTransportState();
+  }
+  return clonePersistedRelayTransportState(persistedRelayTransportState);
+}
+
+async function writePersistedRelayTransportState(nextState: PersistedRelayTransportState): Promise<void> {
+  const normalized = clonePersistedRelayTransportState(nextState);
+  persistedRelayTransportState = normalized;
+  const secureStore = await loadSecureStore();
+  if (!secureStore) {
+    return;
+  }
+  await secureStore.setItemAsync(REMODEX_SECURE_TRANSPORT_STORAGE_KEY, JSON.stringify(normalized));
 }
 
 function queueMessage(
@@ -724,8 +918,437 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
   }
 }
 
+class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEvents> {
+  private state: RemodexSecureTransportState = {
+    status: "idle",
+    transportMode: "native",
+    connectedMacDeviceId: null,
+    relay: null,
+    sessionId: null,
+    trustedMacs: [],
+    lastError: null,
+  };
+  private socket: RuntimeWebSocket | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private currentTarget: PersistedTrustedMacRecord | null = null;
+  private disconnecting = false;
+
+  private emitStateChanged(): void {
+    (this as unknown as { emit: (eventName: "stateChanged", payload: RemodexSecureTransportState) => void }).emit(
+      "stateChanged",
+      this.state,
+    );
+  }
+
+  private emitPlaintext(text: string): void {
+    (this as unknown as { emit: (eventName: "plaintextMessage", payload: { text: string }) => void }).emit(
+      "plaintextMessage",
+      { text },
+    );
+  }
+
+  private emitSecureError(message: string): void {
+    (this as unknown as { emit: (eventName: "secureError", payload: { message: string }) => void }).emit(
+      "secureError",
+      { message },
+    );
+  }
+
+  private emitSocketClosed(reason: string | null, code?: number): void {
+    (this as unknown as { emit: (eventName: "socketClosed", payload: { code?: number; reason?: string | null }) => void }).emit(
+      "socketClosed",
+      { code, reason },
+    );
+  }
+
+  private async readPersistedState(): Promise<PersistedRelayTransportState> {
+    return await readPersistedRelayTransportState();
+  }
+
+  private async writePersistedState(nextState: PersistedRelayTransportState): Promise<void> {
+    await writePersistedRelayTransportState(nextState);
+  }
+
+  private async ensurePhoneIdentity(): Promise<PersistedPhoneIdentity> {
+    const persistedState = await this.readPersistedState();
+    if (persistedState.phoneIdentity) {
+      return persistedState.phoneIdentity;
+    }
+    const phoneIdentity: PersistedPhoneIdentity = {
+      phoneDeviceId: randomToken("phone"),
+      phoneIdentityPublicKey: encodeBase64Ascii(randomToken("phone-public-key")),
+    };
+    await this.writePersistedState({
+      ...persistedState,
+      phoneIdentity,
+    });
+    return phoneIdentity;
+  }
+
+  private async listTrustedMacRecords(): Promise<PersistedTrustedMacRecord[]> {
+    const persistedState = await this.readPersistedState();
+    return persistedState.trustedMacs;
+  }
+
+  private async upsertTrustedMacRecord(record: PersistedTrustedMacRecord): Promise<PersistedTrustedMacRecord[]> {
+    const persistedState = await this.readPersistedState();
+    const remaining = persistedState.trustedMacs.filter((entry) => entry.macDeviceId !== record.macDeviceId);
+    const trustedMacs = [record, ...remaining];
+    await this.writePersistedState({
+      ...persistedState,
+      trustedMacs,
+    });
+    return trustedMacs;
+  }
+
+  private async removeTrustedMacRecord(macDeviceId: string): Promise<PersistedTrustedMacRecord[]> {
+    const persistedState = await this.readPersistedState();
+    const trustedMacs = persistedState.trustedMacs.filter((entry) => entry.macDeviceId !== macDeviceId);
+    await this.writePersistedState({
+      ...persistedState,
+      trustedMacs,
+    });
+    return trustedMacs;
+  }
+
+  private setState(
+    nextState: Partial<RemodexSecureTransportState>,
+    options: { emitSecureError?: string | null } = {},
+  ): RemodexSecureTransportState {
+    this.state = {
+      ...this.state,
+      ...nextState,
+      trustedMacs: nextState.trustedMacs ?? this.state.trustedMacs,
+    };
+    this.emitStateChanged();
+    if (options.emitSecureError) {
+      this.emitSecureError(options.emitSecureError);
+    }
+    return this.state;
+  }
+
+  private clearReconnectTimer(): void {
+    if (!this.reconnectTimer) {
+      return;
+    }
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+  }
+
+  private buildSocketUrl(relay: string, sessionId: string): string {
+    return `${normalizeRelayUrl(relay)}/${sessionId}`;
+  }
+
+  private createSocket(relay: string, sessionId: string, phoneIdentity: PersistedPhoneIdentity): RuntimeWebSocket {
+    const url = this.buildSocketUrl(relay, sessionId);
+    const WebSocketConstructor = globalThis.WebSocket as unknown as {
+      new (url: string, protocols?: string | string[], options?: { headers?: Record<string, string> }): RuntimeWebSocket;
+    } | undefined;
+    if (!WebSocketConstructor) {
+      throw new Error("This mobile build does not expose a WebSocket implementation.");
+    }
+    const headers = {
+      "x-role": "phone",
+      "x-phone-device-id": phoneIdentity.phoneDeviceId,
+      "x-phone-identity-public-key": phoneIdentity.phoneIdentityPublicKey,
+    };
+    try {
+      return new WebSocketConstructor(url, undefined, { headers });
+    } catch {
+      return new WebSocketConstructor(url);
+    }
+  }
+
+  private async handleRelayControlMessage(text: string): Promise<boolean> {
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      parsed = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return false;
+    }
+
+    const kind = typeof parsed.kind === "string" ? parsed.kind : "";
+    if (!kind) {
+      return false;
+    }
+
+    if (kind === "relayMacRegistration") {
+      const registration = parsed.registration && typeof parsed.registration === "object" && !Array.isArray(parsed.registration)
+        ? parsed.registration as Record<string, unknown>
+        : null;
+      const macDeviceId = normalizeNonEmptyString(registration?.macDeviceId);
+      const macIdentityPublicKey = normalizeNonEmptyString(registration?.macIdentityPublicKey);
+      const relay = this.state.relay;
+      if (!macDeviceId || !macIdentityPublicKey || !relay) {
+        return true;
+      }
+      const updatedRecord: PersistedTrustedMacRecord = {
+        macDeviceId,
+        macIdentityPublicKey,
+        relay,
+        displayName: normalizeNonEmptyString(registration?.displayName),
+        lastResolvedAt: nowIso(),
+        lastSessionId: normalizeNonEmptyString(registration?.sessionId) ?? this.state.sessionId,
+      };
+      const trustedMacs = await this.upsertTrustedMacRecord(updatedRecord);
+      if (this.currentTarget?.macDeviceId === macDeviceId) {
+        this.currentTarget = updatedRecord;
+      }
+      this.setState({
+        connectedMacDeviceId: macDeviceId,
+        trustedMacs,
+      });
+      return true;
+    }
+
+    if (
+      kind === "serverHello"
+      || kind === "clientAuth"
+      || kind === "resumeState"
+      || kind === "clientHello"
+      || kind === "secureReady"
+    ) {
+      return true;
+    }
+
+    if (kind === "secureError") {
+      const message = normalizeNonEmptyString(parsed.message) ?? "Secure relay error.";
+      this.setState(
+        {
+          status: "error",
+          lastError: message,
+        },
+        { emitSecureError: message },
+      );
+      return true;
+    }
+
+    return false;
+  }
+
+  private async openSocket(target: PersistedTrustedMacRecord, sessionId: string): Promise<RemodexSecureTransportState> {
+    const phoneIdentity = await this.ensurePhoneIdentity();
+    this.disconnecting = true;
+    this.clearReconnectTimer();
+    const previousSocket = this.socket;
+    this.socket = null;
+    previousSocket?.close();
+    this.disconnecting = false;
+
+    this.currentTarget = {
+      ...target,
+      lastSessionId: sessionId,
+    };
+    const trustedMacs = await this.upsertTrustedMacRecord(this.currentTarget);
+    this.setState({
+      status: "connecting",
+      transportMode: "native",
+      connectedMacDeviceId: target.macDeviceId,
+      relay: target.relay,
+      sessionId,
+      trustedMacs,
+      lastError: null,
+    });
+
+    const socket = this.createSocket(target.relay, sessionId, phoneIdentity);
+    this.socket = socket;
+
+    return await new Promise<RemodexSecureTransportState>((resolve) => {
+      let settled = false;
+      socket.onopen = () => {
+        if (this.socket !== socket) {
+          return;
+        }
+        socket.send(JSON.stringify({
+          kind: "clientHello",
+          phoneDeviceId: phoneIdentity.phoneDeviceId,
+          phoneIdentityPublicKey: phoneIdentity.phoneIdentityPublicKey,
+        }));
+        socket.send(JSON.stringify({ kind: "secureReady" }));
+        settled = true;
+        resolve(this.setState({
+          status: "connected",
+          transportMode: "native",
+          connectedMacDeviceId: target.macDeviceId,
+          relay: target.relay,
+          sessionId,
+          lastError: null,
+        }));
+      };
+      socket.onmessage = (event) => {
+        if (this.socket !== socket) {
+          return;
+        }
+        const text = typeof event.data === "string" ? event.data : String(event.data ?? "");
+        void this.handleRelayControlMessage(text).then((handled) => {
+          if (!handled) {
+            this.emitPlaintext(text);
+          }
+        });
+      };
+      socket.onerror = (event) => {
+        const message = normalizeNonEmptyString(event.message) ?? "Could not open the secure relay session.";
+        if (!settled) {
+          settled = true;
+          resolve(this.setState(
+            {
+              status: "error",
+              connectedMacDeviceId: target.macDeviceId,
+              relay: target.relay,
+              sessionId,
+              lastError: message,
+            },
+            { emitSecureError: message },
+          ));
+          return;
+        }
+        this.setState(
+          {
+            status: "error",
+            lastError: message,
+          },
+          { emitSecureError: message },
+        );
+      };
+      socket.onclose = (event) => {
+        if (this.socket !== socket) {
+          return;
+        }
+        this.socket = null;
+        this.emitSocketClosed(event.reason ?? null, event.code);
+        if (this.disconnecting) {
+          return;
+        }
+        if (!this.currentTarget?.lastSessionId) {
+          this.setState({
+            status: "idle",
+            lastError: null,
+          });
+          return;
+        }
+        this.setState({
+          status: "reconnecting",
+          lastError: event.reason ?? null,
+        });
+        this.clearReconnectTimer();
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+          const reconnectTarget = this.currentTarget;
+          if (!reconnectTarget?.lastSessionId) {
+            return;
+          }
+          void this.openSocket(reconnectTarget, reconnectTarget.lastSessionId);
+        }, RELAY_RECONNECT_DELAY_MS);
+      };
+    });
+  }
+
+  async listTrustedMacs(): Promise<RemodexTrustedMacSummary[]> {
+    return (await this.listTrustedMacRecords()).map(({ lastSessionId: _lastSessionId, ...record }) => record);
+  }
+
+  async forgetTrustedMac(macDeviceId: string): Promise<RemodexSecureTransportState> {
+    const trustedMacs = await this.removeTrustedMacRecord(macDeviceId);
+    if (this.currentTarget?.macDeviceId === macDeviceId) {
+      await this.disconnect();
+      return this.setState({ trustedMacs });
+    }
+    return this.setState({ trustedMacs });
+  }
+
+  async connectFromQr(payload: RemodexQrPairingPayload): Promise<RemodexSecureTransportState> {
+    const relay = normalizeNonEmptyString(payload.relay);
+    const sessionId = normalizeNonEmptyString(payload.sessionId);
+    const macDeviceId = normalizeNonEmptyString(payload.macDeviceId);
+    const macIdentityPublicKey = normalizeNonEmptyString(payload.macIdentityPublicKey);
+    if (!relay || !sessionId || !macDeviceId || !macIdentityPublicKey) {
+      return this.setState(
+        {
+          status: "error",
+          transportMode: "native",
+          connectedMacDeviceId: macDeviceId,
+          relay,
+          sessionId,
+          lastError: "The pairing QR is missing relay connection details.",
+        },
+        { emitSecureError: "The pairing QR is missing relay connection details." },
+      );
+    }
+    return await this.openSocket({
+      macDeviceId,
+      macIdentityPublicKey,
+      relay,
+      displayName: "Desktop bridge",
+      lastResolvedAt: nowIso(),
+      lastSessionId: sessionId,
+    }, sessionId);
+  }
+
+  async connectTrusted(macDeviceId: string): Promise<RemodexSecureTransportState> {
+    const trustedMac = (await this.listTrustedMacRecords()).find((entry) => entry.macDeviceId === macDeviceId) ?? null;
+    if (!trustedMac?.lastSessionId) {
+      return this.setState(
+        {
+          status: "error",
+          transportMode: "native",
+          connectedMacDeviceId: macDeviceId,
+          lastError: "This saved desktop needs a fresh pairing QR before it can reconnect.",
+        },
+        { emitSecureError: "This saved desktop needs a fresh pairing QR before it can reconnect." },
+      );
+    }
+    return await this.openSocket(trustedMac, trustedMac.lastSessionId);
+  }
+
+  async disconnect(): Promise<RemodexSecureTransportState> {
+    this.disconnecting = true;
+    this.clearReconnectTimer();
+    const socket = this.socket;
+    this.socket = null;
+    this.currentTarget = null;
+    socket?.close(1000, "Disconnected");
+    this.disconnecting = false;
+    return this.setState({
+      status: "idle",
+      transportMode: "native",
+      connectedMacDeviceId: null,
+      relay: null,
+      sessionId: null,
+      lastError: null,
+    });
+  }
+
+  async sendPlaintext(text: string): Promise<void> {
+    if (!this.socket || this.socket.readyState !== 1) {
+      throw new Error("Secure relay is not connected.");
+    }
+    this.socket.send(text);
+  }
+
+  async getState(): Promise<RemodexSecureTransportState> {
+    const trustedMacs = await this.listTrustedMacs();
+    if (this.state.trustedMacs.length !== trustedMacs.length) {
+      this.state = {
+        ...this.state,
+        trustedMacs,
+      };
+    }
+    return this.state;
+  }
+}
+
 const fallbackModule = new RemodexSecureTransportFallback();
-const transport = nativeModule ?? fallbackModule;
+const relayModule = new RemodexSecureTransportRelay();
+const preferDemoTransport = typeof globalThis === "object" && "Bun" in globalThis;
+const preferNativeTransport = !preferDemoTransport
+  && typeof process !== "undefined"
+  && process.env?.COWORK_MOBILE_USE_NATIVE_TRANSPORT === "1"
+  && nativeModule;
+const transport = preferDemoTransport
+  ? fallbackModule
+  : preferNativeTransport
+    ? nativeModule
+    : relayModule;
 
 export function addRemodexListener<EventName extends keyof RemodexSecureTransportEvents>(
   eventName: EventName,

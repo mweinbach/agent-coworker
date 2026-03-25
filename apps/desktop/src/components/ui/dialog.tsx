@@ -7,10 +7,52 @@ import { Button } from "@/components/ui/button";
 
 type DialogContextValue = {
   open: boolean;
+  restoreFocusRef: React.MutableRefObject<HTMLElement | null>;
+  triggerRef: React.MutableRefObject<HTMLElement | null>;
   setOpen: (open: boolean) => void;
 };
 
 const DialogContext = React.createContext<DialogContextValue | null>(null);
+
+const DIALOG_FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled]):not([type='hidden'])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+  "[contenteditable='true']",
+].join(",");
+
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR)).filter(
+    (element) => !element.hasAttribute("disabled") && element.getAttribute("aria-hidden") !== "true",
+  );
+}
+
+function focusFirstElement(container: HTMLElement) {
+  const target = getFocusableElements(container)[0] ?? container;
+  target.focus();
+}
+
+function assignElementRef<T>(ref: React.Ref<T> | undefined, value: T | null) {
+  if (!ref) {
+    return;
+  }
+  if (typeof ref === "function") {
+    ref(value);
+    return;
+  }
+  (ref as React.MutableRefObject<T | null>).current = value;
+}
+
+function getElementRef<T>(element: React.ReactElement): React.Ref<T> | undefined {
+  const withPossibleRef = element as React.ReactElement & {
+    ref?: React.Ref<T>;
+    props: { ref?: React.Ref<T> };
+  };
+  return withPossibleRef.props.ref ?? withPossibleRef.ref;
+}
 
 function useDialogContext(): DialogContextValue {
   const context = React.useContext(DialogContext);
@@ -28,8 +70,16 @@ type DialogProps = React.PropsWithChildren<{
 
 function Dialog({ children, open, defaultOpen, onOpenChange }: DialogProps) {
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen ?? false);
+  const restoreFocusRef = React.useRef<HTMLElement | null>(null);
+  const triggerRef = React.useRef<HTMLElement | null>(null);
   const isOpen = open ?? uncontrolledOpen;
   const setOpen = React.useCallback((nextOpen: boolean) => {
+    if (nextOpen && typeof document !== "undefined") {
+      const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      restoreFocusRef.current = activeElement && activeElement !== document.body
+        ? activeElement
+        : triggerRef.current;
+    }
     if (open === undefined) {
       setUncontrolledOpen(nextOpen);
     }
@@ -37,7 +87,7 @@ function Dialog({ children, open, defaultOpen, onOpenChange }: DialogProps) {
   }, [onOpenChange, open]);
 
   return (
-    <DialogContext.Provider value={{ open: isOpen, setOpen }}>{children}</DialogContext.Provider>
+    <DialogContext.Provider value={{ open: isOpen, restoreFocusRef, triggerRef, setOpen }}>{children}</DialogContext.Provider>
   );
 }
 
@@ -46,7 +96,7 @@ type DialogTriggerProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 function DialogTrigger({ children, asChild = false, onClick, type, ...props }: React.PropsWithChildren<DialogTriggerProps>) {
-  const { setOpen } = useDialogContext();
+  const { setOpen, triggerRef } = useDialogContext();
 
   const handleClick = (event: React.MouseEvent<HTMLElement>) => {
     onClick?.(event as unknown as React.MouseEvent<HTMLButtonElement>);
@@ -61,11 +111,22 @@ function DialogTrigger({ children, asChild = false, onClick, type, ...props }: R
         children.props.onClick?.(event);
         handleClick(event);
       },
+      ref: (node: HTMLElement | null) => {
+        triggerRef.current = node;
+        assignElementRef(getElementRef<HTMLElement>(children), node);
+      },
     });
   }
 
   return (
-    <button type={type ?? "button"} onClick={handleClick as React.MouseEventHandler<HTMLButtonElement>} {...props}>
+    <button
+      ref={(node) => {
+        triggerRef.current = node;
+      }}
+      type={type ?? "button"}
+      onClick={handleClick as React.MouseEventHandler<HTMLButtonElement>}
+      {...props}
+    >
       {children}
     </button>
   );
@@ -108,8 +169,9 @@ function DialogContent({
   onKeyDown,
   ...props
 }: DialogContentProps) {
-  const { open, setOpen } = useDialogContext();
+  const { open, restoreFocusRef, setOpen, triggerRef } = useDialogContext();
   const allowDismissRef = React.useRef(true);
+  const contentRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
     if (!open || typeof document === "undefined") {
@@ -123,14 +185,108 @@ function DialogContent({
     };
   }, [open]);
 
-  const handleBackdropClick = React.useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      const syntheticEvent = Object.assign(event.nativeEvent, {
+  const handleEscapeDismiss = React.useCallback(
+    (event: KeyboardEvent) => {
+      allowDismissRef.current = true;
+      const nativePreventDefault = event.preventDefault.bind(event);
+      const syntheticEvent = Object.assign(event, {
         preventDefault: () => {
           allowDismissRef.current = false;
-          event.preventDefault();
+          nativePreventDefault();
         },
       });
+      onEscapeKeyDown?.(syntheticEvent as KeyboardEvent);
+      if (!event.defaultPrevented && allowDismissRef.current) {
+        setOpen(false);
+      }
+    },
+    [onEscapeKeyDown, setOpen],
+  );
+
+  React.useEffect(() => {
+    if (!open || typeof document === "undefined") {
+      return;
+    }
+
+    const content = contentRef.current;
+    if (!content) {
+      return;
+    }
+
+    focusFirstElement(content);
+
+    const handleDocumentKeyDown = (event: KeyboardEvent) => {
+      if (!contentRef.current || event.defaultPrevented) {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        handleEscapeDismiss(event);
+        return;
+      }
+
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const focusable = getFocusableElements(contentRef.current);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        contentRef.current.focus();
+        return;
+      }
+
+      const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+
+      if (!activeElement || !contentRef.current.contains(activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+        return;
+      }
+
+      if (!event.shiftKey && activeElement === last) {
+        event.preventDefault();
+        first.focus();
+        return;
+      }
+
+      if (event.shiftKey && (activeElement === first || activeElement === contentRef.current)) {
+        event.preventDefault();
+        last.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleDocumentKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleDocumentKeyDown);
+      const restoreFocus = () => {
+        const restoreTarget = restoreFocusRef.current;
+        const fallbackTrigger = triggerRef.current;
+        if (restoreTarget && restoreTarget.isConnected) {
+          restoreTarget.focus();
+          return;
+        }
+        if (fallbackTrigger && fallbackTrigger.isConnected) {
+          fallbackTrigger.focus();
+        }
+      };
+
+      restoreFocus();
+      setTimeout(restoreFocus, 0);
+      restoreFocusRef.current = null;
+    };
+  }, [handleEscapeDismiss, open]);
+
+  const handleBackdropClick = React.useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const syntheticEvent = Object.create(event.nativeEvent) as Event & { preventDefault: () => void };
+      syntheticEvent.preventDefault = () => {
+        allowDismissRef.current = false;
+        event.preventDefault();
+      };
       onInteractOutside?.(syntheticEvent);
     },
     [onInteractOutside],
@@ -138,21 +294,9 @@ function DialogContent({
 
   const handleKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      if (event.key === "Escape") {
-        const nativeEvent = Object.assign(event.nativeEvent, {
-          preventDefault: () => {
-            allowDismissRef.current = false;
-            event.preventDefault();
-          },
-        });
-        onEscapeKeyDown?.(nativeEvent as KeyboardEvent);
-        if (!event.defaultPrevented && allowDismissRef.current) {
-          setOpen(false);
-        }
-      }
       onKeyDown?.(event);
     },
-    [onEscapeKeyDown, onKeyDown, setOpen],
+    [onKeyDown],
   );
 
   if (!open) {
@@ -173,6 +317,7 @@ function DialogContent({
         />
         <div className="relative z-10 flex w-full justify-center">
           <div
+            ref={contentRef}
             data-slot="dialog-content"
             role="dialog"
             aria-modal="true"

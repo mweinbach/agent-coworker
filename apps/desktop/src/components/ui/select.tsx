@@ -141,11 +141,16 @@ function SelectContent({
   return (
     <HeroSelect.Popover
       data-slot="select-content"
-      className={cn("min-w-full", className)}
+      className={cn(
+        // Do not use min-w-full here: it resolves against a wide ancestor (often the viewport)
+        // and produces a huge empty popover with the item indicator stranded on the far right.
+        "w-max max-w-[min(24rem,calc(100vw-2rem))] min-w-[10rem]",
+        className,
+      )}
       placement={placement}
       {...props}
     >
-      <ListBox data-slot="select-viewport" className="max-h-96 overflow-auto p-1">
+      <ListBox data-slot="select-viewport" className="max-h-96 w-full overflow-auto p-1">
         {children}
       </ListBox>
     </HeroSelect.Popover>
@@ -205,10 +210,10 @@ function SelectItem({
       data-slot="select-item"
       id={value}
       textValue={resolvedTextValue}
-      className={cn("text-sm", className)}
+      className={cn("flex w-full min-w-0 items-center justify-between gap-2 text-sm", className)}
     >
-      {children}
-      <ListBox.ItemIndicator />
+      <span className="min-w-0 flex-1 truncate">{children}</span>
+      <ListBox.ItemIndicator className="shrink-0" />
     </ListBox.Item>
   );
 }

@@ -5,7 +5,6 @@
     "scheme": "cowork-mobile",
     "version": "0.1.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
@@ -39,3 +38,4 @@
       "typedRoutes": true
     }
   }
+}

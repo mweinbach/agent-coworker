@@ -829,7 +829,10 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
   
 
     selectThread: async (threadId: string) => {
-      await hydrateThreadSelection(get, set, threadId);
+      await hydrateThreadSelection(get, set, threadId, {
+        reconnectAfterHydration: true,
+        skipWorkspaceSelectOnReconnect: true,
+      });
     },
   
 

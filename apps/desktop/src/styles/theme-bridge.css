@@ -3,35 +3,40 @@
 @theme inline {
   --font-sans: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
-  --color-background: var(--app-bg);
-  --color-foreground: var(--text);
+  --color-background: var(--surface-window);
+  --color-foreground: var(--text-primary);
 
-  --color-sidebar: var(--sidebar-bg);
-  --color-panel: var(--panel-bg);
+  --color-sidebar: var(--surface-sidebar);
+  --color-panel: var(--surface-workspace-pane);
 
-  --color-card: color-mix(in srgb, var(--panel-bg) 94%, var(--app-bg));
-  --color-card-foreground: var(--text);
+  --color-card: var(--surface-card);
+  --color-card-foreground: var(--text-primary);
 
-  --color-popover: var(--panel-bg);
-  --color-popover-foreground: var(--text);
+  --color-popover: var(--surface-overlay);
+  --color-popover-foreground: var(--text-primary);
 
   --color-primary: var(--accent);
-  --color-primary-foreground: #ffffff;
+  --color-primary-foreground: var(--text-inverse);
 
-  --color-secondary: color-mix(in srgb, var(--accent) 12%, var(--panel-bg));
-  --color-secondary-foreground: var(--text);
-  --color-accent: color-mix(in srgb, var(--accent) 14%, var(--panel-bg));
-  --color-accent-foreground: var(--text);
+  --color-secondary: var(--surface-secondary);
+  --color-secondary-foreground: var(--text-primary);
+  --color-accent: var(--surface-accent);
+  --color-accent-foreground: var(--text-primary);
 
-  --color-muted: color-mix(in srgb, var(--text) 6%, transparent);
-  --color-muted-foreground: var(--muted);
+  --color-muted: var(--surface-muted-fill);
+  --color-muted-foreground: var(--text-muted);
 
-  --color-border: var(--border);
-  --color-input: var(--border);
+  --color-border: var(--border-default);
+  --color-input: var(--border-subtle);
   --color-ring: var(--accent);
 
   --color-destructive: var(--danger);
-  --color-destructive-foreground: #ffffff;
+  --color-destructive-foreground: var(--text-inverse);
+  --color-success: var(--status-success);
+  --color-success-foreground: var(--status-success-foreground);
+  --color-warning: var(--status-warning);
+  --color-warning-foreground: var(--status-warning-foreground);
+  --color-link: var(--text-link);
 
   --radius-sm: calc(var(--radius) - 0.1875rem);
   --radius-md: var(--radius);
@@ -40,52 +45,109 @@
 
 @layer base {
   :root {
-    --background: var(--app-bg);
-    --foreground: var(--text);
+    --surface-window: var(--window-bg);
+    --surface-shell: var(--shell-bg);
+    --surface-sidebar: var(--sidebar-bg);
+    --surface-sidebar-pane: var(--sidebar-pane-surface);
+    --surface-workspace-pane: var(--workspace-pane-bg);
+    --surface-main: color-mix(in srgb, var(--content-surface) 90%, var(--panel-bg) 10%);
+    --surface-card: color-mix(in srgb, var(--panel-bg) 94%, var(--app-bg));
+    --surface-card-elevated: color-mix(in srgb, var(--panel-bg) 84%, transparent);
+    --surface-overlay: color-mix(in srgb, var(--panel-bg) 96%, transparent);
+    --surface-secondary: color-mix(in srgb, var(--accent-base) 12%, var(--panel-bg));
+    --surface-accent: color-mix(in srgb, var(--accent-base) 14%, var(--panel-bg));
+    --surface-field: color-mix(in srgb, var(--panel-bg) 90%, var(--app-bg));
+    --surface-muted-fill: color-mix(in srgb, var(--text-base) 6%, transparent);
+    --surface-topbar-thread-hover: color-mix(in srgb, var(--content-surface) 60%, transparent);
+    --surface-topbar-popover: color-mix(in srgb, var(--content-surface) 88%, var(--panel-bg) 12%);
+    --surface-context-panel: color-mix(in srgb, var(--panel-bg) 88%, var(--app-bg) 12%);
+    --surface-context-panel-nested: color-mix(in srgb, var(--panel-bg) 84%, var(--app-bg) 16%);
+    --surface-settings-main: color-mix(in srgb, var(--content-surface) 72%, var(--glass-fill) 28%);
+    --surface-settings-card: color-mix(in srgb, var(--panel-bg) 94%, transparent);
+    --surface-settings-card-elevated: color-mix(in srgb, var(--panel-bg) 84%, transparent);
+    --surface-selection: color-mix(in srgb, var(--accent-base) 35%, transparent);
+    --surface-selection-inverse: color-mix(in srgb, var(--text-inverse) 30%, transparent);
+    --surface-sidebar-drop: color-mix(in srgb, var(--accent-base) 6%, transparent);
+    --surface-sidebar-drop-strong: color-mix(in srgb, var(--accent-base) 10%, transparent);
 
-    --surface: color-mix(in srgb, var(--panel-bg) 96%, var(--app-bg));
-    --surface-foreground: var(--text);
+    --text-primary: var(--text-base);
+    --text-secondary: color-mix(in srgb, var(--text-base) 88%, transparent);
+    --text-muted: var(--muted-base);
+    --text-emphasis: color-mix(in srgb, var(--text-base) 96%, transparent);
+    --text-subtle: color-mix(in srgb, var(--muted-base) 92%, transparent);
+    --text-muted-subtle: color-mix(in srgb, var(--muted-base) 78%, transparent);
+    --text-inverse: var(--inverse-text);
+    --text-link: var(--accent-base);
 
-    --overlay: color-mix(in srgb, var(--panel-bg) 96%, transparent);
-    --overlay-foreground: var(--text);
+    --border-default: var(--border-base);
+    --border-subtle: color-mix(in srgb, var(--border-base) 76%, transparent);
+    --border-strong: color-mix(in srgb, var(--border-base) 92%, transparent);
+    --border-glass: color-mix(in srgb, var(--glass-border) 78%, transparent);
+    --border-glass-strong: color-mix(in srgb, var(--glass-border) 92%, transparent);
+    --border-context: color-mix(in srgb, var(--glass-border) 88%, transparent);
+    --border-context-nested: color-mix(in srgb, var(--glass-border) 76%, transparent);
+    --border-separator: color-mix(in srgb, var(--border-base) 82%, transparent);
+    --border-accent-soft: color-mix(in srgb, var(--accent-base) 18%, transparent);
+    --border-accent-strong: color-mix(in srgb, var(--accent-base) 28%, transparent);
 
-    --muted: var(--muted);
-    --scrollbar: color-mix(in srgb, var(--text) 18%, transparent);
+    --background: var(--surface-window);
+    --foreground: var(--text-primary);
+
+    --surface: var(--surface-card);
+    --surface-foreground: var(--text-primary);
+
+    --overlay: var(--surface-overlay);
+    --overlay-foreground: var(--text-primary);
+
+    --muted: var(--text-muted);
+    --scrollbar: var(--scrollbar-thumb);
 
     --default: color-mix(in srgb, var(--panel-bg) 92%, var(--app-bg));
-    --default-foreground: var(--text);
+    --default-foreground: var(--text-primary);
 
-    --accent: var(--accent);
-    --accent-foreground: #ffffff;
+    --accent: var(--accent-base);
+    --accent-foreground: var(--text-inverse);
 
-    --field-background: color-mix(in srgb, var(--panel-bg) 90%, var(--app-bg));
-    --field-foreground: var(--text);
-    --field-placeholder: color-mix(in srgb, var(--muted) 86%, transparent);
-    --field-border: color-mix(in srgb, var(--border) 76%, transparent);
+    --field-background: var(--surface-field);
+    --field-foreground: var(--text-primary);
+    --field-placeholder: color-mix(in srgb, var(--muted-base) 86%, transparent);
+    --field-border: var(--border-subtle);
 
-    --success: oklch(0.69 0.16 151);
-    --success-foreground: #ffffff;
+    --status-success: var(--success-base);
+    --status-success-foreground: var(--success-foreground-base);
 
-    --warning: oklch(0.78 0.16 80);
-    --warning-foreground: #2f2318;
+    --status-warning: var(--warning-base);
+    --status-warning-foreground: var(--warning-foreground-base);
 
-    --danger: var(--danger);
-    --danger-foreground: #ffffff;
+    --success: var(--status-success);
+    --success-foreground: var(--status-success-foreground);
+    --warning: var(--status-warning);
+    --warning-foreground: var(--status-warning-foreground);
+
+    --danger: var(--danger-base);
+    --danger-foreground: var(--text-inverse);
 
     --segment: color-mix(in srgb, var(--panel-bg) 88%, var(--app-bg));
-    --segment-foreground: var(--text);
+    --segment-foreground: var(--text-primary);
 
-    --border: var(--border);
-    --separator: color-mix(in srgb, var(--border) 82%, transparent);
+    --border: var(--border-default);
+    --separator: var(--border-separator);
     --focus: var(--accent);
-    --link: var(--accent);
+    --link: var(--text-link);
 
-    --radius: var(--radius);
+    --radius: var(--radius-base);
     --field-radius: calc(var(--radius) * 0.9);
 
-    --surface-shadow: 0 1px 2px rgba(0, 0, 0, 0.035);
-    --overlay-shadow: 0 12px 30px rgba(0, 0, 0, 0.1);
-    --field-shadow: 0 0 0 0 transparent;
+    --shadow-surface: var(--shadow-surface-base);
+    --shadow-surface-elevated: 0 1px 0 color-mix(in srgb, var(--text-base) 6%, transparent);
+    --shadow-overlay: var(--shadow-overlay-base);
+    --shadow-popover: 0 14px 30px color-mix(in srgb, var(--panel-bg) 24%, transparent), 0 1px 0 color-mix(in srgb, var(--text-base) 8%, transparent);
+    --shadow-field: 0 0 0 0 transparent;
+
+    --focus-ring-shadow: 0 0 0 2px var(--surface-window), 0 0 0 4px color-mix(in srgb, var(--accent-base) 40%, transparent);
+    --scrollbar-thumb: color-mix(in srgb, var(--text-base) 18%, transparent);
+    --scrollbar-thumb-hover: color-mix(in srgb, var(--text-base) 30%, transparent);
+    --toolbar-button-filter: none;
   }
 
   html.light,

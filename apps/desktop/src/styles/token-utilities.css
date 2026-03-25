@@ -1,0 +1,92 @@
+.app-focus-ring:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-shadow);
+}
+
+.app-surface-card {
+  background: var(--surface-card);
+  color: var(--text-primary);
+}
+
+.app-surface-card-elevated {
+  background: var(--surface-card-elevated);
+  color: var(--text-primary);
+}
+
+.app-surface-overlay {
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+}
+
+.app-surface-field {
+  background: var(--surface-field);
+  color: var(--text-primary);
+}
+
+.app-surface-muted-fill {
+  background: var(--surface-muted-fill);
+}
+
+.app-border-default {
+  border-color: var(--border-default);
+}
+
+.app-border-subtle {
+  border-color: var(--border-subtle);
+}
+
+.app-border-strong {
+  border-color: var(--border-strong);
+}
+
+.app-border-glass {
+  border-color: var(--border-glass);
+}
+
+.app-border-glass-strong {
+  border-color: var(--border-glass-strong);
+}
+
+.app-text-primary {
+  color: var(--text-primary);
+}
+
+.app-text-secondary {
+  color: var(--text-secondary);
+}
+
+.app-text-muted {
+  color: var(--text-muted);
+}
+
+.app-text-emphasis {
+  color: var(--text-emphasis);
+}
+
+.app-text-subtle {
+  color: var(--text-subtle);
+}
+
+.app-text-link {
+  color: var(--text-link);
+}
+
+.app-shadow-surface {
+  box-shadow: var(--shadow-surface);
+}
+
+.app-shadow-surface-elevated {
+  box-shadow: var(--shadow-surface-elevated);
+}
+
+.app-shadow-overlay {
+  box-shadow: var(--shadow-overlay);
+}
+
+.app-shadow-popover {
+  box-shadow: var(--shadow-popover);
+}
+
+.app-shadow-field {
+  box-shadow: var(--shadow-field);
+}

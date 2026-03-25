@@ -959,7 +959,7 @@ export function WorkspaceUserProfileCard({
           <Button onClick={handleSave} disabled={!isDirty || saving}>
             {saving ? "Saving..." : "Save changes"}
           </Button>
-          {saveSuccess && <span className="text-sm text-emerald-600">Saved successfully</span>}
+          {saveSuccess && <span className="text-sm text-success">Saved successfully</span>}
         </div>
       </CardContent>
     </Card>
@@ -1151,7 +1151,7 @@ export function WorkspacesPage() {
                 {activeTab === tab && (
                   <motion.div
                     layoutId="workspaces-active-tab"
-                    className="pointer-events-none absolute inset-0 -z-10 rounded-md border border-border/50 bg-background shadow-sm"
+                    className="app-shadow-surface pointer-events-none absolute inset-0 -z-10 rounded-md border border-border/50 bg-background"
                     transition={{ type: "spring", stiffness: 500, damping: 30 }}
                   />
                 )}

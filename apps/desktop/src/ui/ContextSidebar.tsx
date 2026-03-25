@@ -15,13 +15,13 @@ function agentStatusIcon(agent: ThreadAgentSummary) {
     return <MinusCircleIcon className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />;
   }
   if (agent.executionState === "errored") {
-    return <AlertCircleIcon className="mt-0.5 h-3.5 w-3.5 text-amber-500" />;
+    return <AlertCircleIcon className="mt-0.5 h-3.5 w-3.5 text-warning" />;
   }
   if (agent.busy || agent.executionState === "running" || agent.executionState === "pending_init") {
     return <CircleDashedIcon className="mt-0.5 h-3.5 w-3.5 text-primary" />;
   }
   if (agent.executionState === "completed") {
-    return <CheckCircle2Icon className="mt-0.5 h-3.5 w-3.5 text-emerald-500" />;
+    return <CheckCircle2Icon className="mt-0.5 h-3.5 w-3.5 text-success" />;
   }
   return <CircleIcon className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />;
 }
@@ -60,7 +60,7 @@ export const ContextSidebar = memo(function ContextSidebar() {
               {todos.map((todo, index) => (
                 <div key={`${todo.content}:${index}`} className="flex items-start gap-2 text-[11px]">
                   {todo.status === "completed" ? (
-                    <CheckCircle2Icon className="mt-0.5 h-3.25 w-3.25 text-emerald-500" />
+                    <CheckCircle2Icon className="mt-0.5 h-3.25 w-3.25 text-success" />
                   ) : todo.status === "in_progress" ? (
                     <CircleDashedIcon className="mt-0.5 h-3.25 w-3.25 text-primary" />
                   ) : (

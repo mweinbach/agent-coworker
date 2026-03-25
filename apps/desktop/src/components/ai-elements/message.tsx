@@ -435,7 +435,7 @@ function DesktopCitationChip({
             ref={cardRef}
             role="dialog"
             aria-label="Citation sources"
-            className="fixed z-[70] w-[min(18rem,calc(100vw-2rem))] overflow-hidden rounded-[1.1rem] border border-border/70 bg-card shadow-[0_14px_28px_rgba(0,0,0,0.13)]"
+            className="app-shadow-overlay fixed z-[70] w-[min(18rem,calc(100vw-2rem))] overflow-hidden rounded-[1.1rem] border border-border/70 bg-card"
             style={popupPosition ? { left: popupPosition.left, top: popupPosition.top } : { left: 0, top: 0, visibility: "hidden" }}
           >
             <div className="flex items-center gap-0.5 border-b border-border/60 bg-muted/25 px-2.5 py-1.5">

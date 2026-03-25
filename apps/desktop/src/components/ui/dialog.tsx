@@ -345,7 +345,7 @@ function DialogContent({
             aria-modal="true"
             tabIndex={-1}
             className={cn(
-              "relative grid w-[min(96vw,42rem)] gap-4 rounded-xl border border-border/80 bg-card p-5 text-card-foreground shadow-lg",
+              "app-surface-overlay app-border-strong app-shadow-overlay relative grid w-[min(96vw,42rem)] gap-4 rounded-xl border p-5 text-card-foreground",
               className,
             )}
             onKeyDown={handleKeyDown}
@@ -384,7 +384,7 @@ function DialogTitle({ className, ...props }: React.ComponentProps<"h2">) {
 
 const DialogDescription = React.forwardRef<HTMLParagraphElement, React.ComponentProps<"p">>(
   function DialogDescription({ className, ...props }, ref) {
-    return <p ref={ref} data-slot="dialog-description" className={cn("text-sm text-muted-foreground", className)} {...props} />;
+    return <p ref={ref} data-slot="dialog-description" className={cn("app-text-muted text-sm", className)} {...props} />;
   },
 );
 

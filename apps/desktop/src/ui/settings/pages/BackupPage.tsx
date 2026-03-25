@@ -89,7 +89,7 @@ function sortByUpdated(entries: WorkspaceBackupEntry[]): WorkspaceBackupEntry[] 
 
 function lifecycleBadgeClass(lifecycle: WorkspaceBackupEntry["lifecycle"]): string {
   if (lifecycle === "active") {
-    return "border-emerald-700/25 bg-emerald-700/[0.04] text-emerald-700/80";
+    return "border-success/25 bg-success/[0.04] text-success/80";
   }
   if (lifecycle === "deleted") {
     return "border-destructive/25 bg-destructive/[0.04] text-destructive/75";
@@ -426,8 +426,8 @@ function CheckpointDeltaView({
           </span>
           {delta && (
             <div className="flex items-center gap-4 font-medium">
-              <span className="text-emerald-700/80">+{delta.counts.added}</span>
-              <span className="text-amber-700/80">~{delta.counts.modified}</span>
+              <span className="text-success/80">+{delta.counts.added}</span>
+              <span className="text-warning/80">~{delta.counts.modified}</span>
               <span className="text-destructive/75">-{delta.counts.deleted}</span>
             </div>
           )}
@@ -461,8 +461,8 @@ function CheckpointDeltaView({
                     <div className="w-24 text-right shrink-0">
                       <Badge variant="outline" className={cn(
                         "text-[10px] uppercase h-5 py-0",
-                        f.change === "added" ? "border-emerald-700/20 bg-emerald-700/[0.04] text-emerald-700/80 group-hover:bg-emerald-700/[0.07]" :
-                        f.change === "modified" ? "border-amber-700/20 bg-amber-700/[0.04] text-amber-700/80 group-hover:bg-amber-700/[0.07]" :
+                        f.change === "added" ? "border-success/20 bg-success/[0.04] text-success/80 group-hover:bg-success/[0.07]" :
+                        f.change === "modified" ? "border-warning/20 bg-warning/[0.04] text-warning/80 group-hover:bg-warning/[0.07]" :
                         "border-destructive/20 bg-destructive/[0.04] text-destructive/75 group-hover:bg-destructive/[0.07]"
                       )}>
                         {f.change}

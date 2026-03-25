@@ -46,7 +46,7 @@ function TimelineToolIcon({ title, className }: { title: string; className?: str
 }
 
 function ToolStateIndicator({ state }: { state: ToolFeedState }) {
-  if (state === "output-available") return <CheckCircleIcon className="size-3 text-emerald-500/70" />;
+  if (state === "output-available") return <CheckCircleIcon className="size-3 text-success/70" />;
   if (state === "output-error" || state === "output-denied") {
     return <XCircleIcon className="size-3 text-destructive" />;
   }
@@ -89,7 +89,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: { items:
   const isDone = summary.status === "done" && summary.toolCount > 0;
 
   return (
-    <Card className="max-w-3xl border-border/60 bg-card/60 shadow-[0_1px_2px_0_rgb(0_0_0/0.03)] backdrop-blur-sm">
+    <Card className="app-shadow-surface max-w-3xl border-border/60 bg-card/60 backdrop-blur-sm">
       <Collapsible open={expanded} onOpenChange={setExpanded}>
         {/* ── Trigger / header ──────────────────────────────────────────────── */}
         <CollapsibleTrigger className="group w-full text-left outline-none">
@@ -101,7 +101,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: { items:
             <div className="flex shrink-0 items-center gap-2">
               {isDone ? (
                 <span className="flex items-center gap-1 text-[11px] text-muted-foreground/50">
-                  <CheckCircleIcon className="size-3 text-emerald-500/60" />
+                  <CheckCircleIcon className="size-3 text-success/60" />
                   Done
                 </span>
               ) : (

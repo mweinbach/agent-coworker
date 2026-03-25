@@ -21,7 +21,7 @@ function Card({ className, variant = "default", ...props }: CardProps) {
       data-slot="card"
       variant={variant}
       className={cn(
-        "rounded-[calc(var(--radius)*1.35)] border border-border/70 bg-card text-card-foreground shadow-none",
+        "app-surface-card app-border-subtle rounded-[calc(var(--radius)*1.35)] border text-card-foreground shadow-none",
         className,
       )}
       {...props}
@@ -56,7 +56,7 @@ function CardDescription({
   return (
     <HeroCardDescription
       data-slot="card-description"
-      className={cn("text-[13px] text-muted-foreground", className)}
+      className={cn("app-text-muted text-[13px]", className)}
       {...props}
     />
   );

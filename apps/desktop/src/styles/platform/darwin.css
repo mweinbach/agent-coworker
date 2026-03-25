@@ -27,8 +27,8 @@
 }
 
 :root[data-platform="darwin"] .app-topbar__toolbar--right .app-topbar__toolbar-button {
-  color: var(--text);
-  filter: drop-shadow(0 1px 0.75px color-mix(in srgb, var(--panel-bg) 72%, transparent));
+  color: var(--text-primary);
+  filter: var(--toolbar-button-filter);
 }
 
 :root[data-platform="darwin"] .app-window-drag-strip {

@@ -35,7 +35,7 @@ type ToolStatusIconProps = {
 
 function ToolStatusIcon({ state }: ToolStatusIconProps) {
   if (state === "output-available") {
-    return <CheckCircleIcon className="size-3.5 text-emerald-500/90" />;
+    return <CheckCircleIcon className="size-3.5 text-success/90" />;
   }
   if (state === "output-error" || state === "output-denied") {
     return <XCircleIcon className="size-3.5 text-destructive" />;
@@ -55,8 +55,8 @@ export function Tool({ className, variant = "default", ...props }: ToolProps) {
     <Collapsible
       className={cn(
         variant === "trace"
-          ? "w-full overflow-hidden rounded-xl border border-border/50 bg-background/50 shadow-sm"
-          : "w-full max-w-3xl overflow-hidden rounded-lg border border-border/60 bg-background/55 shadow-sm transition-colors hover:bg-muted/15",
+          ? "app-shadow-surface w-full overflow-hidden rounded-xl border border-border/50 bg-background/50"
+          : "app-shadow-surface w-full max-w-3xl overflow-hidden rounded-lg border border-border/60 bg-background/55 transition-colors hover:bg-muted/15",
         className,
       )}
       {...props}
@@ -187,7 +187,7 @@ export function ToolCodeBlock({ label, value, tone = "default" }: ToolCodeBlockP
       <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">{label}</div>
       <pre
         className={cn(
-          "max-h-72 overflow-auto rounded-lg bg-background/40 p-3 text-[11px] leading-relaxed shadow-sm ring-1 ring-border/20",
+          "app-shadow-surface max-h-72 overflow-auto rounded-lg bg-background/40 p-3 text-[11px] leading-relaxed ring-1 ring-border/20",
           tone === "error" ? "bg-destructive/5 text-destructive ring-destructive/20" : "text-foreground/80",
         )}
       >

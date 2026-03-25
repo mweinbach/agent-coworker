@@ -156,7 +156,7 @@ export function sessionUsageTone(sessionUsage: SessionUsageSnapshot | null): str
     return "border-destructive/40 bg-destructive/10 text-destructive";
   }
   if (budget?.warningTriggered) {
-    return "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+    return "border-warning/40 bg-warning/10 text-warning";
   }
   return "border-border/50 bg-background/80 text-muted-foreground";
 }

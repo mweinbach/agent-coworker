@@ -677,9 +677,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
                   {isDirectory ? (
                     row.expanded ? (
-                      <FolderOpenIcon className={cn("h-3.25 w-3.25 shrink-0", isSelected ? "text-accent-foreground" : "text-blue-500/85")} />
+                      <FolderOpenIcon className={cn("h-3.25 w-3.25 shrink-0", isSelected ? "text-accent-foreground" : "text-link/85")} />
                     ) : (
-                      <FolderIcon className={cn("h-3.25 w-3.25 shrink-0", isSelected ? "text-accent-foreground" : "text-blue-500/85")} />
+                      <FolderIcon className={cn("h-3.25 w-3.25 shrink-0", isSelected ? "text-accent-foreground" : "text-link/85")} />
                     )
                   ) : (
                     <FileIcon className="h-3.25 w-3.25 shrink-0" />

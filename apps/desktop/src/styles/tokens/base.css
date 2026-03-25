@@ -20,13 +20,20 @@
   --sidebar-blur: 0px;
   --sidebar-titlebar-blur: 8px;
   --titlebar-blur: 7px;
-  --border: rgba(94, 67, 41, 0.12);
-  --text: #2f2318;
-  --muted: #5a4736;
-  --accent: #8e603f;
-  --danger: #bb3e3e;
+  --border-base: rgba(94, 67, 41, 0.12);
+  --text-base: #2f2318;
+  --muted-base: #5a4736;
+  --accent-base: #8e603f;
+  --danger-base: #bb3e3e;
   --danger-bg: rgba(187, 62, 62, 0.12);
-  --radius: 0.5rem;
+  --inverse-text: #ffffff;
+  --success-base: oklch(0.69 0.16 151);
+  --success-foreground-base: var(--inverse-text);
+  --warning-base: oklch(0.78 0.16 80);
+  --warning-foreground-base: #2f2318;
+  --radius-base: 0.5rem;
+  --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.035);
+  --shadow-overlay-base: 0 12px 30px rgba(0, 0, 0, 0.1);
 
   color-scheme: light;
 }
@@ -49,12 +56,19 @@
   --glass-border: rgba(255, 233, 212, 0.16);
   --sidebar-titlebar-blur: 8px;
   --titlebar-blur: 7px;
-  --border: rgba(255, 233, 212, 0.14);
-  --text: #f6ece0;
-  --muted: #d8c7b6;
-  --accent: #d39261;
-  --danger: #e86060;
+  --border-base: rgba(255, 233, 212, 0.14);
+  --text-base: #f6ece0;
+  --muted-base: #d8c7b6;
+  --accent-base: #d39261;
+  --danger-base: #e86060;
   --danger-bg: rgba(232, 96, 96, 0.14);
+  --inverse-text: #ffffff;
+  --success-base: oklch(0.76 0.15 151);
+  --success-foreground-base: #1a150f;
+  --warning-base: oklch(0.8 0.16 80);
+  --warning-foreground-base: #23160d;
+  --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-overlay-base: 0 12px 30px rgba(0, 0, 0, 0.35);
 
   color-scheme: dark;
 }
@@ -78,12 +92,19 @@
     --glass-border: rgba(255, 233, 212, 0.16);
     --sidebar-titlebar-blur: 8px;
     --titlebar-blur: 7px;
-    --border: rgba(255, 233, 212, 0.14);
-    --text: #f6ece0;
-    --muted: #d8c7b6;
-    --accent: #d39261;
-    --danger: #e86060;
+    --border-base: rgba(255, 233, 212, 0.14);
+    --text-base: #f6ece0;
+    --muted-base: #d8c7b6;
+    --accent-base: #d39261;
+    --danger-base: #e86060;
     --danger-bg: rgba(232, 96, 96, 0.14);
+    --inverse-text: #ffffff;
+    --success-base: oklch(0.76 0.15 151);
+    --success-foreground-base: #1a150f;
+    --warning-base: oklch(0.8 0.16 80);
+    --warning-foreground-base: #23160d;
+    --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.24);
+    --shadow-overlay-base: 0 12px 30px rgba(0, 0, 0, 0.35);
 
     color-scheme: dark;
   }

@@ -12,11 +12,12 @@
     var(--app-bg) 16%
   );
   --glass-fill: color-mix(in srgb, var(--panel-bg) 98%, transparent);
-  --glass-border: color-mix(in srgb, var(--border) 90%, transparent);
+  --glass-border: color-mix(in srgb, var(--border-base) 90%, transparent);
   /* Pane uses native vibrancy blur; CSS blur would stack opaquely on the material */
   --sidebar-blur: 0px;
   --sidebar-titlebar-blur: 14px;
   --titlebar-blur: 10px;
+  --toolbar-button-filter: drop-shadow(0 1px 0.75px color-mix(in srgb, var(--panel-bg) 72%, transparent));
 }
 
 :root[data-platform="win32"]:not([data-reduced-transparency="true"]) {
@@ -30,7 +31,7 @@
     var(--app-bg) 30%
   );
   --glass-fill: color-mix(in srgb, var(--panel-bg) 80%, transparent);
-  --glass-border: color-mix(in srgb, var(--border) 95%, transparent);
+  --glass-border: color-mix(in srgb, var(--border-base) 95%, transparent);
   --sidebar-blur: 10px;
   --sidebar-titlebar-blur: 10px;
   --titlebar-blur: 8px;
@@ -47,7 +48,7 @@
     var(--app-bg) 30%
   );
   --glass-fill: color-mix(in srgb, var(--panel-bg) 80%, transparent);
-  --glass-border: color-mix(in srgb, var(--border) 95%, transparent);
+  --glass-border: color-mix(in srgb, var(--border-base) 95%, transparent);
   --sidebar-blur: 10px;
   --sidebar-titlebar-blur: 10px;
   --titlebar-blur: 8px;
@@ -68,13 +69,13 @@
     var(--app-bg) 12%
   );
   --glass-fill: var(--panel-bg);
-  --glass-border: var(--border);
+  --glass-border: var(--border-base);
   --sidebar-blur: 0px;
   --sidebar-titlebar-blur: 0px;
   --titlebar-blur: 0px;
 }
 
 :root[data-high-contrast="true"] {
-  --border: currentColor;
-  --accent: #1769e0;
+  --border-base: currentColor;
+  --accent-base: #1769e0;
 }

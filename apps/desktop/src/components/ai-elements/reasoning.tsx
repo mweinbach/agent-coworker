@@ -19,7 +19,7 @@ export function Reasoning({
     <Collapsible
       className={cn(
         variant === "trace"
-          ? "rounded-xl border border-border/50 bg-background/50 shadow-sm"
+          ? "app-shadow-surface rounded-xl border border-border/50 bg-background/50"
           : "rounded-lg border border-border/80 bg-muted/25",
         className,
       )}

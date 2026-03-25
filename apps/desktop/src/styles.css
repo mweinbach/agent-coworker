@@ -2,6 +2,7 @@
 @import "@heroui/styles";
 @import "./styles/tokens.css";
 @import "./styles/theme-bridge.css";
+@import "./styles/token-utilities.css";
 @import "./styles/platform/darwin.css";
 @import "./styles/platform/win32.css";
 @import "./styles/platform/linux.css";
@@ -17,8 +18,8 @@ body,
 body {
   margin: 0;
   overflow: hidden;
-  background: var(--window-bg);
-  color: var(--text);
+  background: var(--surface-window);
+  color: var(--text-primary);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -electron-corner-smoothing: system-ui;
@@ -39,27 +40,27 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--text) 18%, transparent);
+  background: var(--scrollbar-thumb);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--text) 30%, transparent);
+  background: var(--scrollbar-thumb-hover);
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--surface-selection);
   color: inherit;
 }
 
 .is-user ::selection {
-  background: color-mix(in srgb, var(--color-primary-foreground) 30%, transparent);
+  background: var(--surface-selection-inverse);
   color: inherit;
 }
 
 :where(button, [role="button"], [role="treeitem"], a, input, textarea, select, [role="separator"]):focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--app-bg), 0 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent);
+  box-shadow: var(--focus-ring-shadow);
 }
 
 .app-topbar {
@@ -117,7 +118,7 @@ body {
 
 .app-topbar__thread-button:hover,
 .app-topbar__thread-button[data-open="true"] {
-  background: color-mix(in srgb, var(--content-surface) 60%, transparent);
+  background: var(--surface-topbar-thread-hover);
 }
 
 .app-topbar__thread-title {
@@ -126,7 +127,7 @@ body {
   font-size: 0.8rem;
   font-weight: 620;
   letter-spacing: -0.02em;
-  color: color-mix(in srgb, var(--text) 96%, transparent);
+  color: var(--text-emphasis);
 }
 
 .app-topbar__thread-separator {
@@ -141,30 +142,28 @@ body {
   font-size: 0.74rem;
   font-weight: 560;
   font-style: italic;
-  color: color-mix(in srgb, var(--muted) 92%, transparent);
+  color: var(--text-subtle);
 }
 
 .app-topbar__thread-popover {
   z-index: 30;
   -webkit-app-region: no-drag;
   pointer-events: auto;
-  border: 1px solid color-mix(in srgb, var(--glass-border) 92%, transparent);
+  border: 1px solid var(--border-glass-strong);
   border-radius: 1rem;
-  background: color-mix(in srgb, var(--content-surface) 88%, var(--panel-bg) 12%);
-  box-shadow:
-    0 14px 30px color-mix(in srgb, var(--panel-bg) 24%, transparent),
-    0 1px 0 color-mix(in srgb, var(--text) 8%, transparent);
+  background: var(--surface-topbar-popover);
+  box-shadow: var(--shadow-popover);
   backdrop-filter: blur(calc(var(--titlebar-blur) + 2px));
   padding: 0.9rem 0.95rem 0.95rem;
 }
 
 .app-topbar__toolbar-button {
-  color: var(--muted);
+  color: var(--text-muted);
   opacity: 0.82;
 }
 
 .app-topbar__toolbar-button:hover {
-  color: var(--text);
+  color: var(--text-primary);
   opacity: 1;
 }
 
@@ -190,7 +189,7 @@ body {
   left: 0;
   pointer-events: none;
   z-index: 0;
-  background: var(--sidebar-pane-surface);
+  background: var(--surface-sidebar-pane);
   backdrop-filter: blur(var(--sidebar-titlebar-blur));
 }
 
@@ -201,17 +200,17 @@ body {
   bottom: 0;
   pointer-events: none;
   z-index: 0;
-  background: var(--workspace-pane-bg);
+  background: var(--surface-workspace-pane);
   backdrop-filter: blur(var(--titlebar-blur));
 }
 
 .app-shell {
   position: relative;
-  background: var(--shell-bg);
+  background: var(--surface-shell);
 }
 
 .app-shell--settings {
-  background: var(--shell-bg);
+  background: var(--surface-shell);
 }
 
 .app-shell--chat {
@@ -225,32 +224,32 @@ body {
 }
 
 .app-main-content {
-  background: color-mix(in srgb, var(--content-surface) 90%, var(--panel-bg) 10%);
+  background: var(--surface-main);
 }
 
 .app-skills-view {
-  background: var(--workspace-pane-bg);
+  background: var(--surface-workspace-pane);
 }
 
 .app-left-sidebar-pane {
-  border-right-color: var(--glass-border);
-  background: var(--sidebar-pane-surface);
+  border-right-color: var(--border-glass);
+  background: var(--surface-sidebar-pane);
   backdrop-filter: blur(var(--sidebar-blur));
 }
 
 .app-right-sidebar-pane {
-  background: var(--panel-bg);
+  background: var(--surface-workspace-pane);
 }
 
 .app-context-sidebar__panel {
-  border-color: color-mix(in srgb, var(--glass-border) 88%, transparent);
-  background: color-mix(in srgb, var(--panel-bg) 88%, var(--app-bg) 12%);
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--text) 6%, transparent);
+  border-color: var(--border-context);
+  background: var(--surface-context-panel);
+  box-shadow: var(--shadow-surface-elevated);
 }
 
 .app-context-sidebar__nested-panel {
-  border-color: color-mix(in srgb, var(--glass-border) 76%, transparent);
-  background: color-mix(in srgb, var(--panel-bg) 84%, var(--app-bg) 16%);
+  border-color: var(--border-context-nested);
+  background: var(--surface-context-panel-nested);
 }
 
 /* Inline gridTemplateColumns on desktop; collapse to one column at small widths */
@@ -262,7 +261,7 @@ body {
 
 .settings-shell__main {
   border-left-width: 0;
-  background: color-mix(in srgb, var(--content-surface) 72%, var(--glass-fill) 28%);
+  background: var(--surface-settings-main);
 }
 
 .settings-shell__content {
@@ -270,14 +269,14 @@ body {
 }
 
 .settings-shell__main [data-slot="card"] {
-  border-color: color-mix(in srgb, var(--glass-border) 78%, transparent);
-  background: color-mix(in srgb, var(--panel-bg) 94%, transparent);
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--text) 6%, transparent);
+  border-color: var(--border-glass);
+  background: var(--surface-settings-card);
+  box-shadow: var(--shadow-surface-elevated);
   backdrop-filter: blur(calc(var(--titlebar-blur) - 1px));
 }
 
 .settings-shell__main [data-slot="card"]:has([data-provider-card]) {
-  background: color-mix(in srgb, var(--panel-bg) 84%, transparent);
+  background: var(--surface-settings-card-elevated);
 }
 
 @keyframes sidebarRailIn {
@@ -295,13 +294,13 @@ body {
 @keyframes sidebarDropPulse {
   0%,
   100% {
-    background-color: color-mix(in srgb, var(--accent) 6%, transparent);
-    border-color: color-mix(in srgb, var(--accent) 18%, transparent);
+    background-color: var(--surface-sidebar-drop);
+    border-color: var(--border-accent-soft);
   }
 
   50% {
-    background-color: color-mix(in srgb, var(--accent) 10%, transparent);
-    border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+    background-color: var(--surface-sidebar-drop-strong);
+    border-color: var(--border-accent-strong);
   }
 }
 

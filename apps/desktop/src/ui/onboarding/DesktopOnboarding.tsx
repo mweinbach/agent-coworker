@@ -494,7 +494,7 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                         ) : null}
 
                         {resultMatch ? (
-                          <div className={cn("text-xs", resultMatch.ok ? "text-emerald-600" : "text-destructive")}>
+                          <div className={cn("text-xs", resultMatch.ok ? "text-success" : "text-destructive")}>
                             {resultMatch.message}
                           </div>
                         ) : null}
@@ -878,7 +878,7 @@ export function DesktopOnboarding() {
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2 }}
-        className="relative z-10 w-[min(92vw,520px)] rounded-xl border border-border/80 bg-card p-6 shadow-2xl"
+        className="app-shadow-overlay relative z-10 w-[min(92vw,520px)] rounded-xl border border-border/80 bg-card p-6"
       >
         <div className="mb-5 flex items-center justify-between">
           <StepIndicator current={step} />

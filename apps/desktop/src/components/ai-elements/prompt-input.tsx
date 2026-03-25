@@ -114,7 +114,7 @@ export function PromptInputSubmit({ className, disabled, mode = "send", onStop, 
       size="icon"
       className={cn(
         steerReady || steerPending
-          ? "rounded-[10px] border border-amber-500/40 bg-amber-500 text-slate-950 shadow-none hover:bg-amber-400"
+          ? "rounded-[10px] border border-warning/40 bg-warning text-warning-foreground shadow-none hover:brightness-105"
           : "rounded-[10px] border border-primary/15 bg-primary brightness-[0.78] text-primary-foreground shadow-none hover:brightness-[0.84]",
         steerPending && "animate-pulse",
         "disabled:brightness-100 disabled:border-border/50 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",

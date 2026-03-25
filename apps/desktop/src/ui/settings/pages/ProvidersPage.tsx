@@ -609,7 +609,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
         ) : null}
 
         {resultMatch ? (
-          <div className={cn("text-xs", resultMatch.ok ? "text-emerald-600" : "text-destructive")}>
+          <div className={cn("text-xs", resultMatch.ok ? "text-success" : "text-destructive")}>
             {resultMatch.message}
           </div>
         ) : null}
@@ -1002,7 +1002,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
         </Card>
       ) : null}
 
-      <div className="relative mb-2 flex max-w-fit space-x-1 rounded-xl border border-border/70 bg-foreground/[0.04] p-1.5 shadow-sm backdrop-blur-sm">
+      <div className="app-shadow-surface relative mb-2 flex max-w-fit space-x-1 rounded-xl border border-border/70 bg-foreground/[0.04] p-1.5 backdrop-blur-sm">
         {(["models", "tools"] as const).map((tab) => (
           <Button
             key={tab}
@@ -1017,7 +1017,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
             {activeTab === tab && (
               <motion.div
                 layoutId="providers-active-tab"
-                className="absolute inset-0 -z-10 rounded-lg border border-border/55 bg-panel/85 shadow-sm backdrop-blur-sm"
+                className="app-shadow-surface absolute inset-0 -z-10 rounded-lg border border-border/55 bg-panel/85 backdrop-blur-sm"
                 transition={{ type: "spring", stiffness: 500, damping: 30 }}
               />
             )}

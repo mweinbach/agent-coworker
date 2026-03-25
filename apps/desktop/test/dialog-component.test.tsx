@@ -62,6 +62,34 @@ function ControlledDialogWithExternalTrigger() {
   );
 }
 
+function StackedDialogs() {
+  const [outerOpen, setOuterOpen] = useState(true);
+  const [innerOpen, setInnerOpen] = useState(true);
+
+  return createElement(
+    Fragment,
+    null,
+    createElement(
+      Dialog,
+      { open: outerOpen, onOpenChange: setOuterOpen },
+      createElement(
+        DialogContent,
+        null,
+        createElement("button", { id: "outer-dialog-button", type: "button" }, "Outer dialog"),
+      ),
+    ),
+    createElement(
+      Dialog,
+      { open: innerOpen, onOpenChange: setInnerOpen },
+      createElement(
+        DialogContent,
+        null,
+        createElement("button", { id: "inner-dialog-button", type: "button" }, "Inner dialog"),
+      ),
+    ),
+  );
+}
+
 describe("desktop dialog component", () => {
   test.serial("moves focus into the dialog and restores it to the trigger on close", async () => {
     const harness = setupJsdom();
@@ -300,6 +328,56 @@ describe("desktop dialog component", () => {
 
       expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
       expect(harness.dom.window.document.activeElement).toBe(trigger);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("only the topmost dialog handles Escape and preserves body scroll lock until the last close", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      harness.dom.window.document.body.style.overflow = "scroll";
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StackedDialogs));
+      });
+
+      expect(harness.dom.window.document.body.style.overflow).toBe("hidden");
+      expect(harness.dom.window.document.getElementById("outer-dialog-button")).not.toBeNull();
+      expect(harness.dom.window.document.getElementById("inner-dialog-button")).not.toBeNull();
+
+      await act(async () => {
+        harness.dom.window.document.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(harness.dom.window.document.getElementById("inner-dialog-button")).toBeNull();
+      expect(harness.dom.window.document.getElementById("outer-dialog-button")).not.toBeNull();
+      expect(harness.dom.window.document.body.style.overflow).toBe("hidden");
+
+      await act(async () => {
+        harness.dom.window.document.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(harness.dom.window.document.getElementById("outer-dialog-button")).toBeNull();
+      expect(harness.dom.window.document.body.style.overflow).toBe("scroll");
 
       await act(async () => {
         root.unmount();

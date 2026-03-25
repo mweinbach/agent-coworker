@@ -13,6 +13,9 @@ type DialogContextValue = {
 };
 
 const DialogContext = React.createContext<DialogContextValue | null>(null);
+const openDialogStack: symbol[] = [];
+let dialogBodyLockCount = 0;
+let dialogBodyOverflow = "";
 
 const DIALOG_FOCUSABLE_SELECTOR = [
   "a[href]",
@@ -69,6 +72,43 @@ function getElementRef<T>(element: React.ReactElement): React.Ref<T> | undefined
   return withPossibleRef.props.ref ?? withPossibleRef.ref;
 }
 
+function registerDialogLayer(dialogId: symbol) {
+  if (openDialogStack.includes(dialogId)) {
+    return;
+  }
+
+  if (dialogBodyLockCount === 0 && typeof document !== "undefined") {
+    dialogBodyOverflow = document.body.style.overflow;
+  }
+
+  openDialogStack.push(dialogId);
+  dialogBodyLockCount += 1;
+
+  if (typeof document !== "undefined") {
+    document.body.style.overflow = "hidden";
+  }
+}
+
+function unregisterDialogLayer(dialogId: symbol) {
+  const index = openDialogStack.lastIndexOf(dialogId);
+  if (index === -1) {
+    return;
+  }
+
+  openDialogStack.splice(index, 1);
+  if (dialogBodyLockCount > 0) {
+    dialogBodyLockCount -= 1;
+  }
+
+  if (dialogBodyLockCount === 0 && typeof document !== "undefined") {
+    document.body.style.overflow = dialogBodyOverflow;
+  }
+}
+
+function isTopmostDialog(dialogId: symbol) {
+  return openDialogStack[openDialogStack.length - 1] === dialogId;
+}
+
 function useDialogContext(): DialogContextValue {
   const context = React.useContext(DialogContext);
   if (!context) {
@@ -88,7 +128,6 @@ function Dialog({ children, open, defaultOpen, onOpenChange }: DialogProps) {
   const restoreFocusRef = React.useRef<HTMLElement | null>(null);
   const triggerRef = React.useRef<HTMLElement | null>(null);
   const isOpen = open ?? uncontrolledOpen;
-  const wasOpenRef = React.useRef(isOpen);
   const setOpen = React.useCallback((nextOpen: boolean) => {
     if (nextOpen && typeof document !== "undefined") {
       const activeElement = getActiveElement(document);
@@ -103,19 +142,16 @@ function Dialog({ children, open, defaultOpen, onOpenChange }: DialogProps) {
   }, [onOpenChange, open]);
 
   React.useLayoutEffect(() => {
-    if (typeof document === "undefined") {
-      wasOpenRef.current = isOpen;
+    if (!isOpen || typeof document === "undefined") {
       return;
     }
 
-    if (!wasOpenRef.current && isOpen && restoreFocusRef.current === null) {
+    if (restoreFocusRef.current === null) {
       const activeElement = getActiveElement(document);
       restoreFocusRef.current = activeElement && activeElement !== document.body
         ? activeElement
         : triggerRef.current;
     }
-
-    wasOpenRef.current = isOpen;
   }, [isOpen]);
 
   return (
@@ -211,33 +247,21 @@ function DialogContent({
   const { open, restoreFocusRef, setOpen, triggerRef } = useDialogContext();
   const allowDismissRef = React.useRef(true);
   const contentRef = React.useRef<HTMLDivElement | null>(null);
+  const dialogIdRef = React.useRef<symbol>(Symbol("dialog"));
 
   React.useEffect(() => {
     if (!open || typeof document === "undefined") {
       return;
     }
 
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
+    registerDialogLayer(dialogIdRef.current);
+    return () => unregisterDialogLayer(dialogIdRef.current);
   }, [open]);
 
   const handleEscapeDismiss = React.useCallback(
     (event: KeyboardEvent) => {
       allowDismissRef.current = true;
-      event.stopPropagation();
-      const syntheticEvent = Object.assign(Object.create(event), {
-        preventDefault: () => {
-          allowDismissRef.current = false;
-          event.preventDefault();
-        },
-        stopPropagation: () => {
-          event.stopPropagation();
-        },
-      });
-      onEscapeKeyDown?.(syntheticEvent as KeyboardEvent);
+      onEscapeKeyDown?.(event);
       if (!event.defaultPrevented && allowDismissRef.current) {
         setOpen(false);
       }
@@ -256,6 +280,17 @@ function DialogContent({
     }
 
     focusFirstElement(content);
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!open || typeof document === "undefined") {
+      return;
+    }
+
+    const content = contentRef.current;
+    if (!content) {
+      return;
+    }
 
     const handleDocumentKeyDown = (event: KeyboardEvent) => {
       if (!contentRef.current || event.defaultPrevented) {
@@ -263,6 +298,10 @@ function DialogContent({
       }
 
       if (event.key === "Escape") {
+        if (!isTopmostDialog(dialogIdRef.current)) {
+          return;
+        }
+        event.stopImmediatePropagation();
         handleEscapeDismiss(event);
         return;
       }
@@ -304,9 +343,9 @@ function DialogContent({
 
     return () => {
       document.removeEventListener("keydown", handleDocumentKeyDown);
+      const restoreTarget = restoreFocusRef.current;
+      const fallbackTrigger = triggerRef.current;
       const restoreFocus = () => {
-        const restoreTarget = restoreFocusRef.current;
-        const fallbackTrigger = triggerRef.current;
         if (restoreTarget && restoreTarget.isConnected) {
           restoreTarget.focus();
           return;
@@ -317,8 +356,10 @@ function DialogContent({
       };
 
       restoreFocus();
-      setTimeout(restoreFocus, 0);
-      restoreFocusRef.current = null;
+      setTimeout(() => {
+        restoreFocus();
+        restoreFocusRef.current = null;
+      }, 0);
     };
   }, [handleEscapeDismiss, open]);
 

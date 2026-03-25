@@ -211,4 +211,65 @@ describe("desktop app top bar", () => {
       harness.restore();
     }
   });
+
+  test("consumes Escape while the thread details popover is open", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+      let windowEscapeCount = 0;
+      const handleWindowKeyDown = () => {
+        windowEscapeCount += 1;
+      };
+      harness.dom.window.addEventListener("keydown", handleWindowKeyDown);
+
+      await act(async () => {
+        root.render(
+          createElement(AppTopBar, {
+            busy: true,
+            onToggleSidebar: () => {},
+            onNewChat: () => {},
+            sidebarCollapsed: false,
+            sidebarWidth: 280,
+            contextSidebarCollapsed: false,
+            onToggleContextSidebar: () => {},
+            title: "Refine desktop app UI",
+            subtitle: "agent-coworker",
+            sessionUsage,
+            lastTurnUsage,
+          }),
+        );
+      });
+
+      const titleButton = container.querySelector('button[aria-label="Open thread details"]');
+      if (!(titleButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing thread details button");
+      }
+
+      await act(async () => {
+        titleButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+
+      await act(async () => {
+        harness.dom.window.document.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+      });
+
+      expect(windowEscapeCount).toBe(0);
+      expect(container.querySelector('[role="dialog"]')).toBeNull();
+
+      harness.dom.window.removeEventListener("keydown", handleWindowKeyDown);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

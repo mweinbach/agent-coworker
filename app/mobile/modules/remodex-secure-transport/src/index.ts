@@ -493,6 +493,22 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
     }
 
     if (method === "turn/interrupt" && id !== null) {
+      const params = envelope.params && typeof envelope.params === "object"
+        ? envelope.params as Record<string, unknown>
+        : {};
+      const threadId = typeof params.threadId === "string" ? params.threadId : this.threads[0]?.id ?? "mobile-demo-thread";
+      const thread = this.threads.find((entry) => entry.id === threadId) ?? this.threads[0];
+      if (thread) {
+        const ts = nowIso();
+        thread.lastEventSeq += 1;
+        thread.feed.push({
+          id: `interrupt:${thread.lastEventSeq}`,
+          kind: "system",
+          ts,
+          line: "Interrupt requested from Cowork Mobile.",
+        });
+        thread.updatedAt = ts;
+      }
       queueMessage(this, {
         id,
         result: {},

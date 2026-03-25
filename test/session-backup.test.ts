@@ -8,6 +8,7 @@ import { directoryByteSize } from "../src/server/sessionBackup/fileSystem";
 import { extractTarGz } from "../src/server/sessionBackup/tar";
 import { MODEL_SCRATCHPAD_DIRNAME } from "../src/shared/toolOutputOverflow";
 import { workspaceFingerprint } from "../src/server/sessionBackup/fingerprint";
+import { withGlobalTestLock } from "./shared/processLock";
 
 async function makeTmpWorkspace() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "session-backup-test-"));
@@ -25,6 +26,24 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function withMissingPathEnv<T>(workspace: string, run: () => Promise<T>): Promise<T> {
+  return await withGlobalTestLock("subprocess-env", async () => {
+    const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+    const previousPath = process.env[pathKey];
+    process.env[pathKey] = path.join(workspace, ".missing-bin");
+
+    try {
+      return await run();
+    } finally {
+      if (previousPath === undefined) {
+        delete process.env[pathKey];
+      } else {
+        process.env[pathKey] = previousPath;
+      }
+    }
+  });
 }
 
 describe("SessionBackupManager", () => {
@@ -99,13 +118,7 @@ describe("SessionBackupManager", () => {
     await fs.writeFile(path.join(workspace, "a.txt"), "one\n", "utf-8");
     await fs.writeFile(path.join(workspace, "sub", "b.txt"), "orig\n", "utf-8");
 
-    const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
-    const previousPath = process.env[pathKey];
-    // Bun's child_process lookup may still resolve commands when PATH is empty,
-    // so force a definitely-missing directory to make tar unavailable.
-    process.env[pathKey] = path.join(workspace, ".missing-bin");
-
-    try {
+    await withMissingPathEnv(workspace, async () => {
       const manager = await SessionBackupManager.create({
         sessionId: crypto.randomUUID(),
         workingDirectory: workspace,
@@ -137,13 +150,7 @@ describe("SessionBackupManager", () => {
       await manager.restoreOriginal();
       expect(await fs.readFile(path.join(workspace, "a.txt"), "utf-8")).toBe("one\n");
       expect(await fs.readFile(path.join(workspace, "sub", "b.txt"), "utf-8")).toBe("orig\n");
-    } finally {
-      if (previousPath === undefined) {
-        delete process.env[pathKey];
-      } else {
-        process.env[pathKey] = previousPath;
-      }
-    }
+    });
   });
 
   test("workspace fingerprint ignores .ModelScratchpad changes", async () => {
@@ -195,11 +202,7 @@ describe("SessionBackupManager", () => {
     await fs.mkdir(path.join(workspace, ".ModelScratchpad"), { recursive: true });
     await fs.writeFile(path.join(workspace, ".ModelScratchpad", "spill.txt"), "scratch-v1\n", "utf-8");
 
-    const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
-    const previousPath = process.env[pathKey];
-    process.env[pathKey] = path.join(workspace, ".missing-bin");
-
-    try {
+    await withMissingPathEnv(workspace, async () => {
       const manager = await SessionBackupManager.create({
         sessionId: crypto.randomUUID(),
         workingDirectory: workspace,
@@ -218,13 +221,7 @@ describe("SessionBackupManager", () => {
 
       expect(await fs.readFile(path.join(workspace, "tracked.txt"), "utf-8")).toBe("original\n");
       expect(await fs.readFile(path.join(workspace, ".ModelScratchpad", "spill.txt"), "utf-8")).toBe("scratch-v2\n");
-    } finally {
-      if (previousPath === undefined) {
-        delete process.env[pathKey];
-      } else {
-        process.env[pathKey] = previousPath;
-      }
-    }
+    });
   });
 
   test("directory snapshots preserve nested .ModelScratchpad directories", async () => {
@@ -235,11 +232,7 @@ describe("SessionBackupManager", () => {
     await fs.mkdir(nestedScratchpadDir, { recursive: true });
     await fs.writeFile(nestedScratchpadFile, "nested-v1\n", "utf-8");
 
-    const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
-    const previousPath = process.env[pathKey];
-    process.env[pathKey] = path.join(workspace, ".missing-bin");
-
-    try {
+    await withMissingPathEnv(workspace, async () => {
       const manager = await SessionBackupManager.create({
         sessionId: crypto.randomUUID(),
         workingDirectory: workspace,
@@ -260,13 +253,7 @@ describe("SessionBackupManager", () => {
 
       expect(await fs.readFile(path.join(workspace, "tracked.txt"), "utf-8")).toBe("original\n");
       expect(await fs.readFile(nestedScratchpadFile, "utf-8")).toBe("nested-v1\n");
-    } finally {
-      if (previousPath === undefined) {
-        delete process.env[pathKey];
-      } else {
-        process.env[pathKey] = previousPath;
-      }
-    }
+    });
   });
 
   test("tar snapshots exclude .ModelScratchpad from archived workspace state", async () => {

@@ -261,7 +261,7 @@ describe("server JSON-RPC websocket mode", () => {
     }
   });
 
-  test("JSON-RPC returns internal error when a handler throws before sending a response", async () => {
+  test("JSON-RPC workspace control routes fall back to the server cwd when params.cwd is omitted", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
 
@@ -286,14 +286,10 @@ describe("server JSON-RPC websocket mode", () => {
         method: "cowork/provider/status/refresh",
         params: {},
       }));
-      const errorResponse = await waitForSingleMessage(ws);
-      expect(errorResponse).toEqual({
-        id: 2,
-        error: {
-          code: -32603,
-          message: "cowork/provider/status/refresh requires cwd",
-        },
-      });
+      const response = await waitForSingleMessage(ws);
+      expect(response.id).toBe(2);
+      expect(response.result?.event?.type).toBe("provider_status");
+      expect(Array.isArray(response.result?.event?.providers)).toBe(true);
       ws.close();
     } finally {
       server.stop();

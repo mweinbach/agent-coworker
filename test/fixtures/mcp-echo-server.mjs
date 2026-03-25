@@ -32,3 +32,9 @@ server.registerTool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+await new Promise((resolve) => {
+  process.stdin.resume();
+  process.stdin.on("close", resolve);
+  process.stdin.on("end", resolve);
+});

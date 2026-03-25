@@ -1,133 +1,73 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import type { AgentConfig, MCPServerConfig } from "../src/types";
-import { runTurnWithDeps } from "../src/agent";
-import { loadMCPTools } from "../src/mcp";
+import { withGlobalTestLock } from "./shared/processLock";
 
-function fixturePath(name: string): string {
-  return path.join(import.meta.dir, "fixtures", name);
+type LoadToolsResult = {
+  scenario: "load-tools";
+  logs: string[];
+  toolNames: string[];
+  resultText: string;
+  annotations: Record<string, unknown> | null;
+};
+
+type RunTurnResult = {
+  scenario: "run-turn";
+  responseText: string;
+  responseMessagesLength: number;
+  streamTextCalls: number;
+};
+
+function runnerPath(): string {
+  return path.join(import.meta.dir, "fixtures", "mcp-local-integration-runner.ts");
 }
 
-function makeConfig(baseDir: string, configDir: string): AgentConfig {
-  return {
-    provider: "google",
-    model: "gemini-3-flash-preview",
-    preferredChildModel: "gemini-3-flash-preview",
-    workingDirectory: baseDir,
-    outputDirectory: path.join(baseDir, "output"),
-    uploadsDirectory: path.join(baseDir, "uploads"),
-    userName: "tester",
-    knowledgeCutoff: "unknown",
-    projectAgentDir: path.join(baseDir, ".agent"),
-    userAgentDir: path.join(baseDir, ".agent"),
-    builtInDir: baseDir,
-    builtInConfigDir: path.join(baseDir, "config"),
-    skillsDirs: [],
-    memoryDirs: [],
-    configDirs: [configDir],
-    enableMcp: true,
-  };
+async function runScenario<T>(scenario: "load-tools" | "run-turn"): Promise<T> {
+  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-local-runner-"));
+  const outputPath = path.join(outputDir, "result.json");
+
+  try {
+    const proc = Bun.spawn({
+      cmd: [process.execPath, runnerPath(), scenario, outputPath],
+      cwd: path.resolve(import.meta.dir, ".."),
+      stdout: "ignore",
+      stderr: "pipe",
+    });
+
+    const [exitCode, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stderr).text(),
+    ]);
+
+    if (exitCode !== 0) {
+      throw new Error(stderr.trim() || `Runner exited with status ${exitCode}`);
+    }
+
+    return JSON.parse(await fs.readFile(outputPath, "utf-8")) as T;
+  } finally {
+    await fs.rm(outputDir, { recursive: true, force: true });
+  }
 }
 
 describe("local MCP integration", () => {
   test("loadMCPTools connects to a local stdio server and executes a real tool", async () => {
-    const servers: MCPServerConfig[] = [
-      {
-        name: "local",
-        transport: {
-          type: "stdio",
-          command: process.execPath,
-          args: [fixturePath("mcp-echo-server.mjs")],
-        },
-        required: true,
-        retries: 0,
-      },
-    ];
-
-    const logs: string[] = [];
-    const loaded = await loadMCPTools(servers, { log: (line) => logs.push(line) });
-    try {
-      expect(loaded.errors).toEqual([]);
-      expect(loaded.tools).toHaveProperty("mcp__local__echo");
-
-      const tool = loaded.tools["mcp__local__echo"] as any;
-      expect(tool.annotations).toEqual(expect.objectContaining({ readOnlyHint: true }));
-      const result = await tool.execute({ text: "hello" });
-      const firstText = result?.content?.find((part: any) => part?.type === "text")?.text;
-      expect(firstText).toBe("echo:hello");
-      expect(logs.some((line) => line.includes("Connected to local"))).toBe(true);
-    } finally {
-      await loaded.close();
-    }
+    await withGlobalTestLock("subprocess-env", async () => {
+      const result = await runScenario<LoadToolsResult>("load-tools");
+      expect(result.toolNames).toContain("mcp__local__echo");
+      expect(result.resultText).toBe("echo:hello");
+      expect(result.annotations).toEqual(expect.objectContaining({ readOnlyHint: true }));
+      expect(result.logs.some((line) => line.includes("Connected to local"))).toBe(true);
+    });
   });
 
   test("runTurnWithDeps exposes local MCP tools to streamText", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-local-mcp-"));
-    try {
-      await fs.mkdir(path.join(tmpDir, ".cowork"), { recursive: true });
-      await fs.writeFile(
-        path.join(tmpDir, ".cowork", "mcp-servers.json"),
-        JSON.stringify(
-          {
-            servers: [
-              {
-                name: "local",
-                transport: {
-                  type: "stdio",
-                  command: process.execPath,
-                  args: [fixturePath("mcp-echo-server.mjs")],
-                },
-                required: true,
-                retries: 0,
-              },
-            ],
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-
-      const config = makeConfig(tmpDir, tmpDir);
-      const streamText = mock(async (args: any) => {
-        const tool = args?.tools?.["mcp__local__echo"];
-        expect(tool).toBeDefined();
-
-        const result = await tool.execute({ text: "turn" });
-        const firstText = result?.content?.find((part: any) => part?.type === "text")?.text ?? "";
-
-        return {
-          text: firstText,
-          reasoningText: undefined,
-          response: { messages: [] as any[] },
-        };
-      });
-
-      const response = await runTurnWithDeps(
-        {
-          config,
-          system: "You are helpful.",
-          messages: [{ role: "user", content: [{ type: "text", text: "use tools" }] }] as any[],
-          log: () => {},
-          askUser: async () => "ok",
-          approveCommand: async () => true,
-          maxSteps: 5,
-        },
-        {
-          streamText: streamText as any,
-          stepCountIs: mock((_n: number) => "stop") as any,
-          getModel: mock((_cfg: AgentConfig, _id?: string) => "model") as any,
-        },
-      );
-
-      expect(streamText).toHaveBeenCalledTimes(1);
-      expect(response.text).toBe("echo:turn");
-      expect(response.responseMessages).toEqual([]);
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    await withGlobalTestLock("subprocess-env", async () => {
+      const result = await runScenario<RunTurnResult>("run-turn");
+      expect(result.responseText).toBe("echo:turn");
+      expect(result.responseMessagesLength).toBe(0);
+      expect(result.streamTextCalls).toBe(1);
+    });
   });
 });

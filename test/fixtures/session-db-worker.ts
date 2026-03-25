@@ -57,10 +57,10 @@ function makeSnapshot(sessionId: string, step: number): SessionSnapshot {
   };
 }
 
-const [rootDir, sessionsDir, sessionId, expectedCountRaw] = process.argv.slice(2);
+const [rootDir, sessionsDir, sessionId, expectedCountRaw, outputPath] = process.argv.slice(2);
 const expectedCount = Number(expectedCountRaw ?? "0");
 
-if (!rootDir || !sessionsDir || !sessionId || !Number.isFinite(expectedCount) || expectedCount <= 0) {
+if (!rootDir || !sessionsDir || !sessionId || !Number.isFinite(expectedCount) || expectedCount <= 0 || !outputPath) {
   console.error(JSON.stringify({ error: "usage: <rootDir> <sessionsDir> <sessionId> <expectedCount>" }));
   process.exit(1);
 }
@@ -121,11 +121,11 @@ try {
       await Bun.sleep(25);
     }
 
-    console.log(JSON.stringify({
+    await fs.writeFile(outputPath, `${JSON.stringify({
       sessionId,
       visibleSessionIds,
       telemetry,
-    }));
+    })}\n`, "utf-8");
   } finally {
     db.close();
   }

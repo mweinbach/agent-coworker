@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { SessionDb } from "../src/server/sessionDb";
 import { SessionDbWriteCoordinator } from "../src/server/sessionDb/writeCoordinator";
+import { withGlobalTestLock } from "./shared/processLock";
 
 type TelemetryEvent = {
   name: string;
@@ -221,60 +222,74 @@ describe("SessionDbWriteCoordinator", () => {
 
 describe("session DB shared write integration", () => {
   test("three harness processes can share the same session database without sqlite lock failures", async () => {
-    const paths = await makeTmpCoworkHome("session-db-integration-");
-    const workerPath = path.join(repoRoot(), "test", "fixtures", "session-db-worker.ts");
-    const sessionIds = ["worker-a", "worker-b", "worker-c"];
+    await withGlobalTestLock("subprocess-env", async () => {
+      const paths = await makeTmpCoworkHome("session-db-integration-");
+      const workerPath = path.join(repoRoot(), "test", "fixtures", "session-db-worker.ts");
+      const sessionIds = ["worker-a", "worker-b", "worker-c"];
+      const outputPaths = sessionIds.map((sessionId) => path.join(paths.rootDir, `${sessionId}.json`));
 
-    const processes = sessionIds.map((sessionId) =>
-      Bun.spawn({
-        cmd: [process.execPath, workerPath, paths.rootDir, paths.sessionsDir, sessionId, String(sessionIds.length)],
-        cwd: repoRoot(),
-        stdout: "pipe",
-        stderr: "pipe",
-      }),
-    );
+      const processes = sessionIds.map((sessionId, index) =>
+        Bun.spawn({
+          cmd: [
+            process.execPath,
+            workerPath,
+            paths.rootDir,
+            paths.sessionsDir,
+            sessionId,
+            String(sessionIds.length),
+            outputPaths[index]!,
+          ],
+          cwd: repoRoot(),
+          stdout: "ignore",
+          stderr: "pipe",
+        }),
+      );
 
-    const outputs = await Promise.all(processes.map(async (proc, index) => {
-      const [exitCode, stdout, stderr] = await Promise.all([
-        proc.exited,
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
+      const outputs = await Promise.all(processes.map(async (proc, index) => {
+        const [exitCode, stderr] = await Promise.all([
+          proc.exited,
+          new Response(proc.stderr).text(),
+        ]);
+        const outputPath = outputPaths[index]!;
+        const output = exitCode === 0
+          ? (await fs.readFile(outputPath, "utf-8")).trim()
+          : "";
 
-      return {
-        sessionId: sessionIds[index],
-        exitCode,
-        stdout: stdout.trim(),
-        stderr: stderr.trim(),
-      };
-    }));
+        return {
+          sessionId: sessionIds[index],
+          exitCode,
+          output,
+          stderr: stderr.trim(),
+        };
+      }));
 
-    for (const output of outputs) {
-      expect(output.exitCode).toBe(0);
-      expect(output.stderr).toBe("");
-      const parsed = JSON.parse(output.stdout) as {
-        sessionId: string;
-        visibleSessionIds: string[];
-        telemetry: TelemetryEvent[];
-      };
-      expect(parsed.sessionId).toBe(output.sessionId);
-      expect(parsed.visibleSessionIds).toEqual(sessionIds);
-      expect(parsed.telemetry.some((event) => event.name === "session.db.sqlite_lock")).toBe(false);
-      expect(parsed.telemetry.some((event) => event.status === "error")).toBe(false);
-    }
-
-    const db = await SessionDb.create({ paths });
-    try {
-      const sessions = db.listSessions().map((session) => session.sessionId).sort();
-      expect(sessions).toEqual(sessionIds);
-      for (const sessionId of sessionIds) {
-        const record = db.getSessionRecord(sessionId);
-        expect(record?.sessionId).toBe(sessionId);
-        expect(record?.messageCount).toBe(1);
-        expect(record?.lastEventSeq).toBe(4);
+      for (const output of outputs) {
+        expect(output.exitCode).toBe(0);
+        expect(output.stderr).toBe("");
+        const parsed = JSON.parse(output.output) as {
+          sessionId: string;
+          visibleSessionIds: string[];
+          telemetry: TelemetryEvent[];
+        };
+        expect(parsed.sessionId).toBe(output.sessionId);
+        expect(parsed.visibleSessionIds).toEqual(sessionIds);
+        expect(parsed.telemetry.some((event) => event.name === "session.db.sqlite_lock")).toBe(false);
+        expect(parsed.telemetry.some((event) => event.status === "error")).toBe(false);
       }
-    } finally {
-      db.close();
-    }
+
+      const db = await SessionDb.create({ paths });
+      try {
+        const sessions = db.listSessions().map((session) => session.sessionId).sort();
+        expect(sessions).toEqual(sessionIds);
+        for (const sessionId of sessionIds) {
+          const record = db.getSessionRecord(sessionId);
+          expect(record?.sessionId).toBe(sessionId);
+          expect(record?.messageCount).toBe(1);
+          expect(record?.lastEventSeq).toBe(4);
+        }
+      } finally {
+        db.close();
+      }
+    });
   }, 20_000);
 });

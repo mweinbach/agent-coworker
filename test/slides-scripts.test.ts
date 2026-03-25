@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+import { withGlobalTestLock } from "./shared/processLock";
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -53,9 +57,20 @@ function runPython(code: string): string {
   return result.stdout.trim();
 }
 
+function runPythonWithOutputFile(code: string): string {
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "slides-script-output-"));
+  const outputPath = path.join(outputDir, "result.txt");
+  try {
+    runPython(`output_path = ${JSON.stringify(outputPath)}\n${code}`);
+    return fs.readFileSync(outputPath, "utf-8").trim();
+  } finally {
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  }
+}
+
 describe("slides script executable resolution", () => {
-  test("includes cross-platform LibreOffice and Ghostscript candidates", () => {
-    const output = runPython(`
+  test("includes cross-platform LibreOffice and Ghostscript candidates", async () => {
+    const output = await withGlobalTestLock("subprocess-env", async () => runPythonWithOutputFile(`
 import json
 from executable_resolution import libreoffice_search_candidates, ghostscript_search_candidates
 
@@ -77,8 +92,9 @@ payload = {
         },
     ),
 }
-print(json.dumps(payload))
-`);
+with open(output_path, "w", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload))
+`));
 
     const parsed = JSON.parse(output) as Record<string, string[]>;
     expect(parsed.libreoffice_win32).toContain("soffice");
@@ -88,8 +104,8 @@ print(json.dumps(payload))
     expect(parsed.ghostscript_win32).toContain("gswin32c.exe");
   });
 
-  test("raises clear override errors for missing Windows slide dependencies", () => {
-    const output = runPython(`
+  test("raises clear override errors for missing Windows slide dependencies", async () => {
+    const output = await withGlobalTestLock("subprocess-env", async () => runPythonWithOutputFile(`
 from executable_resolution import MissingDependencyError, resolve_libreoffice_executable
 
 try:
@@ -99,15 +115,16 @@ try:
         which=lambda name: None,
     )
 except MissingDependencyError as exc:
-    print(str(exc))
-`);
+    with open(output_path, "w", encoding="utf-8") as handle:
+        handle.write(str(exc))
+`));
 
     expect(output).toContain("LibreOffice executable configured via COWORK_SLIDES_LIBREOFFICE_BIN was not found");
     expect(output).toContain("Update COWORK_SLIDES_LIBREOFFICE_BIN");
   });
 
-  test("raises actionable missing-dependency messages for Linux and Windows helpers", () => {
-    const output = runPython(`
+  test("raises actionable missing-dependency messages for Linux and Windows helpers", async () => {
+    const output = await withGlobalTestLock("subprocess-env", async () => runPythonWithOutputFile(`
 import json
 from executable_resolution import (
     MissingDependencyError,
@@ -125,8 +142,9 @@ for key, resolver, platform_name in [
     except MissingDependencyError as exc:
         messages[key] = str(exc)
 
-print(json.dumps(messages))
-`);
+with open(output_path, "w", encoding="utf-8") as handle:
+    handle.write(json.dumps(messages))
+`));
 
     const parsed = JSON.parse(output) as Record<string, string>;
     expect(parsed.fontconfig).toContain("fontconfig (fc-list) executable not found");

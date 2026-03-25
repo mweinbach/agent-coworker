@@ -105,17 +105,24 @@ function DialogTrigger({ children, asChild = false, onClick, type, ...props }: R
     }
   };
 
-  if (asChild && React.isValidElement<{ onClick?: (event: React.MouseEvent<HTMLElement>) => void }>(children)) {
-    return React.cloneElement(children, {
+  if (asChild && React.isValidElement(children)) {
+    const child = children as React.ReactElement<{
+      onClick?: (event: React.MouseEvent<HTMLElement>) => void;
+      ref?: React.Ref<HTMLElement>;
+    }>;
+
+    const childProps: React.HTMLAttributes<HTMLElement> & React.RefAttributes<HTMLElement> = {
       onClick: (event: React.MouseEvent<HTMLElement>) => {
-        children.props.onClick?.(event);
+        child.props.onClick?.(event);
         handleClick(event);
       },
       ref: (node: HTMLElement | null) => {
         triggerRef.current = node;
-        assignElementRef(getElementRef<HTMLElement>(children), node);
+        assignElementRef(getElementRef<HTMLElement>(child), node);
       },
-    });
+    };
+
+    return React.cloneElement(child, childProps);
   }
 
   return (

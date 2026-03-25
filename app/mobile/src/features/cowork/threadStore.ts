@@ -11,14 +11,35 @@ export type MobileThreadSummary = {
   feed: SessionFeedItem[];
   composerDraft: string;
   pendingPrompt: boolean;
+  pendingServerRequest: PendingServerRequest | null;
 };
 
 export type MobileThreadFeedEntry = SessionFeedItem;
+
+export type PendingServerRequest =
+  | {
+      requestId: string;
+      kind: "ask";
+      threadId: string;
+      itemId: string;
+      question: string;
+      options: string[];
+    }
+  | {
+      requestId: string;
+      kind: "approval";
+      threadId: string;
+      itemId: string;
+      command: string;
+      reason: string;
+      dangerous: boolean;
+    };
 
 type ThreadStoreState = {
   snapshots: Record<string, SessionSnapshotLike>;
   threads: MobileThreadSummary[];
   selectedThreadId: string | null;
+  pendingRequests: Record<string, PendingServerRequest | null>;
   hydrate(snapshot: SessionSnapshotLike): void;
   appendStarted(threadId: string, item: ProjectedItem, ts: string): void;
   appendCompleted(threadId: string, item: ProjectedItem, ts: string): void;
@@ -33,6 +54,9 @@ type ThreadStoreState = {
   currentFeed(threadId: string): SessionFeedItem[];
   seedThread(): void;
   getThread(threadId: string): MobileThreadSummary | null;
+  getPendingRequest(threadId: string): PendingServerRequest | null;
+  setPendingRequest(request: PendingServerRequest): void;
+  clearPendingRequest(threadId: string): void;
   selectThread(threadId: string): void;
   setComposerDraft(threadId: string, text: string): void;
   submitComposer(threadId: string): void;
@@ -63,6 +87,7 @@ function buildThreadSummary(
   threadId: string,
   snapshot: SessionSnapshotLike,
   composerDraft = "",
+  pendingServerRequest: PendingServerRequest | null = null,
 ): MobileThreadSummary {
   const previewSource = snapshot.feed.at(-1);
   return {
@@ -76,7 +101,8 @@ function buildThreadSummary(
     updatedAtLabel: `${snapshot.feed.length} updates`,
     feed: snapshot.feed,
     composerDraft,
-    pendingPrompt: snapshot.hasPendingAsk || snapshot.hasPendingApproval,
+    pendingPrompt: snapshot.hasPendingAsk || snapshot.hasPendingApproval || pendingServerRequest !== null,
+    pendingServerRequest,
   };
 }
 
@@ -87,7 +113,12 @@ function updateThreadList(
   composerDraft?: string,
 ): MobileThreadSummary[] {
   const existing = state.threads.find((thread) => thread.id === threadId);
-  const next = buildThreadSummary(threadId, snapshot, composerDraft ?? existing?.composerDraft ?? "");
+  const next = buildThreadSummary(
+    threadId,
+    snapshot,
+    composerDraft ?? existing?.composerDraft ?? "",
+    state.pendingRequests[threadId] ?? existing?.pendingServerRequest ?? null,
+  );
   const remaining = state.threads.filter((thread) => thread.id !== threadId);
   return [next, ...remaining];
 }
@@ -96,6 +127,7 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   snapshots: {},
   threads: [],
   selectedThreadId: null,
+  pendingRequests: {},
   hydrate(snapshot) {
     set((state) => ({
       snapshots: {
@@ -242,6 +274,39 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   },
   getThread(threadId) {
     return get().threads.find((entry) => entry.id === threadId) ?? null;
+  },
+  getPendingRequest(threadId) {
+    return get().pendingRequests[threadId] ?? null;
+  },
+  setPendingRequest(request) {
+    set((state) => ({
+      pendingRequests: {
+        ...state.pendingRequests,
+        [request.threadId]: request,
+      },
+      threads: state.threads.map((thread) => (
+        thread.id === request.threadId
+          ? { ...thread, pendingPrompt: true, pendingServerRequest: request }
+          : thread
+      )),
+    }));
+  },
+  clearPendingRequest(threadId) {
+    set((state) => ({
+      pendingRequests: {
+        ...state.pendingRequests,
+        [threadId]: null,
+      },
+      threads: state.threads.map((thread) => (
+        thread.id === threadId
+          ? {
+              ...thread,
+              pendingPrompt: state.snapshots[threadId]?.hasPendingAsk || state.snapshots[threadId]?.hasPendingApproval || false,
+              pendingServerRequest: null,
+            }
+          : thread
+      )),
+    }));
   },
   selectThread(threadId) {
     set({ selectedThreadId: threadId });

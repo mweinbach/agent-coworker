@@ -112,4 +112,53 @@ describe("mobile transport integration", () => {
       subscription.remove();
     }
   });
+
+  test("fallback secure transport can round-trip an approval server request", async () => {
+    const payload = createPayload();
+    const requests: string[] = [];
+
+    const client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile-test",
+        version: "0.1.0",
+      },
+      send: async (text) => {
+        await transportModule.sendPlaintext(text);
+      },
+      onServerRequest(request) {
+        requests.push(request.method);
+        void client.respondServerRequest(request.id, { decision: "accept" });
+      },
+    });
+
+    const subscription = transportModule.addRemodexListener("plaintextMessage", (event) => {
+      void client.handleIncoming(event.text);
+    });
+
+    try {
+      await transportModule.connectFromQr(payload);
+      await client.initialize();
+
+      const threadList = await client.requestThreadList();
+      const threadId = threadList.threads[0]!.id;
+
+      await client.startTurn(threadId, "Please trigger approval");
+      await flushMicrotasks();
+      await flushMicrotasks();
+
+      expect(requests).toContain("item/commandExecution/requestApproval");
+
+      const reread = await client.readThread(threadId);
+      expect(
+        reread.coworkSnapshot?.feed.some(
+          (item) =>
+            item.kind === "message" &&
+            item.role === "assistant" &&
+            item.text.includes("Approval accepted"),
+        ),
+      ).toBe(true);
+    } finally {
+      subscription.remove();
+    }
+  });
 });

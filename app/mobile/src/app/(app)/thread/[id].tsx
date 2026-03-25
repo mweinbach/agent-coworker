@@ -1,17 +1,22 @@
 import { useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useState } from "react";
 
 import { ComposerBar } from "../../../components/ComposerBar";
 import { useThreadStore, type MobileThreadFeedEntry } from "../../../features/cowork/threadStore";
+import { getActiveCoworkJsonRpcClient } from "../../../features/cowork/runtimeClient";
 
 export default function ThreadDetailScreen() {
   const params = useLocalSearchParams<{ id?: string }>();
   const threadId = typeof params.id === "string" ? params.id : "";
   const thread = useThreadStore((state) => state.getThread(threadId));
+  const pendingRequest = useThreadStore((state) => state.getPendingRequest(threadId));
   const setComposerDraft = useThreadStore((state) => state.setComposerDraft);
   const submitComposer = useThreadStore((state) => state.submitComposer);
   const interruptThread = useThreadStore((state) => state.interruptThread);
+  const clearPendingRequest = useThreadStore((state) => state.clearPendingRequest);
+  const [askDraft, setAskDraft] = useState("");
 
   if (!thread) {
     return (
@@ -42,6 +47,82 @@ export default function ThreadDetailScreen() {
           contentContainerStyle={styles.feedContent}
           keyboardShouldPersistTaps="handled"
         >
+          {pendingRequest ? (
+            <View style={styles.pendingCard}>
+              <Text style={styles.pendingTitle}>
+                {pendingRequest.kind === "approval" ? "Approval needed" : "Question from desktop"}
+              </Text>
+              <Text style={styles.pendingBody}>
+                {pendingRequest.kind === "approval"
+                  ? `${pendingRequest.command}\n${pendingRequest.reason}`
+                  : pendingRequest.question}
+              </Text>
+              {pendingRequest.kind === "ask" ? (
+                <>
+                  <TextInput
+                    value={askDraft}
+                    onChangeText={setAskDraft}
+                    placeholder="Type a response…"
+                    placeholderTextColor="#64748b"
+                    style={styles.pendingInput}
+                  />
+                  <View style={styles.pendingActions}>
+                    {pendingRequest.options?.map((option: string) => (
+                      <Pressable
+                        key={option}
+                        onPress={async () => {
+                          const client = getActiveCoworkJsonRpcClient();
+                          if (!client) return;
+                          await client.respondServerRequest(pendingRequest.requestId, { answer: option });
+                          clearPendingRequest(thread.id);
+                        }}
+                        style={styles.pendingSecondaryButton}
+                      >
+                        <Text style={styles.pendingSecondaryLabel}>{option}</Text>
+                      </Pressable>
+                    ))}
+                    <Pressable
+                      onPress={async () => {
+                        const client = getActiveCoworkJsonRpcClient();
+                        if (!client) return;
+                        await client.respondServerRequest(pendingRequest.requestId, { answer: askDraft || "ok" });
+                        clearPendingRequest(thread.id);
+                        setAskDraft("");
+                      }}
+                      style={styles.pendingPrimaryButton}
+                    >
+                      <Text style={styles.pendingPrimaryLabel}>Send answer</Text>
+                    </Pressable>
+                  </View>
+                </>
+              ) : (
+                <View style={styles.pendingActions}>
+                  <Pressable
+                    onPress={async () => {
+                      const client = getActiveCoworkJsonRpcClient();
+                      if (!client) return;
+                      await client.respondServerRequest(pendingRequest.requestId, { decision: "accept" });
+                      clearPendingRequest(thread.id);
+                    }}
+                    style={styles.pendingPrimaryButton}
+                  >
+                    <Text style={styles.pendingPrimaryLabel}>Approve</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={async () => {
+                      const client = getActiveCoworkJsonRpcClient();
+                      if (!client) return;
+                      await client.respondServerRequest(pendingRequest.requestId, { decision: "reject" });
+                      clearPendingRequest(thread.id);
+                    }}
+                    style={styles.pendingSecondaryButton}
+                  >
+                    <Text style={styles.pendingSecondaryLabel}>Decline</Text>
+                  </Pressable>
+                </View>
+              )}
+            </View>
+          ) : null}
           {thread.feed.map((item: MobileThreadFeedEntry) => (
             <View key={item.id} style={styles.feedItem}>
               <Text style={styles.feedItemKind}>{item.kind.toUpperCase()}</Text>
@@ -175,6 +256,61 @@ const styles = StyleSheet.create({
     color: "#cbd5e1",
     fontSize: 14,
     lineHeight: 21,
+  },
+  pendingCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#7c2d12",
+    backgroundColor: "#1c1917",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 10,
+  },
+  pendingTitle: {
+    color: "#fdba74",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  pendingBody: {
+    color: "#fed7aa",
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  pendingInput: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#44403c",
+    backgroundColor: "#0c0a09",
+    color: "#f8fafc",
+    minHeight: 48,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  pendingActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  pendingPrimaryButton: {
+    borderRadius: 999,
+    backgroundColor: "#ea580c",
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  pendingPrimaryLabel: {
+    color: "#fff7ed",
+    fontWeight: "800",
+  },
+  pendingSecondaryButton: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#57534e",
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  pendingSecondaryLabel: {
+    color: "#e7e5e4",
+    fontWeight: "700",
   },
   emptyState: {
     flex: 1,

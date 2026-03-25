@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import type { PropsWithChildren } from "react";
 
 import { CoworkJsonRpcClient } from "../features/cowork/jsonRpcClient";
+import { setActiveCoworkJsonRpcClient } from "../features/cowork/runtimeClient";
 import type { SessionSnapshotLike } from "../features/cowork/protocolTypes";
 import { usePairingStore } from "../features/pairing/pairingStore";
 import { useThreadStore } from "../features/cowork/threadStore";
@@ -86,14 +87,37 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
             );
             break;
           case "turn/completed":
+            break;
           case "serverRequest/resolved":
+            threadStore.clearPendingRequest(notification.params.threadId);
             break;
         }
       },
-      onServerRequest() {
-        // Approval / ask UI will use this hook in the next slice.
+      onServerRequest(request) {
+        const threadStore = useThreadStore.getState();
+        if (request.method === "item/tool/requestUserInput") {
+          threadStore.setPendingRequest({
+            kind: "ask",
+            threadId: request.params.threadId,
+            itemId: request.params.itemId,
+            requestId: String(request.id),
+            question: request.params.question,
+            options: request.params.options ?? [],
+          });
+          return;
+        }
+        threadStore.setPendingRequest({
+          kind: "approval",
+          threadId: request.params.threadId,
+          itemId: request.params.itemId,
+          requestId: String(request.id),
+          command: request.params.command,
+          reason: request.params.reason,
+          dangerous: request.params.dangerous,
+        });
       },
     });
+    setActiveCoworkJsonRpcClient(client);
 
     let initialized = false;
     const unsubscribeTransport = defaultSecureTransportClient.subscribe({
@@ -127,6 +151,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
     return () => {
       unsubscribeTransport();
       resetPairingListeners();
+      setActiveCoworkJsonRpcClient(null);
     };
   }, [attachPairingListeners, bootstrapPairing, resetPairingListeners, seedThread]);
 

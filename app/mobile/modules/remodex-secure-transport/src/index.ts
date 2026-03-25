@@ -74,6 +74,29 @@ type MockThreadRecord = {
   feed: MockFeedItem[];
 };
 
+type PendingServerRequestRecord =
+  | {
+      kind: "approval";
+      requestId: string;
+      threadId: string;
+      turnId: string;
+      itemId: string;
+      prompt: string;
+      command: string;
+      dangerous: boolean;
+      reason: string;
+    }
+  | {
+      kind: "ask";
+      requestId: string;
+      threadId: string;
+      turnId: string;
+      itemId: string;
+      prompt: string;
+      question: string;
+      options?: string[];
+    };
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -97,6 +120,7 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
     lastError: null,
   };
   private threads: MockThreadRecord[] = [];
+  private pendingServerRequests = new Map<string, PendingServerRequestRecord>();
 
   private emitStateChanged(): void {
     (this as unknown as { emit: (eventName: "stateChanged", payload: RemodexSecureTransportState) => void }).emit(
@@ -205,6 +229,106 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
     });
   }
 
+  private appendAssistantResolution(
+    thread: MockThreadRecord,
+    turnId: string,
+    text: string,
+  ): void {
+    const ts = nowIso();
+    const assistantItemId = `${turnId}:assistant:resolution`;
+    thread.lastEventSeq += 1;
+    thread.feed.push({
+      id: assistantItemId,
+      kind: "message",
+      role: "assistant",
+      ts,
+      text,
+    });
+    thread.updatedAt = ts;
+    queueMessage(this, {
+      method: "item/started",
+      params: {
+        threadId: thread.id,
+        turnId,
+        item: {
+          id: assistantItemId,
+          type: "agentMessage",
+          text: "",
+        },
+      },
+    });
+    queueMessage(this, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: thread.id,
+        turnId,
+        itemId: assistantItemId,
+        delta: text,
+      },
+    });
+    queueMessage(this, {
+      method: "item/completed",
+      params: {
+        threadId: thread.id,
+        turnId,
+        item: {
+          id: assistantItemId,
+          type: "agentMessage",
+          text,
+        },
+      },
+    });
+    queueMessage(this, {
+      method: "turn/completed",
+      params: {
+        threadId: thread.id,
+        turn: {
+          id: turnId,
+          status: "completed",
+        },
+      },
+    });
+  }
+
+  private resolvePendingServerRequest(
+    requestId: string,
+    result: unknown,
+  ): void {
+    const pending = this.pendingServerRequests.get(requestId);
+    if (!pending) {
+      return;
+    }
+    this.pendingServerRequests.delete(requestId);
+    const thread = this.threads.find((entry) => entry.id === pending.threadId);
+    if (!thread) {
+      return;
+    }
+    let resolutionText = "Request resolved from mobile.";
+    if (pending.kind === "approval") {
+      const decision = result && typeof result === "object" && "decision" in result
+        ? String((result as { decision?: unknown }).decision ?? "accept")
+        : "accept";
+      resolutionText = decision === "accept"
+        ? `Approval accepted for command: ${pending.command}`
+        : `Approval declined for command: ${pending.command}`;
+    } else {
+      const answer = result && typeof result === "object" && "answer" in result
+        ? String((result as { answer?: unknown }).answer ?? "")
+        : "";
+      resolutionText = answer
+        ? `Input provided: ${answer}`
+        : "Input request resolved from mobile.";
+    }
+    queueMessage(this, {
+      method: "serverRequest/resolved",
+      params: {
+        threadId: pending.threadId,
+        requestId: pending.requestId,
+      },
+    });
+    this.appendAssistantResolution(thread, pending.turnId, resolutionText);
+  }
+
   async listTrustedMacs(): Promise<RemodexTrustedMacSummary[]> {
     return this.state.trustedMacs;
   }
@@ -297,6 +421,11 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
       ? envelope.id
       : null;
 
+    if (!method && id !== null && ("result" in envelope || "error" in envelope)) {
+      this.resolvePendingServerRequest(String(id), envelope.result);
+      return;
+    }
+
     if (!method) {
       return;
     }
@@ -388,6 +517,9 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
         type: "userMessage",
         content: [{ type: "text", text: prompt }],
       };
+      const lowerPrompt = prompt.toLowerCase();
+      const shouldRequestApproval = lowerPrompt.includes("approval");
+      const shouldRequestInput = lowerPrompt.includes("input");
       const assistantItem = {
         id: assistantItemId,
         type: "agentMessage",
@@ -401,14 +533,6 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
         role: "user",
         ts,
         text: prompt,
-      });
-      thread.lastEventSeq += 1;
-      thread.feed.push({
-        id: assistantItemId,
-        kind: "message",
-        role: "assistant",
-        ts,
-        text: assistantItem.text,
       });
       thread.updatedAt = ts;
 
@@ -450,6 +574,71 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
           item: userItem,
         },
       });
+
+      if (shouldRequestApproval) {
+        const requestId = `approval-${Date.now()}`;
+        this.pendingServerRequests.set(requestId, {
+          kind: "approval",
+          requestId,
+          threadId: thread.id,
+          turnId,
+          itemId: `${turnId}:approval`,
+          prompt,
+          command: "demo approval command",
+          reason: "Approval demo triggered by the mobile fallback transport.",
+          dangerous: true,
+        });
+        queueMessage(this, {
+          id: requestId,
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: thread.id,
+            turnId,
+            requestId,
+            itemId: `${turnId}:approval`,
+            command: "demo approval command",
+            dangerous: true,
+            reason: "Approval demo triggered by the mobile fallback transport.",
+          },
+        });
+        return;
+      }
+
+      if (shouldRequestInput) {
+        const requestId = `ask-${Date.now()}`;
+        this.pendingServerRequests.set(requestId, {
+          kind: "ask",
+          requestId,
+          threadId: thread.id,
+          turnId,
+          itemId: `${turnId}:ask`,
+          prompt,
+          question: "Which follow-up should Cowork send back?",
+          options: ["Continue", "More detail", "Stop"],
+        });
+        queueMessage(this, {
+          id: requestId,
+          method: "item/tool/requestUserInput",
+          params: {
+            threadId: thread.id,
+            turnId,
+            requestId,
+            itemId: `${turnId}:ask`,
+            question: "Which follow-up should Cowork send back?",
+            options: ["Continue", "More detail", "Stop"],
+          },
+        });
+        return;
+      }
+
+      thread.lastEventSeq += 1;
+      thread.feed.push({
+        id: assistantItemId,
+        kind: "message",
+        role: "assistant",
+        ts,
+        text: assistantItem.text,
+      });
       queueMessage(this, {
         method: "item/started",
         params: {
@@ -489,6 +678,14 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
           },
         },
       });
+      return;
+    }
+
+    if (method === "turn/start" && id !== null) {
+      // unreachable placeholder to satisfy exhaustive flow
+    }
+
+    if (method === "turn/start" && id !== null) {
       return;
     }
 

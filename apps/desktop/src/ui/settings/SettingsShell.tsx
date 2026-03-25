@@ -67,8 +67,8 @@ function SettingsNavigation({
   const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
 
   return (
-    <aside className="settings-shell__nav app-left-sidebar-pane flex min-h-0 flex-col border-r border-border/70 max-[960px]:border-r-0 max-[960px]:border-b">
-      <div className="border-b border-border/80 px-3 py-3 flex flex-col gap-2">
+    <aside className="settings-shell__nav app-left-sidebar-pane flex min-h-0 flex-col border-r border-border/60 bg-gradient-to-b from-muted/12 to-muted/[0.04] max-[960px]:border-r-0 max-[960px]:border-b max-[960px]:bg-gradient-to-r max-[960px]:from-muted/10 max-[960px]:to-transparent">
+      <div className="border-b border-border/70 px-3 py-3 flex flex-col gap-2">
         <Button
           className="settings-shell__back-button sidebar-lift h-9 w-full justify-start rounded-lg border border-border/70 bg-foreground/[0.03] px-3 text-[13px] font-medium text-foreground/86 hover:bg-foreground/[0.05] hover:text-foreground"
           variant="ghost"
@@ -85,10 +85,10 @@ function SettingsNavigation({
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 py-3.5 flex flex-col gap-5 max-[960px]:flex-row max-[960px]:flex-wrap">
+      <div className="flex-1 overflow-y-auto px-3 py-3.5 pb-4 flex flex-col gap-5 max-[960px]:flex-row max-[960px]:flex-wrap">
         {SETTINGS_GROUPS.map((group) => (
           <div key={group.label} className="flex flex-col gap-1">
-            <h4 className="mb-1 px-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/88">
+            <h4 className="mb-1.5 px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/80">
               {group.label}
             </h4>
             <div className="flex flex-col gap-0.5">
@@ -99,7 +99,7 @@ function SettingsNavigation({
                   className={cn(
                     "settings-shell__nav-button sidebar-lift h-8 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em]",
                     activePage === page.id
-                      ? "bg-foreground/[0.055] text-foreground"
+                      ? "bg-foreground/[0.07] text-foreground shadow-sm ring-1 ring-border/45"
                       : "text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground",
                   )}
                   type="button"
@@ -142,7 +142,7 @@ export function SettingsShell() {
             // Narrow: even padding. Wide: flush to the nav divider on the left; keep right/top/bottom inset.
             activePage.id === "backup"
               ? "h-full p-0"
-              : "max-[960px]:p-4 min-[961px]:pl-0 min-[961px]:py-5 min-[961px]:pr-5 lg:py-6 lg:pr-6",
+              : "max-[960px]:p-4 min-[961px]:pl-3 min-[961px]:py-5 min-[961px]:pr-5 lg:py-6 lg:pr-6",
           )}
         >
           <div key={activePage.id} className="animate-in fade-in slide-in-from-bottom-2 duration-200 ease-out h-full">

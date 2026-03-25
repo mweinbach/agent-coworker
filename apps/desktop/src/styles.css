@@ -263,6 +263,12 @@ body {
   background: var(--surface-settings-main);
 }
 
+@media (min-width: 961px) {
+  .settings-shell__main {
+    box-shadow: var(--shadow-settings-pane-divider);
+  }
+}
+
 .settings-shell__content {
   min-height: 100%;
 }

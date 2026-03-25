@@ -90,6 +90,7 @@ export type JsonRpcNotification =
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  timeoutHandle: ReturnType<typeof setTimeout>;
 };
 
 type JsonRpcClientOptions = {
@@ -100,6 +101,7 @@ type JsonRpcClientOptions = {
   send: (text: string) => Promise<void> | void;
   onNotification?: (notification: JsonRpcNotification) => void;
   onServerRequest?: (request: JsonRpcServerRequest) => void;
+  requestTimeoutMs?: number;
 };
 
 function parseJsonMessage(raw: string): JsonRpcRequestMessage | JsonRpcNotificationMessage | JsonRpcResponseMessage {
@@ -202,6 +204,7 @@ function normalizeServerRequest(message: JsonRpcRequestMessage): JsonRpcServerRe
 }
 
 export class CoworkJsonRpcClient {
+  private readonly requestTimeoutMs: number;
   private readonly sendTransport: (text: string) => Promise<void> | void;
   private readonly onNotification?: (notification: JsonRpcNotification) => void;
   private readonly onServerRequest?: (request: JsonRpcServerRequest) => void;
@@ -211,6 +214,7 @@ export class CoworkJsonRpcClient {
   private readonly clientInfo: JsonRpcClientOptions["clientInfo"];
 
   constructor(options: JsonRpcClientOptions) {
+    this.requestTimeoutMs = Math.max(1, options.requestTimeoutMs ?? 5_000);
     this.sendTransport = options.send;
     this.onNotification = options.onNotification;
     this.onServerRequest = options.onServerRequest;
@@ -284,6 +288,7 @@ export class CoworkJsonRpcClient {
         return;
       }
       this.pending.delete(message.id);
+      clearTimeout(pending.timeoutHandle);
       if (message.error) {
         pending.reject(new Error(message.error.message));
         return;
@@ -309,7 +314,11 @@ export class CoworkJsonRpcClient {
   private async request(method: string, params?: unknown): Promise<unknown> {
     const id = ++this.nextId;
     const promise = new Promise<unknown>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timeoutHandle = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`JSON-RPC request timed out: ${method}`));
+      }, this.requestTimeoutMs);
+      this.pending.set(id, { resolve, reject, timeoutHandle });
     });
     await this.sendTransport(JSON.stringify({
       id,

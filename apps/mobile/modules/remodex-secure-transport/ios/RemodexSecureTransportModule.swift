@@ -9,10 +9,11 @@ public class RemodexSecureTransportModule: Module {
     Function("getState") { () -> [String: Any?] in
       return [
         "status": "idle",
-        "connectionMode": nil,
-        "activeMacDeviceId": nil,
-        "activeSessionId": nil,
-        "trustedMacCount": 0,
+        "transportMode": "unsupported",
+        "connectedMacDeviceId": nil,
+        "relay": nil,
+        "sessionId": nil,
+        "trustedMacs": [],
         "lastError": nil
       ]
     }
@@ -27,28 +28,38 @@ public class RemodexSecureTransportModule: Module {
 
     AsyncFunction("connectFromQr") { (_ payload: [String: Any]) -> [String: Any?] in
       return [
-        "status": "unsupported",
-        "connectionMode": "qr",
-        "activeMacDeviceId": payload["macDeviceId"] as? String,
-        "activeSessionId": payload["sessionId"] as? String,
-        "trustedMacCount": 0,
+        "status": "error",
+        "transportMode": "unsupported",
+        "connectedMacDeviceId": payload["macDeviceId"] as? String,
+        "relay": payload["relay"] as? String,
+        "sessionId": payload["sessionId"] as? String,
+        "trustedMacs": [],
         "lastError": "Native secure transport is not implemented yet."
       ]
     }
 
     AsyncFunction("connectTrusted") { (_ macDeviceId: String) -> [String: Any?] in
       return [
-        "status": "unsupported",
-        "connectionMode": "trusted",
-        "activeMacDeviceId": macDeviceId,
-        "activeSessionId": nil,
-        "trustedMacCount": 0,
+        "status": "error",
+        "transportMode": "unsupported",
+        "connectedMacDeviceId": macDeviceId,
+        "relay": nil,
+        "sessionId": nil,
+        "trustedMacs": [],
         "lastError": "Native secure transport is not implemented yet."
       ]
     }
 
-    AsyncFunction("disconnect") { () in
-      return
+    AsyncFunction("disconnect") { () -> [String: Any?] in
+      return [
+        "status": "idle",
+        "transportMode": "unsupported",
+        "connectedMacDeviceId": nil,
+        "relay": nil,
+        "sessionId": nil,
+        "trustedMacs": [],
+        "lastError": nil
+      ]
     }
 
     AsyncFunction("sendPlaintext") { (_ text: String) in

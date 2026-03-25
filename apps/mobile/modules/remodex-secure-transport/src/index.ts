@@ -19,6 +19,7 @@ export type RemodexTrustedMacSummary = {
 
 export type RemodexSecureTransportState = {
   status: "idle" | "pairing" | "connecting" | "connected" | "reconnecting" | "error";
+  transportMode: "native" | "fallback" | "unsupported";
   connectedMacDeviceId: string | null;
   relay: string | null;
   sessionId: string | null;
@@ -113,6 +114,7 @@ function queueMessage(
 class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransportEvents> {
   private state: RemodexSecureTransportState = {
     status: "idle",
+    transportMode: "fallback",
     connectedMacDeviceId: null,
     relay: null,
     sessionId: null,
@@ -353,6 +355,7 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
     };
     this.state = {
       status: "connected",
+      transportMode: "fallback",
       connectedMacDeviceId: payload.macDeviceId,
       relay: payload.relay,
       sessionId: payload.sessionId,
@@ -379,6 +382,7 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
     this.state = {
       ...this.state,
       status: "connected",
+      transportMode: "fallback",
       connectedMacDeviceId: trusted.macDeviceId,
       relay: trusted.relay,
       sessionId: this.state.sessionId ?? `trusted-${trusted.macDeviceId}`,
@@ -392,6 +396,7 @@ class RemodexSecureTransportFallback extends EventEmitter<RemodexSecureTransport
     this.state = {
       ...this.state,
       status: "idle",
+      transportMode: "fallback",
       connectedMacDeviceId: null,
       relay: null,
       sessionId: null,

@@ -6,6 +6,7 @@ import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
 import { useMcpStore } from "@/features/cowork/mcpStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 export default function McpServersScreen() {
@@ -17,7 +18,7 @@ export default function McpServersScreen() {
   const fetchServers = useMcpStore((s) => s.fetchServers);
   const validateServer = useMcpStore((s) => s.validateServer);
   const deleteServer = useMcpStore((s) => s.deleteServer);
-  const isConnected = usePairingStore((s) => s.connectionState.status === "connected");
+  const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
 
   useEffect(() => {
     if (isConnected) {

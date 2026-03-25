@@ -4,8 +4,14 @@ import { Pressable, Text, View } from "react-native";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
-import type { RelayConnectionStatus } from "@/features/relay/relayTypes";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import {
+  describeTransportMode,
+  describeTransportStatus,
+  isWorkspaceConnectionReady,
+  toneForTransportState,
+} from "@/features/relay/connectionState";
+import type { RelayConnectionStatus, RelayTransportMode } from "@/features/relay/relayTypes";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 type DetailRowProps = {
@@ -21,41 +27,26 @@ type StepRowProps = {
   description: string;
 };
 
-const STATUS_TONE_BY_STATE: Record<
-  RelayConnectionStatus,
-  "neutral" | "success" | "warning" | "danger"
-> = {
-  idle: "neutral",
-  pairing: "warning",
-  connecting: "warning",
-  reconnecting: "warning",
-  connected: "success",
-  error: "danger",
-};
-
-function describeStatus(status: RelayConnectionStatus): string {
-  switch (status) {
-    case "pairing":
-      return "Pairing";
-    case "connecting":
-      return "Connecting";
-    case "reconnecting":
-      return "Reconnecting";
-    case "connected":
-      return "Connected";
-    case "error":
-      return "Needs attention";
-    case "idle":
-    default:
-      return "Ready";
-  }
-}
-
 function describeHero(
   status: RelayConnectionStatus,
+  transportMode: RelayTransportMode,
   connectedDesktop: string | null,
   hasTrustedDesktop: boolean,
 ): { title: string; body: string } {
+  if (transportMode === "fallback" && status === "connected") {
+    return {
+      title: "Fallback demo transport is active",
+      body: "This build is using the JavaScript fallback transport. It can demo thread flows locally, but it is not a live desktop workspace connection.",
+    };
+  }
+  if (transportMode === "unsupported") {
+    return {
+      title: "Native transport is unavailable",
+      body: hasTrustedDesktop
+        ? "This mobile build cannot open a real Remodex secure session yet. Re-scan a QR once native transport support lands."
+        : "This mobile build cannot open a real Remodex secure session yet. Scan a QR again once native transport support lands.",
+    };
+  }
   switch (status) {
     case "connected":
       return {
@@ -97,8 +88,17 @@ function describeHero(
 
 function describeRelay(connectionState: {
   status: RelayConnectionStatus;
+  transportMode: RelayTransportMode;
   relayUrl: string | null;
 }): string {
+  if (connectionState.transportMode === "fallback" && connectionState.status === "connected") {
+    return connectionState.relayUrl
+      ? `${connectionState.relayUrl} (fallback demo)`
+      : "Fallback demo transport is active.";
+  }
+  if (connectionState.transportMode === "unsupported") {
+    return "Native relay transport is not available in this build.";
+  }
   if (connectionState.relayUrl) {
     return connectionState.relayUrl;
   }
@@ -211,11 +211,12 @@ export default function PairingIndexRoute() {
   const connectionState = usePairingStore((state) => state.connectionState);
   const reconnectTrusted = usePairingStore((state) => state.reconnectTrusted);
   const primaryTrustedDesktop = trustedDesktops[0] ?? null;
-  const isConnected = connectionState.status === "connected";
-  const statusTone = STATUS_TONE_BY_STATE[connectionState.status];
-  const statusLabel = describeStatus(connectionState.status);
+  const isConnected = isWorkspaceConnectionReady(connectionState);
+  const statusTone = toneForTransportState(connectionState);
+  const statusLabel = describeTransportStatus(connectionState);
   const hero = describeHero(
     connectionState.status,
+    connectionState.transportMode,
     connectionState.connectedMacDeviceId,
     trustedDesktops.length > 0,
   );
@@ -382,9 +383,12 @@ export default function PairingIndexRoute() {
         title="Connection status"
         description={isConnected
           ? "This phone is ready to browse threads and answer prompts."
-          : "The technical details show up here after a desktop has been paired."}
+          : connectionState.transportMode === "fallback" && connectionState.status === "connected"
+            ? "Fallback demo transport is connected, but workspace controls stay disabled."
+            : "The technical details show up here after a desktop has been paired."}
       >
         <DetailRow label="State" value={statusLabel} emphasize />
+        <DetailRow label="Transport mode" value={describeTransportMode(connectionState.transportMode)} />
         <DetailRow
           label="Computer"
           value={connectionState.connectedMacDeviceId ?? "No computer connected"}

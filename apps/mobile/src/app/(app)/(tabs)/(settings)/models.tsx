@@ -8,6 +8,7 @@ import { useProviderStore } from "@/features/cowork/providerStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 export default function ModelsScreen() {
@@ -17,7 +18,7 @@ export default function ModelsScreen() {
   const sessionState = useWorkspaceStore((s) => s.sessionState);
   const fetchSessionState = useWorkspaceStore((s) => s.fetchSessionState);
   const activeWorkspaceCwd = useWorkspaceStore((s) => s.activeWorkspaceCwd);
-  const isConnected = usePairingStore((s) => s.connectionState.status === "connected");
+  const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
 
   useEffect(() => {
     if (isConnected) {

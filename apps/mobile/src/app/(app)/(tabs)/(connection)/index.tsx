@@ -5,6 +5,11 @@ import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import {
+  describeTransportMode,
+  describeTransportStatus,
+  toneForTransportState,
+} from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 export default function ConnectionScreen() {
@@ -13,22 +18,22 @@ export default function ConnectionScreen() {
   const connectionState = usePairingStore((state) => state.connectionState);
   const disconnect = usePairingStore((state) => state.disconnect);
   const forgetTrustedMac = usePairingStore((state) => state.forgetTrustedMac);
-  const tone = connectionState.status === "connected"
-    ? "success"
-    : connectionState.status === "error"
-      ? "danger"
-      : connectionState.status === "connecting" || connectionState.status === "reconnecting" || connectionState.status === "pairing"
-        ? "warning"
-        : "neutral";
+  const tone = toneForTransportState(connectionState);
 
   return (
     <Screen scroll>
       <SectionCard
         title="Secure transport"
         description="Your pairing and trust state live in the native relay module, so reconnecting here keeps desktop access portable across sessions."
-        action={<StatusPill label={connectionState.status} tone={tone} />}
+        action={<StatusPill label={describeTransportStatus(connectionState)} tone={tone} />}
       >
         <View style={{ gap: 10 }}>
+          <View style={{ gap: 4 }}>
+            <Text selectable style={{ color: theme.textSecondary, fontSize: 13 }}>Transport mode</Text>
+            <Text selectable style={{ color: theme.text, fontSize: 16, fontWeight: "600" }}>
+              {describeTransportMode(connectionState.transportMode)}
+            </Text>
+          </View>
           <View style={{ gap: 4 }}>
             <Text selectable style={{ color: theme.textSecondary, fontSize: 13 }}>Connected desktop</Text>
             <Text selectable style={{ color: theme.text, fontSize: 16, fontWeight: "600" }}>

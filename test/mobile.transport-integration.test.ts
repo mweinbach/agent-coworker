@@ -76,7 +76,8 @@ describe("mobile transport integration", () => {
     });
 
     try {
-      await transportModule.connectFromQr(payload);
+      const connectedState = await transportModule.connectFromQr(payload);
+      expect(connectedState.transportMode).toBe("fallback");
       await client.initialize();
 
       const threadList = await client.requestThreadList();
@@ -136,7 +137,8 @@ describe("mobile transport integration", () => {
     });
 
     try {
-      await transportModule.connectFromQr(payload);
+      const connectedState = await transportModule.connectFromQr(payload);
+      expect(connectedState.transportMode).toBe("fallback");
       await client.initialize();
 
       const threadList = await client.requestThreadList();
@@ -187,7 +189,8 @@ describe("mobile transport integration", () => {
     });
 
     try {
-      await transportModule.connectFromQr(payload);
+      const connectedState = await transportModule.connectFromQr(payload);
+      expect(connectedState.transportMode).toBe("fallback");
       await client.initialize();
       const threadId = (await client.requestThreadList()).threads[0]!.id;
 
@@ -229,7 +232,8 @@ describe("mobile transport integration", () => {
     });
 
     try {
-      await transportModule.connectFromQr(payload);
+      const connectedState = await transportModule.connectFromQr(payload);
+      expect(connectedState.transportMode).toBe("fallback");
       await client.initialize();
 
       const firstList = await client.requestThreadList();
@@ -239,6 +243,7 @@ describe("mobile transport integration", () => {
       client.resetTransportSession("socket closed");
       const reconnectState = await transportModule.connectTrusted(payload.macDeviceId);
       expect(reconnectState.connectedMacDeviceId).toBe(payload.macDeviceId);
+      expect(reconnectState.transportMode).toBe("fallback");
 
       await client.initialize();
       expect(

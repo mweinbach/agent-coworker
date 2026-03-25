@@ -5,6 +5,7 @@ import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
 import { useBackupStore } from "@/features/cowork/backupStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 export default function BackupsScreen() {
@@ -15,7 +16,7 @@ export default function BackupsScreen() {
   const fetchBackups = useBackupStore((s) => s.fetchBackups);
   const restoreBackup = useBackupStore((s) => s.restoreBackup);
   const deleteCheckpoint = useBackupStore((s) => s.deleteCheckpoint);
-  const isConnected = usePairingStore((s) => s.connectionState.status === "connected");
+  const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
 
   useEffect(() => {
     if (isConnected) {

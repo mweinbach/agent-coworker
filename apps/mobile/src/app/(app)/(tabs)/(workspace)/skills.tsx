@@ -6,6 +6,7 @@ import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
 import { useSkillsStore } from "@/features/cowork/skillsStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 export default function SkillsScreen() {
@@ -18,7 +19,7 @@ export default function SkillsScreen() {
   const disableSkill = useSkillsStore((s) => s.disableSkill);
   const deleteSkill = useSkillsStore((s) => s.deleteSkill);
   const mutationPending = useSkillsStore((s) => s.mutationPending);
-  const isConnected = usePairingStore((s) => s.connectionState.status === "connected");
+  const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
 
   useEffect(() => {
     if (isConnected) {

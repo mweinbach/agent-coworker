@@ -12,6 +12,7 @@ import { useMemoryStore } from "../features/cowork/memoryStore";
 import { useBackupStore } from "../features/cowork/backupStore";
 import { useProviderStore } from "../features/cowork/providerStore";
 import { useMcpStore } from "../features/cowork/mcpStore";
+import { isWorkspaceConnectionReady } from "../features/relay/connectionState";
 import { defaultSecureTransportClient } from "../features/relay/secureTransportClient";
 
 function createThreadSnapshot(thread: {
@@ -173,7 +174,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
         void client.handleIncoming(text);
       },
       onStateChanged(state) {
-        if (state.status !== "connected") {
+        if (!isWorkspaceConnectionReady(state) && state.transportMode !== "fallback") {
           return;
         }
         void ensureConnectedSession();
@@ -188,7 +189,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
 
     void defaultSecureTransportClient.getSnapshot()
       .then((snapshot) => {
-        if (snapshot.status === "connected") {
+        if (isWorkspaceConnectionReady(snapshot) || snapshot.transportMode === "fallback") {
           void ensureConnectedSession();
         }
       })

@@ -15,6 +15,7 @@ import {
 } from "../../../modules/remodex-secure-transport/src";
 import type {
   RelayConnectionStatus,
+  RelayTransportMode,
   RelayTrustedDesktop,
   SecureTransportClientEvents,
 } from "./relayTypes";
@@ -41,6 +42,18 @@ function fingerprintFromPublicKey(publicKey: string): string {
   return publicKey.slice(0, 16);
 }
 
+function mapTransportMode(mode: RemodexSecureTransportState["transportMode"]): RelayTransportMode {
+  switch (mode) {
+    case "fallback":
+      return "fallback";
+    case "unsupported":
+      return "unsupported";
+    case "native":
+    default:
+      return "native";
+  }
+}
+
 function toTrustedDesktop(entry: RemodexTrustedMacSummary): RelayTrustedDesktop {
   return {
     macDeviceId: entry.macDeviceId,
@@ -54,6 +67,7 @@ function toTrustedDesktop(entry: RemodexTrustedMacSummary): RelayTrustedDesktop 
 
 export type SecureTransportSnapshot = {
   status: RelayConnectionStatus;
+  transportMode: RelayTransportMode;
   connectedMacDeviceId: string | null;
   relayUrl: string | null;
   sessionId: string | null;
@@ -67,6 +81,7 @@ function toSnapshot(
 ): SecureTransportSnapshot {
   return {
     status: mapStatus(state.status),
+    transportMode: mapTransportMode(state.transportMode),
     connectedMacDeviceId: state.connectedMacDeviceId,
     relayUrl: state.relay,
     sessionId: state.sessionId,

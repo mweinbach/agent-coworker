@@ -6,6 +6,7 @@ import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
 import { useMemoryStore } from "@/features/cowork/memoryStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 function ScopeFilter() {
@@ -55,7 +56,7 @@ export default function MemoryScreen() {
   const fetchMemories = useMemoryStore((s) => s.fetchMemories);
   const upsertMemory = useMemoryStore((s) => s.upsertMemory);
   const deleteMemory = useMemoryStore((s) => s.deleteMemory);
-  const isConnected = usePairingStore((s) => s.connectionState.status === "connected");
+  const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
   const [adding, setAdding] = useState(false);
   const [newScope, setNewScope] = useState<"workspace" | "user">("workspace");
   const [newContent, setNewContent] = useState("");

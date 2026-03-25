@@ -24,6 +24,7 @@ export type PairingStoreState = {
 
 const INITIAL_CONNECTION_STATE: SecureTransportSnapshot = {
   status: "idle",
+  transportMode: "native",
   connectedMacDeviceId: null,
   relayUrl: null,
   sessionId: null,

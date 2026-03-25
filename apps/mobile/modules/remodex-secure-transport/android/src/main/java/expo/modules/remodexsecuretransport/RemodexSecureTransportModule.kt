@@ -17,7 +17,10 @@ class RemodexSecureTransportModule : Module() {
     Function("getState") {
       mapOf(
         "status" to "idle",
+        "transportMode" to "unsupported",
         "connectedMacDeviceId" to null,
+        "relay" to null,
+        "sessionId" to null,
         "lastError" to null,
         "trustedMacs" to emptyList<Map<String, Any?>>()
       )
@@ -32,34 +35,26 @@ class RemodexSecureTransportModule : Module() {
     }
 
     AsyncFunction("connectFromQr") { _: String ->
-      sendEvent(
-        "stateChanged",
-        mapOf(
-          "status" to "connected",
-          "connectedMacDeviceId" to "stub-mac",
-          "lastError" to null
-        )
-      )
       mapOf(
-        "status" to "connected",
-        "connectedMacDeviceId" to "stub-mac",
-        "lastError" to null
+        "status" to "error",
+        "transportMode" to "unsupported",
+        "connectedMacDeviceId" to null,
+        "relay" to null,
+        "sessionId" to null,
+        "lastError" to "Native secure transport is not implemented yet.",
+        "trustedMacs" to emptyList<Map<String, Any?>>()
       )
     }
 
     AsyncFunction("connectTrusted") { macDeviceId: String ->
-      sendEvent(
-        "stateChanged",
-        mapOf(
-          "status" to "connected",
-          "connectedMacDeviceId" to macDeviceId,
-          "lastError" to null
-        )
-      )
       mapOf(
-        "status" to "connected",
+        "status" to "error",
+        "transportMode" to "unsupported",
         "connectedMacDeviceId" to macDeviceId,
-        "lastError" to null
+        "relay" to null,
+        "sessionId" to null,
+        "lastError" to "Native secure transport is not implemented yet.",
+        "trustedMacs" to emptyList<Map<String, Any?>>()
       )
     }
 
@@ -73,8 +68,12 @@ class RemodexSecureTransportModule : Module() {
       )
       mapOf(
         "status" to "idle",
+        "transportMode" to "unsupported",
         "connectedMacDeviceId" to null,
-        "lastError" to null
+        "relay" to null,
+        "sessionId" to null,
+        "lastError" to null,
+        "trustedMacs" to emptyList<Map<String, Any?>>()
       )
     }
 

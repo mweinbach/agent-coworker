@@ -9,6 +9,11 @@ import { WorkspaceSwitcher } from "@/components/workspace/workspace-switcher";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import {
+  describeTransportStatus,
+  isWorkspaceConnectionReady,
+  toneForTransportState,
+} from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 export default function ThreadsScreen() {
@@ -20,13 +25,8 @@ export default function ThreadsScreen() {
   const sessionState = useWorkspaceStore((state) => state.sessionState);
   const workspaces = useWorkspaceStore((state) => state.workspaces);
   const [switcherVisible, setSwitcherVisible] = useState(false);
-  const connectionTone = connectionState.status === "connected"
-    ? "success"
-    : connectionState.status === "error"
-      ? "danger"
-      : connectionState.status === "connecting" || connectionState.status === "reconnecting" || connectionState.status === "pairing"
-        ? "warning"
-        : "neutral";
+  const connectionTone = toneForTransportState(connectionState);
+  const isConnected = isWorkspaceConnectionReady(connectionState);
 
   const modelLabel = sessionState?.effectiveModel ?? sessionState?.model ?? null;
 
@@ -35,13 +35,15 @@ export default function ThreadsScreen() {
       <SectionCard
         title={activeWorkspaceName ?? "Cowork Mobile"}
         description={
-          connectionState.status === "connected"
+          isConnected
             ? modelLabel
               ? `${sessionState?.provider ?? "provider"} / ${modelLabel}`
               : "Connected to desktop"
+            : connectionState.transportMode === "fallback" && connectionState.status === "connected"
+              ? "Fallback demo transport is active. Workspace controls stay disabled until native transport is available."
             : "Not connected to a desktop right now."
         }
-        action={<StatusPill label={connectionState.status} tone={connectionTone} />}
+        action={<StatusPill label={describeTransportStatus(connectionState)} tone={connectionTone} />}
       >
         <View style={{ gap: 10 }}>
           <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>

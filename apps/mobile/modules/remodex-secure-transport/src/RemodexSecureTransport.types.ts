@@ -25,6 +25,7 @@ export type RemodexConnectionState =
 
 export type RemodexTransportSnapshot = {
   state: RemodexConnectionState;
+  transportMode: "native" | "fallback" | "unsupported";
   macDeviceId: string | null;
   relayUrl: string | null;
   sessionId: string | null;

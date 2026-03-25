@@ -6,6 +6,7 @@ import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
 import { useProviderStore } from "@/features/cowork/providerStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 export default function ProvidersScreen() {
@@ -17,7 +18,7 @@ export default function ProvidersScreen() {
   const fetchStatus = useProviderStore((s) => s.fetchStatus);
   const setApiKey = useProviderStore((s) => s.setApiKey);
   const logout = useProviderStore((s) => s.logout);
-  const isConnected = usePairingStore((s) => s.connectionState.status === "connected");
+  const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState("");
 

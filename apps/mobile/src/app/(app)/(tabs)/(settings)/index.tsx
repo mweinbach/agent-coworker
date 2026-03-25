@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import { Link } from "expo-router";
 import { Pressable, Text, View } from "react-native";
 
@@ -6,10 +7,12 @@ import { SectionCard } from "@/components/ui/section-card";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { useAppTheme } from "@/theme/use-app-theme";
 
-function SettingsRow({ label, detail, href }: { label: string; detail?: string; href: string }) {
+type SettingsHref = ComponentProps<typeof Link>["href"];
+
+function SettingsRow({ label, detail, href }: { label: string; detail?: string; href: SettingsHref }) {
   const theme = useAppTheme();
   return (
-    <Link href={href as `/${string}`} asChild>
+    <Link href={href} asChild>
       <Pressable
         style={({ pressed }) => ({
           flexDirection: "row",

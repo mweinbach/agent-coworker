@@ -5,6 +5,7 @@ import { SectionCard } from "@/components/ui/section-card";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 function UsageRow({ label, value }: { label: string; value: string }) {
@@ -25,7 +26,7 @@ export default function UsageScreen() {
   const snapshots = useThreadStore((s) => s.snapshots);
   const activeWorkspaceName = useWorkspaceStore((s) => s.activeWorkspaceName);
   const sessionState = useWorkspaceStore((s) => s.sessionState);
-  const isConnected = usePairingStore((s) => s.connectionState.status === "connected");
+  const isConnected = usePairingStore((s) => isWorkspaceConnectionReady(s.connectionState));
 
   // Aggregate usage from thread snapshots
   let totalInputTokens = 0;

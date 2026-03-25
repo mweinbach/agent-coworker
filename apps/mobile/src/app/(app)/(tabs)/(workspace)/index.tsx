@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import { Link } from "expo-router";
 import { Pressable, Text, View } from "react-native";
 
@@ -6,12 +7,15 @@ import { SectionCard } from "@/components/ui/section-card";
 import { StatusPill } from "@/components/ui/status-pill";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
-function WorkspaceRow({ label, detail, href }: { label: string; detail?: string; href: string }) {
+type WorkspaceHref = ComponentProps<typeof Link>["href"];
+
+function WorkspaceRow({ label, detail, href }: { label: string; detail?: string; href: WorkspaceHref }) {
   const theme = useAppTheme();
   return (
-    <Link href={href as `/${string}`} asChild>
+    <Link href={href} asChild>
       <Pressable
         style={({ pressed }) => ({
           flexDirection: "row",
@@ -40,8 +44,7 @@ export default function WorkspaceHubScreen() {
   const activeWorkspaceName = useWorkspaceStore((state) => state.activeWorkspaceName);
   const activeWorkspaceCwd = useWorkspaceStore((state) => state.activeWorkspaceCwd);
   const sessionState = useWorkspaceStore((state) => state.sessionState);
-  const connectionStatus = usePairingStore((state) => state.connectionState.status);
-  const isConnected = connectionStatus === "connected";
+  const isConnected = usePairingStore((state) => isWorkspaceConnectionReady(state.connectionState));
 
   return (
     <Screen scroll contentStyle={{ gap: 18 }}>

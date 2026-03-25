@@ -6,6 +6,11 @@ export type RelayConnectionStatus =
   | "reconnecting"
   | "error";
 
+export type RelayTransportMode =
+  | "native"
+  | "fallback"
+  | "unsupported";
+
 export type RelayTrustedDesktop = {
   macDeviceId: string;
   relayUrl: string;
@@ -17,6 +22,7 @@ export type RelayTrustedDesktop = {
 
 export type SecureTransportSnapshot = {
   status: RelayConnectionStatus;
+  transportMode: RelayTransportMode;
   connectedMacDeviceId: string | null;
   relayUrl: string | null;
   sessionId: string | null;

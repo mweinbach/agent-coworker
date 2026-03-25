@@ -26,10 +26,6 @@
   pointer-events: auto;
 }
 
-:root[data-platform="darwin"] .app-topbar__thread-anchor--collapsed {
-  padding-left: 7.25rem;
-}
-
 :root[data-platform="darwin"] .app-topbar__toolbar--right .app-topbar__toolbar-button {
   color: var(--text);
   filter: drop-shadow(0 1px 0.75px color-mix(in srgb, var(--panel-bg) 72%, transparent));

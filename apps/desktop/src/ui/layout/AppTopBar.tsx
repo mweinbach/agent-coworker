@@ -43,6 +43,7 @@ export function AppTopBar({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsRef = useRef<HTMLDivElement | null>(null);
   const detailsId = useId();
+  const isDarwin = typeof document !== "undefined" && document.documentElement.dataset.platform === "darwin";
   const sidebarLabel = sidebarCollapsed ? "Show sidebar" : "Hide sidebar";
   const rightSidebarLabel = contextSidebarCollapsed ? "Show context" : "Hide context";
   const hasUsage = sessionUsage !== null || lastTurnUsage !== null;
@@ -90,6 +91,7 @@ export function AppTopBar({
   }, [sessionUsage]);
   const titleOffset = sidebarCollapsed ? 0 : sidebarWidth;
   const titleRightInset = busy ? 8.75 * 16 : 4.75 * 16;
+  const collapsedThreadAnchorStyle = sidebarCollapsed && isDarwin ? { paddingLeft: "10rem" } : undefined;
 
   useEffect(() => {
     setDetailsOpen(false);
@@ -172,6 +174,7 @@ export function AppTopBar({
             "app-topbar__thread-anchor relative flex min-w-0",
             sidebarCollapsed && "app-topbar__thread-anchor--collapsed",
           )}
+          style={collapsedThreadAnchorStyle}
         >
           <button
             type="button"

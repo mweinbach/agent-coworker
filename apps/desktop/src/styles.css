@@ -397,7 +397,9 @@ body.app-resizing-sidebars .app-left-sidebar-pane {
 }
 
 body.app-resizing-sidebars .app-topbar__sidebar-fill,
-body.app-resizing-sidebars .app-topbar__content-fill {
+body.app-resizing-sidebars .app-topbar__content-fill,
+body.app-resizing-sidebars .app-topbar__thread-shell,
+body.app-resizing-sidebars .app-topbar__thread-anchor {
   transition: none;
 }
 
@@ -408,10 +410,14 @@ body.app-resizing-sidebars .app-topbar__sidebar-fill {
 body.app-animating-sidebars .app-left-sidebar-pane,
 body.app-animating-sidebars .app-right-sidebar-pane,
 body.app-animating-sidebars .app-topbar__sidebar-fill,
-body.app-animating-sidebars .app-topbar__content-fill {
+body.app-animating-sidebars .app-topbar__content-fill,
+body.app-animating-sidebars .app-topbar__thread-shell,
+body.app-animating-sidebars .app-topbar__thread-anchor {
   transition:
     width 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
     left 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    right 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    padding-left 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
     border-right-width 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
     border-left-width 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }

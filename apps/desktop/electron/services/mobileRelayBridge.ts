@@ -49,7 +49,9 @@ function decodeSocketMessage(raw: unknown): string {
   if (typeof raw === "string") return raw;
   if (raw instanceof ArrayBuffer) return Buffer.from(raw).toString("utf8");
   if (Array.isArray(raw)) return Buffer.concat(raw.map((entry) => Buffer.from(entry))).toString("utf8");
-  return Buffer.from(raw).toString("utf8");
+  if (ArrayBuffer.isView(raw)) return Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength).toString("utf8");
+  if (raw == null) return "";
+  return String(raw);
 }
 
 function closeSocket(socket: BridgeSocket | null): void {

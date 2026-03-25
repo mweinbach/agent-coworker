@@ -22,11 +22,13 @@
     "@heroui/react": "^3.0.1",
     "@heroui/styles": "^3.0.1",
     "electron-updater": "^6.8.3",
+    "qrcode.react": "^4.2.0",
+    "ws": "^8.20.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@formkit/auto-animate": "^0.9.0",
     "@electron/notarize": "^3.1.1",
+    "@formkit/auto-animate": "^0.9.0",
     "@react-grab/mcp": "^0.1.28",
     "@streamdown/cjk": "^1.0.3",
     "@streamdown/code": "^1.1.1",
@@ -36,6 +38,7 @@
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.2.0",
     "ai-elements": "^1.9.0",
     "clsx": "^2.1.1",

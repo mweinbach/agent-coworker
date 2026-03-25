@@ -146,6 +146,15 @@ function normalizeRelayUrl(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
+function buildRelaySocketHeaders(phoneIdentity: PersistedPhoneIdentity): Record<string, string> {
+  return {
+    // The hosted Remodex relay accepts `iphone` for the mobile peer role.
+    "x-role": "iphone",
+    "x-phone-device-id": phoneIdentity.phoneDeviceId,
+    "x-phone-identity-public-key": phoneIdentity.phoneIdentityPublicKey,
+  };
+}
+
 function randomToken(prefix: string): string {
   const cryptoObject = typeof globalThis === "object" && globalThis
     ? (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
@@ -1047,11 +1056,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
     if (!WebSocketConstructor) {
       throw new Error("This mobile build does not expose a WebSocket implementation.");
     }
-    const headers = {
-      "x-role": "phone",
-      "x-phone-device-id": phoneIdentity.phoneDeviceId,
-      "x-phone-identity-public-key": phoneIdentity.phoneIdentityPublicKey,
-    };
+    const headers = buildRelaySocketHeaders(phoneIdentity);
     try {
       return new WebSocketConstructor(url, undefined, { headers });
     } catch {
@@ -1384,3 +1389,7 @@ export async function sendPlaintext(text: string): Promise<void> {
 export async function getTransportState(): Promise<RemodexSecureTransportState> {
   return await transport.getState();
 }
+
+export const __internal = {
+  buildRelaySocketHeaders,
+};

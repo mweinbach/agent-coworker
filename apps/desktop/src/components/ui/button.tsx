@@ -8,6 +8,33 @@ type ButtonSize = "default" | "sm" | "lg" | "icon" | "icon-sm";
 
 type HeroButtonPressEvent = Parameters<NonNullable<React.ComponentProps<typeof HeroButton>["onPress"]>>[0];
 
+function assignRef<T>(ref: React.Ref<T> | undefined, value: T | null) {
+  if (!ref) {
+    return;
+  }
+  if (typeof ref === "function") {
+    ref(value);
+    return;
+  }
+  (ref as React.MutableRefObject<T | null>).current = value;
+}
+
+function composeRefs<T>(...refs: Array<React.Ref<T> | undefined>): React.RefCallback<T> {
+  return (value) => {
+    for (const ref of refs) {
+      assignRef(ref, value);
+    }
+  };
+}
+
+function getElementRef<T>(element: React.ReactElement): React.Ref<T> | undefined {
+  const withPossibleRef = element as React.ReactElement & {
+    ref?: React.Ref<T>;
+    props: { ref?: React.Ref<T> };
+  };
+  return withPossibleRef.props.ref ?? withPossibleRef.ref;
+}
+
 type ButtonProps = Omit<React.ComponentProps<typeof HeroButton>, "variant" | "size" | "onPress" | "isDisabled"> & {
   variant?: ButtonVariant;
   size?: ButtonSize;
@@ -96,27 +123,14 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
         child.props.onClick?.(event);
         onClick?.(event as React.MouseEvent<HTMLButtonElement>);
       },
+      ref: composeRefs(
+        getElementRef<HTMLElement>(child),
+        ref as React.Ref<HTMLElement>,
+      ),
     } as React.HTMLAttributes<HTMLElement>;
 
     return React.cloneElement(child, childProps);
   }
-
-  const handlePress = React.useCallback((event: HeroButtonPressEvent) => {
-    onPress?.(event);
-    if (!onClick) {
-      return;
-    }
-
-    const compatEvent = {
-      defaultPrevented: false,
-      preventDefault() {
-        this.defaultPrevented = true;
-      },
-      stopPropagation() {},
-    } as React.MouseEvent<HTMLButtonElement>;
-
-    onClick(compatEvent);
-  }, [onClick, onPress]);
 
   return (
     <HeroButton
@@ -132,7 +146,8 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
       data-variant={variant}
       isDisabled={disabled}
       isIconOnly={size === "icon" || size === "icon-sm"}
-      onPress={handlePress}
+      onClick={onClick as React.ComponentProps<typeof HeroButton>["onClick"]}
+      onPress={onPress as ((event: HeroButtonPressEvent) => void) | undefined}
       size={mapSize(size)}
       variant={mapVariant(variant)}
     >

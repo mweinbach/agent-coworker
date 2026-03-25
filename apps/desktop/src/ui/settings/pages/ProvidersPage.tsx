@@ -17,6 +17,7 @@ import {
   displayProviderName,
   isProviderNameString,
 } from "../../../lib/providerDisplayNames";
+import { getWorkspaceAwsBedrockProxyBaseUrl } from "../../../app/openaiCompatibleProviderOptions";
 
 type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
 type ProviderCatalogEntry = Extract<ServerEvent, { type: "provider_catalog" }>["all"][number];
@@ -808,6 +809,9 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       Boolean(userConfigLastResult?.ok)
       && runningWorkspaceIds.length > 0
       && !dismissedRestartPrompt;
+    const workspaceAwsBedrockProxyBaseUrl = selectedWorkspace
+      ? getWorkspaceAwsBedrockProxyBaseUrl(selectedWorkspace.providerOptions)
+      : "";
 
     if (provider === "lmstudio") {
       const lmStudioEnabled = providerUiState.lmstudio.enabled;

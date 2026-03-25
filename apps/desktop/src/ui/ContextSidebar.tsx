@@ -4,8 +4,10 @@ import { AlertCircleIcon, BotIcon, CheckCircle2Icon, CircleDashedIcon, CircleIco
 
 import { useAppStore } from "../app/store";
 import type { ThreadAgentSummary } from "../app/types";
+import { MessageResponse } from "../components/ai-elements/message";
 import { ScrollShadow } from "../components/ui/scroll-shadow";
 import { cn } from "../lib/utils";
+import { buildMarkdownPreviewText } from "./chat/markdownPreview";
 import { WorkspaceFileExplorer } from "./file-explorer/WorkspaceFileExplorer";
 
 function agentStatusIcon(agent: ThreadAgentSummary) {
@@ -72,27 +74,27 @@ export const ContextSidebar = memo(function ContextSidebar() {
         )}
       </section>
 
-      <section className={compactSectionClassName} data-sidebar-panel="agents">
+      <section className={compactSectionClassName} data-sidebar-panel="subagents">
         <div className={compactSectionHeaderClassName}>
-          <span className={sectionLabelClassName}>Agents</span>
+          <span className={sectionLabelClassName}>Subagents</span>
         </div>
         {!selectedThreadId ? (
-          <div className={cn(compactSectionBodyClassName, compactMutedCopyClassName)}>Select a thread to inspect agents</div>
+          <div className={cn(compactSectionBodyClassName, compactMutedCopyClassName)}>Select a thread to inspect subagents</div>
         ) : threadRuntime?.sessionKind === "agent" ? (
           <div className={compactSectionBodyClassName}>
             <div className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2 text-[11px] text-muted-foreground">
               <div className="flex items-center gap-2 text-foreground">
                 <BotIcon className="h-3.5 w-3.5" />
-                <span className="font-medium">This thread is a child agent</span>
+                <span className="font-medium">This thread is a subagent</span>
               </div>
               <div className="mt-1">{threadRuntime.role ?? "default"} · depth {threadRuntime.depth}</div>
               {threadRuntime.effectiveModel ? <div className="mt-1 truncate">{threadRuntime.effectiveModel}</div> : null}
             </div>
           </div>
         ) : agents.length === 0 ? (
-          <div className={cn(compactSectionBodyClassName, compactMutedCopyClassName)}>No child agents</div>
+          <div className={cn(compactSectionBodyClassName, compactMutedCopyClassName)}>No subagents</div>
         ) : (
-          <ScrollShadow className={compactSectionScrollerClassName} data-sidebar-section="agents">
+          <ScrollShadow className={compactSectionScrollerClassName} data-sidebar-section="subagents">
             <div className="space-y-1.5">
               {agents.map((agent) => (
                 <div key={agent.agentId} className="app-context-sidebar__nested-panel rounded-[10px] border px-2.5 py-2">
@@ -111,9 +113,9 @@ export const ContextSidebar = memo(function ContextSidebar() {
                     </div>
                   </div>
                   {agent.lastMessagePreview ? (
-                    <div className="mt-1.5 line-clamp-2 text-[10px] leading-4 text-muted-foreground">
-                      {agent.lastMessagePreview}
-                    </div>
+                    <MessageResponse className="mt-1.5 line-clamp-2 text-[10px] leading-4 text-muted-foreground [&_p]:my-0 [&_p]:leading-4 [&_ul]:my-0 [&_ol]:my-0 [&_li]:leading-4 [&_pre]:border-0 [&_pre]:bg-transparent [&_pre]:p-0 [&_code]:bg-transparent [&_code]:px-0 [&_code]:py-0 [&_a]:text-inherit">
+                      {buildMarkdownPreviewText(agent.lastMessagePreview, 2)}
+                    </MessageResponse>
                   ) : null}
                 </div>
               ))}

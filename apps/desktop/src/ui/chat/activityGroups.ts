@@ -1,5 +1,6 @@
 import type { FeedItem, ToolFeedState } from "../../app/types";
 
+import { buildMarkdownPreviewText } from "./markdownPreview";
 import { formatToolCard } from "./toolCards/toolCardFormatting";
 
 export type ActivityFeedItem = Extract<FeedItem, { kind: "reasoning" | "tool" }>;
@@ -23,37 +24,6 @@ export type ActivityGroupSummary = {
   title: string;
   toolCount: number;
 };
-
-function truncate(text: string, max = 180): string {
-  if (text.length <= max) return text;
-  return `${text.slice(0, max - 1)}…`;
-}
-
-function isStandaloneReasoningHeading(line: string): boolean {
-  const trimmed = line.trim();
-  if (!trimmed) return false;
-  if (/^#{1,6}\s+\S/.test(trimmed)) return true;
-  if (/^\*\*[^*]+\*\*$/.test(trimmed)) return true;
-  if (/^__[^_]+__$/.test(trimmed)) return true;
-  return false;
-}
-
-function reasoningPreviewText(text: string, maxLines = 2): string {
-  const lines = text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (lines.length === 0) return "";
-
-  const previewLines = [...lines];
-  while (previewLines.length > 1 && isStandaloneReasoningHeading(previewLines[0] ?? "")) {
-    previewLines.shift();
-  }
-
-  const preview = previewLines.slice(0, maxLines).join(" ");
-  return previewLines.length > maxLines ? `${preview}…` : preview;
-}
 
 function normalizedReasoningText(text: string): string {
   return text.trim();
@@ -348,7 +318,7 @@ export function summarizeActivityGroup(items: ActivityFeedItem[]): ActivityGroup
   const latestTool = toolItems[toolItems.length - 1];
   const preview =
     primaryReasoning?.text
-      ? truncate(reasoningPreviewText(primaryReasoning.text, 2))
+      ? buildMarkdownPreviewText(primaryReasoning.text, 2)
       : latestTool
         ? formatToolCard(latestTool.name, latestTool.args, latestTool.result, latestTool.state).subtitle
         : "Reasoning and tool activity";

@@ -59,7 +59,7 @@ function resetAppStore(overrides: Record<string, unknown>) {
 }
 
 describe("desktop context sidebar", () => {
-  test.serial("renders child-agent summaries for the selected thread", async () => {
+  test.serial("renders subagent summaries for the selected thread", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true, extraGlobals: { ResizeObserver: MockResizeObserver } });
 
     try {
@@ -105,7 +105,7 @@ describe("desktop context sidebar", () => {
                 lifecycleState: "active",
                 executionState: "running",
                 busy: true,
-                lastMessagePreview: "Checking the failing snapshot expectation.",
+                lastMessagePreview: "**Markdown** _preview_ for the [summary](https://example.com).",
               },
             ],
             sessionUsage: null,
@@ -124,15 +124,19 @@ describe("desktop context sidebar", () => {
       });
 
       const text = container.textContent ?? "";
-      const agentsPanel = container.querySelector('[data-sidebar-panel="agents"]');
+      const subagentsPanel = container.querySelector('[data-sidebar-panel="subagents"]');
       const nestedAgentPanel = container.querySelector(".app-context-sidebar__nested-panel");
-      expect(text).toContain("Agents");
+      expect(text).toContain("Subagents");
       expect(text).toContain("Investigate parser test");
       expect(text).toContain("worker · depth 1 · gpt-5.4");
-      expect(text).toContain("Checking the failing snapshot expectation.");
+      expect(text).toContain("Markdown");
+      expect(text).toContain("preview");
+      expect(text).toContain("summary");
+      expect(text).not.toContain("**Markdown**");
       expect(text).toContain("busy");
-      expect(agentsPanel?.className).toContain("app-context-sidebar__panel");
+      expect(subagentsPanel?.className).toContain("app-context-sidebar__panel");
       expect(nestedAgentPanel?.className).toContain("app-context-sidebar__nested-panel");
+      expect(nestedAgentPanel?.querySelector("a")).not.toBeNull();
 
       await act(async () => {
         root.unmount();
@@ -142,7 +146,7 @@ describe("desktop context sidebar", () => {
     }
   });
 
-  test.serial("keeps tasks and agents in scrollable sections so files can keep the remaining height", async () => {
+  test.serial("keeps tasks and subagents in scrollable sections so files can keep the remaining height", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true, extraGlobals: { ResizeObserver: MockResizeObserver } });
 
     try {
@@ -210,9 +214,9 @@ describe("desktop context sidebar", () => {
       });
 
       const tasksSection = container.querySelector('[data-sidebar-section="tasks"]');
-      const agentsSection = container.querySelector('[data-sidebar-section="agents"]');
+      const agentsSection = container.querySelector('[data-sidebar-section="subagents"]');
       const tasksPanel = container.querySelector('[data-sidebar-panel="tasks"]');
-      const agentsPanel = container.querySelector('[data-sidebar-panel="agents"]');
+      const agentsPanel = container.querySelector('[data-sidebar-panel="subagents"]');
       const filesPanel = container.querySelector('[data-sidebar-panel="files"]');
 
       expect(tasksSection?.className).toContain("overflow-y-auto");

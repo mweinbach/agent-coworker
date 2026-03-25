@@ -65,18 +65,10 @@ mock.module("../src/lib/desktopCommands", () => ({
   onUpdateStateChanged: () => () => {},
 }));
 
-mock.module("../src/components/ui/dialog", () => ({
-  Dialog: ({ children }: { children: unknown }) => createElement("div", null, children),
-  DialogContent: ({ children, ...props }: Record<string, unknown>) => createElement("div", props, children),
-  DialogHeader: ({ children, ...props }: Record<string, unknown>) => createElement("div", props, children),
-  DialogFooter: ({ children, ...props }: Record<string, unknown>) => createElement("div", props, children),
-  DialogTitle: ({ children, ...props }: Record<string, unknown>) => createElement("h2", props, children),
-  DialogDescription: ({ children, ...props }: Record<string, unknown>) => createElement("p", props, children),
-}));
-
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
 const { SkillDetailDialog } = await import("../src/ui/skills/SkillDetailDialog");
+mock.restore();
 
 describe("skill detail dialog", () => {
   test("reveals the installation folder for non-workspace skills", async () => {

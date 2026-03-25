@@ -3,8 +3,11 @@ import { createElement, useState } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 
-import { Dialog, DialogContent, DialogTrigger } from "../src/components/ui/dialog";
 import { setupJsdom } from "./jsdomHarness";
+
+const { Dialog, DialogContent, DialogTrigger } = await import(
+  new URL("../src/components/ui/dialog.tsx?dialog-component-test", import.meta.url).href,
+);
 
 type TestDialogProps = {
   preventOutsideClose?: boolean;
@@ -33,7 +36,7 @@ function TestDialog({ preventOutsideClose = false }: TestDialogProps) {
 }
 
 describe("desktop dialog component", () => {
-  test("moves focus into the dialog and restores it to the trigger on close", async () => {
+  test.serial("moves focus into the dialog and restores it to the trigger on close", async () => {
     const harness = setupJsdom();
 
     try {
@@ -79,7 +82,7 @@ describe("desktop dialog component", () => {
     }
   });
 
-  test("traps focus within the dialog when tabbing", async () => {
+  test.serial("traps focus within the dialog when tabbing", async () => {
     const harness = setupJsdom();
 
     try {
@@ -133,7 +136,7 @@ describe("desktop dialog component", () => {
     }
   });
 
-  test("still closes on Escape after an outside interaction is prevented", async () => {
+  test.serial("still closes on Escape after an outside interaction is prevented", async () => {
     const harness = setupJsdom();
 
     try {

@@ -35,6 +35,21 @@ function focusFirstElement(container: HTMLElement) {
   target.focus();
 }
 
+function isElementNode(value: unknown): value is HTMLElement {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      "nodeType" in value &&
+      (value as Node).nodeType === 1 &&
+      "focus" in value &&
+      typeof (value as { focus?: unknown }).focus === "function",
+  );
+}
+
+function getActiveElement(doc: Document): HTMLElement | null {
+  return isElementNode(doc.activeElement) ? doc.activeElement : null;
+}
+
 function assignElementRef<T>(ref: React.Ref<T> | undefined, value: T | null) {
   if (!ref) {
     return;
@@ -75,7 +90,7 @@ function Dialog({ children, open, defaultOpen, onOpenChange }: DialogProps) {
   const isOpen = open ?? uncontrolledOpen;
   const setOpen = React.useCallback((nextOpen: boolean) => {
     if (nextOpen && typeof document !== "undefined") {
-      const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const activeElement = getActiveElement(document);
       restoreFocusRef.current = activeElement && activeElement !== document.body
         ? activeElement
         : triggerRef.current;
@@ -243,7 +258,7 @@ function DialogContent({
         return;
       }
 
-      const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const activeElement = getActiveElement(document);
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
 

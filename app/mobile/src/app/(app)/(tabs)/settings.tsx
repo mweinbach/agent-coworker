@@ -3,7 +3,7 @@ import { View, Text, Pressable } from "react-native";
 import { usePairingStore } from "../../../features/pairing/pairingStore";
 
 export default function SettingsScreen() {
-  const trustedMacs = usePairingStore((state) => state.trustedMacs);
+  const trustedDesktops = usePairingStore((state) => state.trustedMacs);
   const connectionState = usePairingStore((state) => state.connectionState);
   const disconnect = usePairingStore((state) => state.disconnect);
   const forgetTrustedMac = usePairingStore((state) => state.forgetTrustedMac);
@@ -53,7 +53,7 @@ export default function SettingsScreen() {
 
       <View style={{ gap: 12 }}>
         <Text style={{ color: "#e2e8f0", fontSize: 18, fontWeight: "600" }}>Trusted Macs</Text>
-        {trustedMacs.length === 0 ? (
+        {trustedDesktops.length === 0 ? (
           <View
             style={{
               borderRadius: 18,
@@ -69,7 +69,7 @@ export default function SettingsScreen() {
             </Text>
           </View>
         ) : (
-          trustedMacs.map((trustedMac) => (
+          trustedDesktops.map((trustedMac) => (
             <View
               key={trustedMac.macDeviceId}
               style={{
@@ -85,10 +85,10 @@ export default function SettingsScreen() {
                 {trustedMac.displayName}
               </Text>
               <Text style={{ color: "#94a3b8" }}>
-                Public key: {trustedMac.macIdentityPublicKey.slice(0, 16)}…
+                Fingerprint: {trustedMac.fingerprint}
               </Text>
               <Text style={{ color: "#64748b", fontSize: 12 }}>
-                Last resolved: {trustedMac.lastResolvedAt ?? "Never"}
+                Last connected: {trustedMac.lastConnectedAt ?? "Never"}
               </Text>
               <Pressable
                 onPress={() => {

@@ -1,17 +1,20 @@
 import { useState } from "react";
 import { Alert, Pressable, ScrollView, Text, View } from "react-native";
 import { CameraView, type BarcodeScanningResult, useCameraPermissions } from "expo-camera";
-import { Stack } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 
 import { validatePairingPayload } from "../../features/pairing/qrValidation";
+import { usePairingStore } from "../../features/pairing/pairingStore";
 
 export default function PairingScanScreen() {
+  const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
   const [scannedPayload, setScannedPayload] = useState<string | null>(null);
+  const connectWithQr = usePairingStore((state) => state.connectWithQr);
 
   const granted = permission?.granted ?? false;
 
-  function onBarcodeScanned(result: BarcodeScanningResult) {
+  async function onBarcodeScanned(result: BarcodeScanningResult) {
     if (scannedPayload) {
       return;
     }
@@ -21,6 +24,15 @@ export default function PairingScanScreen() {
       return;
     }
     setScannedPayload(JSON.stringify(parsed.data, null, 2));
+    try {
+      await connectWithQr(parsed.data);
+      router.replace("/(app)/(tabs)/threads");
+    } catch (error) {
+      Alert.alert(
+        "Pairing failed",
+        error instanceof Error ? error.message : "Could not start the secure transport session.",
+      );
+    }
   }
 
   return (

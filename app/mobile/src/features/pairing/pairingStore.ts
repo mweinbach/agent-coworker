@@ -1,48 +1,44 @@
 import { create } from "zustand";
 
 import {
-  connectFromQr,
-  connectTrusted,
-  disconnectTransport,
-  forgetTrustedMac as forgetTrustedMacNative,
-  getTransportState,
-  listTrustedMacs,
-  type RemodexSecureTransportState,
-  type RemodexTrustedMacSummary,
-} from "../../../modules/remodex-secure-transport/src";
+  SecureTransportSnapshot,
+  defaultSecureTransportClient,
+} from "../relay/secureTransportClient";
+import type { RelayTrustedDesktop } from "../relay/relayTypes";
 import type { PairingQrPayload } from "./pairingTypes";
 
 export type PairingStoreState = {
-  trustedMacs: RemodexTrustedMacSummary[];
-  connectionState: RemodexSecureTransportState;
+  trustedMacs: RelayTrustedDesktop[];
+  connectionState: SecureTransportSnapshot;
+  listenerCleanup: Array<() => void>;
   bootstrap(): Promise<void>;
-  syncTrustedMacs(trustedMacs: RemodexTrustedMacSummary[]): void;
-  setConnectionState(connectionState: RemodexSecureTransportState): void;
+  syncTrustedMacs(trustedMacs: RelayTrustedDesktop[]): void;
+  setConnectionState(connectionState: SecureTransportSnapshot): void;
+  attachNativeListeners(): void;
+  resetNativeListeners(): void;
   connectWithQr(payload: PairingQrPayload): Promise<void>;
   reconnectTrusted(macDeviceId: string): Promise<void>;
   disconnect(): Promise<void>;
   forgetTrustedMac(macDeviceId: string): Promise<void>;
 };
 
-const INITIAL_CONNECTION_STATE: RemodexSecureTransportState = {
+const INITIAL_CONNECTION_STATE: SecureTransportSnapshot = {
   status: "idle",
   connectedMacDeviceId: null,
-  relay: null,
+  relayUrl: null,
   sessionId: null,
-  trustedMacs: [],
+  trustedDesktops: [],
   lastError: null,
 };
 
 export const usePairingStore = create<PairingStoreState>((set, get) => ({
   trustedMacs: [],
   connectionState: INITIAL_CONNECTION_STATE,
+  listenerCleanup: [],
   async bootstrap() {
-    const [trustedMacs, connectionState] = await Promise.all([
-      listTrustedMacs(),
-      getTransportState(),
-    ]);
+    const connectionState = await defaultSecureTransportClient.getSnapshot();
     set({
-      trustedMacs,
+      trustedMacs: connectionState.trustedDesktops,
       connectionState,
     });
   },
@@ -52,33 +48,72 @@ export const usePairingStore = create<PairingStoreState>((set, get) => ({
   setConnectionState(connectionState) {
     set({ connectionState });
   },
-  async connectWithQr(payload) {
-    const connectionState = await connectFromQr(payload);
-    const trustedMacs = await listTrustedMacs();
+  attachNativeListeners() {
+    get().resetNativeListeners();
+
+    const unsubscribe = defaultSecureTransportClient.subscribe({
+      onStateChanged: (connectionState) => {
+        set({
+          connectionState,
+          trustedMacs: connectionState.trustedDesktops,
+        });
+      },
+      onSecureError: (message) => {
+        set((state) => ({
+          connectionState: {
+            ...state.connectionState,
+            status: "error",
+            lastError: message,
+          },
+        }));
+      },
+      onSocketClosed: () => {
+        set((state) => ({
+          connectionState: {
+            ...state.connectionState,
+            status: "idle",
+          },
+        }));
+      },
+    });
+
     set({
-      trustedMacs,
+      listenerCleanup: [
+        unsubscribe,
+      ],
+    });
+  },
+  resetNativeListeners() {
+    for (const cleanup of get().listenerCleanup) {
+      cleanup();
+    }
+    set({ listenerCleanup: [] });
+  },
+  async connectWithQr(payload) {
+    const connectionState = await defaultSecureTransportClient.connectFromQrPayload(payload);
+    set({
+      trustedMacs: connectionState.trustedDesktops,
       connectionState,
     });
   },
   async reconnectTrusted(macDeviceId) {
-    const connectionState = await connectTrusted(macDeviceId);
+    const connectionState = await defaultSecureTransportClient.reconnectTrustedDesktop(macDeviceId);
     set({
-      trustedMacs: get().trustedMacs,
+      trustedMacs: connectionState.trustedDesktops,
       connectionState,
     });
   },
   async disconnect() {
-    const connectionState = await disconnectTransport();
+    const connectionState = await defaultSecureTransportClient.disconnect();
     set({
-      trustedMacs: get().trustedMacs,
+      trustedMacs: connectionState.trustedDesktops,
       connectionState,
     });
   },
   async forgetTrustedMac(macDeviceId) {
-    const connectionState = await forgetTrustedMacNative(macDeviceId);
-    const trustedMacs = await listTrustedMacs();
+    const connectionState = await defaultSecureTransportClient.forgetTrustedDesktop(macDeviceId);
     set({
-      trustedMacs,
+      trustedMacs: connectionState.trustedDesktops,
       connectionState,
     });
   },

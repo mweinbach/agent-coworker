@@ -22,9 +22,18 @@ type ThreadStoreState = {
   hydrate(snapshot: SessionSnapshotLike): void;
   appendStarted(threadId: string, item: ProjectedItem, ts: string): void;
   appendCompleted(threadId: string, item: ProjectedItem, ts: string): void;
+  appendAgentDelta(threadId: string, itemId: string, delta: string, ts: string): void;
+  appendReasoningDelta(
+    threadId: string,
+    itemId: string,
+    mode: "reasoning" | "summary",
+    delta: string,
+    ts: string,
+  ): void;
   currentFeed(threadId: string): SessionFeedItem[];
   seedThread(): void;
   getThread(threadId: string): MobileThreadSummary | null;
+  selectThread(threadId: string): void;
   setComposerDraft(threadId: string, text: string): void;
   submitComposer(threadId: string): void;
   interruptThread(threadId: string): void;
@@ -134,6 +143,74 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
       };
     });
   },
+  appendAgentDelta(threadId, itemId, delta, ts) {
+    set((state) => {
+      const snapshot = ensureThreadSnapshot(threadId, state.snapshots[threadId]);
+      const nextFeed = applyProjectedCompletion(
+        { feed: snapshot.feed, lastEventSeq: snapshot.lastEventSeq },
+        {
+          id: itemId,
+          type: "agentMessage",
+          text: delta,
+        },
+        ts,
+        snapshot.lastEventSeq + 1,
+      ).feed;
+      const current = nextFeed.find((entry) => entry.id === itemId && entry.kind === "message");
+      const mergedFeed = current
+        ? nextFeed.map((entry) =>
+            entry.id === itemId && entry.kind === "message"
+              ? { ...entry, text: entry.text }
+              : entry
+          )
+        : nextFeed;
+      const nextSnapshot = {
+        ...snapshot,
+        feed: mergedFeed,
+      };
+      return {
+        snapshots: {
+          ...state.snapshots,
+          [threadId]: nextSnapshot,
+        },
+        threads: updateThreadList(state, threadId, nextSnapshot),
+      };
+    });
+  },
+  appendReasoningDelta(threadId, itemId, mode, delta, ts) {
+    set((state) => {
+      const snapshot = ensureThreadSnapshot(threadId, state.snapshots[threadId]);
+      const existing = snapshot.feed.find(
+        (entry) => entry.id === itemId && entry.kind === "reasoning",
+      );
+      const nextSnapshot = {
+        ...snapshot,
+        feed: existing
+          ? snapshot.feed.map((entry) =>
+              entry.id === itemId && entry.kind === "reasoning"
+                ? { ...entry, text: `${entry.text}${delta}` }
+                : entry
+            )
+          : [
+              ...snapshot.feed,
+              {
+                id: itemId,
+                kind: "reasoning",
+                mode,
+                ts,
+                text: delta,
+              } satisfies SessionFeedItem,
+            ],
+      };
+      return {
+        snapshots: {
+          ...state.snapshots,
+          [threadId]: nextSnapshot,
+        },
+        threads: updateThreadList(state, threadId, nextSnapshot),
+      };
+    });
+  },
   currentFeed(threadId) {
     return get().snapshots[threadId]?.feed ?? [];
   },
@@ -165,6 +242,9 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   },
   getThread(threadId) {
     return get().threads.find((entry) => entry.id === threadId) ?? null;
+  },
+  selectThread(threadId) {
+    set({ selectedThreadId: threadId });
   },
   setComposerDraft(threadId, text) {
     set((state) => ({

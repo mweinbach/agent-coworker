@@ -209,4 +209,44 @@ describe("mobile transport integration", () => {
       subscription.remove();
     }
   });
+
+  test("fallback secure transport can reconnect with a trusted desktop and rehydrate threads", async () => {
+    const payload = createPayload();
+    const client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile-test",
+        version: "0.1.0",
+      },
+      send: async (text) => {
+        await transportModule.sendPlaintext(text);
+      },
+    });
+
+    const subscription = transportModule.addRemodexListener("plaintextMessage", (event) => {
+      void client.handleIncoming(event.text);
+    });
+
+    try {
+      await transportModule.connectFromQr(payload);
+      await client.initialize();
+
+      const firstList = await client.requestThreadList();
+      expect(firstList.threads).toHaveLength(1);
+
+      await transportModule.disconnectTransport();
+      const reconnectState = await transportModule.connectTrusted(payload.macDeviceId);
+      expect(reconnectState.connectedMacDeviceId).toBe(payload.macDeviceId);
+
+      await client.initialize();
+      const secondList = await client.requestThreadList();
+      expect(secondList.threads.map((thread) => thread.id)).toEqual(
+        firstList.threads.map((thread) => thread.id),
+      );
+
+      const reread = await client.readThread(secondList.threads[0]!.id);
+      expect(reread.coworkSnapshot?.title).toBe("Remote Access Demo");
+    } finally {
+      subscription.remove();
+    }
+  });
 });

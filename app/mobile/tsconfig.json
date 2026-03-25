@@ -12,6 +12,7 @@
   "include": [
     "expo-env.d.ts",
     "src",
-    "modules"
+    "modules",
+    ".expo/types/**/*.ts"
   ]
 }

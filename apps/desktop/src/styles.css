@@ -201,7 +201,7 @@ body {
   bottom: 0;
   pointer-events: none;
   z-index: 0;
-  background: var(--panel-bg);
+  background: var(--workspace-pane-bg);
   backdrop-filter: blur(var(--titlebar-blur));
 }
 
@@ -226,6 +226,10 @@ body {
 
 .app-main-content {
   background: color-mix(in srgb, var(--content-surface) 90%, var(--panel-bg) 10%);
+}
+
+.app-skills-view {
+  background: var(--workspace-pane-bg);
 }
 
 .app-left-sidebar-pane {

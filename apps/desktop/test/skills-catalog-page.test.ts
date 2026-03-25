@@ -107,6 +107,8 @@ describe("skills catalog page", () => {
         root.render(createElement(SkillsCatalogPage, { workspaceId: "ws-1" }));
       });
 
+      expect(container.firstElementChild?.className).toContain("app-skills-view");
+      expect(container.firstElementChild?.className).not.toContain("bg-background");
       expect(container.textContent).toContain("Loading...");
       expect(container.textContent).toContain("Fetching skills catalog.");
       expect(container.textContent).not.toContain("No skills found");

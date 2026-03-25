@@ -173,4 +173,42 @@ describe("desktop app top bar", () => {
       harness.restore();
     }
   });
+
+  test("can hide the context sidebar control when a view has no right rail", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(AppTopBar, {
+            busy: false,
+            onToggleSidebar: () => {},
+            onNewChat: () => {},
+            sidebarCollapsed: false,
+            sidebarWidth: 280,
+            contextSidebarCollapsed: false,
+            onToggleContextSidebar: () => {},
+            title: "Skills",
+            subtitle: "Cowork Test",
+            sessionUsage: null,
+            lastTurnUsage: null,
+            showContextToggle: false,
+          }),
+        );
+      });
+
+      expect(container.querySelector('button[aria-label="Hide context"]')).toBeNull();
+      expect(container.querySelector(".app-topbar__toolbar--right")).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

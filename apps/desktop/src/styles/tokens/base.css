@@ -6,6 +6,7 @@
   --shell-bg: var(--app-bg);
   --sidebar-bg: #e8dfd2;
   --panel-bg: #faf6ef;
+  --workspace-pane-bg: var(--panel-bg);
   --sidebar-surface: color-mix(in srgb, var(--sidebar-bg) 92%, white 8%);
   /* Left rail fill; defaults to titlebar strip until glass platforms override */
   --sidebar-pane-surface: var(--sidebar-surface);
@@ -36,6 +37,7 @@
   --shell-bg: var(--app-bg);
   --sidebar-bg: #29221b;
   --panel-bg: #322920;
+  --workspace-pane-bg: var(--panel-bg);
   --sidebar-surface: color-mix(in srgb, var(--sidebar-bg) 88%, black 12%);
   --sidebar-pane-surface: var(--sidebar-surface);
   --content-surface: color-mix(
@@ -64,6 +66,7 @@
     --shell-bg: var(--app-bg);
     --sidebar-bg: #29221b;
     --panel-bg: #322920;
+    --workspace-pane-bg: var(--panel-bg);
     --sidebar-surface: color-mix(in srgb, var(--sidebar-bg) 88%, black 12%);
     --sidebar-pane-surface: var(--sidebar-surface);
     --content-surface: color-mix(

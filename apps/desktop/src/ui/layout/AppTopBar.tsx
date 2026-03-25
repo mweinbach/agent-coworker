@@ -23,6 +23,7 @@ interface AppTopBarProps {
   lastTurnUsage: TurnUsageSnapshot | null;
   canClearHardCap?: boolean;
   onClearHardCap?: () => void;
+  showContextToggle?: boolean;
 }
 
 export function AppTopBar({
@@ -39,6 +40,7 @@ export function AppTopBar({
   lastTurnUsage,
   canClearHardCap = false,
   onClearHardCap,
+  showContextToggle = true,
 }: AppTopBarProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsRef = useRef<HTMLDivElement | null>(null);
@@ -266,24 +268,28 @@ export function AppTopBar({
         </div>
       </div>
 
-      <div className="app-topbar__toolbar app-topbar__toolbar--right app-topbar__controls absolute inset-y-0 right-3 flex items-center gap-1.5">
-        {busy ? (
-          <Badge variant="secondary" className="gap-1.5 rounded-md border-border/55 bg-muted/20 px-2 py-0 text-[11px] text-muted-foreground shadow-none">
-            <LoaderCircleIcon className="h-3 w-3 animate-spin" />
-            Busy
-          </Badge>
-        ) : null}
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          onClick={onToggleContextSidebar}
-          title={rightSidebarLabel}
-          aria-label={rightSidebarLabel}
-          className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-        >
-          <PanelRightIcon className="h-4 w-4" />
-        </Button>
-      </div>
+      {showContextToggle || busy ? (
+        <div className="app-topbar__toolbar app-topbar__toolbar--right app-topbar__controls absolute inset-y-0 right-3 flex items-center gap-1.5">
+          {busy ? (
+            <Badge variant="secondary" className="gap-1.5 rounded-md border-border/55 bg-muted/20 px-2 py-0 text-[11px] text-muted-foreground shadow-none">
+              <LoaderCircleIcon className="h-3 w-3 animate-spin" />
+              Busy
+            </Badge>
+          ) : null}
+          {showContextToggle ? (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onToggleContextSidebar}
+              title={rightSidebarLabel}
+              aria-label={rightSidebarLabel}
+              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+            >
+              <PanelRightIcon className="h-4 w-4" />
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

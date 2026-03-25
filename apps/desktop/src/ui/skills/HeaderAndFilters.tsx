@@ -62,12 +62,6 @@ export function HeaderAndFilters({
             Skills for <span className="font-medium text-foreground/80">{workspace?.name ?? "this workspace"}</span>
             <span className="mx-2 text-muted-foreground/65">•</span>
             {sessionLabel}
-            {activeThread ? (
-              <>
-                <span className="mx-2 text-muted-foreground/65">•</span>
-                Current chat: <span className="font-medium text-foreground/80">{activeThread.title || "New thread"}</span>
-              </>
-            ) : null}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 lg:justify-end">

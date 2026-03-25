@@ -43,7 +43,7 @@ export function SkillsCatalogPage({ workspaceId }: { workspaceId: string }) {
   }, [installations]);
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto bg-background px-6 py-5">
+    <div className="app-skills-view h-full min-h-0 overflow-y-auto px-6 py-5">
       <div className="mx-auto max-w-6xl">
         <HeaderAndFilters
           workspaceId={workspaceId}

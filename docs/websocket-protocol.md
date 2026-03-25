@@ -180,6 +180,8 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - memories
 - workspace backups
 
+`thread/list` and workspace-scoped `cowork/*` control methods now default omitted `cwd` to the sidecar/server working directory. Mobile and other remote clients no longer need to know a host filesystem path just to list threads or read workspace control state.
+
 `cowork/session/state/read` returns the current workspace control session state as a bundle of legacy-compatible `config_updated`, `session_settings`, and `session_config` events so JSON-RPC clients can hydrate provider/model defaults before diffing local settings.
 
 `cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session.

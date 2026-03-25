@@ -14,7 +14,7 @@ export function createSkillsRouteHandlers(
   return {
     "cowork/skills/catalog/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
@@ -30,7 +30,7 @@ export function createSkillsRouteHandlers(
 
     "cowork/skills/list": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
@@ -46,7 +46,7 @@ export function createSkillsRouteHandlers(
 
     "cowork/skills/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const skillName = typeof params.skillName === "string" ? params.skillName.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,
@@ -64,7 +64,7 @@ export function createSkillsRouteHandlers(
 
     "cowork/skills/disable": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const skillName = typeof params.skillName === "string" ? params.skillName.trim() : "";
       const outcome = await captureWorkspaceControlMutationError(
         context,
@@ -90,7 +90,7 @@ export function createSkillsRouteHandlers(
 
     "cowork/skills/enable": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const skillName = typeof params.skillName === "string" ? params.skillName.trim() : "";
       const outcome = await captureWorkspaceControlMutationError(
         context,
@@ -116,7 +116,7 @@ export function createSkillsRouteHandlers(
 
     "cowork/skills/delete": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const skillName = typeof params.skillName === "string" ? params.skillName.trim() : "";
       const outcome = await captureWorkspaceControlMutationError(
         context,
@@ -142,7 +142,7 @@ export function createSkillsRouteHandlers(
 
     "cowork/skills/installation/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,
@@ -159,7 +159,7 @@ export function createSkillsRouteHandlers(
 
     "cowork/skills/install/preview": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const sourceInput = typeof params.sourceInput === "string" ? params.sourceInput : "";
       const targetScope = params.targetScope === "global" ? "global" : "project";
       const event = await captureWorkspaceControlOutcome(
@@ -177,7 +177,7 @@ export function createSkillsRouteHandlers(
 
     "cowork/skills/install": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const sourceInput = typeof params.sourceInput === "string" ? params.sourceInput : "";
       const targetScope = params.targetScope === "global" ? "global" : "project";
       const event = await captureWorkspaceControlOutcome(
@@ -195,7 +195,7 @@ export function createSkillsRouteHandlers(
 
     "cowork/skills/installation/enable": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,
@@ -214,7 +214,7 @@ export function createSkillsRouteHandlers(
 
     "cowork/skills/installation/disable": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,
@@ -233,7 +233,7 @@ export function createSkillsRouteHandlers(
 
     "cowork/skills/installation/delete": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,
@@ -252,7 +252,7 @@ export function createSkillsRouteHandlers(
 
     "cowork/skills/installation/update": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,
@@ -271,7 +271,7 @@ export function createSkillsRouteHandlers(
 
     "cowork/skills/installation/copy": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
       const targetScope = params.targetScope === "global" ? "global" : "project";
       const event = await captureWorkspaceControlOutcome(
@@ -289,7 +289,7 @@ export function createSkillsRouteHandlers(
 
     "cowork/skills/installation/checkUpdate": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const installationId = typeof params.installationId === "string" ? params.installationId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,

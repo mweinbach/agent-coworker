@@ -247,9 +247,6 @@
               "minLength": 1
             }
           },
-          "required": [
-            "cwd"
-          ],
           "additionalProperties": false
         },
         "cowork/session/model/set": {
@@ -430,9 +427,6 @@
               "additionalProperties": {}
             }
           },
-          "required": [
-            "cwd"
-          ],
           "additionalProperties": false
         },
         "cowork/session/delete": {
@@ -448,7 +442,6 @@
             }
           },
           "required": [
-            "cwd",
             "targetSessionId"
           ],
           "additionalProperties": false
@@ -608,9 +601,6 @@
               "minLength": 1
             }
           },
-          "required": [
-            "cwd"
-          ],
           "additionalProperties": false
         },
         "cowork/provider/authMethods/read": {
@@ -621,9 +611,6 @@
               "minLength": 1
             }
           },
-          "required": [
-            "cwd"
-          ],
           "additionalProperties": false
         },
         "cowork/provider/status/refresh": {
@@ -634,9 +621,6 @@
               "minLength": 1
             }
           },
-          "required": [
-            "cwd"
-          ],
           "additionalProperties": false
         },
         "cowork/provider/auth/authorize": {
@@ -656,7 +640,6 @@
             }
           },
           "required": [
-            "cwd",
             "provider",
             "methodId"
           ],
@@ -675,7 +658,6 @@
             }
           },
           "required": [
-            "cwd",
             "provider"
           ],
           "additionalProperties": false
@@ -700,7 +682,6 @@
             }
           },
           "required": [
-            "cwd",
             "provider",
             "methodId"
           ],
@@ -726,7 +707,6 @@
             }
           },
           "required": [
-            "cwd",
             "provider",
             "methodId",
             "apiKey"
@@ -750,7 +730,6 @@
             }
           },
           "required": [
-            "cwd",
             "provider",
             "sourceProvider"
           ],
@@ -764,9 +743,6 @@
               "minLength": 1
             }
           },
-          "required": [
-            "cwd"
-          ],
           "additionalProperties": false
         },
         "cowork/mcp/server/upsert": {
@@ -788,7 +764,6 @@
             }
           },
           "required": [
-            "cwd",
             "server"
           ],
           "additionalProperties": false
@@ -806,7 +781,6 @@
             }
           },
           "required": [
-            "cwd",
             "name"
           ],
           "additionalProperties": false
@@ -824,7 +798,6 @@
             }
           },
           "required": [
-            "cwd",
             "name"
           ],
           "additionalProperties": false
@@ -842,7 +815,6 @@
             }
           },
           "required": [
-            "cwd",
             "name"
           ],
           "additionalProperties": false
@@ -863,7 +835,6 @@
             }
           },
           "required": [
-            "cwd",
             "name"
           ],
           "additionalProperties": false
@@ -884,7 +855,6 @@
             }
           },
           "required": [
-            "cwd",
             "name",
             "apiKey"
           ],
@@ -906,7 +876,6 @@
             }
           },
           "required": [
-            "cwd",
             "scope"
           ],
           "additionalProperties": false
@@ -919,9 +888,6 @@
               "minLength": 1
             }
           },
-          "required": [
-            "cwd"
-          ],
           "additionalProperties": false
         },
         "cowork/skills/list": {
@@ -932,9 +898,6 @@
               "minLength": 1
             }
           },
-          "required": [
-            "cwd"
-          ],
           "additionalProperties": false
         },
         "cowork/skills/read": {
@@ -950,7 +913,6 @@
             }
           },
           "required": [
-            "cwd",
             "skillName"
           ],
           "additionalProperties": false
@@ -968,7 +930,6 @@
             }
           },
           "required": [
-            "cwd",
             "skillName"
           ],
           "additionalProperties": false
@@ -986,7 +947,6 @@
             }
           },
           "required": [
-            "cwd",
             "skillName"
           ],
           "additionalProperties": false
@@ -1004,7 +964,6 @@
             }
           },
           "required": [
-            "cwd",
             "skillName"
           ],
           "additionalProperties": false
@@ -1022,7 +981,6 @@
             }
           },
           "required": [
-            "cwd",
             "installationId"
           ],
           "additionalProperties": false
@@ -1046,7 +1004,6 @@
             }
           },
           "required": [
-            "cwd",
             "sourceInput",
             "targetScope"
           ],
@@ -1071,7 +1028,6 @@
             }
           },
           "required": [
-            "cwd",
             "sourceInput",
             "targetScope"
           ],
@@ -1090,7 +1046,6 @@
             }
           },
           "required": [
-            "cwd",
             "installationId"
           ],
           "additionalProperties": false
@@ -1108,7 +1063,6 @@
             }
           },
           "required": [
-            "cwd",
             "installationId"
           ],
           "additionalProperties": false
@@ -1126,7 +1080,6 @@
             }
           },
           "required": [
-            "cwd",
             "installationId"
           ],
           "additionalProperties": false
@@ -1144,7 +1097,6 @@
             }
           },
           "required": [
-            "cwd",
             "installationId"
           ],
           "additionalProperties": false
@@ -1169,7 +1121,6 @@
             }
           },
           "required": [
-            "cwd",
             "installationId",
             "targetScope"
           ],
@@ -1188,7 +1139,6 @@
             }
           },
           "required": [
-            "cwd",
             "installationId"
           ],
           "additionalProperties": false
@@ -1208,9 +1158,6 @@
               ]
             }
           },
-          "required": [
-            "cwd"
-          ],
           "additionalProperties": false
         },
         "cowork/memory/upsert": {
@@ -1235,7 +1182,6 @@
             }
           },
           "required": [
-            "cwd",
             "scope",
             "content"
           ],
@@ -1261,7 +1207,6 @@
             }
           },
           "required": [
-            "cwd",
             "scope",
             "id"
           ],
@@ -1275,9 +1220,6 @@
               "minLength": 1
             }
           },
-          "required": [
-            "cwd"
-          ],
           "additionalProperties": false
         },
         "cowork/backups/workspace/delta/read": {
@@ -1297,7 +1239,6 @@
             }
           },
           "required": [
-            "cwd",
             "targetSessionId",
             "checkpointId"
           ],
@@ -1316,7 +1257,6 @@
             }
           },
           "required": [
-            "cwd",
             "targetSessionId"
           ],
           "additionalProperties": false
@@ -1337,7 +1277,6 @@
             }
           },
           "required": [
-            "cwd",
             "targetSessionId"
           ],
           "additionalProperties": false
@@ -1359,7 +1298,6 @@
             }
           },
           "required": [
-            "cwd",
             "targetSessionId",
             "checkpointId"
           ],
@@ -1378,7 +1316,6 @@
             }
           },
           "required": [
-            "cwd",
             "targetSessionId"
           ],
           "additionalProperties": false

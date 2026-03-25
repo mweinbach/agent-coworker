@@ -13,7 +13,7 @@ export function createMemoryRouteHandlers(
   return {
     "cowork/memory/list": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const scope = params.scope === "user" ? "user" : params.scope === "workspace" ? "workspace" : undefined;
       const event = await captureWorkspaceControlOutcome(
         context,
@@ -30,7 +30,7 @@ export function createMemoryRouteHandlers(
 
     "cowork/memory/upsert": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const scope = params.scope === "user" ? "user" : "workspace";
       const id = typeof params.id === "string" && params.id.trim() ? params.id.trim() : undefined;
       const content = typeof params.content === "string" ? params.content : "";
@@ -49,7 +49,7 @@ export function createMemoryRouteHandlers(
 
     "cowork/memory/delete": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const scope = params.scope === "user" ? "user" : "workspace";
       const id = typeof params.id === "string" ? params.id.trim() : "";
       const event = await captureWorkspaceControlOutcome(

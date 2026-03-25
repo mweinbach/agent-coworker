@@ -847,7 +847,7 @@ export async function startAgentServer(
       sendError: (ws, id, error) => sendJsonRpc(ws, buildJsonRpcErrorResponse(id, error)),
     },
     utils: {
-      requireWorkspacePath,
+      resolveWorkspacePath: (params, method) => requireWorkspacePath(params, method, config.workingDirectory),
       extractTextInput: extractJsonRpcTextInput,
       buildThreadFromSession: buildJsonRpcThreadFromSession,
       buildThreadFromRecord: buildJsonRpcThreadFromRecord,

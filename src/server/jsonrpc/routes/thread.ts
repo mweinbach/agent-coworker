@@ -92,9 +92,9 @@ export function createThreadRouteHandlers(
 
     "thread/list": (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : undefined;
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const threads = new Map<string, ReturnType<JsonRpcRouteContext["utils"]["buildThreadFromRecord"]>>();
-      for (const record of context.threads.listPersisted({ ...(cwd ? { cwd } : {}) })) {
+      for (const record of context.threads.listPersisted({ cwd })) {
         if (!context.utils.shouldIncludeThreadSummary({
           titleSource: record.titleSource,
           messageCount: record.messageCount,
@@ -106,7 +106,7 @@ export function createThreadRouteHandlers(
         }
         threads.set(record.sessionId, context.utils.buildThreadFromRecord(record));
       }
-      for (const session of context.threads.listLiveRoot({ ...(cwd ? { cwd } : {}) })) {
+      for (const session of context.threads.listLiveRoot({ cwd })) {
         threads.set(session.id, context.utils.buildThreadFromSession(session));
       }
       context.jsonrpc.sendResult(ws, message.id, {

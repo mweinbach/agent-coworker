@@ -32,37 +32,37 @@ export const providerAuthResultEventSchema = z.object({
 
 export const jsonRpcProviderRequestSchemas = {
   "cowork/provider/catalog/read": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
   }).strict(),
   "cowork/provider/authMethods/read": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
   }).strict(),
   "cowork/provider/status/refresh": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
   }).strict(),
   "cowork/provider/auth/authorize": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     provider: nonEmptyTrimmedStringSchema,
     methodId: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/provider/auth/logout": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     provider: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/provider/auth/callback": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     provider: nonEmptyTrimmedStringSchema,
     methodId: nonEmptyTrimmedStringSchema,
     code: z.string().optional(),
   }).strict(),
   "cowork/provider/auth/setApiKey": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     provider: nonEmptyTrimmedStringSchema,
     methodId: nonEmptyTrimmedStringSchema,
     apiKey: z.string(),
   }).strict(),
   "cowork/provider/auth/copyApiKey": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     provider: nonEmptyTrimmedStringSchema,
     sourceProvider: nonEmptyTrimmedStringSchema,
   }).strict(),

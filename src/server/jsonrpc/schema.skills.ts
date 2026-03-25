@@ -33,64 +33,64 @@ export const skillInstallUpdateCheckEventSchema = z.object({
 
 export const jsonRpcSkillsRequestSchemas = {
   "cowork/skills/catalog/read": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
   }).strict(),
   "cowork/skills/list": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
   }).strict(),
   "cowork/skills/read": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     skillName: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/skills/disable": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     skillName: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/skills/enable": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     skillName: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/skills/delete": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     skillName: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/skills/installation/read": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     installationId: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/skills/install/preview": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     sourceInput: z.string(),
     targetScope: targetScopeSchema,
   }).strict(),
   "cowork/skills/install": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     sourceInput: z.string(),
     targetScope: targetScopeSchema,
   }).strict(),
   "cowork/skills/installation/enable": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     installationId: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/skills/installation/disable": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     installationId: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/skills/installation/delete": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     installationId: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/skills/installation/update": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     installationId: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/skills/installation/copy": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     installationId: nonEmptyTrimmedStringSchema,
     targetScope: targetScopeSchema,
   }).strict(),
   "cowork/skills/installation/checkUpdate": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     installationId: nonEmptyTrimmedStringSchema,
   }).strict(),
 } as const;

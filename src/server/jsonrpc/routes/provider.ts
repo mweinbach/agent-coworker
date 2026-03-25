@@ -15,7 +15,7 @@ export function createProviderRouteHandlers(
   return {
     "cowork/provider/catalog/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
@@ -31,7 +31,7 @@ export function createProviderRouteHandlers(
 
     "cowork/provider/authMethods/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
@@ -47,7 +47,7 @@ export function createProviderRouteHandlers(
 
     "cowork/provider/status/refresh": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
@@ -63,7 +63,7 @@ export function createProviderRouteHandlers(
 
     "cowork/provider/auth/authorize": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const provider = typeof params.provider === "string"
         ? params.provider as AgentConfig["provider"]
         : undefined;
@@ -94,7 +94,7 @@ export function createProviderRouteHandlers(
 
     "cowork/provider/auth/logout": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const provider = typeof params.provider === "string"
         ? params.provider as AgentConfig["provider"]
         : undefined;
@@ -122,7 +122,7 @@ export function createProviderRouteHandlers(
 
     "cowork/provider/auth/callback": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const provider = typeof params.provider === "string"
         ? params.provider as AgentConfig["provider"]
         : undefined;
@@ -154,7 +154,7 @@ export function createProviderRouteHandlers(
 
     "cowork/provider/auth/setApiKey": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const provider = typeof params.provider === "string"
         ? params.provider as AgentConfig["provider"]
         : undefined;
@@ -186,7 +186,7 @@ export function createProviderRouteHandlers(
 
     "cowork/provider/auth/copyApiKey": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const provider = typeof params.provider === "string"
         ? params.provider as AgentConfig["provider"]
         : undefined;

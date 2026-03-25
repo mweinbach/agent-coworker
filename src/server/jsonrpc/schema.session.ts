@@ -84,7 +84,7 @@ export const jsonRpcSessionRequestSchemas = {
     title: z.string(),
   }).strict(),
   "cowork/session/state/read": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
   }).strict(),
   "cowork/session/model/set": z.object({
     threadId: nonEmptyTrimmedStringSchema,
@@ -108,7 +108,7 @@ export const jsonRpcSessionRequestSchemas = {
     context: harnessContextPayloadSchema,
   }).strict(),
   "cowork/session/defaults/apply": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     threadId: optionalNonEmptyTrimmedStringSchema,
     provider: optionalNonEmptyTrimmedStringSchema,
     model: optionalNonEmptyTrimmedStringSchema,
@@ -116,7 +116,7 @@ export const jsonRpcSessionRequestSchemas = {
     config: anyObjectSchema.optional(),
   }).strict(),
   "cowork/session/delete": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     targetSessionId: nonEmptyTrimmedStringSchema,
   }).strict(),
 } as const;

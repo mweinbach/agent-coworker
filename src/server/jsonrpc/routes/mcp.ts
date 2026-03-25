@@ -14,7 +14,7 @@ export function createMcpRouteHandlers(
   return {
     "cowork/mcp/servers/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
@@ -30,7 +30,7 @@ export function createMcpRouteHandlers(
 
     "cowork/mcp/server/upsert": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const server = params.server as any;
       const previousName = typeof params.previousName === "string" ? params.previousName : undefined;
       const mutationError = await captureWorkspaceControlMutationError(
@@ -57,7 +57,7 @@ export function createMcpRouteHandlers(
 
     "cowork/mcp/server/delete": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
       const mutationError = await captureWorkspaceControlMutationError(
         context,
@@ -83,7 +83,7 @@ export function createMcpRouteHandlers(
 
     "cowork/mcp/server/validate": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
       const outcome = await captureWorkspaceControlOutcome(
         context,
@@ -101,7 +101,7 @@ export function createMcpRouteHandlers(
 
     "cowork/mcp/server/auth/authorize": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
       const outcome = await captureWorkspaceControlOutcome(
         context,
@@ -121,7 +121,7 @@ export function createMcpRouteHandlers(
 
     "cowork/mcp/server/auth/callback": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
       const code = typeof params.code === "string" && params.code.trim() ? params.code.trim() : undefined;
       const outcome = await captureWorkspaceControlOutcome(
@@ -140,7 +140,7 @@ export function createMcpRouteHandlers(
 
     "cowork/mcp/server/auth/setApiKey": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const name = typeof params.name === "string" ? params.name.trim() : "";
       const apiKey = typeof params.apiKey === "string" ? params.apiKey : "";
       const outcome = await captureWorkspaceControlOutcome(
@@ -159,7 +159,7 @@ export function createMcpRouteHandlers(
 
     "cowork/mcp/legacy/migrate": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const scope = params.scope === "user" ? "user" : "workspace";
       const mutationError = await captureWorkspaceControlMutationError(
         context,

@@ -17,29 +17,29 @@ export const workspaceBackupDeltaEventSchema = z.object({
 
 export const jsonRpcBackupsRequestSchemas = {
   "cowork/backups/workspace/read": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
   }).strict(),
   "cowork/backups/workspace/delta/read": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     targetSessionId: nonEmptyTrimmedStringSchema,
     checkpointId: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/backups/workspace/checkpoint": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     targetSessionId: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/backups/workspace/restore": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     targetSessionId: nonEmptyTrimmedStringSchema,
     checkpointId: z.string().optional(),
   }).strict(),
   "cowork/backups/workspace/deleteCheckpoint": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     targetSessionId: nonEmptyTrimmedStringSchema,
     checkpointId: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/backups/workspace/deleteEntry": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     targetSessionId: nonEmptyTrimmedStringSchema,
   }).strict(),
 } as const;

@@ -26,37 +26,37 @@ export const mcpAuthResultEventSchema = z.object({
 
 export const jsonRpcMcpRequestSchemas = {
   "cowork/mcp/servers/read": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
   }).strict(),
   "cowork/mcp/server/upsert": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     server: anyObjectSchema,
     previousName: z.string().optional(),
   }).strict(),
   "cowork/mcp/server/delete": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     name: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/mcp/server/validate": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     name: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/mcp/server/auth/authorize": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     name: nonEmptyTrimmedStringSchema,
   }).strict(),
   "cowork/mcp/server/auth/callback": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     name: nonEmptyTrimmedStringSchema,
     code: z.string().optional(),
   }).strict(),
   "cowork/mcp/server/auth/setApiKey": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     name: nonEmptyTrimmedStringSchema,
     apiKey: z.string(),
   }).strict(),
   "cowork/mcp/legacy/migrate": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     scope: z.enum(["workspace", "user"]),
   }).strict(),
 } as const;

@@ -124,6 +124,26 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("session state read defaults omitted cwd to the server working directory", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request("cowork/session/state/read", {});
+
+      expect(response.result.events.map((event: any) => event.type)).toEqual([
+        "config_updated",
+        "session_settings",
+        "session_config",
+      ]);
+      expect(response.result.events[0]?.config?.workingDirectory).toBe(tmpDir);
+      rpc.close();
+    } finally {
+      server.stop();
+    }
+  });
+
   test("provider catalog read returns a legacy-compatible provider_catalog event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

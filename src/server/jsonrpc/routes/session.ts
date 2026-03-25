@@ -39,7 +39,7 @@ export function createSessionRouteHandlers(
 
     "cowork/session/state/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       await context.workspaceControl.withSession(cwd, async (_binding, session) => {
         context.jsonrpc.sendResult(ws, message.id, {
           events: context.utils.buildControlSessionStateEvents(session),
@@ -194,7 +194,7 @@ export function createSessionRouteHandlers(
 
     "cowork/session/defaults/apply": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
       const binding = threadId
         ? context.threads.load(threadId)
@@ -235,7 +235,7 @@ export function createSessionRouteHandlers(
 
     "cowork/session/delete": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
       const session = context.workspaceControl.getOrCreateBinding(cwd).session!;
       const outcome = await captureWorkspaceControlOutcome(

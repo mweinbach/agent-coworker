@@ -106,7 +106,7 @@ export interface JsonRpcRouteContext {
     sendError(ws: StartServerSocket, id: JsonRpcLiteId | null, error: JsonRpcLiteError): void;
   };
   utils: {
-    requireWorkspacePath(params: Record<string, unknown>, method: string): string;
+    resolveWorkspacePath(params: Record<string, unknown>, method: string): string;
     extractTextInput(input: unknown): string;
     buildThreadFromSession(session: AgentSession): JsonRpcThread;
     buildThreadFromRecord(record: PersistedSessionRecord): JsonRpcThread;

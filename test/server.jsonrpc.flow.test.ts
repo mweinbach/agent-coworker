@@ -143,6 +143,30 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("thread/list defaults omitted cwd to the server working directory", async () => {
+    const tmpDir = await makeTmpProject();
+    const otherTmpDir = await makeTmpProject("agent-harness-other-");
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const localThread = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+      const otherThread = await rpc.sendRequest("thread/start", { cwd: otherTmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      const listed = await rpc.sendRequest("thread/list", {});
+
+      expect(listed.result.threads.map((thread: any) => thread.id)).toContain(localThread.result.thread.id);
+      expect(listed.result.threads.map((thread: any) => thread.id)).not.toContain(otherThread.result.thread.id);
+      expect(listed.result.threads.every((thread: any) => thread.cwd === tmpDir)).toBe(true);
+      rpc.close();
+    } finally {
+      await server.stop();
+      await Bun.$`rm -rf ${otherTmpDir}`.quiet();
+    }
+  });
+
   test("thread/list includes wire counts for live and persisted threads", async () => {
     const tmpDir = await makeTmpProject();
     let threadId = "";

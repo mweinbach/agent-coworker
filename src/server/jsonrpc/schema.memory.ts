@@ -13,17 +13,17 @@ export const memoryListEventSchema = z.object({
 
 export const jsonRpcMemoryRequestSchemas = {
   "cowork/memory/list": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     scope: workspaceMemoryScopeSchema.optional(),
   }).strict(),
   "cowork/memory/upsert": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     scope: workspaceMemoryScopeSchema,
     id: z.string().optional(),
     content: z.string(),
   }).strict(),
   "cowork/memory/delete": z.object({
-    cwd: nonEmptyTrimmedStringSchema,
+    cwd: nonEmptyTrimmedStringSchema.optional(),
     scope: workspaceMemoryScopeSchema,
     id: nonEmptyTrimmedStringSchema,
   }).strict(),

@@ -9,12 +9,22 @@ export function toJsonRpcParams(params: unknown): Record<string, unknown> {
     : {};
 }
 
-export function requireWorkspacePath(params: Record<string, unknown>, method: string): string {
+export function requireWorkspacePath(
+  params: Record<string, unknown>,
+  method: string,
+  defaultWorkingDirectory?: string | null,
+): string {
   const cwd = typeof params.cwd === "string" ? params.cwd.trim() : "";
-  if (!cwd) {
+  if (cwd) {
+    return cwd;
+  }
+  const fallback = typeof defaultWorkingDirectory === "string"
+    ? defaultWorkingDirectory.trim()
+    : "";
+  if (!fallback) {
     throw new Error(`${method} requires cwd`);
   }
-  return cwd;
+  return fallback;
 }
 
 export function extractJsonRpcTextInput(input: unknown): string {

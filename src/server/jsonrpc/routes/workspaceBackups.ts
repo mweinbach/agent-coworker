@@ -13,7 +13,7 @@ export function createWorkspaceBackupRouteHandlers(
   return {
     "cowork/backups/workspace/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
@@ -29,7 +29,7 @@ export function createWorkspaceBackupRouteHandlers(
 
     "cowork/backups/workspace/delta/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
       const checkpointId = typeof params.checkpointId === "string" ? params.checkpointId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
@@ -47,7 +47,7 @@ export function createWorkspaceBackupRouteHandlers(
 
     "cowork/backups/workspace/checkpoint": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,
@@ -66,7 +66,7 @@ export function createWorkspaceBackupRouteHandlers(
 
     "cowork/backups/workspace/restore": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
       const checkpointId = typeof params.checkpointId === "string" && params.checkpointId.trim()
         ? params.checkpointId.trim()
@@ -88,7 +88,7 @@ export function createWorkspaceBackupRouteHandlers(
 
     "cowork/backups/workspace/deleteCheckpoint": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
       const checkpointId = typeof params.checkpointId === "string" && params.checkpointId.trim()
         ? params.checkpointId.trim()
@@ -112,7 +112,7 @@ export function createWorkspaceBackupRouteHandlers(
 
     "cowork/backups/workspace/deleteEntry": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const cwd = context.utils.requireWorkspacePath(params, message.method);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
       const event = await captureWorkspaceControlOutcome(
         context,

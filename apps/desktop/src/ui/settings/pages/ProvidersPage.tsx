@@ -1046,7 +1046,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                   </Button>
                 </div>
                 {userConfigLastResult ? (
-                  <div className={cn("text-xs", userConfigLastResult.ok ? "text-emerald-600" : "text-destructive")}>
+                  <div className={cn("text-xs", userConfigLastResult.ok ? "text-success" : "text-destructive")}>
                     {userConfigLastResult.message}
                   </div>
                 ) : null}
@@ -1199,7 +1199,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                   <div className="text-xs text-muted-foreground">No models loaded yet.</div>
                 )}
                 {isOpenAiProxy && bedrockRefresh.status === "done" ? (
-                  <div className={cn("text-xs", bedrockRefresh.result.ok ? "text-emerald-600" : "text-destructive")}>
+                  <div className={cn("text-xs", bedrockRefresh.result.ok ? "text-success" : "text-destructive")}>
                     {bedrockRefresh.result.message}
                   </div>
                 ) : null}

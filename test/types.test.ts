@@ -5,8 +5,8 @@ import { isProviderName, PROVIDER_NAMES, resolveProviderName } from "../src/type
 // PROVIDER_NAMES
 // ---------------------------------------------------------------------------
 describe("PROVIDER_NAMES", () => {
-  test("contains exactly 11 providers", () => {
-    expect(PROVIDER_NAMES).toHaveLength(11);
+  test("contains exactly 12 providers", () => {
+    expect(PROVIDER_NAMES).toHaveLength(12);
   });
 
   test("contains expected provider names", () => {

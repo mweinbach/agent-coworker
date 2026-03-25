@@ -23,6 +23,7 @@ export function PendingRequestCard({
   onReject,
 }: PendingRequestCardProps) {
   const theme = useAppTheme();
+  const isDangerous = request.kind === "approval" && request.dangerous;
 
   return (
     <View
@@ -30,8 +31,8 @@ export function PendingRequestCard({
         gap: 12,
         borderRadius: 24,
         borderCurve: "continuous",
-        borderWidth: 1,
-        borderColor: theme.warning,
+        borderWidth: isDangerous ? 2 : 1,
+        borderColor: isDangerous ? theme.danger : theme.warning,
         backgroundColor: theme.surface,
         paddingHorizontal: 16,
         paddingVertical: 16,
@@ -41,27 +42,56 @@ export function PendingRequestCard({
       <Text
         selectable
         style={{
-          color: theme.warning,
+          color: isDangerous ? theme.danger : theme.warning,
           fontSize: 12,
           fontWeight: "800",
           letterSpacing: 0.6,
           textTransform: "uppercase",
         }}
       >
-        {request.kind === "approval" ? "Approval needed" : "Question from desktop"}
-      </Text>
-      <Text
-        selectable
-        style={{
-          color: theme.text,
-          fontSize: 15,
-          lineHeight: 22,
-        }}
-      >
         {request.kind === "approval"
-          ? `${request.command}\n${request.reason}`
-          : request.question}
+          ? isDangerous
+            ? "Dangerous command"
+            : "Approval needed"
+          : "Question from desktop"}
       </Text>
+      {request.kind === "approval" ? (
+        <>
+          <Text
+            selectable
+            style={{
+              fontFamily: "Menlo",
+              fontSize: 13,
+              lineHeight: 18,
+              color: theme.text,
+              backgroundColor: theme.surfaceMuted,
+              borderRadius: 10,
+              borderCurve: "continuous",
+              padding: 10,
+              overflow: "hidden",
+            }}
+          >
+            {request.command}
+          </Text>
+          <Text
+            selectable
+            style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}
+          >
+            {request.reason}
+          </Text>
+        </>
+      ) : (
+        <Text
+          selectable
+          style={{
+            color: theme.text,
+            fontSize: 15,
+            lineHeight: 22,
+          }}
+        >
+          {request.question}
+        </Text>
+      )}
       {request.kind === "ask" ? (
         <>
           <TextInput

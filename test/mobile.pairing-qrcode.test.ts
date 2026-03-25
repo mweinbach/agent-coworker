@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   parsePairingQrPayload,
   validatePairingPayload,
-} from "../app/mobile/src/features/pairing/qrValidation";
+} from "../apps/mobile/src/features/pairing/qrValidation";
 
 function buildPayload(overrides?: Partial<{
   expiresAt: number;

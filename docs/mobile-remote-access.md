@@ -3,7 +3,7 @@
 This repo now includes the first vertical slices for mobile remote access:
 
 - desktop Electron remote-access bridge and Settings UI
-- standalone Expo app scaffold at `app/mobile`
+- standalone Expo app scaffold at `apps/mobile`
 - local Expo native module scaffold for Remodex secure transport
 - workspace-scoped JSON-RPC methods that no longer require the mobile client to know host filesystem paths
 
@@ -30,12 +30,12 @@ The desktop bridge keeps its trust state and private identity material in Electr
 
 The mobile app lives at:
 
-- `app/mobile`
+- `apps/mobile`
 
 Important structure:
 
-- routes are under `app/mobile/src/app`
-- there is intentionally no `app/mobile/app` route tree
+- routes are under `apps/mobile/src/app`
+- there is intentionally no `apps/mobile/app` route tree
 
 Included scaffolded areas:
 
@@ -45,7 +45,7 @@ Included scaffolded areas:
 - shared pairing store
 - shared thread/feed store
 - local Expo module scaffold:
-  - `app/mobile/modules/remodex-secure-transport`
+  - `apps/mobile/modules/remodex-secure-transport`
 
 The current mobile implementation is a scaffolded vertical slice:
 

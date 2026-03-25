@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { CoworkJsonRpcClient } from "../app/mobile/src/features/cowork/jsonRpcClient";
+import { CoworkJsonRpcClient } from "../apps/mobile/src/features/cowork/jsonRpcClient";
 
 function flushMicrotasks() {
   return new Promise<void>((resolve) => queueMicrotask(resolve));

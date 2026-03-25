@@ -25,8 +25,8 @@ mock.module("expo-modules-core", () => ({
   requireOptionalNativeModule: () => null,
 }));
 
-const transportModule = await import("../app/mobile/modules/remodex-secure-transport/src");
-const { CoworkJsonRpcClient } = await import("../app/mobile/src/features/cowork/jsonRpcClient");
+const transportModule = await import("../apps/mobile/modules/remodex-secure-transport/src");
+const { CoworkJsonRpcClient } = await import("../apps/mobile/src/features/cowork/jsonRpcClient");
 
 type RemodexQrPairingPayload = transportModule.RemodexQrPairingPayload;
 

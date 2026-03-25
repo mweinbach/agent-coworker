@@ -161,4 +161,52 @@ describe("mobile transport integration", () => {
       subscription.remove();
     }
   });
+
+  test("fallback secure transport can round-trip a user-input server request", async () => {
+    const payload = createPayload();
+    const requests: string[] = [];
+
+    const client = new CoworkJsonRpcClient({
+      clientInfo: {
+        name: "cowork-mobile-test",
+        version: "0.1.0",
+      },
+      send: async (text) => {
+        await transportModule.sendPlaintext(text);
+      },
+      onServerRequest(message) {
+        requests.push(message.method);
+        if (message.method === "item/tool/requestUserInput") {
+          void client.respondServerRequest(message.id, { answer: "continue" });
+        }
+      },
+    });
+
+    const subscription = transportModule.addRemodexListener("plaintextMessage", (event) => {
+      void client.handleIncoming(event.text);
+    });
+
+    try {
+      await transportModule.connectFromQr(payload);
+      await client.initialize();
+      const threadId = (await client.requestThreadList()).threads[0]!.id;
+
+      await client.startTurn(threadId, "Please trigger input");
+      await flushMicrotasks(8);
+
+      expect(requests).toContain("item/tool/requestUserInput");
+
+      const reread = await client.readThread(threadId);
+      expect(
+        reread.coworkSnapshot?.feed.some(
+          (item) =>
+            item.kind === "message" &&
+            item.role === "assistant" &&
+            item.text.includes("continue"),
+        ),
+      ).toBe(true);
+    } finally {
+      subscription.remove();
+    }
+  });
 });

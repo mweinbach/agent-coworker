@@ -18,6 +18,7 @@
     "app:mobile:dev": "cd apps/mobile && npx expo start --dev-client",
     "app:mobile:ios": "cd apps/mobile && npx expo run:ios",
     "app:mobile:android": "cd apps/mobile && npx expo run:android",
+    "app:mobile:xcode": "cd apps/mobile && open ios/CoworkMobile.xcworkspace",
     "app:mobile:typecheck": "bunx tsc --noEmit -p apps/mobile/tsconfig.json",
     "build:desktop-resources": "bun scripts/build_desktop_resources.ts",
     "docs:check": "bun scripts/check_docs.ts",

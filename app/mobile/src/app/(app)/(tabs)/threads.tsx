@@ -4,6 +4,7 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import { useThreadStore } from "../../../features/cowork/threadStore";
 
 export default function ThreadsTab() {
+  const seedThread = useThreadStore((state) => state.seedThread);
   const snapshots = useThreadStore((state) => state.snapshots);
   const threads = Object.values(snapshots).map((snapshot) => ({
     id: snapshot.sessionId,
@@ -31,7 +32,7 @@ export default function ThreadsTab() {
       <Pressable
         accessibilityRole="button"
         onPress={() => {
-          // Local draft creation happens once the JS protocol layer lands.
+          seedThread();
         }}
         style={{
           alignItems: "center",

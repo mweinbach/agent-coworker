@@ -17,6 +17,9 @@ export default function ThreadDetailScreen() {
   const interruptThread = useThreadStore((state) => state.interruptThread);
   const clearPendingRequest = useThreadStore((state) => state.clearPendingRequest);
   const [askDraft, setAskDraft] = useState("");
+  const runtimeClient = getActiveCoworkJsonRpcClient();
+
+  const isDraftThread = threadId.startsWith("draft-");
 
   if (!thread) {
     return (
@@ -37,7 +40,20 @@ export default function ThreadDetailScreen() {
             <Text style={styles.title}>{thread.title}</Text>
             <Text style={styles.subtitle}>Rendered directly from the shared `coworkSnapshot.feed` contract.</Text>
           </View>
-          <Pressable onPress={() => interruptThread(thread.id)} style={styles.interruptButton}>
+          <Pressable
+            onPress={async () => {
+              if (runtimeClient && !isDraftThread) {
+                await runtimeClient.interruptTurn(thread.id);
+                const reread = await runtimeClient.readThread(thread.id);
+                if (reread.coworkSnapshot) {
+                  useThreadStore.getState().hydrate(reread.coworkSnapshot);
+                }
+                return;
+              }
+              interruptThread(thread.id);
+            }}
+            style={styles.interruptButton}
+          >
             <Text style={styles.interruptLabel}>Interrupt</Text>
           </Pressable>
         </View>
@@ -135,7 +151,13 @@ export default function ThreadDetailScreen() {
         <ComposerBar
           value={thread.composerDraft}
           onChangeText={(text) => setComposerDraft(thread.id, text)}
-          onSubmit={() => {
+          onSubmit={async () => {
+            if (runtimeClient && !isDraftThread && thread.composerDraft.trim()) {
+              const draft = thread.composerDraft;
+              setComposerDraft(thread.id, "");
+              await runtimeClient.startTurn(thread.id, draft);
+              return;
+            }
             submitComposer(thread.id);
           }}
         />

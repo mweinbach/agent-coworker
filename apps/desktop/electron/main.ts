@@ -14,6 +14,7 @@ import {
   syncWindowAppearance,
 } from "./services/appearance";
 import { installDesktopApplicationMenu } from "./services/menu";
+import { MobileRelayBridge } from "./services/mobileRelayBridge";
 import { PersistenceService } from "./services/persistence";
 import { resolveDesktopRendererUrl } from "./services/rendererUrl";
 import { ServerManager } from "./services/serverManager";
@@ -32,6 +33,7 @@ const DESKTOP_SMOKE_WORKSPACE_ENV = "COWORK_DESKTOP_SMOKE_WORKSPACE";
 const DESKTOP_SMOKE_OUTPUT_ENV = "COWORK_DESKTOP_SMOKE_OUTPUT";
 
 const serverManager = new ServerManager();
+const mobileRelayBridge = new MobileRelayBridge({ serverManager });
 const persistence = new PersistenceService();
 const updater = new DesktopUpdaterService({
   currentVersion: app.getVersion(),
@@ -369,6 +371,7 @@ if (!gotSingleInstanceLock) {
     }
 
     registerDesktopIpc({
+      mobileRelayBridge,
       persistence,
       serverManager,
       updater,
@@ -406,6 +409,9 @@ if (!gotSingleInstanceLock) {
     createBeforeQuitHandler({
       unregisterAppearanceListener: () => unregisterAppearanceListener(),
       stopUpdater: () => updater.dispose(),
+      stopMobileRelayBridge: async () => {
+        await mobileRelayBridge.stop();
+      },
       stopAllServers: () => serverManager.stopAll(),
       quit: () => app.quit(),
       onError: (error) => {

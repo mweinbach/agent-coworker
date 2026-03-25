@@ -168,6 +168,30 @@ export async function setWindowAppearance(opts: SetWindowAppearanceInput): Promi
   return await requireDesktopApi().setWindowAppearance(opts);
 }
 
+export async function startMobileRelay(opts: {
+  workspaceId: string;
+  workspacePath: string;
+  yolo: boolean;
+}): Promise<import("./desktopApi").MobileRelayBridgeState> {
+  return await requireDesktopApi().startMobileRelay(opts);
+}
+
+export async function stopMobileRelay(): Promise<import("./desktopApi").MobileRelayBridgeState> {
+  return await requireDesktopApi().stopMobileRelay();
+}
+
+export async function getMobileRelayState(): Promise<import("./desktopApi").MobileRelayBridgeState> {
+  return await requireDesktopApi().getMobileRelayState();
+}
+
+export async function rotateMobileRelaySession(): Promise<import("./desktopApi").MobileRelayBridgeState> {
+  return await requireDesktopApi().rotateMobileRelaySession();
+}
+
+export async function forgetMobileRelayTrustedPhone(): Promise<import("./desktopApi").MobileRelayBridgeState> {
+  return await requireDesktopApi().forgetMobileRelayTrustedPhone();
+}
+
 export function onSystemAppearanceChanged(listener: (appearance: SystemAppearance) => void): () => void {
   return requireDesktopApi().onSystemAppearanceChanged(listener);
 }
@@ -178,4 +202,10 @@ export function onUpdateStateChanged(listener: (state: UpdaterState) => void): (
 
 export function onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void {
   return requireDesktopApi().onMenuCommand(listener);
+}
+
+export function onMobileRelayStateChanged(
+  listener: (state: import("./desktopApi").MobileRelayBridgeState) => void,
+): () => void {
+  return requireDesktopApi().onMobileRelayStateChanged(listener);
 }

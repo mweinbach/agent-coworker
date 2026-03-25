@@ -130,7 +130,16 @@ export type PersistedOnboardingState = {
 
 export type OnboardingStep = "welcome" | "workspace" | "provider" | "defaults" | "firstThread";
 export type ViewId = "chat" | "skills" | "settings";
-export type SettingsPageId = "providers" | "usage" | "workspaces" | "backup" | "mcp" | "memory" | "updates" | "developer";
+export type SettingsPageId =
+  | "providers"
+  | "usage"
+  | "workspaces"
+  | "backup"
+  | "mcp"
+  | "memory"
+  | "updates"
+  | "developer"
+  | "remoteAccess";
 
 export type CachedDesktopUiState = {
   selectedWorkspaceId?: string | null;

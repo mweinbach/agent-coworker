@@ -7,6 +7,8 @@ import {
   type ConfirmActionInput,
   type DeleteTranscriptInput,
   type DesktopMenuCommand,
+  type MobileRelayBridgeState,
+  type MobileRelayStartInput,
   type CopyPathInput,
   type CreateDirectoryInput,
   type DesktopApi,
@@ -37,6 +39,8 @@ import {
   desktopMenuCommandSchema,
   desktopNotificationInputSchema,
   listDirectoryInputSchema,
+  mobileRelayBridgeStateSchema,
+  mobileRelayStartInputSchema,
   openPathInputSchema,
   openExternalUrlInputSchema,
   previewOSFileInputSchema,
@@ -153,6 +157,14 @@ function assertDesktopMenuCommand(value: unknown): asserts value is DesktopMenuC
   parseWithSchema(desktopMenuCommandSchema, value, "menu command");
 }
 
+function assertMobileRelayStartInput(opts: MobileRelayStartInput): void {
+  parseWithSchema(mobileRelayStartInputSchema, opts, "mobileRelay.start options");
+}
+
+function assertMobileRelayBridgeState(value: unknown): asserts value is MobileRelayBridgeState {
+  parseWithSchema(mobileRelayBridgeStateSchema, value, "mobile relay state");
+}
+
 function assertSystemAppearance(value: unknown): asserts value is SystemAppearance {
   parseWithSchema(systemAppearanceSchema, value, "system appearance");
 }
@@ -166,6 +178,37 @@ const desktopApi = Object.freeze<DesktopApi>({
   stopWorkspaceServer: (opts: StopWorkspaceServerInput) => {
     assertStopWorkspaceServerInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.stopWorkspaceServer, opts);
+  },
+
+  startMobileRelay: async (opts: MobileRelayStartInput) => {
+    assertMobileRelayStartInput(opts);
+    const state = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.mobileRelayStart, opts);
+    assertMobileRelayBridgeState(state);
+    return state;
+  },
+
+  stopMobileRelay: async () => {
+    const state = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.mobileRelayStop);
+    assertMobileRelayBridgeState(state);
+    return state;
+  },
+
+  getMobileRelayState: async () => {
+    const state = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.mobileRelayGetState);
+    assertMobileRelayBridgeState(state);
+    return state;
+  },
+
+  rotateMobileRelaySession: async () => {
+    const state = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.mobileRelayRotateSession);
+    assertMobileRelayBridgeState(state);
+    return state;
+  },
+
+  forgetMobileRelayTrustedPhone: async () => {
+    const state = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.mobileRelayForgetTrustedPhone);
+    assertMobileRelayBridgeState(state);
+    return state;
   },
 
   loadState: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.loadState),
@@ -337,6 +380,20 @@ const desktopApi = Object.freeze<DesktopApi>({
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.menuCommand, wrapped);
     return () => {
       ipcRenderer.off(DESKTOP_EVENT_CHANNELS.menuCommand, wrapped);
+    };
+  },
+
+  onMobileRelayStateChanged: (listener: (state: MobileRelayBridgeState) => void) => {
+    if (typeof listener !== "function") {
+      throw new Error("onMobileRelayStateChanged listener must be a function");
+    }
+    const wrapped = (_event: unknown, payload: unknown) => {
+      assertMobileRelayBridgeState(payload);
+      listener(payload);
+    };
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.mobileRelayStateChanged, wrapped);
+    return () => {
+      ipcRenderer.off(DESKTOP_EVENT_CHANNELS.mobileRelayStateChanged, wrapped);
     };
   },
 });

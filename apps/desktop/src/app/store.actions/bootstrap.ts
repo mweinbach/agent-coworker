@@ -108,6 +108,7 @@ const normalizedSettingsPageSchema = z.preprocess(
     value === "providers"
     || value === "usage"
     || value === "workspaces"
+    || value === "remoteAccess"
     || value === "backup"
     || value === "mcp"
     || value === "memory"
@@ -116,7 +117,7 @@ const normalizedSettingsPageSchema = z.preprocess(
       ? value
       : "providers"
   ),
-  z.enum(["providers", "usage", "workspaces", "backup", "mcp", "memory", "updates", "developer"])
+  z.enum(["providers", "usage", "workspaces", "remoteAccess", "backup", "mcp", "memory", "updates", "developer"])
 );
 const normalizedNullableSelectionSchema = z.preprocess(
   (value) => (typeof value === "string" && value.trim() ? value : null),

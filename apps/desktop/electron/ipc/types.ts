@@ -2,11 +2,13 @@ import type { IpcMainInvokeEvent } from "electron";
 import type { z } from "zod";
 
 import type { PersistedState } from "../../src/app/types";
+import type { MobileRelayBridge } from "../services/mobileRelayBridge";
 import type { PersistenceService } from "../services/persistence";
 import type { ServerManager } from "../services/serverManager";
 import type { DesktopUpdaterService } from "../services/updater";
 
 export type DesktopIpcDeps = {
+  mobileRelayBridge: MobileRelayBridge;
   persistence: PersistenceService;
   serverManager: ServerManager;
   updater: DesktopUpdaterService;

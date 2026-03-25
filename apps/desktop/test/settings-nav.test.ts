@@ -140,6 +140,12 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().settingsPage).toBe("updates");
   });
 
+  test("openSettings accepts remote access page", () => {
+    useAppStore.getState().openSettings("remoteAccess");
+    expect(useAppStore.getState().view).toBe("settings");
+    expect(useAppStore.getState().settingsPage).toBe("remoteAccess");
+  });
+
   test("setDeveloperMode updates developer mode state", () => {
     useAppStore.getState().setDeveloperMode(true);
     expect(useAppStore.getState().developerMode).toBe(true);

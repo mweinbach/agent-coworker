@@ -321,3 +321,30 @@ export const systemAppearanceSchema: z.ZodType<SystemAppearance> = z.object({
   prefersReducedTransparency: z.boolean(),
   inForcedColorsMode: z.boolean(),
 });
+
+const mobileRelayPairingPayloadSchema = z.object({
+  v: z.number().int().nonnegative(),
+  relay: nonEmptyStringSchema,
+  sessionId: nonEmptyStringSchema,
+  macDeviceId: nonEmptyStringSchema,
+  macIdentityPublicKey: nonEmptyStringSchema,
+  expiresAt: z.number().int().nonnegative(),
+});
+
+export const mobileRelayStartInputSchema = z.object({
+  workspaceId: safeIdSchema,
+  workspacePath: nonEmptyStringSchema,
+  yolo: z.boolean(),
+});
+
+export const mobileRelayBridgeStateSchema = z.object({
+  status: z.enum(["idle", "starting", "pairing", "connected", "reconnecting", "error"]),
+  workspaceId: z.string().nullable(),
+  workspacePath: z.string().nullable(),
+  relayUrl: z.string().nullable(),
+  sessionId: z.string().nullable(),
+  pairingPayload: mobileRelayPairingPayloadSchema.nullable(),
+  trustedPhoneDeviceId: z.string().nullable(),
+  trustedPhoneFingerprint: z.string().nullable(),
+  lastError: z.string().nullable(),
+});

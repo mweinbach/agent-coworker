@@ -6,6 +6,7 @@ type ShutdownDeps = {
   unregisterAppearanceListener?: () => void;
   stopUpdater?: () => void;
   stopAllServers: () => Promise<void>;
+  stopMobileRelayBridge?: () => Promise<void>;
   quit: () => void;
   onError?: (error: unknown) => void;
 };
@@ -29,6 +30,11 @@ export function createBeforeQuitHandler(deps: ShutdownDeps): (event: QuitEvent) 
 
     void deps
       .stopAllServers()
+      .then(async () => {
+        if (deps.stopMobileRelayBridge) {
+          await deps.stopMobileRelayBridge();
+        }
+      })
       .catch((error) => {
         deps.onError?.(error);
       })

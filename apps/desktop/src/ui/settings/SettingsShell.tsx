@@ -14,6 +14,7 @@ import { McpServersPage } from "./pages/McpServersPage";
 import { UpdatesPage } from "./pages/UpdatesPage";
 import { DeveloperPage } from "./pages/DeveloperPage";
 import { MemoryPage } from "./pages/MemoryPage";
+import { RemoteAccessPage } from "./pages/RemoteAccessPage";
 
 type SettingsPageDefinition = {
   id: SettingsPageId;
@@ -34,6 +35,7 @@ const SETTINGS_GROUPS = [
     pages: [
       { id: "workspaces", label: "General", render: () => <WorkspacesPage /> },
       { id: "memory", label: "Memory", render: () => <MemoryPage /> },
+      { id: "remoteAccess", label: "Remote Access", render: () => <RemoteAccessPage /> },
     ] as SettingsPageDefinition[],
   },
   {

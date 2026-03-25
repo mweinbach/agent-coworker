@@ -12,6 +12,31 @@ export type StopWorkspaceServerInput = {
   workspaceId: string;
 };
 
+export type MobileRelayStartInput = {
+  workspaceId: string;
+  workspacePath: string;
+  yolo: boolean;
+};
+
+export type MobileRelayBridgeState = {
+  status: "idle" | "starting" | "pairing" | "connected" | "reconnecting" | "error";
+  workspaceId: string | null;
+  workspacePath: string | null;
+  relayUrl: string | null;
+  sessionId: string | null;
+  pairingPayload: {
+    v: number;
+    relay: string;
+    sessionId: string;
+    macDeviceId: string;
+    macIdentityPublicKey: string;
+    expiresAt: number;
+  } | null;
+  trustedPhoneDeviceId: string | null;
+  trustedPhoneFingerprint: string | null;
+  lastError: string | null;
+};
+
 export type ReadTranscriptInput = {
   threadId: string;
 };
@@ -195,6 +220,11 @@ export type SetWindowAppearanceInput = {
 export interface DesktopApi {
   startWorkspaceServer(opts: StartWorkspaceServerInput): Promise<{ url: string }>;
   stopWorkspaceServer(opts: StopWorkspaceServerInput): Promise<void>;
+  startMobileRelay(opts: MobileRelayStartInput): Promise<MobileRelayBridgeState>;
+  stopMobileRelay(): Promise<MobileRelayBridgeState>;
+  getMobileRelayState(): Promise<MobileRelayBridgeState>;
+  rotateMobileRelaySession(): Promise<MobileRelayBridgeState>;
+  forgetMobileRelayTrustedPhone(): Promise<MobileRelayBridgeState>;
   loadState(): Promise<PersistedState>;
   saveState(state: PersistedState): Promise<void>;
   readTranscript(opts: ReadTranscriptInput): Promise<TranscriptEvent[]>;
@@ -228,11 +258,17 @@ export interface DesktopApi {
   onUpdateStateChanged(listener: (state: UpdaterState) => void): () => void;
   onSystemAppearanceChanged(listener: (appearance: SystemAppearance) => void): () => void;
   onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void;
+  onMobileRelayStateChanged(listener: (state: MobileRelayBridgeState) => void): () => void;
 }
 
 export const DESKTOP_IPC_CHANNELS = {
   startWorkspaceServer: "desktop:startWorkspaceServer",
   stopWorkspaceServer: "desktop:stopWorkspaceServer",
+  mobileRelayStart: "desktop:mobileRelayStart",
+  mobileRelayStop: "desktop:mobileRelayStop",
+  mobileRelayGetState: "desktop:mobileRelayGetState",
+  mobileRelayRotateSession: "desktop:mobileRelayRotateSession",
+  mobileRelayForgetTrustedPhone: "desktop:mobileRelayForgetTrustedPhone",
   loadState: "desktop:loadState",
   saveState: "desktop:saveState",
   readTranscript: "desktop:readTranscript",
@@ -269,4 +305,5 @@ export const DESKTOP_EVENT_CHANNELS = {
   menuCommand: "desktop:event:menuCommand",
   updateStateChanged: "desktop:event:updateState",
   systemAppearanceChanged: "desktop:event:systemAppearanceChanged",
+  mobileRelayStateChanged: "desktop:event:mobileRelayStateChanged",
 } as const;

@@ -1,0 +1,170 @@
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createElement } from "react";
+
+const MOCK_SYSTEM_APPEARANCE = {
+  platform: "linux",
+  themeSource: "system",
+  shouldUseDarkColors: false,
+  shouldUseHighContrastColors: false,
+  shouldUseInvertedColorScheme: false,
+  prefersReducedTransparency: false,
+  inForcedColorsMode: false,
+};
+
+const MOCK_UPDATE_STATE = {
+  phase: "idle",
+  currentVersion: "0.1.0",
+  packaged: false,
+  lastCheckedAt: null,
+  release: null,
+  progress: null,
+  error: null,
+};
+
+mock.module("../src/lib/desktopCommands", () => ({
+  appendTranscriptBatch: async () => {},
+  appendTranscriptEvent: async () => {},
+  deleteTranscript: async () => {},
+  listDirectory: async () => [],
+  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+  pickWorkspaceDirectory: async () => null,
+  readTranscript: async () => [],
+  saveState: async () => {},
+  startWorkspaceServer: async () => ({ url: "ws://mock" }),
+  stopWorkspaceServer: async () => {},
+  showContextMenu: async () => null,
+  windowMinimize: async () => {},
+  windowMaximize: async () => {},
+  windowClose: async () => {},
+  getPlatform: async () => "linux",
+  readFile: async () => "",
+  previewOSFile: async () => {},
+  openPath: async () => {},
+  openExternalUrl: async () => {},
+  revealPath: async () => {},
+  copyPath: async () => {},
+  createDirectory: async () => {},
+  renamePath: async () => {},
+  trashPath: async () => {},
+  confirmAction: async () => true,
+  showNotification: async () => true,
+  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  getUpdateState: async () => MOCK_UPDATE_STATE,
+  checkForUpdates: async () => {},
+  quitAndInstallUpdate: async () => {},
+  onSystemAppearanceChanged: () => () => {},
+  onMenuCommand: () => () => {},
+  onUpdateStateChanged: () => () => {},
+  startMobileRelay: async () => ({
+    status: "pairing",
+    workspaceId: "ws-1",
+    workspacePath: "/tmp/workspace",
+    relayUrl: "ws://127.0.0.1:7338/relay",
+    sessionId: "sess-1",
+    pairingPayload: {
+      v: 2,
+      relay: "ws://127.0.0.1:7338/relay",
+      sessionId: "sess-1",
+      macDeviceId: "mac-1",
+      macIdentityPublicKey: "pub-key",
+      expiresAt: 1_700_000_000_000,
+    },
+    trustedPhoneDeviceId: null,
+    trustedPhoneFingerprint: null,
+    lastError: null,
+  }),
+  stopMobileRelay: async () => ({
+    status: "idle",
+    workspaceId: null,
+    workspacePath: null,
+    relayUrl: null,
+    sessionId: null,
+    pairingPayload: null,
+    trustedPhoneDeviceId: null,
+    trustedPhoneFingerprint: null,
+    lastError: null,
+  }),
+  getMobileRelayState: async () => ({
+    status: "pairing",
+    workspaceId: "ws-1",
+    workspacePath: "/tmp/workspace",
+    relayUrl: "ws://127.0.0.1:7338/relay",
+    sessionId: "sess-1",
+    pairingPayload: {
+      v: 2,
+      relay: "ws://127.0.0.1:7338/relay",
+      sessionId: "sess-1",
+      macDeviceId: "mac-1",
+      macIdentityPublicKey: "pub-key",
+      expiresAt: 1_700_000_000_000,
+    },
+    trustedPhoneDeviceId: "phone-1",
+    trustedPhoneFingerprint: "abc123",
+    lastError: null,
+  }),
+  rotateMobileRelaySession: async () => ({
+    status: "pairing",
+    workspaceId: "ws-1",
+    workspacePath: "/tmp/workspace",
+    relayUrl: "ws://127.0.0.1:7338/relay",
+    sessionId: "sess-2",
+    pairingPayload: {
+      v: 2,
+      relay: "ws://127.0.0.1:7338/relay",
+      sessionId: "sess-2",
+      macDeviceId: "mac-1",
+      macIdentityPublicKey: "pub-key",
+      expiresAt: 1_700_000_000_000,
+    },
+    trustedPhoneDeviceId: "phone-1",
+    trustedPhoneFingerprint: "abc123",
+    lastError: null,
+  }),
+  forgetMobileRelayTrustedPhone: async () => ({
+    status: "pairing",
+    workspaceId: "ws-1",
+    workspacePath: "/tmp/workspace",
+    relayUrl: "ws://127.0.0.1:7338/relay",
+    sessionId: "sess-1",
+    pairingPayload: null,
+    trustedPhoneDeviceId: null,
+    trustedPhoneFingerprint: null,
+    lastError: null,
+  }),
+  onMobileRelayStateChanged: () => () => {},
+}));
+
+const { useAppStore } = await import("../src/app/store");
+const { RemoteAccessPage } = await import("../src/ui/settings/pages/RemoteAccessPage");
+
+describe("desktop remote access page", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      ready: true,
+      settingsPage: "remoteAccess",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          lastOpenedAt: "2024-01-01T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+    });
+  });
+
+  test("renders pairing and trusted phone sections", () => {
+    const html = renderToStaticMarkup(createElement(RemoteAccessPage));
+    expect(html).toContain("Remote Access");
+    expect(html).toContain("Workspace bridge");
+    expect(html).toContain("Pairing QR");
+    expect(html).toContain("Trusted phone");
+  });
+});

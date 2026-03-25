@@ -6,6 +6,7 @@ import { handleDesktopInvoke } from "./ipc/invoke";
 import { parseWithSchema } from "./ipc/parse";
 import { registerSystemIpc } from "./ipc/system";
 import type { DesktopIpcDeps } from "./ipc/types";
+import { registerMobileRelayIpc } from "./ipc/mobileRelay";
 import { registerWindowIpc } from "./ipc/window";
 import { registerWorkspaceIpc } from "./ipc/workspace";
 import { WorkspaceRootsController } from "./ipc/workspaceRoots";
@@ -23,6 +24,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
   registerFilesIpc(context);
   registerWindowIpc(context);
   registerSystemIpc(context);
+  registerMobileRelayIpc(context);
 
   return () => {
     for (const channel of Object.values(DESKTOP_IPC_CHANNELS)) {

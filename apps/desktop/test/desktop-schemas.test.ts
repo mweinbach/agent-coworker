@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
-import { desktopMenuCommandSchema, persistedStateInputSchema, updaterStateSchema } from "../src/lib/desktopSchemas";
+import {
+  desktopMenuCommandSchema,
+  mobileRelayBridgeStateSchema,
+  mobileRelayStartInputSchema,
+  persistedStateInputSchema,
+  updaterStateSchema,
+} from "../src/lib/desktopSchemas";
 
 const TS = "2024-01-01T00:00:00.000Z";
 
@@ -123,5 +129,41 @@ describe("desktop persisted-state schema defaults", () => {
 
   test("accepts openUpdates desktop menu command", () => {
     expect(desktopMenuCommandSchema.parse("openUpdates")).toBe("openUpdates");
+  });
+
+  test("accepts mobile relay start input", () => {
+    const parsed = mobileRelayStartInputSchema.parse({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+
+    expect(parsed.workspaceId).toBe("ws_1");
+    expect(parsed.workspacePath).toBe("/tmp/workspace");
+    expect(parsed.yolo).toBe(false);
+  });
+
+  test("accepts mobile relay bridge state payloads", () => {
+    const parsed = mobileRelayBridgeStateSchema.parse({
+      status: "pairing",
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      relayUrl: "ws://127.0.0.1:7338/relay",
+      sessionId: "relay-session",
+      pairingPayload: {
+        v: 2,
+        relay: "ws://127.0.0.1:7338/relay",
+        sessionId: "relay-session",
+        macDeviceId: "mac-1",
+        macIdentityPublicKey: "ZmFrZQ==",
+        expiresAt: 1_700_000_000_000,
+      },
+      trustedPhoneDeviceId: null,
+      trustedPhoneFingerprint: null,
+      lastError: null,
+    });
+
+    expect(parsed.status).toBe("pairing");
+    expect(parsed.pairingPayload?.macDeviceId).toBe("mac-1");
   });
 });

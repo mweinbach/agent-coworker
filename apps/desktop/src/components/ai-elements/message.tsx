@@ -2,7 +2,7 @@ import type { ComponentProps, HTMLAttributes, ReactNode } from "react";
 import type { Options as RehypeSanitizeOptions } from "rehype-sanitize";
 import type { PluggableList } from "unified";
 
-import { Children, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Children, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   defaultRehypePlugins,
@@ -49,7 +49,7 @@ export function MessageContent({ className, ...props }: MessageContentProps) {
     <div
       className={cn(
         "select-text min-w-0 text-sm leading-6",
-        "group-[.is-user]:rounded-[calc(var(--radius)*1.75)] group-[.is-user]:border group-[.is-user]:border-primary/25 group-[.is-user]:bg-primary group-[.is-user]:text-primary-foreground group-[.is-user]:px-3.5 group-[.is-user]:py-2.5",
+        "group-[.is-user]:rounded-2xl group-[.is-user]:border group-[.is-user]:border-primary/22 group-[.is-user]:bg-primary/12 group-[.is-user]:px-3 group-[.is-user]:py-2 group-[.is-user]:text-foreground group-[.is-user]:leading-relaxed",
         "group-[.is-assistant]:text-foreground",
         className,
       )}
@@ -210,7 +210,7 @@ function citationFaviconSrc(source: CitationSource): string {
   return display.faviconHostname ? faviconUrl(display.faviconHostname) : "";
 }
 
-function CitationFavicon({ source }: { source: CitationSource }) {
+function CitationFavicon({ source, className }: { source: CitationSource; className?: string }) {
   const display = useMemo(() => describeCitationSource(source), [source]);
   const src = useMemo(() => citationFaviconSrc(source), [source]);
   const [loaded, setLoaded] = useState(false);
@@ -222,7 +222,12 @@ function CitationFavicon({ source }: { source: CitationSource }) {
   }, [src]);
 
   return (
-    <div className="relative flex size-5 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted/80 text-[10px] font-semibold uppercase text-muted-foreground">
+    <div
+      className={cn(
+        "relative flex size-5 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted/80 text-[10px] font-semibold uppercase text-muted-foreground",
+        className,
+      )}
+    >
       <span aria-hidden="true">{display.hostLabel.charAt(0)}</span>
       {src && !failed ? (
         <img
@@ -280,7 +285,7 @@ function computeCitationPopupPosition(anchorRect: DOMRect, cardRect: DOMRect): C
 
 function CitationArrow({ direction }: { direction: "left" | "right" }) {
   return (
-    <svg width="14" height="14" viewBox="0 0 12 12" fill="none" className="text-foreground">
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-foreground">
       {direction === "left" ? (
         <path d="M7.5 2.5L4 6l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
       ) : (
@@ -307,16 +312,15 @@ function DesktopCitationChip({
   const rootRef = useRef<HTMLElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const citationTitleContainerRef = useRef<HTMLDivElement | null>(null);
+  const citationTitleTextRef = useRef<HTMLParagraphElement | null>(null);
   const [popupPosition, setPopupPosition] = useState<CitationPopupPosition | null>(null);
+
   const label = useMemo(() => {
     const text = flattenReactText(children).trim();
     return text.length > 0 ? text : "Source";
   }, [children]);
   const currentSource = sources[Math.min(activeIndex, Math.max(0, sources.length - 1))] ?? null;
-  const currentSourceDisplay = useMemo(
-    () => currentSource ? describeCitationSource(currentSource) : null,
-    [currentSource],
-  );
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.Image !== "function") {
@@ -340,6 +344,63 @@ function DesktopCitationChip({
     }
     setActiveIndex(0);
   }, [activeIndex, sources.length]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+    const container = citationTitleContainerRef.current;
+    const textEl = citationTitleTextRef.current;
+    if (!container || !textEl) {
+      return;
+    }
+
+    let animation: Animation | null = null;
+
+    const applyPan = () => {
+      animation?.cancel();
+      animation = null;
+      textEl.style.transform = "";
+
+      const overflow = textEl.scrollWidth - container.clientWidth;
+      const reduceMotion =
+        typeof window !== "undefined" &&
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (overflow <= 1 || typeof textEl.animate !== "function" || reduceMotion) {
+        return;
+      }
+
+      const duration = clamp(Math.round(4500 + overflow * 38), 5500, 15_000);
+      animation = textEl.animate(
+        [
+          { transform: "translateX(0)" },
+          { transform: `translateX(-${overflow}px)` },
+        ],
+        {
+          duration,
+          direction: "alternate",
+          easing: "ease-in-out",
+          iterations: Infinity,
+        },
+      );
+    };
+
+    applyPan();
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(() => applyPan());
+      resizeObserver.observe(container);
+      resizeObserver.observe(textEl);
+    }
+
+    return () => {
+      resizeObserver?.disconnect();
+      animation?.cancel();
+      textEl.style.transform = "";
+    };
+  }, [open, activeIndex, currentSource]);
 
   useEffect(() => {
     if (!open) {
@@ -435,15 +496,15 @@ function DesktopCitationChip({
             ref={cardRef}
             role="dialog"
             aria-label="Citation sources"
-            className="app-shadow-overlay fixed z-[70] w-[min(18rem,calc(100vw-2rem))] overflow-hidden rounded-[1.1rem] border border-border/70 bg-card"
+            className="app-surface-card app-shadow-surface-elevated fixed z-[70] w-[min(16rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border/32 text-card-foreground"
             style={popupPosition ? { left: popupPosition.left, top: popupPosition.top } : { left: 0, top: 0, visibility: "hidden" }}
           >
-            <div className="flex items-center gap-0.5 border-b border-border/60 bg-muted/25 px-2.5 py-1.5">
+            <div className="flex items-center gap-0 border-b border-border/32 bg-muted/20 px-1.5 py-0.5">
               <Button
                 type="button"
                 variant="ghost"
                 size="icon-sm"
-                className="h-7 w-7 min-w-7 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
+                className="h-6 w-6 min-w-6 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
                 aria-label="Previous source"
                 disabled={sources.length <= 1}
                 onClick={() => setActiveIndex((index) => (index - 1 + sources.length) % sources.length)}
@@ -454,40 +515,46 @@ function DesktopCitationChip({
                 type="button"
                 variant="ghost"
                 size="icon-sm"
-                className="h-7 w-7 min-w-7 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
+                className="h-6 w-6 min-w-6 rounded-full p-0 shadow-none transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-35"
                 aria-label="Next source"
                 disabled={sources.length <= 1}
                 onClick={() => setActiveIndex((index) => (index + 1) % sources.length)}
               >
                 <CitationArrow direction="right" />
               </Button>
-              <div className="ml-auto text-xs font-medium text-muted-foreground">
+              <div className="ml-auto pr-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
                 {activeIndex + 1}/{sources.length}
               </div>
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-auto w-full justify-start px-3.5 py-3 text-left shadow-none transition-colors hover:bg-accent/35"
+            <div
+              role="button"
+              tabIndex={0}
+              aria-label={`Open source: ${citationSourceTitle(currentSource)}`}
+              className="w-full cursor-pointer text-left outline-none transition-colors hover:bg-muted/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => {
                 setOpen(false);
                 void openExternalCitationSource(currentSource);
               }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setOpen(false);
+                  void openExternalCitationSource(currentSource);
+                }
+              }}
             >
-              <div className="flex items-center gap-2.5">
-                <CitationFavicon source={currentSource} />
-                <div className="min-w-0">
-                  {currentSourceDisplay && currentSourceDisplay.hostLabel !== citationSourceTitle(currentSource) ? (
-                    <div className="truncate text-xs font-medium text-muted-foreground">{currentSourceDisplay.hostLabel}</div>
-                  ) : null}
-                  <div className="truncate text-[0.98rem] font-semibold leading-5 text-foreground">{citationSourceTitle(currentSource)}</div>
+              <div className="flex items-center gap-2 px-2 py-1.5">
+                <CitationFavicon source={currentSource} className="size-4 shrink-0 text-[9px]" />
+                <div ref={citationTitleContainerRef} className="min-w-0 flex-1 overflow-hidden">
+                  <p
+                    ref={citationTitleTextRef}
+                    className="inline-block whitespace-nowrap text-[0.9rem] font-semibold leading-snug tracking-tight text-foreground will-change-transform"
+                  >
+                    {citationSourceTitle(currentSource)}
+                  </p>
                 </div>
               </div>
-              {currentSourceDisplay?.displayUrl ? (
-                <div className="mt-2 break-all text-xs leading-5 text-muted-foreground">{currentSourceDisplay.displayUrl}</div>
-              ) : null}
-            </Button>
+            </div>
           </div>,
           document.body,
         )

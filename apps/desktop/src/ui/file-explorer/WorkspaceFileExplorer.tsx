@@ -1,14 +1,15 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
-  ChevronDownIcon,
   ChevronRightIcon,
   FolderIcon,
   FolderOpenIcon,
   FileIcon,
   MoreVerticalIcon,
-  Loader2Icon,
 } from "lucide-react";
+import type { AutoAnimationPlugin } from "@formkit/auto-animate";
+import { getTransitionSizes } from "@formkit/auto-animate";
+import { useAutoAnimate } from "@formkit/auto-animate/react";
 
 import { useAppStore } from "../../app/store";
 import type { ExplorerEntry } from "../../app/types";
@@ -23,6 +24,66 @@ export type WorkspaceFileExplorerProps = {
 
 const AUTO_REFRESH_INTERVAL_MS = 5000;
 const FILE_EXPLORER_CONTROL_SELECTOR = "[data-file-explorer-control='true']";
+/** Two clicks on the same folder within this window open the native folder instead of toggling twice. */
+const FOLDER_DOUBLE_CLICK_MS = 320;
+
+/** Add/remove/move keyframes for file tree rows (AutoAnimate plugin). */
+const fileExplorerTreeAnimate: AutoAnimationPlugin = (el, action, coordA, coordB) => {
+  const moveMs = 300;
+
+  /**
+   * Enter motion is handled in CSS (`.file-explorer-row-enter`) keyed off row-key diffs.
+   * AutoAnimate's `add` often does not run meaningfully here: sibling layouts mostly take the
+   * `remain` path, and `isOffscreen` skips entries inside nested scroll regions.
+   */
+  if (action === "add") {
+    return new KeyframeEffect(el, [{ opacity: 1 }, { opacity: 1 }], { duration: 0 });
+  }
+
+  if (action === "remove") {
+    return new KeyframeEffect(
+      el,
+      [
+        { opacity: 1, transform: "scale(1)" },
+        { opacity: 0, transform: "scale(0.96)" },
+      ],
+      { duration: 240, easing: "ease-out", fill: "both" },
+    );
+  }
+
+  if (action === "remain" && coordA && coordB) {
+    const oldCoords = coordA;
+    const newCoords = coordB;
+    let deltaLeft = oldCoords.left - newCoords.left;
+    let deltaTop = oldCoords.top - newCoords.top;
+    const deltaRight = oldCoords.left + oldCoords.width - (newCoords.left + newCoords.width);
+    const deltaBottom = oldCoords.top + oldCoords.height - (newCoords.top + newCoords.height);
+    if (deltaBottom === 0) deltaTop = 0;
+    if (deltaRight === 0) deltaLeft = 0;
+    const [widthFrom, widthTo, heightFrom, heightTo] = getTransitionSizes(el, oldCoords, newCoords);
+    const start: Record<string, string> = {
+      transform: `translate(${deltaLeft}px, ${deltaTop}px)`,
+    };
+    const end: Record<string, string> = {
+      transform: "translate(0, 0)",
+    };
+    if (widthFrom !== widthTo) {
+      start.width = `${widthFrom}px`;
+      end.width = `${widthTo}px`;
+    }
+    if (heightFrom !== heightTo) {
+      start.height = `${heightFrom}px`;
+      end.height = `${heightTo}px`;
+    }
+    return new KeyframeEffect(el, [start, end], {
+      duration: moveMs,
+      easing: "ease-out",
+      fill: "both",
+    });
+  }
+
+  return new KeyframeEffect(el, [{ opacity: 1 }, { opacity: 1 }], { duration: 0 });
+};
 
 type DirectorySnapshot = {
   entries: ExplorerEntry[];
@@ -31,6 +92,32 @@ type DirectorySnapshot = {
   updatedAt: number | null;
   fingerprint: string;
 };
+
+/** In-memory listing cache per workspace root so revisiting a workspace is instant (no blank tree). */
+const explorerDirectorySessionByScope = new Map<string, Record<string, DirectorySnapshot>>();
+/** Parallel directory listings while prefetching (wave 1 + wave 2 under root). */
+const PREFETCH_CONCURRENCY = 8;
+
+function explorerScopeKey(workspaceId: string, rootPath: string): string {
+  return `${workspaceId}:${normalizeExplorerPath(rootPath)}`;
+}
+
+function cloneDirectoryByPath(data: Record<string, DirectorySnapshot>): Record<string, DirectorySnapshot> {
+  return JSON.parse(JSON.stringify(data)) as Record<string, DirectorySnapshot>;
+}
+
+async function runPool<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
+  if (items.length === 0) return;
+  const queue = items.slice();
+  const worker = async () => {
+    while (queue.length > 0) {
+      const item = queue.shift();
+      if (item !== undefined) await fn(item);
+    }
+  };
+  const n = Math.min(concurrency, items.length);
+  await Promise.all(Array.from({ length: n }, () => worker()));
+}
 
 type DirectorySnapshotSummary = Pick<DirectorySnapshot, "error" | "fingerprint">;
 
@@ -45,9 +132,20 @@ export type ExplorerTreeRow =
       kind: "status";
       depth: number;
       path: string;
-      status: "loading" | "error" | "empty";
+      status: "error" | "empty";
       message: string;
     };
+
+export function explorerRowDomKey(row: ExplorerTreeRow): string {
+  return row.kind === "entry" ? row.entry.path : `${row.path}:${row.status}`;
+}
+
+function escapeRowKeyForSelector(key: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(key);
+  }
+  return key.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
 
 function isTreeRowControlTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && Boolean(target.closest(FILE_EXPLORER_CONTROL_SELECTOR));
@@ -122,14 +220,11 @@ export function buildExplorerRows(
       if (!entry.isDirectory || !expanded) continue;
       const childDirectory = directoryByPath[normalizedEntryPath];
 
-      if (!childDirectory || childDirectory.loading) {
-        rows.push({
-          kind: "status",
-          depth: depth + 1,
-          path: normalizedEntryPath,
-          status: "loading",
-          message: "Loading…",
-        });
+      if (!childDirectory) {
+        continue;
+      }
+      /** Keep showing cached listing while refresh runs (`loading`) so open/expand still animates. */
+      if (childDirectory.loading && childDirectory.entries.length === 0) {
         continue;
       }
 
@@ -227,6 +322,12 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   const scopeRef = useRef<string | null>(null);
   const rootPathRef = useRef<string>("");
   const expandedPathsRef = useRef<Set<string>>(new Set());
+  /** Latest directory snapshots (for expand: avoid toggling `loading` when cached data exists). */
+  const directoryByPathRef = useRef<Record<string, DirectorySnapshot>>({});
+  /** Tracks last folder row click for double-click → open in native explorer (no debounce delay). */
+  const folderLastClickRef = useRef<{ path: string; t: number } | null>(null);
+  /** Cancels stale prefetch waves when `directoryByPath` / scope changes. */
+  const prefetchGenRef = useRef(0);
 
   const rootPath = useMemo(() => {
     const candidate = explorer?.rootPath ?? workspacePath ?? "";
@@ -245,6 +346,17 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
   const rootSnapshot = directoryByPath[rootPath];
   const rootLabel = formatPathLabel(rootPath);
+  const treeListDomRef = useRef<HTMLDivElement | null>(null);
+  const [autoAnimateRef] = useAutoAnimate(fileExplorerTreeAnimate);
+  const setTreeListEl = useCallback(
+    (node: HTMLDivElement | null) => {
+      treeListDomRef.current = node;
+      autoAnimateRef(node);
+    },
+    [autoAnimateRef]
+  );
+  const [rowEnterAnimationsReady, setRowEnterAnimationsReady] = useState(false);
+  const explorerRowAnimPrevRef = useRef<{ scope: string; keys: Set<string> }>({ scope: "", keys: new Set() });
 
   useEffect(() => {
     rootPathRef.current = rootPath;
@@ -255,13 +367,77 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   }, [expandedPaths]);
 
   useEffect(() => {
+    directoryByPathRef.current = directoryByPath;
+  }, [directoryByPath]);
+
+  useLayoutEffect(() => {
+    setRowEnterAnimationsReady(false);
+  }, [workspaceId, rootPath]);
+
+  useEffect(() => {
+    if (!rootSnapshot || rootSnapshot.loading || rootSnapshot.updatedAt == null) {
+      return undefined;
+    }
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setRowEnterAnimationsReady(true));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [rootSnapshot?.loading, rootSnapshot?.updatedAt, rootPath, workspaceId]);
+
+  useLayoutEffect(() => {
+    const scope = explorerScopeKey(workspaceId, rootPath);
+    const container = treeListDomRef.current;
+    const keys = treeRows.map(explorerRowDomKey);
+    const nextKeySet = new Set(keys);
+    const bundle = explorerRowAnimPrevRef.current;
+
+    if (bundle.scope !== scope) {
+      explorerRowAnimPrevRef.current = { scope, keys: new Set(nextKeySet) };
+      return;
+    }
+
+    if (!rowEnterAnimationsReady || !container) {
+      explorerRowAnimPrevRef.current = { scope, keys: new Set(nextKeySet) };
+      return;
+    }
+
+    const prev = bundle.keys;
+    const added = keys.filter((k) => !prev.has(k));
+    explorerRowAnimPrevRef.current = { scope, keys: new Set(nextKeySet) };
+
+    if (added.length === 0) return;
+
+    const reducedMotion =
+      typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reducedMotion) return;
+
+    for (const key of added) {
+      const el = container.querySelector(`[data-file-row-key="${escapeRowKeyForSelector(key)}"]`);
+      if (!(el instanceof HTMLElement)) continue;
+      el.classList.remove("file-explorer-row-enter");
+      void el.offsetWidth;
+      el.classList.add("file-explorer-row-enter");
+      const onEnd = (e: AnimationEvent) => {
+        if (e.target !== el) return;
+        el.classList.remove("file-explorer-row-enter");
+        el.removeEventListener("animationend", onEnd);
+      };
+      el.addEventListener("animationend", onEnd);
+    }
+  }, [workspaceId, rootPath, treeRows, rowEnterAnimationsReady]);
+
+  useEffect(() => {
     if (!explorer && workspacePath) {
       void refresh(workspaceId).catch(() => {});
     }
   }, [explorer, refresh, workspaceId, workspacePath]);
 
   const loadDirectory = useCallback(
-    async (path: string, opts?: { background?: boolean }): Promise<boolean> => {
+    async (path: string, opts?: { background?: boolean; silent?: boolean }): Promise<boolean> => {
       const targetPath = normalizeExplorerPath(path);
       if (!targetPath) return false;
 
@@ -270,6 +446,10 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
       setDirectoryByPath((previous) => {
         const current = previous[targetPath];
+        /** Silent: fetch without flipping `loading` (used for prefetch; keeps UI off spinners). */
+        if (opts?.silent) {
+          return previous;
+        }
         if (opts?.background && current) {
           return previous;
         }
@@ -376,7 +556,11 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       });
 
       if (!isExpanded) {
-        void loadDirectory(targetPath).catch(() => {});
+        const normalizedTarget = normalizeExplorerPath(targetPath);
+        const snap = directoryByPathRef.current[normalizedTarget];
+        const useBackgroundRefresh =
+          !!snap && !snap.loading && !snap.error && snap.updatedAt != null;
+        void loadDirectory(targetPath, useBackgroundRefresh ? { background: true } : undefined).catch(() => {});
       }
     },
     [loadDirectory]
@@ -384,18 +568,83 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
   useEffect(() => {
     if (!rootPath) return;
-    const scope = `${workspaceId}:${rootPath}`;
+    const scope = explorerScopeKey(workspaceId, rootPath);
     if (scopeRef.current === scope) return;
+
+    const prevScope = scopeRef.current;
+    if (prevScope) {
+      explorerDirectorySessionByScope.set(prevScope, cloneDirectoryByPath(directoryByPathRef.current));
+    }
+
+    folderLastClickRef.current = null;
     scopeRef.current = scope;
 
     latestRequestByPathRef.current = {};
-    const nextExpanded = new Set<string>([rootPath]);
+    const normalizedRoot = normalizeExplorerPath(rootPath);
+    const cached = explorerDirectorySessionByScope.get(scope);
+    const nextMap = cached ? cloneDirectoryByPath(cached) : {};
+    setDirectoryByPath(nextMap);
+    const nextExpanded = new Set<string>([normalizedRoot]);
     expandedPathsRef.current = nextExpanded;
     setExpandedPaths(nextExpanded);
-    setDirectoryByPath({});
     selectFile(workspaceId, null);
-    void loadDirectory(rootPath).catch(() => {});
+
+    const hasCachedListings = cached && Object.keys(cached).length > 0;
+    if (hasCachedListings) {
+      void loadDirectory(rootPath, { background: true }).catch(() => {});
+    } else {
+      void loadDirectory(rootPath).catch(() => {});
+    }
   }, [loadDirectory, rootPath, selectFile, workspaceId]);
+
+  useEffect(() => {
+    return () => {
+      const scope = scopeRef.current;
+      if (scope) {
+        explorerDirectorySessionByScope.set(scope, cloneDirectoryByPath(directoryByPathRef.current));
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!rootPath) return;
+    const normalizedRoot = normalizeExplorerPath(rootPath);
+    const rootSnap = directoryByPath[normalizedRoot];
+    if (!rootSnap || rootSnap.loading || rootSnap.error) return;
+
+    const gen = ++prefetchGenRef.current;
+    let cancelled = false;
+
+    void (async () => {
+      const silentLoad = async (dirPath: string) => {
+        if (cancelled || gen !== prefetchGenRef.current) return;
+        const p = normalizeExplorerPath(dirPath);
+        const snap = directoryByPathRef.current[p];
+        if (snap?.updatedAt != null && !snap.error) return;
+        await loadDirectory(p, { silent: true });
+      };
+
+      const childDirs = rootSnap.entries.filter((e) => e.isDirectory).map((e) => normalizeExplorerPath(e.path));
+      await runPool(childDirs, PREFETCH_CONCURRENCY, silentLoad);
+
+      if (cancelled || gen !== prefetchGenRef.current) return;
+      await new Promise<void>((r) => setTimeout(r, 0));
+
+      const grand: string[] = [];
+      for (const d of childDirs) {
+        const snap = directoryByPathRef.current[d];
+        if (!snap?.entries) continue;
+        for (const e of snap.entries) {
+          if (e.isDirectory) grand.push(normalizeExplorerPath(e.path));
+        }
+      }
+      await runPool(grand, PREFETCH_CONCURRENCY, silentLoad);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [directoryByPath, rootPath, loadDirectory]);
 
   useEffect(() => {
     if (!rootPath) return;
@@ -438,7 +687,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     async (entry: ExplorerEntry) => {
       const targetPath = entry.path;
       const normalizedPath = normalizeExplorerPath(targetPath);
-      selectFile(workspaceId, targetPath);
+      if (!entry.isDirectory) {
+        selectFile(workspaceId, targetPath);
+      }
 
       const folderExpanded = entry.isDirectory && expandedPathsRef.current.has(normalizedPath);
       const openLabel = entry.isDirectory ? "Open Folder" : "Open File";
@@ -532,14 +783,6 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     );
   }
 
-  if (!rootSnapshot && treeRows.length === 0) {
-    return (
-      <div className={cn("flex items-center justify-center p-4 text-muted-foreground", className)}>
-        <Loader2Icon className="h-4 w-4 animate-spin" />
-      </div>
-    );
-  }
-
   return (
     <div className={cn("flex h-full flex-col overflow-hidden", className)}>
       <div className="flex items-center justify-between px-2.5 pb-1 pt-2">
@@ -563,27 +806,27 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-1" data-file-explorer-scroll-region="true">
         {rootSnapshot?.error ? (
           <div className="rounded bg-destructive/10 p-3 text-center text-xs text-destructive">{rootSnapshot.error}</div>
-        ) : treeRows.length === 0 && rootSnapshot?.loading ? (
-          <div className="flex items-center justify-center py-6 text-xs text-muted-foreground">
-            <Loader2Icon className="mr-2 h-3.5 w-3.5 animate-spin" />
-            Loading files…
-          </div>
-        ) : treeRows.length === 0 ? (
+        ) : treeRows.length === 0 && (!rootSnapshot || rootSnapshot.loading) ? null : treeRows.length === 0 ? (
           <div className="py-6 text-center text-xs text-muted-foreground">This folder is empty</div>
         ) : (
-          <div role="tree" aria-label={`Workspace files for ${rootLabel}`} className="space-y-0.5">
+          <div
+            ref={setTreeListEl}
+            role="tree"
+            aria-label={`Workspace files for ${rootLabel}`}
+            className="space-y-0.5"
+          >
             {treeRows.map((row) => {
               if (row.kind === "status") {
                 return (
                   <div
                     key={`${row.path}:${row.status}`}
+                    data-file-row-key={explorerRowDomKey(row)}
                     className={cn(
-                      "flex items-center gap-1 rounded py-1 text-[10px]",
+                      "flex items-center gap-1 rounded py-1 text-[10px] transition-opacity duration-150 ease-out motion-reduce:transition-none",
                       row.status === "error" ? "text-destructive" : "text-muted-foreground"
                     )}
                     style={{ paddingLeft: `${row.depth * 0.85 + 1.15}rem` }}
                   >
-                    {row.status === "loading" ? <Loader2Icon className="h-3 w-3 animate-spin" /> : null}
                     <span className="truncate">{row.message}</span>
                   </div>
                 );
@@ -591,7 +834,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
               const { entry, depth } = row;
               const normalizedPath = normalizeExplorerPath(entry.path);
-              const isSelected = selectedPath === normalizedPath;
+              const isSelected = !entry.isDirectory && selectedPath === normalizedPath;
               const isDirectory = entry.isDirectory;
               const entryMeta = isDirectory
                 ? `${entry.isHidden ? "Hidden folder" : "Folder"}`
@@ -600,13 +843,14 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
               return (
                 <div
                   key={entry.path}
+                  data-file-row-key={explorerRowDomKey(row)}
                   role="treeitem"
                   tabIndex={0}
                   aria-level={depth + 1}
-                  aria-selected={isSelected}
+                  aria-selected={isDirectory ? false : isSelected}
                   aria-expanded={isDirectory ? row.expanded : undefined}
                   className={cn(
-                    "group flex cursor-pointer items-center gap-1 rounded-[9px] py-1 pr-1 text-[11.5px] transition-colors",
+                    "group flex cursor-pointer items-center gap-1 rounded-[9px] py-1 pr-1 text-[11.5px] transition-[color,background-color,transform] duration-150 ease-out motion-reduce:transition-none active:scale-[0.99]",
                     isSelected
                       ? "bg-accent text-accent-foreground"
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
@@ -615,6 +859,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                   style={{ paddingLeft: `${depth * 0.85 + 0.35}rem` }}
                   onDoubleClick={(event) => {
                     if (isTreeRowControlTarget(event.target)) {
+                      return;
+                    }
+                    if (entry.isDirectory) {
                       return;
                     }
                     handleOpenEntry(entry);
@@ -631,6 +878,22 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                     if (isTreeRowControlTarget(event.target)) {
                       return;
                     }
+                    if (entry.isDirectory) {
+                      const now = Date.now();
+                      const prev = folderLastClickRef.current;
+                      if (
+                        prev &&
+                        prev.path === normalizedPath &&
+                        now - prev.t < FOLDER_DOUBLE_CLICK_MS
+                      ) {
+                        folderLastClickRef.current = null;
+                        void openFile(workspaceId, entry.path, false).catch(() => {});
+                        return;
+                      }
+                      folderLastClickRef.current = { path: normalizedPath, t: now };
+                      toggleDirectory(entry.path);
+                      return;
+                    }
                     handleSelectEntry(entry);
                   }}
                   onKeyDown={(event) => {
@@ -641,7 +904,11 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                     }
                     if (event.key === " " || event.key === "Spacebar") {
                       event.preventDefault();
-                      handleSelectEntry(entry);
+                      if (isDirectory) {
+                        toggleDirectory(entry.path);
+                      } else {
+                        handleSelectEntry(entry);
+                      }
                       return;
                     }
                     if (isDirectory && event.key === "ArrowRight" && !row.expanded) {
@@ -663,13 +930,18 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                       size="icon-sm"
                       aria-label={row.expanded ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
                       className={cn(
-                        "h-[18px] w-[18px] min-w-[18px] rounded p-0 transition-colors select-none shadow-none",
+                        "h-[18px] w-[18px] min-w-[18px] rounded p-0 transition-colors duration-150 ease-out select-none shadow-none motion-reduce:transition-none",
                         isSelected ? "hover:bg-accent-foreground/15" : "hover:bg-muted"
                       )}
                       data-file-explorer-control="true"
                       onPress={() => toggleDirectory(entry.path)}
                     >
-                      {row.expanded ? <ChevronDownIcon className="h-3.25 w-3.25" /> : <ChevronRightIcon className="h-3.25 w-3.25" />}
+                      <ChevronRightIcon
+                        className={cn(
+                          "h-3.25 w-3.25 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+                          row.expanded && "rotate-90",
+                        )}
+                      />
                     </Button>
                   ) : (
                     <span className="inline-block h-[18px] w-[18px]" aria-hidden />
@@ -677,12 +949,22 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
                   {isDirectory ? (
                     row.expanded ? (
-                      <FolderOpenIcon className={cn("h-3.25 w-3.25 shrink-0", isSelected ? "text-accent-foreground" : "text-link/85")} />
+                      <FolderOpenIcon
+                        className={cn(
+                          "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                          isSelected ? "text-accent-foreground" : "text-link/85",
+                        )}
+                      />
                     ) : (
-                      <FolderIcon className={cn("h-3.25 w-3.25 shrink-0", isSelected ? "text-accent-foreground" : "text-link/85")} />
+                      <FolderIcon
+                        className={cn(
+                          "h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                          isSelected ? "text-accent-foreground" : "text-link/85",
+                        )}
+                      />
                     )
                   ) : (
-                    <FileIcon className="h-3.25 w-3.25 shrink-0" />
+                    <FileIcon className="h-3.25 w-3.25 shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none" />
                   )}
 
                   <div className="min-w-0 flex-1">

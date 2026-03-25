@@ -103,11 +103,11 @@ describe("desktop app top bar", () => {
         titleButton?.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
-      expect(container.textContent).toContain("Session details");
+      expect(container.textContent).toContain("Usage");
       expect(container.textContent).toContain("Estimated cost");
       expect(container.textContent).toContain("$0.02");
       expect(container.textContent).toContain("1.2k");
-      expect(container.textContent).toContain("Last turn estimate");
+      expect(container.textContent).toContain("Last turn cost");
 
       await act(async () => {
         root.unmount();

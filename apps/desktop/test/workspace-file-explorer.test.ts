@@ -4,6 +4,7 @@ import type { ExplorerEntry } from "../src/app/types";
 import {
   buildDirectoryFingerprint,
   buildExplorerRows,
+  explorerRowDomKey,
   normalizeExplorerPath,
   shouldAutoRefreshExplorer,
   shouldReuseBackgroundDirectorySnapshot,
@@ -29,6 +30,24 @@ function snapshot(entries: ExplorerEntry[]) {
 }
 
 describe("workspace file explorer helpers", () => {
+  test("explorerRowDomKey is stable for entry and status rows", () => {
+    const entryRow = {
+      kind: "entry" as const,
+      depth: 0,
+      expanded: false,
+      entry: entry({ name: "a.ts", path: "/w/a.ts", isDirectory: false }),
+    };
+    const statusRow = {
+      kind: "status" as const,
+      depth: 1,
+      path: "/w/src",
+      status: "empty" as const,
+      message: "Empty folder",
+    };
+    expect(explorerRowDomKey(entryRow)).toBe("/w/a.ts");
+    expect(explorerRowDomKey(statusRow)).toBe("/w/src:empty");
+  });
+
   test("normalizes separators and trailing slash", () => {
     expect(normalizeExplorerPath("C:\\Users\\me\\project\\")).toBe("C:/Users/me/project");
     expect(normalizeExplorerPath("/tmp/workspace/")).toBe("/tmp/workspace");
@@ -107,7 +126,31 @@ describe("workspace file explorer helpers", () => {
     expect(rows[2].kind === "entry" ? rows[2].entry.name : "").toBe("README.md");
   });
 
-  test("buildExplorerRows emits loading placeholder for expanded directories without children snapshot", () => {
+  test("buildExplorerRows still nests children while a directory refresh is in flight if entries are cached", () => {
+    const root = "/workspace";
+    const srcPath = "/workspace/src";
+
+    const rows = buildExplorerRows(
+      root,
+      new Set([root, srcPath]),
+      {
+        [root]: snapshot([entry({ name: "src", path: srcPath, isDirectory: true })]),
+        [srcPath]: {
+          entries: [entry({ name: "a.ts", path: `${srcPath}/a.ts`, isDirectory: false })],
+          loading: true,
+          error: null,
+          updatedAt: 1700000000000,
+          fingerprint: "fp",
+        },
+      }
+    );
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0].kind === "entry" && rows[0].entry.name).toBe("src");
+    expect(rows[1].kind === "entry" && rows[1].entry.name).toBe("a.ts");
+  });
+
+  test("buildExplorerRows omits children while expanded directory is still loading (no loading row)", () => {
     const root = "/workspace";
     const srcPath = "/workspace/src";
 
@@ -119,13 +162,7 @@ describe("workspace file explorer helpers", () => {
       }
     );
 
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ kind: "entry", depth: 0, expanded: true });
-    expect(rows[1]).toMatchObject({
-      kind: "status",
-      depth: 1,
-      path: srcPath,
-      status: "loading",
-    });
   });
 });

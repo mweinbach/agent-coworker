@@ -208,47 +208,56 @@ export function AppTopBar({
               id={detailsId}
               role="dialog"
               aria-label="Thread details"
-              className="app-topbar__thread-popover absolute left-0 top-full mt-1.5 w-[21.5rem] max-w-[min(21.5rem,calc(100vw-2rem))]"
+              className="app-topbar__thread-popover absolute left-0 top-full mt-1.5 w-[19.5rem] max-w-[min(19.5rem,calc(100vw-2rem))]"
             >
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/72">Session details</div>
-                  <div className="mt-1 truncate text-[13px] font-medium text-foreground/84">
-                    {hasUsage ? `Estimated ${estimatedCostLabel} across ${totalTurnsLabel} turn${totalTurnsLabel === "1" ? "" : "s"}` : "No usage recorded yet"}
-                  </div>
+              <div className="flex items-start justify-between gap-3 px-0.5 pt-0.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-medium leading-none text-muted-foreground">Usage</p>
+                  {hasUsage ? (
+                    <p className="mt-2 text-[13px] leading-snug tracking-tight text-foreground/92">
+                      <span className="font-semibold tabular-nums">{estimatedCostLabel}</span>
+                      <span className="font-normal text-muted-foreground"> · </span>
+                      <span className="font-normal text-muted-foreground">
+                        {totalTurnsLabel} turn{totalTurnsLabel === "1" ? "" : "s"}
+                      </span>
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-[13px] leading-snug text-muted-foreground">No usage recorded yet</p>
+                  )}
                 </div>
                 {busy ? (
-                  <Badge variant="secondary" className="h-6 gap-1.5 rounded-full border-border/45 bg-background/40 px-2 text-[10px] text-muted-foreground shadow-none">
-                    <LoaderCircleIcon className="h-3 w-3 animate-spin" />
+                  <Badge
+                    variant="secondary"
+                    className="h-6 shrink-0 gap-1 rounded-full border-border/40 bg-muted/25 px-2 text-[10px] font-medium text-muted-foreground shadow-none"
+                  >
+                    <LoaderCircleIcon className="h-3 w-3 animate-spin opacity-80" />
                     Busy
                   </Badge>
                 ) : null}
               </div>
 
-              <div className="app-topbar__thread-metrics mt-3.5 grid grid-cols-2 gap-x-4 gap-y-2.5">
-                <TopBarMetric label="Estimated cost" value={estimatedCostLabel} />
-                <TopBarMetric label="Total tokens" value={totalTokensLabel} />
-                <TopBarMetric label="Prompt tokens" value={promptTokensLabel} />
-                <TopBarMetric label="Completion tokens" value={completionTokensLabel} />
-                <TopBarMetric label="Turns" value={totalTurnsLabel} />
-                <TopBarMetric label="Last turn" value={lastTurnTokensLabel} />
+              <div className="app-topbar__thread-metrics app-context-sidebar__nested-panel mt-2.5 flex flex-col rounded-[10px] border px-2.5 py-1">
+                <TopBarMetricRow label="Estimated cost" value={estimatedCostLabel} />
+                <TopBarMetricRow label="Total tokens" value={totalTokensLabel} />
+                <TopBarMetricRow label="Prompt tokens" value={promptTokensLabel} />
+                <TopBarMetricRow label="Completion tokens" value={completionTokensLabel} />
+                <TopBarMetricRow label="Turns" value={totalTurnsLabel} />
+                <TopBarMetricRow label="Last turn tokens" value={lastTurnTokensLabel} />
               </div>
 
               {lastTurnUsage ? (
-                <div className="mt-3 flex items-center justify-between gap-3 border-t border-border/45 pt-3 text-[11px] text-muted-foreground">
-                  <span>Last turn estimate</span>
-                  <span className="font-medium text-foreground/84">{lastTurnCostLabel}</span>
+                <div className="mt-2 flex items-center justify-between gap-3 px-0.5 text-[11px]">
+                  <span className="text-muted-foreground">Last turn cost</span>
+                  <span className="tabular-nums font-medium text-foreground/88">{lastTurnCostLabel}</span>
                 </div>
               ) : null}
 
               {budgetLine ? (
-                <div className="mt-3 border-t border-border/45 pt-3 text-[11px] leading-5 text-muted-foreground">
-                  {budgetLine}
-                </div>
+                <div className="mt-2 px-0.5 text-[11px] leading-relaxed text-muted-foreground">{budgetLine}</div>
               ) : null}
 
               {canClearHardCap && onClearHardCap ? (
-                <div className="mt-4 flex justify-end">
+                <div className="mt-3 flex justify-end">
                   <Button
                     type="button"
                     size="sm"
@@ -294,11 +303,13 @@ export function AppTopBar({
   );
 }
 
-function TopBarMetric({ label, value }: { label: string; value: string }) {
+function TopBarMetricRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0">
-      <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/68">{label}</div>
-      <div className="mt-1 truncate text-[13px] font-semibold tracking-[-0.01em] text-foreground/88">{value}</div>
+    <div className="flex items-baseline justify-between gap-4 border-b border-border/20 py-1.5 last:border-b-0">
+      <span className="shrink-0 text-[11px] font-medium text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate text-right text-[13px] font-medium tabular-nums tracking-tight text-foreground/90">
+        {value}
+      </span>
     </div>
   );
 }

@@ -149,12 +149,11 @@ body {
   z-index: 30;
   -webkit-app-region: no-drag;
   pointer-events: auto;
-  border: 1px solid var(--border-glass-strong);
-  border-radius: 1rem;
+  border: 1px solid var(--border-context);
+  border-radius: 14px;
   background: var(--surface-topbar-popover);
-  box-shadow: var(--shadow-popover);
-  backdrop-filter: blur(calc(var(--titlebar-blur) + 2px));
-  padding: 0.9rem 0.95rem 0.95rem;
+  box-shadow: var(--shadow-surface-elevated);
+  padding: 0.65rem 0.75rem 0.75rem;
 }
 
 .app-topbar__toolbar-button {
@@ -288,6 +287,28 @@ body {
   to {
     opacity: 1;
     transform: translateX(0);
+  }
+}
+
+@keyframes fileExplorerRowIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.file-explorer-row-enter {
+  animation: fileExplorerRowIn 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-explorer-row-enter {
+    animation: none;
   }
 }
 

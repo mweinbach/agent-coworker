@@ -388,12 +388,12 @@ describe("desktop message local file links", () => {
 
       expect(harness.dom.window.document.body.textContent).toContain("1/2");
       expect(harness.dom.window.document.body.textContent).toContain("Safety Memo");
-      expect(harness.dom.window.document.body.textContent).toContain("https://example.com/killed");
 
       const popup = harness.dom.window.document.querySelector('[role="dialog"][aria-label="Citation sources"]');
       expect(popup?.getAttribute("class")).toContain("fixed");
       expect(popup?.getAttribute("class")).toContain("z-[70]");
-      expect(popup?.getAttribute("class")).toContain("w-[min(18rem,calc(100vw-2rem))]");
+      expect(popup?.getAttribute("class")).toContain("w-[min(16rem,calc(100vw-2rem))]");
+      expect(popup?.textContent).toContain("Safety Memo");
 
       const nextButton = harness.dom.window.document.querySelector('button[aria-label="Next source"]');
       if (!nextButton) {
@@ -406,7 +406,7 @@ describe("desktop message local file links", () => {
 
       expect(harness.dom.window.document.body.textContent).toContain("2/2");
       expect(harness.dom.window.document.body.textContent).toContain("Hospital Update");
-      expect(harness.dom.window.document.body.textContent).toContain("https://example.com/injuries");
+      expect(popup?.textContent).toContain("Hospital Update");
 
       await act(async () => {
         root.unmount();

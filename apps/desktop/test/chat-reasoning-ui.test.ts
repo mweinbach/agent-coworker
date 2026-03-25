@@ -145,7 +145,7 @@ describe("desktop reasoning UI helpers", () => {
     };
 
     expect(formatSessionBudgetLine(warningUsage)).toBe("Warning threshold reached at $0.01");
-    expect(sessionUsageTone(warningUsage)).toContain("amber");
+    expect(sessionUsageTone(warningUsage)).toContain("warning");
 
     expect(
       formatSessionBudgetLine({
@@ -157,6 +157,14 @@ describe("desktop reasoning UI helpers", () => {
         },
       }),
     ).toBe("Hard cap exceeded at $0.02");
+    expect(sessionUsageTone({
+      ...warningUsage,
+      budgetStatus: {
+        ...warningUsage.budgetStatus,
+        stopTriggered: true,
+        stopAtUsd: 0.02,
+      },
+    })).toContain("destructive");
   });
 
   test("only exposes hard-cap clearing once the thread has reconnected", () => {

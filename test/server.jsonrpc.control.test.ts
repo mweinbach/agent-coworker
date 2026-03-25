@@ -163,6 +163,42 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("provider auth methods read returns a legacy-compatible provider_auth_methods event payload", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request("cowork/provider/authMethods/read", {
+        cwd: tmpDir,
+      });
+
+      expect(response.result.event.type).toBe("provider_auth_methods");
+      expect(response.result.event.methods.google).toEqual(expect.any(Array));
+      rpc.close();
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("provider status refresh returns a legacy-compatible provider_status event payload", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request("cowork/provider/status/refresh", {
+        cwd: tmpDir,
+      });
+
+      expect(response.result.event.type).toBe("provider_status");
+      expect(Array.isArray(response.result.event.providers)).toBe(true);
+      rpc.close();
+    } finally {
+      server.stop();
+    }
+  });
+
   test("memory list returns a legacy-compatible memory_list event payload", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -178,6 +214,43 @@ describe("server JSON-RPC control methods", () => {
         sessionId: expect.any(String),
         memories: [],
       });
+      rpc.close();
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("MCP servers read returns a legacy-compatible mcp_servers event payload", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request("cowork/mcp/servers/read", {
+        cwd: tmpDir,
+      });
+
+      expect(response.result.event.type).toBe("mcp_servers");
+      expect(Array.isArray(response.result.event.servers)).toBe(true);
+      expect(response.result.event.legacy.workspace.path).toContain("mcp-servers.json");
+      rpc.close();
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("skills catalog read returns a legacy-compatible skills_catalog event payload", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request("cowork/skills/catalog/read", {
+        cwd: tmpDir,
+      });
+
+      expect(response.result.event.type).toBe("skills_catalog");
+      expect(Array.isArray(response.result.event.catalog.installations)).toBe(true);
       rpc.close();
     } finally {
       server.stop();

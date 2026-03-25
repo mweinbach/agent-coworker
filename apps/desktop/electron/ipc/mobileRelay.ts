@@ -23,6 +23,40 @@ function emitStateToAllWindows(windows: BrowserWindow[], payload: unknown) {
 export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
   const { deps, handleDesktopInvoke, parseWithSchema } = context;
 
+  // Provide workspace list to the bridge for workspace/list and workspace/switch.
+  // Uses persistence service to read the latest workspace records on demand.
+  let cachedWorkspaces: Awaited<ReturnType<typeof deps.persistence.loadState>>["workspaces"] = [];
+  let cacheTimestamp = 0;
+  const CACHE_TTL_MS = 2_000;
+
+  deps.mobileRelayBridge.setWorkspaceListProvider(() => {
+    const now = Date.now();
+    if (now - cacheTimestamp > CACHE_TTL_MS) {
+      // Refresh cache async; return stale data for this call, fresh data for next.
+      void deps.persistence.loadState().then((state) => {
+        cachedWorkspaces = state.workspaces;
+        cacheTimestamp = Date.now();
+      }).catch(() => {});
+    }
+    return cachedWorkspaces.map((w) => ({
+      id: w.id,
+      name: w.name,
+      path: w.path,
+      createdAt: w.createdAt,
+      lastOpenedAt: w.lastOpenedAt,
+      defaultProvider: w.defaultProvider,
+      defaultModel: w.defaultModel,
+      defaultEnableMcp: w.defaultEnableMcp,
+      yolo: w.yolo,
+    }));
+  });
+
+  // Eagerly populate workspace cache.
+  void deps.persistence.loadState().then((state) => {
+    cachedWorkspaces = state.workspaces;
+    cacheTimestamp = Date.now();
+  }).catch(() => {});
+
   deps.mobileRelayBridge.on("stateChanged", (state) => {
     emitStateToAllWindows(BrowserWindow.getAllWindows(), state);
   });

@@ -6,6 +6,7 @@ import { setActiveCoworkJsonRpcClient } from "../features/cowork/runtimeClient";
 import type { SessionSnapshotLike } from "../features/cowork/protocolTypes";
 import { usePairingStore } from "../features/pairing/pairingStore";
 import { useThreadStore } from "../features/cowork/threadStore";
+import { useWorkspaceStore } from "../features/cowork/workspaceStore";
 import { defaultSecureTransportClient } from "../features/relay/secureTransportClient";
 
 function createThreadSnapshot(thread: {
@@ -123,12 +124,23 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
     const resetClientSession = () => {
       sessionReady = false;
       client.resetTransportSession();
+      useWorkspaceStore.getState().clear();
     };
 
     const hydrateRemoteThreads = async () => {
       const list = await client.requestThreadList();
       for (const thread of list.threads) {
         useThreadStore.getState().hydrate(createThreadSnapshot(thread));
+      }
+    };
+
+    const hydrateWorkspaceContext = async () => {
+      const workspaceStore = useWorkspaceStore.getState();
+      try {
+        await workspaceStore.fetchWorkspaces();
+        await workspaceStore.fetchSessionState();
+      } catch {
+        // Non-critical — workspace context is supplemental
       }
     };
 
@@ -140,6 +152,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
       try {
         await client.initialize();
         await hydrateRemoteThreads();
+        void hydrateWorkspaceContext();
       } catch {
         sessionReady = false;
       }

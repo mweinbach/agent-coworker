@@ -32,6 +32,18 @@ export type MobileRelayStoreState = {
   trustedPhone: MobileRelayTrustedPhoneRecord | null;
 };
 
+export type MobileRelayWorkspaceRecord = {
+  id: string;
+  name: string;
+  path: string;
+  createdAt?: string;
+  lastOpenedAt?: string;
+  defaultProvider?: string;
+  defaultModel?: string;
+  defaultEnableMcp?: boolean;
+  yolo: boolean;
+};
+
 export type MobileRelayBridgeState = {
   status: MobileRelayStatus;
   workspaceId: string | null;

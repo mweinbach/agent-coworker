@@ -214,7 +214,7 @@ export class CoworkJsonRpcClient {
   private readonly clientInfo: JsonRpcClientOptions["clientInfo"];
 
   constructor(options: JsonRpcClientOptions) {
-    this.requestTimeoutMs = Math.max(1, options.requestTimeoutMs ?? 5_000);
+    this.requestTimeoutMs = Math.max(1, options.requestTimeoutMs ?? 15_000);
     this.sendTransport = options.send;
     this.onNotification = options.onNotification;
     this.onServerRequest = options.onServerRequest;
@@ -259,6 +259,11 @@ export class CoworkJsonRpcClient {
 
   async interruptTurn(threadId: string): Promise<void> {
     await this.request("turn/interrupt", { threadId });
+  }
+
+  async call<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
+    const result = await this.request(method, params);
+    return result as T;
   }
 
   async respondServerRequest(

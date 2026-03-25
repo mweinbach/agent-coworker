@@ -12,6 +12,7 @@ import type {
   MobileRelayStatus,
   MobileRelayStoreState,
   MobileRelayTrustedPhoneRecord,
+  MobileRelayWorkspaceRecord,
 } from "./mobileRelayTypes";
 import {
   forgetTrustedPhoneRecord,
@@ -31,6 +32,7 @@ type MobileRelayBridgeOptions = {
   relayUrl?: string;
   userDataPath?: string;
   getAppName?: () => string;
+  getWorkspaceList?: () => MobileRelayWorkspaceRecord[];
   createSidecarSocket?: (url: string) => BridgeSocket;
   createRelaySocket?: (url: string, headers: Record<string, string>) => BridgeSocket;
 };
@@ -87,6 +89,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private readonly relayUrl: string;
   private readonly userDataPath?: string;
   private readonly getAppName: () => string;
+  private getWorkspaceList: () => MobileRelayWorkspaceRecord[];
   private readonly createSidecarSocket: (url: string) => BridgeSocket;
   private readonly createRelaySocket: (url: string, headers: Record<string, string>) => BridgeSocket;
 
@@ -106,7 +109,8 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.relayUrl = normalizeRelayUrl(options.relayUrl ?? process.env.COWORK_MOBILE_RELAY_URL);
     this.userDataPath = options.userDataPath;
     this.getAppName = options.getAppName ?? (() => app.getName());
-    this.createSidecarSocket = options.createSidecarSocket ?? ((url) => new WebSocket(url, "cowork.jsonrpc.v1"));
+    this.getWorkspaceList = options.getWorkspaceList ?? (() => []);
+    this.createSidecarSocket = options.createSidecarSocket ?? ((url: string) => new WebSocket(url, "cowork.jsonrpc.v1"));
     this.createRelaySocket = options.createRelaySocket ?? ((url, headers) => new WebSocket(url, { headers }));
     this.storeState = loadOrCreateMobileRelayStoreState(this.userDataPath);
     this.syncTrustedPhoneSummary();
@@ -135,6 +139,10 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
 
   getSnapshot(): MobileRelaySnapshot {
     return { ...this.state };
+  }
+
+  setWorkspaceListProvider(provider: () => MobileRelayWorkspaceRecord[]): void {
+    this.getWorkspaceList = provider;
   }
 
   async start(opts: {
@@ -309,6 +317,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         if (this.handleRelayControlMessage(text)) {
           return;
         }
+        if (this.handleBridgeLevelMessage(text)) {
+          return;
+        }
         if (this.sidecarSocket?.readyState === WebSocket.OPEN) {
           this.sidecarSocket.send(text);
         }
@@ -382,6 +393,118 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         trustedPhonePublicKey: trustedPhone?.phoneIdentityPublicKey ?? null,
       },
     }));
+  }
+
+  /**
+   * Intercepts bridge-level JSON-RPC methods (workspace/list, workspace/switch)
+   * before they reach the sidecar. Returns true if the message was handled.
+   */
+  private handleBridgeLevelMessage(rawText: string): boolean {
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      parsed = JSON.parse(rawText) as Record<string, unknown>;
+    } catch {
+      return false;
+    }
+
+    const method = typeof parsed.method === "string" ? parsed.method : "";
+    const id = parsed.id;
+    if (!method || id === undefined) return false;
+
+    if (method === "workspace/list") {
+      const workspaces = this.getWorkspaceList();
+      const response = JSON.stringify({
+        id,
+        result: {
+          workspaces: workspaces.map((w) => ({
+            id: w.id,
+            name: w.name,
+            path: w.path,
+            createdAt: w.createdAt,
+            lastOpenedAt: w.lastOpenedAt,
+            defaultProvider: w.defaultProvider,
+            defaultModel: w.defaultModel,
+            defaultEnableMcp: w.defaultEnableMcp,
+            yolo: w.yolo,
+          })),
+          activeWorkspaceId: this.state.workspaceId,
+        },
+      });
+      if (this.relaySocket?.readyState === WebSocket.OPEN) {
+        this.relaySocket.send(response);
+      }
+      return true;
+    }
+
+    if (method === "workspace/switch") {
+      const params = parsed.params as Record<string, unknown> | undefined;
+      const workspaceId = typeof params?.workspaceId === "string" ? params.workspaceId.trim() : "";
+      if (!workspaceId) {
+        this.sendBridgeError(id, -32602, "Missing workspaceId parameter.");
+        return true;
+      }
+      void this.handleWorkspaceSwitch(id, workspaceId).catch((error) => {
+        this.sendBridgeError(id, -32000, error instanceof Error ? error.message : String(error));
+      });
+      return true;
+    }
+
+    return false;
+  }
+
+  private async handleWorkspaceSwitch(requestId: unknown, workspaceId: string): Promise<void> {
+    const workspaces = this.getWorkspaceList();
+    const target = workspaces.find((w) => w.id === workspaceId);
+    if (!target) {
+      this.sendBridgeError(requestId, -32602, `Workspace "${workspaceId}" not found.`);
+      return;
+    }
+
+    // Start the target workspace server (idempotent if already running)
+    const { url } = await this.serverManager.startWorkspaceServer({
+      workspaceId: target.id,
+      workspacePath: target.path,
+      yolo: target.yolo,
+    });
+
+    // Close old sidecar and connect to new one
+    const oldSidecar = this.sidecarSocket;
+    this.sidecarSocket = null;
+    closeSocket(oldSidecar);
+
+    this.sidecarUrl = url;
+    await this.connectSidecar(url);
+
+    // Update state
+    this.state = {
+      ...this.state,
+      workspaceId: target.id,
+      workspacePath: target.path,
+    };
+    this.emitStateChanged();
+
+    // Respond to mobile
+    const response = JSON.stringify({
+      id: requestId,
+      result: {
+        workspaceId: target.id,
+        name: target.name,
+        path: target.path,
+      },
+    });
+    if (this.relaySocket?.readyState === WebSocket.OPEN) {
+      this.relaySocket.send(response);
+    }
+  }
+
+  private sendBridgeError(requestId: unknown, code: number, message: string): void {
+    const response = JSON.stringify({
+      id: requestId,
+      error: { code, message },
+    });
+    if (this.relaySocket?.readyState === WebSocket.OPEN) {
+      this.relaySocket.send(response);
+    }
   }
 
   private handleRelayControlMessage(rawText: string): boolean {

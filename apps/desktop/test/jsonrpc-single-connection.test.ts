@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
+import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
 const startCalls: Array<{ workspaceId: string; workspacePath: string; yolo: boolean }> = [];
 const savedStates: any[] = [];
@@ -285,7 +286,7 @@ class MockJsonRpcSocket {
   close() {}
 }
 
-mock.module("../src/lib/desktopCommands", () => ({
+mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   appendTranscriptBatch: async () => {},
   appendTranscriptEvent: async () => {},
   deleteTranscript: async () => {},

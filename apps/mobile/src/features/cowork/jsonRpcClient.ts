@@ -44,7 +44,7 @@ const jsonRpcResponseSchema = z.object({
   message: "Response must include result or error.",
 });
 
-type JsonRpcId = z.infer<typeof jsonRpcIdSchema>;
+export type JsonRpcId = z.infer<typeof jsonRpcIdSchema>;
 
 type JsonRpcRequestMessage = z.infer<typeof jsonRpcRequestSchema>;
 type JsonRpcNotificationMessage = z.infer<typeof jsonRpcNotificationSchema>;
@@ -221,6 +221,11 @@ export class CoworkJsonRpcClient {
     this.clientInfo = options.clientInfo;
   }
 
+  resetTransportSession(reason = "Transport disconnected."): void {
+    this.initialized = false;
+    this.rejectAllPending(reason);
+  }
+
   async initialize(): Promise<void> {
     if (this.initialized) {
       return;
@@ -274,11 +279,20 @@ export class CoworkJsonRpcClient {
   }
 
   async handleIncoming(raw: string): Promise<void> {
-    const message = parseJsonMessage(raw);
+    let message: JsonRpcRequestMessage | JsonRpcNotificationMessage | JsonRpcResponseMessage;
+    try {
+      message = parseJsonMessage(raw);
+    } catch {
+      return;
+    }
     if ("id" in message && "method" in message) {
-      const serverRequest = normalizeServerRequest(message);
-      if (serverRequest && this.onServerRequest) {
-        this.onServerRequest(serverRequest);
+      try {
+        const serverRequest = normalizeServerRequest(message);
+        if (serverRequest && this.onServerRequest) {
+          this.onServerRequest(serverRequest);
+        }
+      } catch {
+        return;
       }
       return;
     }
@@ -297,9 +311,13 @@ export class CoworkJsonRpcClient {
       return;
     }
     if ("method" in message) {
-      const notification = normalizeNotification(message as JsonRpcNotificationMessage);
-      if (notification) {
-        this.onNotification?.(notification);
+      try {
+        const notification = normalizeNotification(message as JsonRpcNotificationMessage);
+        if (notification) {
+          this.onNotification?.(notification);
+        }
+      } catch {
+        return;
       }
     }
   }
@@ -320,11 +338,33 @@ export class CoworkJsonRpcClient {
       }, this.requestTimeoutMs);
       this.pending.set(id, { resolve, reject, timeoutHandle });
     });
-    await this.sendTransport(JSON.stringify({
-      id,
-      method,
-      ...(params !== undefined ? { params } : {}),
-    }));
+    try {
+      await this.sendTransport(JSON.stringify({
+        id,
+        method,
+        ...(params !== undefined ? { params } : {}),
+      }));
+    } catch (error) {
+      this.rejectPending(id, error);
+    }
     return await promise;
+  }
+
+  private rejectPending(id: JsonRpcId, error: unknown): void {
+    const pending = this.pending.get(id);
+    if (!pending) {
+      return;
+    }
+    this.pending.delete(id);
+    clearTimeout(pending.timeoutHandle);
+    pending.reject(error instanceof Error ? error : new Error(String(error)));
+  }
+
+  private rejectAllPending(reason: string): void {
+    for (const [id, pending] of this.pending.entries()) {
+      this.pending.delete(id);
+      clearTimeout(pending.timeoutHandle);
+      pending.reject(new Error(reason));
+    }
   }
 }

@@ -84,7 +84,7 @@ function createRouterHarness() {
       },
     },
     utils: {
-      requireWorkspacePath: () => {
+      resolveWorkspacePath: () => {
         throw new Error("not used");
       },
       extractTextInput: () => "",
@@ -207,7 +207,7 @@ function createThreadResumeHarness() {
       },
     },
     utils: {
-      requireWorkspacePath: (() => {
+      resolveWorkspacePath: (() => {
         throw new Error("not used");
       }) as any,
       extractTextInput: () => "",
@@ -331,7 +331,7 @@ function createThreadReadHarness(snapshotOverride?: any) {
       },
     },
     utils: {
-      requireWorkspacePath: (() => {
+      resolveWorkspacePath: (() => {
         throw new Error("not used");
       }) as any,
       extractTextInput: () => "",

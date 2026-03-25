@@ -142,8 +142,10 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     workspacePath: string;
     yolo: boolean;
   }): Promise<MobileRelaySnapshot> {
-    this.stopping = false;
+    this.stopping = true;
     this.clearReconnectTimer();
+    this.closeConnections();
+    this.stopping = false;
     this.state = {
       ...this.state,
       status: "starting",
@@ -154,27 +156,29 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     };
     this.emitStateChanged();
 
-    const { url } = await this.serverManager.startWorkspaceServer({
-      workspaceId: opts.workspaceId,
-      workspacePath: opts.workspacePath,
-      yolo: opts.yolo,
-    });
-    this.sidecarUrl = url;
-    await this.connectSidecar(url);
-    await this.startRelaySession();
-    return this.getSnapshot();
+    try {
+      const { url } = await this.serverManager.startWorkspaceServer({
+        workspaceId: opts.workspaceId,
+        workspacePath: opts.workspacePath,
+        yolo: opts.yolo,
+      });
+      this.sidecarUrl = url;
+      await this.connectSidecar(url);
+      await this.startRelaySession();
+      return this.getSnapshot();
+    } catch (error) {
+      this.clearReconnectTimer();
+      this.closeConnections();
+      this.updateStatus("error", error instanceof Error ? error.message : String(error));
+      throw error;
+    }
   }
 
   async stop(): Promise<MobileRelaySnapshot> {
     this.stopping = true;
     this.clearReconnectTimer();
-    closeSocket(this.sidecarSocket);
-    closeSocket(this.relaySocket);
-    this.sidecarSocket = null;
-    this.relaySocket = null;
+    this.closeConnections();
     this.sidecarUrl = null;
-    this.notificationSecret = null;
-    this.pendingPhoneHandshake = null;
     this.state = {
       ...buildInitialState(),
       trustedPhoneDeviceId: this.getTrustedPhone()?.phoneDeviceId ?? null,
@@ -188,11 +192,23 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     if (!this.state.workspaceId || !this.state.workspacePath) {
       throw new Error("Remote access is not running.");
     }
-    closeSocket(this.relaySocket);
+    const relaySocket = this.relaySocket;
     this.relaySocket = null;
+    closeSocket(relaySocket);
     this.pendingPhoneHandshake = null;
     await this.startRelaySession();
     return this.getSnapshot();
+  }
+
+  private closeConnections(): void {
+    const sidecarSocket = this.sidecarSocket;
+    const relaySocket = this.relaySocket;
+    this.sidecarSocket = null;
+    this.relaySocket = null;
+    this.notificationSecret = null;
+    this.pendingPhoneHandshake = null;
+    closeSocket(sidecarSocket);
+    closeSocket(relaySocket);
   }
 
   async forgetTrustedPhone(): Promise<MobileRelaySnapshot> {
@@ -219,13 +235,16 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
 
       socket.once("open", () => {
         socket.on("message", (raw: unknown) => {
+          if (this.sidecarSocket !== socket) return;
           const text = decodeSocketMessage(raw);
           if (this.relaySocket?.readyState === WebSocket.OPEN) {
             this.relaySocket.send(text);
           }
         });
         socket.on("close", () => {
+          if (this.sidecarSocket !== socket) return;
           if (this.stopping) return;
+          this.sidecarSocket = null;
           this.updateStatus("reconnecting", "Local sidecar disconnected.");
           if (this.sidecarUrl) {
             void this.connectSidecar(this.sidecarUrl).catch((error) => {
@@ -237,6 +256,10 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       });
 
       socket.once("error", (error) => {
+        if (this.sidecarSocket === socket) {
+          this.sidecarSocket = null;
+        }
+        closeSocket(socket);
         reject(error);
       });
     });
@@ -281,6 +304,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       });
 
       socket.on("message", (raw: unknown) => {
+        if (this.relaySocket !== socket) return;
         const text = decodeSocketMessage(raw);
         if (this.handleRelayControlMessage(text)) {
           return;
@@ -291,12 +315,18 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       });
 
       socket.on("close", () => {
+        if (this.relaySocket !== socket) return;
         if (this.stopping) return;
+        this.relaySocket = null;
         this.updateStatus("reconnecting");
         this.scheduleRelayReconnect();
       });
 
       socket.once("error", (error) => {
+        if (this.relaySocket === socket) {
+          this.relaySocket = null;
+        }
+        closeSocket(socket);
         reject(error);
       });
     });
@@ -375,7 +405,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       this.pendingPhoneHandshake = trustedPhoneDeviceId && trustedPhonePublicKey
         ? { trustedPhoneDeviceId, trustedPhonePublicKey }
         : null;
-      return false;
+      return true;
     }
 
     if (kind === "secureReady") {

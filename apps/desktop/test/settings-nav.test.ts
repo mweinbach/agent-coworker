@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
+import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -24,7 +25,7 @@ const savedStates: any[] = [];
 let startWorkspaceServerCalls = 0;
 let agentSocketConnectCalls = 0;
 
-mock.module("../src/lib/desktopCommands", () => ({
+mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   appendTranscriptBatch: async () => {},
   appendTranscriptEvent: async () => {},
   deleteTranscript: async () => {},

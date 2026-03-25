@@ -212,12 +212,14 @@ describe("mobile transport integration", () => {
 
   test("fallback secure transport can reconnect with a trusted desktop and rehydrate threads", async () => {
     const payload = createPayload();
+    const sent: string[] = [];
     const client = new CoworkJsonRpcClient({
       clientInfo: {
         name: "cowork-mobile-test",
         version: "0.1.0",
       },
       send: async (text) => {
+        sent.push(text);
         await transportModule.sendPlaintext(text);
       },
     });
@@ -234,10 +236,16 @@ describe("mobile transport integration", () => {
       expect(firstList.threads).toHaveLength(1);
 
       await transportModule.disconnectTransport();
+      client.resetTransportSession("socket closed");
       const reconnectState = await transportModule.connectTrusted(payload.macDeviceId);
       expect(reconnectState.connectedMacDeviceId).toBe(payload.macDeviceId);
 
       await client.initialize();
+      expect(
+        sent
+          .map((entry) => JSON.parse(entry) as Record<string, unknown>)
+          .filter((entry) => entry.method === "initialize"),
+      ).toHaveLength(2);
       const secondList = await client.requestThreadList();
       expect(secondList.threads.map((thread) => thread.id)).toEqual(
         firstList.threads.map((thread) => thread.id),

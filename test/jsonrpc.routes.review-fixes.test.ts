@@ -80,7 +80,7 @@ function createRouteHarness(
       },
     },
     utils: {
-      requireWorkspacePath: (params: Record<string, unknown>) => String(params.cwd ?? "C:/workspace"),
+      resolveWorkspacePath: (params: Record<string, unknown>) => String(params.cwd ?? "C:/workspace"),
       extractTextInput: () => "",
       buildThreadFromSession: () => {
         throw new Error("unused");

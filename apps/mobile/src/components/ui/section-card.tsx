@@ -1,5 +1,7 @@
 import type { PropsWithChildren, ReactNode } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Text, View } from "react-native";
+
+import { useAppTheme } from "@/theme/use-app-theme";
 
 type SectionCardProps = PropsWithChildren<{
   title: string;
@@ -8,50 +10,56 @@ type SectionCardProps = PropsWithChildren<{
 }>;
 
 export function SectionCard({ title, description, action, children }: SectionCardProps) {
+  const theme = useAppTheme();
+
   return (
-    <View style={styles.card}>
-      <View style={styles.header}>
-        <View style={styles.headerText}>
-          <Text style={styles.title}>{title}</Text>
-          {description ? <Text style={styles.description}>{description}</Text> : null}
+    <View
+      style={{
+        gap: 14,
+        borderRadius: 24,
+        borderCurve: "continuous",
+        borderWidth: 1,
+        borderColor: theme.border,
+        backgroundColor: theme.surface,
+        padding: 18,
+        boxShadow: theme.shadow,
+      }}
+    >
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 12,
+        }}
+      >
+        <View style={{ flex: 1, gap: 6 }}>
+          <Text
+            selectable
+            style={{
+              color: theme.text,
+              fontSize: 16,
+              fontWeight: "700",
+            }}
+          >
+            {title}
+          </Text>
+          {description ? (
+            <Text
+              selectable
+              style={{
+                color: theme.textSecondary,
+                fontSize: 13,
+                lineHeight: 18,
+              }}
+            >
+              {description}
+            </Text>
+          ) : null}
         </View>
         {action ? <View>{action}</View> : null}
       </View>
-      <View style={styles.body}>{children}</View>
+      <View style={{ gap: 12 }}>{children}</View>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  card: {
-    borderRadius: 24,
-    padding: 18,
-    backgroundColor: "#161A22",
-    borderWidth: 1,
-    borderColor: "#232B3A",
-    gap: 14,
-  },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: 12,
-  },
-  headerText: {
-    flex: 1,
-    gap: 6,
-  },
-  title: {
-    color: "#F5F7FB",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  description: {
-    color: "#9CA7B8",
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  body: {
-    gap: 12,
-  },
-});

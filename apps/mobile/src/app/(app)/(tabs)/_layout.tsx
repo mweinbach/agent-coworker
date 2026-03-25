@@ -1,30 +1,20 @@
-import { Tabs } from "expo-router";
+import { NativeTabs, Icon, Label } from "expo-router/unstable-native-tabs";
+
+import { useAppTheme } from "@/theme/use-app-theme";
 
 export default function AppTabsLayout() {
+  const theme = useAppTheme();
+
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: "#f8fafc",
-        tabBarInactiveTintColor: "#94a3b8",
-        tabBarStyle: {
-          backgroundColor: "#0f172a",
-          borderTopColor: "#1e293b",
-        },
-      }}
-    >
-      <Tabs.Screen
-        name="threads"
-        options={{
-          title: "Threads",
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: "Settings",
-        }}
-      />
-    </Tabs>
+    <NativeTabs tintColor={theme.primary}>
+      <NativeTabs.Trigger name="(threads)">
+        <Label>Threads</Label>
+        <Icon sf={{ default: "bubble.left", selected: "bubble.left.fill" }} />
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="(settings)">
+        <Label>Connection</Label>
+        <Icon sf={{ default: "gearshape", selected: "gearshape.fill" }} />
+      </NativeTabs.Trigger>
+    </NativeTabs>
   );
 }

@@ -214,6 +214,7 @@
 - When a user corrects a CI diagnosis into a real desktop regression, stop treating the failing test as the primary problem and trace the underlying store/UI behavior end-to-end; in the skills flow specifically, verify that post-request state writes do not wipe JSON-RPC-loaded detail data after a click.
 - When the default CI lane hits transient `mcp.grep.app` 5xxs, keep `RUN_REMOTE_MCP_TESTS` on connect/discover smoke only and require `RUN_REMOTE_MCP_AGENT_TESTS` for live remote tool execution.
 - When a desktop Linux smoke run shows a blank renderer or `Render frame was disposed` errors, do not treat native window chrome or menu interactivity alone as proof the UI is healthy; debug the renderer failure and visible content before signing off.
+- For Expo mobile verification in this repo, do not treat native `run:ios` or `run:android` success as sufficient by itself; always run an explicit Metro bundle path too (for example `expo export`) so repo-root imports, Babel/plugin drift, and other JS-resolution failures are caught before declaring the mobile app buildable.
 
 ## 2026-03-18 Tool Output Overflow Audit
 

@@ -24,6 +24,7 @@
     "android": {
       "package": "co.weinbach.cowork.mobile",
       "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "android.permission.CAMERA"
       ]

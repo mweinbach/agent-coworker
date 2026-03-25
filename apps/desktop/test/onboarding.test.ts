@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
+import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
 // ── Pure helper tests (no DOM needed) ──
 
@@ -194,7 +195,7 @@ const MOCK_UPDATE_STATE = {
 
 let lastSavedState: any = null;
 
-mock.module("../src/lib/desktopCommands", () => ({
+mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   appendTranscriptBatch: async () => {},
   appendTranscriptEvent: async () => {},
   deleteTranscript: async () => {},

@@ -27,6 +27,7 @@ class FakeServerManager {
 class FakeSocket extends EventEmitter {
   readyState = 0;
   sentMessages: string[] = [];
+  closeCalls = 0;
 
   open() {
     this.readyState = 1;
@@ -34,6 +35,7 @@ class FakeSocket extends EventEmitter {
   }
 
   close() {
+    this.closeCalls += 1;
     this.readyState = 3;
     this.emit("close");
   }
@@ -44,6 +46,10 @@ class FakeSocket extends EventEmitter {
 
   emitMessage(message: string) {
     this.emit("message", message);
+  }
+
+  emitError(error: Error) {
+    this.emit("error", error);
   }
 }
 
@@ -195,5 +201,94 @@ describe("mobile relay bridge", () => {
     const forgotten = await bridge.forgetTrustedPhone();
     expect(forgotten.trustedPhoneDeviceId).toBeNull();
     expect(forgotten.trustedPhoneFingerprint).toBeNull();
+  });
+
+  test("start closes existing sockets before replacing the bridge session", async () => {
+    const sidecarSockets: FakeSocket[] = [];
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      getAppName: () => "Cowork Test",
+      createSidecarSocket: () => {
+        const socket = new FakeSocket();
+        sidecarSockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+
+    const firstSidecarSocket = sidecarSockets[0]!;
+    const firstRelaySocket = relaySockets[0]!;
+
+    const restarted = await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+
+    expect(sidecarSockets).toHaveLength(2);
+    expect(relaySockets).toHaveLength(2);
+    expect(firstSidecarSocket.closeCalls).toBeGreaterThanOrEqual(1);
+    expect(firstRelaySocket.closeCalls).toBeGreaterThanOrEqual(1);
+
+    firstSidecarSocket.emit("close");
+    firstRelaySocket.emit("close");
+
+    expect(bridge.getSnapshot().status).toBe(restarted.status);
+    expect(bridge.getSnapshot().sessionId).toBe(restarted.sessionId);
+  });
+
+  test("failed relay startup cleans up sockets and leaves an error snapshot", async () => {
+    const sidecarSockets: FakeSocket[] = [];
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      getAppName: () => "Cowork Test",
+      createSidecarSocket: () => {
+        const socket = new FakeSocket();
+        sidecarSockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.emitError(new Error("relay failed"));
+        });
+        return socket;
+      },
+    });
+
+    await expect(bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    })).rejects.toThrow("relay failed");
+
+    expect(bridge.getSnapshot().status).toBe("error");
+    expect(bridge.getSnapshot().lastError).toBe("relay failed");
+    expect(sidecarSockets[0]?.closeCalls).toBeGreaterThanOrEqual(1);
+    expect(relaySockets[0]?.closeCalls).toBeGreaterThanOrEqual(1);
+    expect((bridge as any).sidecarSocket).toBeNull();
+    expect((bridge as any).relaySocket).toBeNull();
   });
 });

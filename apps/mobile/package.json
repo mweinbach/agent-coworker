@@ -10,8 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@expo/ui": "~0.2.0-beta.9",
     "expo": "54.0.33",
-    "expo-barcode-scanner": "13.0.1",
     "expo-camera": "17.0.10",
     "expo-constants": "18.0.13",
     "expo-dev-client": "6.0.20",

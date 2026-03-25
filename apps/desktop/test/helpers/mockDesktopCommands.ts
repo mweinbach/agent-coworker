@@ -1,0 +1,91 @@
+type DesktopCommandsModule = typeof import("../../src/lib/desktopCommands");
+
+export const DEFAULT_SYSTEM_APPEARANCE = {
+  platform: "linux",
+  themeSource: "system",
+  shouldUseDarkColors: false,
+  shouldUseDarkColorsForSystemIntegratedUI: false,
+  shouldUseHighContrastColors: false,
+  shouldUseInvertedColorScheme: false,
+  prefersReducedTransparency: false,
+  inForcedColorsMode: false,
+} satisfies Awaited<ReturnType<typeof import("../../src/lib/desktopCommands").getSystemAppearance>>;
+
+export const DEFAULT_UPDATE_STATE = {
+  phase: "idle",
+  packaged: false,
+  currentVersion: "0.1.0",
+  lastCheckStartedAt: null,
+  lastCheckedAt: null,
+  downloadedAt: null,
+  message: null,
+  error: null,
+  progress: null,
+  release: null,
+} satisfies Awaited<ReturnType<typeof import("../../src/lib/desktopCommands").getUpdateState>>;
+
+const DEFAULT_MOBILE_RELAY_STATE = {
+  status: "idle",
+  workspaceId: null,
+  workspacePath: null,
+  relayUrl: null,
+  sessionId: null,
+  pairingPayload: null,
+  trustedPhoneDeviceId: null,
+  trustedPhoneFingerprint: null,
+  lastError: null,
+} satisfies Awaited<ReturnType<typeof import("../../src/lib/desktopCommands").getMobileRelayState>>;
+
+export function createDesktopCommandsMock(
+  overrides: Partial<DesktopCommandsModule> = {},
+): DesktopCommandsModule {
+  return {
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
+    saveState: async () => {},
+    readTranscript: async () => [],
+    hydrateTranscript: async () => ({
+      feed: [],
+      agents: [],
+      sessionUsage: null,
+      lastTurnUsage: null,
+    }),
+    appendTranscriptEvent: async () => {},
+    appendTranscriptBatch: async () => {},
+    deleteTranscript: async () => {},
+    pickWorkspaceDirectory: async () => null,
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    listDirectory: async () => [],
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getUpdateState: async () => DEFAULT_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    getSystemAppearance: async () => DEFAULT_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => DEFAULT_SYSTEM_APPEARANCE,
+    startMobileRelay: async () => DEFAULT_MOBILE_RELAY_STATE,
+    stopMobileRelay: async () => DEFAULT_MOBILE_RELAY_STATE,
+    getMobileRelayState: async () => DEFAULT_MOBILE_RELAY_STATE,
+    rotateMobileRelaySession: async () => DEFAULT_MOBILE_RELAY_STATE,
+    forgetMobileRelayTrustedPhone: async () => DEFAULT_MOBILE_RELAY_STATE,
+    onSystemAppearanceChanged: () => () => {},
+    onUpdateStateChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onMobileRelayStateChanged: () => () => {},
+    ...overrides,
+  };
+}

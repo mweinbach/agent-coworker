@@ -1,7 +1,12 @@
 import { create } from "zustand";
 
 import type { ProjectedItem, SessionFeedItem, SessionSnapshotLike } from "./protocolTypes";
-import { applyProjectedCompletion, applyProjectedStart } from "./snapshotReducer";
+import {
+  applyAgentDelta,
+  applyProjectedCompletion,
+  applyProjectedStart,
+  applyReasoningDelta,
+} from "./snapshotReducer";
 
 export type MobileThreadSummary = {
   id: string;
@@ -18,7 +23,7 @@ export type MobileThreadFeedEntry = SessionFeedItem;
 
 export type PendingServerRequest =
   | {
-      requestId: string;
+      requestId: string | number;
       kind: "ask";
       threadId: string;
       itemId: string;
@@ -26,7 +31,7 @@ export type PendingServerRequest =
       options: string[];
     }
   | {
-      requestId: string;
+      requestId: string | number;
       kind: "approval";
       threadId: string;
       itemId: string;
@@ -141,9 +146,16 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   appendStarted(threadId, item, ts) {
     set((state) => {
       const snapshot = ensureThreadSnapshot(threadId, state.snapshots[threadId]);
+      const nextState = applyProjectedStart(
+        { feed: snapshot.feed, lastEventSeq: snapshot.lastEventSeq },
+        item,
+        ts,
+        snapshot.lastEventSeq + 1,
+      );
       const nextSnapshot = {
         ...snapshot,
-        feed: applyProjectedStart({ feed: snapshot.feed, lastEventSeq: snapshot.lastEventSeq }, item, ts, snapshot.lastEventSeq + 1).feed,
+        feed: nextState.feed,
+        lastEventSeq: nextState.lastEventSeq,
       };
       return {
         snapshots: {
@@ -157,14 +169,16 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   appendCompleted(threadId, item, ts) {
     set((state) => {
       const snapshot = ensureThreadSnapshot(threadId, state.snapshots[threadId]);
+      const nextState = applyProjectedCompletion(
+        { feed: snapshot.feed, lastEventSeq: snapshot.lastEventSeq },
+        item,
+        ts,
+        snapshot.lastEventSeq + 1,
+      );
       const nextSnapshot = {
         ...snapshot,
-        feed: applyProjectedCompletion(
-          { feed: snapshot.feed, lastEventSeq: snapshot.lastEventSeq },
-          item,
-          ts,
-          snapshot.lastEventSeq + 1,
-        ).feed,
+        feed: nextState.feed,
+        lastEventSeq: nextState.lastEventSeq,
       };
       return {
         snapshots: {
@@ -178,27 +192,17 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   appendAgentDelta(threadId, itemId, delta, ts) {
     set((state) => {
       const snapshot = ensureThreadSnapshot(threadId, state.snapshots[threadId]);
-      const nextFeed = applyProjectedCompletion(
+      const nextState = applyAgentDelta(
         { feed: snapshot.feed, lastEventSeq: snapshot.lastEventSeq },
-        {
-          id: itemId,
-          type: "agentMessage",
-          text: delta,
-        },
+        itemId,
+        delta,
         ts,
         snapshot.lastEventSeq + 1,
-      ).feed;
-      const current = nextFeed.find((entry) => entry.id === itemId && entry.kind === "message");
-      const mergedFeed = current
-        ? nextFeed.map((entry) =>
-            entry.id === itemId && entry.kind === "message"
-              ? { ...entry, text: entry.text }
-              : entry
-          )
-        : nextFeed;
+      );
       const nextSnapshot = {
         ...snapshot,
-        feed: mergedFeed,
+        feed: nextState.feed,
+        lastEventSeq: nextState.lastEventSeq,
       };
       return {
         snapshots: {
@@ -212,27 +216,18 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   appendReasoningDelta(threadId, itemId, mode, delta, ts) {
     set((state) => {
       const snapshot = ensureThreadSnapshot(threadId, state.snapshots[threadId]);
-      const existing = snapshot.feed.find(
-        (entry) => entry.id === itemId && entry.kind === "reasoning",
+      const nextState = applyReasoningDelta(
+        { feed: snapshot.feed, lastEventSeq: snapshot.lastEventSeq },
+        itemId,
+        mode,
+        delta,
+        ts,
+        snapshot.lastEventSeq + 1,
       );
       const nextSnapshot = {
         ...snapshot,
-        feed: existing
-          ? snapshot.feed.map((entry) =>
-              entry.id === itemId && entry.kind === "reasoning"
-                ? { ...entry, text: `${entry.text}${delta}` }
-                : entry
-            )
-          : [
-              ...snapshot.feed,
-              {
-                id: itemId,
-                kind: "reasoning",
-                mode,
-                ts,
-                text: delta,
-              } satisfies SessionFeedItem,
-            ],
+        feed: nextState.feed,
+        lastEventSeq: nextState.lastEventSeq,
       };
       return {
         snapshots: {

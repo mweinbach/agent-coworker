@@ -100,7 +100,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
             kind: "ask",
             threadId: request.params.threadId,
             itemId: request.params.itemId,
-            requestId: String(request.id),
+            requestId: request.id,
             question: request.params.question,
             options: request.params.options ?? [],
           });
@@ -110,7 +110,7 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
           kind: "approval",
           threadId: request.params.threadId,
           itemId: request.params.itemId,
-          requestId: String(request.id),
+          requestId: request.id,
           command: request.params.command,
           reason: request.params.reason,
           dangerous: request.params.dangerous,
@@ -119,37 +119,61 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
     });
     setActiveCoworkJsonRpcClient(client);
 
-    let initialized = false;
+    let sessionReady = false;
+    const resetClientSession = () => {
+      sessionReady = false;
+      client.resetTransportSession();
+    };
+
+    const hydrateRemoteThreads = async () => {
+      const list = await client.requestThreadList();
+      for (const thread of list.threads) {
+        useThreadStore.getState().hydrate(createThreadSnapshot(thread));
+      }
+    };
+
+    const ensureConnectedSession = async () => {
+      if (sessionReady) {
+        return;
+      }
+      sessionReady = true;
+      try {
+        await client.initialize();
+        await hydrateRemoteThreads();
+      } catch {
+        sessionReady = false;
+      }
+    };
+
     const unsubscribeTransport = defaultSecureTransportClient.subscribe({
       onPlaintextMessage(text) {
         void client.handleIncoming(text);
       },
       onStateChanged(state) {
-        if (state.status !== "connected" || initialized) {
+        if (state.status !== "connected") {
           return;
         }
-        initialized = true;
-        void client.initialize()
-          .then(async () => {
-            const list = await client.requestThreadList();
-            for (const thread of list.threads) {
-              useThreadStore.getState().hydrate(createThreadSnapshot(thread));
-            }
-          })
-          .catch(() => {
-            initialized = false;
-          });
+        void ensureConnectedSession();
       },
       onSocketClosed() {
-        initialized = false;
+        resetClientSession();
       },
       onSecureError() {
-        initialized = false;
+        resetClientSession();
       },
     });
 
+    void defaultSecureTransportClient.getSnapshot()
+      .then((snapshot) => {
+        if (snapshot.status === "connected") {
+          void ensureConnectedSession();
+        }
+      })
+      .catch(() => {});
+
     return () => {
       unsubscribeTransport();
+      resetClientSession();
       resetPairingListeners();
       setActiveCoworkJsonRpcClient(null);
     };

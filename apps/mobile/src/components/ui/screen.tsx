@@ -1,6 +1,8 @@
 import type { PropsWithChildren } from "react";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { ScrollView, StyleSheet, View, type ViewStyle } from "react-native";
+import { ScrollView, View, type ViewStyle } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { useAppTheme } from "@/theme/use-app-theme";
 
 type ScreenProps = PropsWithChildren<{
   scroll?: boolean;
@@ -8,40 +10,41 @@ type ScreenProps = PropsWithChildren<{
 }>;
 
 export function Screen({ children, scroll = false, contentStyle }: ScreenProps) {
-  const inner = <View style={[styles.content, contentStyle]}>{children}</View>;
+  const insets = useSafeAreaInsets();
+  const theme = useAppTheme();
+  const inner = (
+    <View
+      style={[
+        {
+          flex: 1,
+          gap: 18,
+          paddingHorizontal: 20,
+          paddingTop: 18,
+          paddingBottom: Math.max(insets.bottom + 24, 32),
+        },
+        contentStyle,
+      ]}
+    >
+      {children}
+    </View>
+  );
+
+  if (!scroll) {
+    return (
+      <View style={{ flex: 1, backgroundColor: theme.background }}>
+        {inner}
+      </View>
+    );
+  }
 
   return (
-    <SafeAreaView edges={["top", "left", "right"]} style={styles.safeArea}>
-      {scroll ? (
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          style={styles.scrollView}
-          keyboardShouldPersistTaps="handled"
-        >
-          {inner}
-        </ScrollView>
-      ) : (
-        inner
-      )}
-    </SafeAreaView>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.background }}
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={{ flexGrow: 1 }}
+      keyboardShouldPersistTaps="handled"
+    >
+      {inner}
+    </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: "#08111f",
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    flexGrow: 1,
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingVertical: 18,
-    gap: 16,
-  },
-});

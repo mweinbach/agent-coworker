@@ -147,8 +147,14 @@ function escapeRowKeyForSelector(key: string): string {
   return key.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-function isTreeRowControlTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && Boolean(target.closest(FILE_EXPLORER_CONTROL_SELECTOR));
+export function isTreeRowControlTarget(target: EventTarget | null): boolean {
+  return Boolean(
+    target &&
+      typeof target === "object" &&
+      "closest" in target &&
+      typeof (target as { closest?: unknown }).closest === "function" &&
+      (target as { closest: (selector: string) => Element | null }).closest(FILE_EXPLORER_CONTROL_SELECTOR),
+  );
 }
 
 function sortExplorerEntries(entries: ExplorerEntry[]): ExplorerEntry[] {

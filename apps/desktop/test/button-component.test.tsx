@@ -3,10 +3,19 @@ import { createElement } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 
-import { Button } from "../src/components/ui/button";
+import { Button, buttonVariants } from "../src/components/ui/button";
 import { setupJsdom } from "./jsdomHarness";
 
 describe("desktop button component", () => {
+  test("buttonVariants includes variant styling for standalone usage", () => {
+    expect(buttonVariants({ variant: "default" })).toContain("bg-primary");
+    expect(buttonVariants({ variant: "secondary" })).toContain("bg-muted/40");
+    expect(buttonVariants({ variant: "destructive" })).toContain("bg-destructive/10");
+    expect(buttonVariants({ variant: "outline" })).toContain("border-border/70");
+    expect(buttonVariants({ variant: "ghost" })).toContain("hover:bg-muted/40");
+    expect(buttonVariants({ variant: "link" })).toContain("underline");
+  });
+
   test("passes a real click event through onClick", async () => {
     const harness = setupJsdom();
 

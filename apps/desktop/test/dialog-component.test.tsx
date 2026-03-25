@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createElement, useState } from "react";
+import { createElement, Fragment, useState } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -31,6 +31,33 @@ function TestDialog({ preventOutsideClose = false }: TestDialogProps) {
       },
       createElement("button", { id: "first-field", type: "button" }, "First button"),
       createElement("button", { id: "last-button", type: "button" }, "Last button"),
+    ),
+  );
+}
+
+function ControlledDialogWithExternalTrigger() {
+  const [open, setOpen] = useState(false);
+
+  return createElement(
+    Fragment,
+    null,
+    createElement(
+      "button",
+      {
+        id: "external-trigger",
+        type: "button",
+        onClick: () => setOpen(true),
+      },
+      "External trigger",
+    ),
+    createElement(
+      Dialog,
+      { open, onOpenChange: setOpen },
+      createElement(
+        DialogContent,
+        null,
+        createElement("button", { id: "external-dialog-button", type: "button" }, "Inside dialog"),
+      ),
     ),
   );
 }
@@ -178,6 +205,101 @@ describe("desktop dialog component", () => {
       });
 
       expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("consumes Escape before window handlers can react", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+      let windowEscapeCount = 0;
+      const handleWindowKeyDown = () => {
+        windowEscapeCount += 1;
+      };
+      harness.dom.window.addEventListener("keydown", handleWindowKeyDown);
+
+      await act(async () => {
+        root.render(createElement(TestDialog));
+      });
+
+      const trigger = harness.dom.window.document.querySelector("button");
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing trigger button");
+      }
+
+      await act(async () => {
+        trigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      await act(async () => {
+        harness.dom.window.document.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(windowEscapeCount).toBe(0);
+      expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
+
+      harness.dom.window.removeEventListener("keydown", handleWindowKeyDown);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("restores focus for controlled dialogs opened externally", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(ControlledDialogWithExternalTrigger));
+      });
+
+      const trigger = harness.dom.window.document.getElementById("external-trigger");
+      if (!(trigger instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing external trigger");
+      }
+
+      trigger.focus();
+      await act(async () => {
+        trigger.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const dialogButton = harness.dom.window.document.getElementById("external-dialog-button");
+      expect(harness.dom.window.document.activeElement).toBe(dialogButton);
+
+      await act(async () => {
+        harness.dom.window.document.dispatchEvent(
+          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
+      expect(harness.dom.window.document.activeElement).toBe(trigger);
 
       await act(async () => {
         root.unmount();

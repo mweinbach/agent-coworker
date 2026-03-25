@@ -6,9 +6,11 @@ import {
   buildExplorerRows,
   explorerRowDomKey,
   normalizeExplorerPath,
+  isTreeRowControlTarget,
   shouldAutoRefreshExplorer,
   shouldReuseBackgroundDirectorySnapshot,
 } from "../src/ui/file-explorer/WorkspaceFileExplorer";
+import { setupJsdom } from "./jsdomHarness";
 
 function entry(partial: Partial<ExplorerEntry> & Pick<ExplorerEntry, "name" | "path" | "isDirectory">): ExplorerEntry {
   return {
@@ -98,6 +100,21 @@ describe("workspace file explorer helpers", () => {
     expect(shouldAutoRefreshExplorer("visible", true)).toBe(true);
     expect(shouldAutoRefreshExplorer("hidden", true)).toBe(false);
     expect(shouldAutoRefreshExplorer("visible", false)).toBe(false);
+  });
+
+  test("treats SVG descendants inside control buttons as control targets", () => {
+    const harness = setupJsdom();
+
+    try {
+      const button = harness.dom.window.document.createElement("button");
+      button.setAttribute("data-file-explorer-control", "true");
+      const svg = harness.dom.window.document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      button.appendChild(svg);
+
+      expect(isTreeRowControlTarget(svg)).toBe(true);
+    } finally {
+      harness.restore();
+    }
   });
 
   test("buildExplorerRows nests expanded directory entries", () => {

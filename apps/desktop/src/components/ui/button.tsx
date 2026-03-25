@@ -77,6 +77,15 @@ function mapSize(size: ButtonSize | undefined): NonNullable<React.ComponentProps
   }
 }
 
+const buttonVariantStyles: Record<ButtonVariant, string> = {
+  default: "border border-transparent bg-primary text-primary-foreground shadow-none hover:bg-primary/85",
+  secondary: "border border-border/70 bg-muted/40 text-foreground shadow-none hover:bg-muted/60",
+  destructive: "border border-transparent bg-destructive/10 text-destructive shadow-none hover:bg-destructive/20 hover:text-destructive",
+  outline: "border border-border/70 bg-background/80 text-foreground shadow-none hover:bg-muted/30 hover:text-foreground",
+  ghost: "border border-transparent bg-transparent text-foreground shadow-none hover:bg-muted/40 hover:text-foreground",
+  link: "h-auto px-0 py-0 text-primary underline-offset-4 hover:underline",
+};
+
 function buttonVariants({
   variant = "default",
   size = "default",
@@ -87,13 +96,13 @@ function buttonVariants({
   className?: string;
 } = {}): string {
   return cn(
-    "rounded-[calc(var(--radius)*0.95)] font-medium shadow-none transition-colors [&>[data-icon]]:pointer-events-none [&>[data-icon]]:shrink-0",
-    variant === "link" && "h-auto px-0 py-0 text-primary underline-offset-4 hover:underline",
+    "rounded-[calc(var(--radius)*0.95)] font-medium transition-colors [&>[data-icon]]:pointer-events-none [&>[data-icon]]:shrink-0",
     size === "default" && "h-9 px-3.5 text-[13px] [&>[data-icon]]:size-4",
     size === "sm" && "h-8 px-3 text-[12px] [&>[data-icon]]:size-3.5",
     size === "lg" && "h-10 px-4 text-[13px] [&>[data-icon]]:size-4",
     size === "icon" && "size-8 min-w-8 px-0 [&>[data-icon]]:size-4",
     size === "icon-sm" && "size-7 min-w-7 px-0 [&>[data-icon]]:size-3.5",
+    buttonVariantStyles[variant],
     className,
   );
 }

@@ -33,7 +33,6 @@ import {
   disposeWorkspaceJsonRpcState,
   ensureControlSocket,
   ensureServerRunning,
-  ensureThreadRuntime,
   ensureThreadSocket,
   ensureWorkspaceRuntime,
   isProviderName,
@@ -52,6 +51,7 @@ import {
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 import { reorderSidebarItemsById } from "../../ui/sidebarHelpers";
+import { hydrateThreadSelection } from "./thread";
 
 export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "addWorkspace" | "removeWorkspace" | "selectWorkspace" | "reorderWorkspaces" | "restartWorkspaceServer"> {
   const closeThreadSession = (threadId: string) => {
@@ -180,6 +180,13 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
     selectWorkspace: async (workspaceId: string) => {
       const wasSelected = get().selectedWorkspaceId === workspaceId;
       const nextThreadId = preferredThreadIdForWorkspace(workspaceId);
+      const hydrateSelectedThreadPromise = nextThreadId
+        ? hydrateThreadSelection(get, set, nextThreadId, {
+            preserveView: true,
+            reconnectAfterHydration: true,
+            skipWorkspaceSelectOnReconnect: true,
+          })
+        : null;
       set((s) => ({
         selectedWorkspaceId: workspaceId,
         selectedThreadId: nextThreadId,
@@ -200,6 +207,9 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
       void requestWorkspaceSessions(get, set, workspaceId);
+      if (hydrateSelectedThreadPromise) {
+        await hydrateSelectedThreadPromise;
+      }
     },
 
     reorderWorkspaces: async (sourceWorkspaceId: string, targetWorkspaceId: string) => {

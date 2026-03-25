@@ -212,7 +212,7 @@ export type AppStoreState = {
   removeThread: (threadId: string) => Promise<void>;
   deleteThreadHistory: (threadId: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
-  reconnectThread: (threadId: string, firstMessage?: string, opts?: { selectionRequestId?: number }) => Promise<void>;
+  reconnectThread: (threadId: string, firstMessage?: string, opts?: { selectionRequestId?: number; skipWorkspaceSelect?: boolean }) => Promise<void>;
   renameThread: (threadId: string, newTitle: string) => void;
 
   sendMessage: (text: string, busyPolicy?: ThreadBusyPolicy) => Promise<void>;

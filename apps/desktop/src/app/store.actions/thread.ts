@@ -44,8 +44,391 @@ import type {
   ThreadBusyPolicy,
   ThreadRecord,
   TranscriptEvent,
-  WorkspaceRecord,
 } from "../types";
+
+type HydrateThreadSelectionOptions = {
+  preserveView?: boolean;
+  reconnectAfterHydration?: boolean;
+  skipWorkspaceSelectOnReconnect?: boolean;
+};
+
+export async function hydrateThreadSelection(
+  get: StoreGet,
+  set: StoreSet,
+  threadId: string,
+  options: HydrateThreadSelectionOptions = {},
+): Promise<void> {
+  const waitForSelectionFrame = async () => {
+    await new Promise<void>((resolve) => {
+      if (typeof window === "undefined") {
+        setTimeout(resolve, 0);
+        return;
+      }
+
+      const schedule = typeof window.requestAnimationFrame === "function"
+        ? window.requestAnimationFrame.bind(window)
+        : (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0);
+
+      schedule(() => {
+        setTimeout(resolve, 0);
+      });
+    });
+  };
+
+  const isSelectionCurrent = (requestId: number) =>
+    get().selectedThreadId === threadId && isCurrentThreadSelectionRequest(threadId, requestId);
+
+  const clearThreadHydrationIfCurrent = (requestId: number) => {
+    if (!isCurrentThreadSelectionRequest(threadId, requestId)) {
+      return;
+    }
+    set((state) => {
+      const rt = state.threadRuntimeById[threadId];
+      if (!rt) return {};
+      return {
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [threadId]: {
+            ...rt,
+            hydrating: false,
+            transcriptOnly: false,
+          },
+        },
+      };
+    });
+    clearThreadSelectionRequest(threadId, requestId);
+  };
+
+  const thread = get().threads.find((candidate) => candidate.id === threadId);
+  if (!thread) return;
+
+  const threadFingerprint = (candidate: ThreadRecord): SessionSnapshotFingerprint => ({
+    updatedAt: candidate.lastMessageAt,
+    messageCount: candidate.messageCount,
+    lastEventSeq: candidate.lastEventSeq,
+  });
+
+  const fingerprintMatches = (left: SessionSnapshotFingerprint, right: SessionSnapshotFingerprint): boolean =>
+    left.updatedAt === right.updatedAt
+    && left.messageCount === right.messageCount
+    && left.lastEventSeq === right.lastEventSeq;
+
+  const cacheSessionSnapshot = (snapshot: SessionSnapshot) => {
+    RUNTIME.sessionSnapshots.set(snapshot.sessionId, {
+      fingerprint: {
+        updatedAt: snapshot.updatedAt,
+        messageCount: snapshot.messageCount,
+        lastEventSeq: snapshot.lastEventSeq,
+      },
+      snapshot,
+    });
+    syncDesktopStateCache(get);
+  };
+
+  const applySessionSnapshot = (selectedThreadId: string, sessionId: string, snapshot: SessionSnapshot) => {
+    set((state) => {
+      const nextThreads = state.threads.map((candidate) =>
+        candidate.id === selectedThreadId
+          ? {
+              ...candidate,
+              title: snapshot.title,
+              titleSource: snapshot.titleSource,
+              lastMessageAt: snapshot.updatedAt,
+              sessionId,
+              messageCount: snapshot.messageCount,
+              lastEventSeq: snapshot.lastEventSeq,
+            }
+          : candidate,
+      );
+      const currentRuntime = state.threadRuntimeById[selectedThreadId];
+      return {
+        threads: nextThreads,
+        threadRuntimeById: {
+          ...state.threadRuntimeById,
+          [selectedThreadId]: {
+            ...currentRuntime,
+            sessionId,
+            sessionKind: snapshot.sessionKind,
+            parentSessionId: snapshot.parentSessionId,
+            role: snapshot.role,
+            mode: snapshot.mode,
+            depth: snapshot.depth ?? 0,
+            nickname: snapshot.nickname,
+            requestedModel: snapshot.requestedModel,
+            effectiveModel: snapshot.effectiveModel,
+            requestedReasoningEffort: snapshot.requestedReasoningEffort,
+            effectiveReasoningEffort: snapshot.effectiveReasoningEffort,
+            executionState: snapshot.executionState,
+            lastMessagePreview: snapshot.lastMessagePreview,
+            agents: snapshot.agents,
+            sessionUsage: snapshot.sessionUsage,
+            lastTurnUsage: snapshot.lastTurnUsage,
+            feed: snapshot.feed,
+            hydrating: false,
+            transcriptOnly: false,
+            connected: currentRuntime?.connected ?? false,
+            config: currentRuntime?.config ?? null,
+            sessionConfig: currentRuntime?.sessionConfig ?? null,
+            enableMcp: currentRuntime?.enableMcp ?? null,
+            busy: currentRuntime?.busy ?? false,
+            busySince: currentRuntime?.busySince ?? null,
+            activeTurnId: currentRuntime?.activeTurnId ?? null,
+            pendingSteer: currentRuntime?.pendingSteer ?? null,
+            wsUrl: currentRuntime?.wsUrl ?? null,
+          },
+        },
+      };
+    });
+  };
+
+  const transcriptIdsForThread = (
+    candidate: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
+  ): string[] => {
+    const ids = [candidate.legacyTranscriptId ?? null, candidate.sessionId ?? null, candidate.id];
+    return [...new Set(ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0))];
+  };
+
+  const readTranscriptEvents = async (
+    candidate: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
+  ): Promise<TranscriptEvent[] | null> => {
+    const transcriptIds = transcriptIdsForThread(candidate);
+    if (transcriptIds.length === 0) return null;
+
+    const transcripts: TranscriptEvent[][] = [];
+    let successfulReads = 0;
+    let firstError: unknown = null;
+
+    for (const transcriptId of transcriptIds) {
+      try {
+        const events = await desktopCommands.readTranscript({ threadId: transcriptId });
+        transcripts.push(events);
+        successfulReads += 1;
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+
+    if (successfulReads === 0 && firstError) {
+      throw firstError;
+    }
+
+    return transcripts
+      .flat()
+      .sort((left, right) => left.ts.localeCompare(right.ts));
+  };
+
+  const hydrateLegacyTranscript = async (candidate: ThreadRecord) => {
+    const transcriptIds = transcriptIdsForThread(candidate);
+    if (transcriptIds.length === 0) return null;
+
+    if (transcriptIds.length === 1 && typeof desktopCommands.hydrateTranscript === "function") {
+      return await desktopCommands.hydrateTranscript({ threadId: transcriptIds[0]! });
+    }
+
+    const transcript: TranscriptEvent[] = [];
+    let successfulReads = 0;
+    let firstError: unknown = null;
+    for (const transcriptId of transcriptIds) {
+      try {
+        transcript.push(...await desktopCommands.readTranscript({ threadId: transcriptId }));
+        successfulReads += 1;
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+
+    if (successfulReads === 0 && firstError) {
+      throw firstError;
+    }
+
+    transcript.sort((left, right) => left.ts.localeCompare(right.ts));
+    return hydrateTranscriptSnapshot(transcript);
+  };
+
+  ensureThreadRuntime(get, set, threadId);
+  if (thread.draft) {
+    set((state) => ({
+      selectedThreadId: threadId,
+      selectedWorkspaceId: thread.workspaceId,
+      view: options.preserveView ? state.view : "chat",
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: {
+          ...state.threadRuntimeById[threadId],
+          hydrating: false,
+          transcriptOnly: false,
+        },
+      },
+    }));
+    syncDesktopStateCache(get);
+    return;
+  }
+
+  const rt = get().threadRuntimeById[threadId];
+  if (get().selectedThreadId === threadId && (RUNTIME.threadSelectionRequests.has(threadId) || rt?.connected)) {
+    set((state) => ({
+      selectedWorkspaceId: thread.workspaceId,
+      view: options.preserveView ? state.view : "chat",
+    }));
+    syncDesktopStateCache(get);
+    return;
+  }
+
+  const alreadyLoaded = rt?.feed && rt.feed.length > 0;
+  const sessionId = rt?.sessionId ?? thread.sessionId;
+  const expectedFingerprint = threadFingerprint(thread);
+  const cachedSnapshot = sessionId ? RUNTIME.sessionSnapshots.get(sessionId) : null;
+  const matchingCachedSnapshot =
+    sessionId && cachedSnapshot && fingerprintMatches(cachedSnapshot.fingerprint, expectedFingerprint)
+      ? cachedSnapshot.snapshot
+      : null;
+
+  if (sessionId && cachedSnapshot && !matchingCachedSnapshot) {
+    console.debug(
+      `[selectThread] Cache fingerprint mismatch for session ${sessionId}: cached ${JSON.stringify(cachedSnapshot.fingerprint)} vs expected ${JSON.stringify(expectedFingerprint)}`,
+    );
+  }
+
+  const skipHarnessSnapshotFetch = Boolean(alreadyLoaded && matchingCachedSnapshot);
+  const shouldFetchHarnessSnapshot =
+    Boolean(sessionId)
+    && !skipHarnessSnapshotFetch
+    && (thread.messageCount > 0 || thread.lastEventSeq > 0 || Boolean(thread.legacyTranscriptId));
+
+  const requestId = beginThreadSelectionRequest(threadId);
+  set((state) => ({
+    selectedThreadId: threadId,
+    selectedWorkspaceId: thread.workspaceId,
+    view: options.preserveView ? state.view : "chat",
+    threadRuntimeById: {
+      ...state.threadRuntimeById,
+      [threadId]: {
+        ...state.threadRuntimeById[threadId],
+        hydrating: !alreadyLoaded && !matchingCachedSnapshot,
+        transcriptOnly: false,
+      },
+    },
+  }));
+  syncDesktopStateCache(get);
+
+  let appliedCachedSnapshot = false;
+  if (matchingCachedSnapshot && sessionId) {
+    applySessionSnapshot(threadId, sessionId, matchingCachedSnapshot);
+    appliedCachedSnapshot = true;
+  }
+
+  await waitForSelectionFrame();
+  if (!isSelectionCurrent(requestId)) {
+    clearThreadHydrationIfCurrent(requestId);
+    return;
+  }
+
+  if (!isSelectionCurrent(requestId)) {
+    if (appliedCachedSnapshot) {
+      clearThreadHydrationIfCurrent(requestId);
+    }
+    return;
+  }
+
+  let stayTranscriptOnly = false;
+  if (!alreadyLoaded || matchingCachedSnapshot) {
+    try {
+      let loadedFromHarness = false;
+      if (sessionId && shouldFetchHarnessSnapshot) {
+        await ensureServerRunning(get, set, thread.workspaceId);
+        ensureControlSocket(get, set, thread.workspaceId);
+        const snapshot = await requestSessionSnapshot(get, set, thread.workspaceId, sessionId);
+        if (!isSelectionCurrent(requestId)) {
+          clearThreadHydrationIfCurrent(requestId);
+          return;
+        }
+        if (snapshot) {
+          applySessionSnapshot(threadId, sessionId, snapshot);
+          cacheSessionSnapshot(snapshot);
+          loadedFromHarness = true;
+        } else if (matchingCachedSnapshot) {
+          applySessionSnapshot(threadId, sessionId, matchingCachedSnapshot);
+        } else {
+          stayTranscriptOnly = true;
+        }
+      }
+
+      if (!loadedFromHarness && !matchingCachedSnapshot && !alreadyLoaded) {
+        const snapshot = await hydrateLegacyTranscript(thread);
+        if (!snapshot) {
+          throw new Error("No harness snapshot or legacy transcript cache was available.");
+        }
+        if (!isSelectionCurrent(requestId)) {
+          clearThreadHydrationIfCurrent(requestId);
+          return;
+        }
+        set((state) => ({
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            [threadId]: {
+              ...state.threadRuntimeById[threadId],
+              sessionUsage: snapshot.sessionUsage,
+              lastTurnUsage: snapshot.lastTurnUsage,
+              agents: snapshot.agents,
+              feed: snapshot.feed,
+              hydrating: false,
+              transcriptOnly: true,
+            },
+          },
+        }));
+      }
+    } catch (error) {
+      if (!isSelectionCurrent(requestId)) {
+        clearThreadHydrationIfCurrent(requestId);
+        return;
+      }
+
+      const detail = error instanceof Error ? error.message : String(error);
+      set((state) => ({
+        notifications: pushNotification(state.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Transcript load failed",
+          detail,
+        }),
+      }));
+      clearThreadHydrationIfCurrent(requestId);
+      return;
+    }
+  }
+
+  if (!isSelectionCurrent(requestId)) {
+    clearThreadHydrationIfCurrent(requestId);
+    return;
+  }
+
+  if (stayTranscriptOnly) {
+    set((state) => ({
+      threadRuntimeById: {
+        ...state.threadRuntimeById,
+        [threadId]: { ...state.threadRuntimeById[threadId], hydrating: false, transcriptOnly: true },
+      },
+    }));
+    clearThreadSelectionRequest(threadId, requestId);
+    return;
+  }
+
+  set((state) => ({
+    threadRuntimeById: {
+      ...state.threadRuntimeById,
+      [threadId]: { ...state.threadRuntimeById[threadId], hydrating: false, transcriptOnly: false },
+    },
+  }));
+
+  if (options.reconnectAfterHydration) {
+    await get().reconnectThread(threadId, undefined, {
+      selectionRequestId: requestId,
+      skipWorkspaceSelect: options.skipWorkspaceSelectOnReconnect,
+    });
+  }
+  clearThreadSelectionRequest(threadId, requestId);
+}
 
 export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "removeThread" | "deleteThreadHistory" | "renameThread" | "newThread" | "selectThread" | "reconnectThread" | "sendMessage" | "cancelThread" | "clearThreadUsageHardCap" | "setThreadModel" | "setComposerText" | "setInjectContext" | "answerAsk" | "answerApproval" | "dismissPrompt" | "loadAllThreadUsage"> {
   const waitForSelectionFrame = async () => {
@@ -446,190 +829,11 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
   
 
     selectThread: async (threadId: string) => {
-      const thread = get().threads.find((t) => t.id === threadId);
-      if (!thread) return;
-
-      ensureThreadRuntime(get, set, threadId);
-      if (thread.draft) {
-        set((s) => ({
-          selectedThreadId: threadId,
-          selectedWorkspaceId: thread.workspaceId,
-          view: "chat",
-          threadRuntimeById: {
-            ...s.threadRuntimeById,
-            [threadId]: {
-              ...s.threadRuntimeById[threadId],
-              hydrating: false,
-              transcriptOnly: false,
-            },
-          },
-        }));
-        syncDesktopStateCache(get);
-        return;
-      }
-      const rt = get().threadRuntimeById[threadId];
-      if (get().selectedThreadId === threadId && (RUNTIME.threadSelectionRequests.has(threadId) || rt?.connected)) {
-        set({
-          selectedWorkspaceId: thread.workspaceId,
-          view: "chat",
-        });
-        syncDesktopStateCache(get);
-        return;
-      }
-
-      const alreadyLoaded = rt?.feed && rt.feed.length > 0;
-      const sessionId = rt?.sessionId ?? thread.sessionId;
-      const expectedFingerprint = threadFingerprint(thread);
-      const cachedSnapshot = sessionId ? RUNTIME.sessionSnapshots.get(sessionId) : null;
-      const matchingCachedSnapshot =
-        sessionId && cachedSnapshot && fingerprintMatches(cachedSnapshot.fingerprint, expectedFingerprint)
-          ? cachedSnapshot.snapshot
-          : null;
-
-      if (sessionId && cachedSnapshot && !matchingCachedSnapshot) {
-        console.debug(
-          `[selectThread] Cache fingerprint mismatch for session ${sessionId}: cached ${JSON.stringify(cachedSnapshot.fingerprint)} vs expected ${JSON.stringify(expectedFingerprint)}`,
-        );
-      }
-
-      const skipHarnessSnapshotFetch = Boolean(alreadyLoaded && matchingCachedSnapshot);
-      const shouldFetchHarnessSnapshot =
-        Boolean(sessionId)
-        && !skipHarnessSnapshotFetch
-        && (thread.messageCount > 0 || thread.lastEventSeq > 0 || Boolean(thread.legacyTranscriptId));
-
-      const requestId = beginThreadSelectionRequest(threadId);
-      set((s) => ({
-        selectedThreadId: threadId,
-        selectedWorkspaceId: thread.workspaceId,
-        view: "chat",
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: {
-            ...s.threadRuntimeById[threadId],
-            hydrating: !alreadyLoaded && !matchingCachedSnapshot,
-            transcriptOnly: false,
-          },
-        },
-      }));
-      syncDesktopStateCache(get);
-
-      await waitForSelectionFrame();
-      if (!isSelectionCurrent(threadId, requestId)) {
-        clearThreadHydrationIfCurrent(threadId, requestId);
-        return;
-      }
-
-      let appliedCachedSnapshot = false;
-      if (matchingCachedSnapshot && sessionId && skipHarnessSnapshotFetch) {
-        applySessionSnapshot(threadId, sessionId, matchingCachedSnapshot);
-        appliedCachedSnapshot = true;
-      }
-
-      if (!isSelectionCurrent(threadId, requestId)) {
-        if (appliedCachedSnapshot) {
-          clearThreadHydrationIfCurrent(threadId, requestId);
-        }
-        return;
-      }
-
-      let stayTranscriptOnly = false;
-      if (!alreadyLoaded || matchingCachedSnapshot) {
-        try {
-          let loadedFromHarness = false;
-          if (sessionId && shouldFetchHarnessSnapshot) {
-            await ensureServerRunning(get, set, thread.workspaceId);
-            ensureControlSocket(get, set, thread.workspaceId);
-            const snapshot = await requestSessionSnapshot(get, set, thread.workspaceId, sessionId);
-            if (!isSelectionCurrent(threadId, requestId)) {
-              clearThreadHydrationIfCurrent(threadId, requestId);
-              return;
-            }
-            if (snapshot) {
-              applySessionSnapshot(threadId, sessionId, snapshot);
-              cacheSessionSnapshot(snapshot);
-              loadedFromHarness = true;
-            } else if (matchingCachedSnapshot) {
-              applySessionSnapshot(threadId, sessionId, matchingCachedSnapshot);
-            } else {
-              stayTranscriptOnly = true;
-            }
-          }
-
-          if (!loadedFromHarness && !matchingCachedSnapshot && !alreadyLoaded) {
-            const snapshot = await hydrateLegacyTranscript(thread);
-            if (!snapshot) {
-              throw new Error("No harness snapshot or legacy transcript cache was available.");
-            }
-            if (!isSelectionCurrent(threadId, requestId)) {
-              clearThreadHydrationIfCurrent(threadId, requestId);
-              return;
-            }
-            set((s) => ({
-              threadRuntimeById: {
-                ...s.threadRuntimeById,
-                [threadId]: {
-                  ...s.threadRuntimeById[threadId],
-                  sessionUsage: snapshot.sessionUsage,
-                  lastTurnUsage: snapshot.lastTurnUsage,
-                  agents: snapshot.agents,
-                  feed: snapshot.feed,
-                  hydrating: false,
-                  transcriptOnly: true,
-                },
-              },
-            }));
-          }
-        } catch (error) {
-          if (!isSelectionCurrent(threadId, requestId)) {
-            clearThreadHydrationIfCurrent(threadId, requestId);
-            return;
-          }
-
-          const detail = error instanceof Error ? error.message : String(error);
-          set((s) => ({
-            notifications: pushNotification(s.notifications, {
-              id: makeId(),
-              ts: nowIso(),
-              kind: "error",
-              title: "Transcript load failed",
-              detail,
-            }),
-          }));
-          clearThreadHydrationIfCurrent(threadId, requestId);
-          return;
-        }
-      }
-
-      if (!isSelectionCurrent(threadId, requestId)) {
-        clearThreadHydrationIfCurrent(threadId, requestId);
-        return;
-      }
-
-      if (stayTranscriptOnly) {
-        set((s) => ({
-          threadRuntimeById: {
-            ...s.threadRuntimeById,
-            [threadId]: { ...s.threadRuntimeById[threadId], hydrating: false, transcriptOnly: true },
-          },
-        }));
-        clearThreadSelectionRequest(threadId, requestId);
-        return;
-      }
-
-      set((s) => ({
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: { ...s.threadRuntimeById[threadId], hydrating: false, transcriptOnly: false },
-        },
-      }));
-
-      await get().reconnectThread(threadId, undefined, { selectionRequestId: requestId });
-      clearThreadSelectionRequest(threadId, requestId);
+      await hydrateThreadSelection(get, set, threadId);
     },
   
 
-    reconnectThread: async (threadId: string, firstMessage?: string, opts?: { selectionRequestId?: number }) => {
+    reconnectThread: async (threadId: string, firstMessage?: string, opts?: { selectionRequestId?: number; skipWorkspaceSelect?: boolean }) => {
       const isReconnectCurrent = () =>
         opts?.selectionRequestId === undefined
         || (get().selectedThreadId === threadId && isCurrentThreadSelectionRequest(threadId, opts.selectionRequestId));
@@ -643,8 +847,10 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         return;
       }
   
-      await get().selectWorkspace(thread.workspaceId);
-      if (!isReconnectCurrent()) return;
+      if (!opts?.skipWorkspaceSelect) {
+        await get().selectWorkspace(thread.workspaceId);
+        if (!isReconnectCurrent()) return;
+      }
       await ensureServerRunning(get, set, thread.workspaceId);
       if (!isReconnectCurrent()) return;
       ensureControlSocket(get, set, thread.workspaceId);

@@ -88,6 +88,7 @@ function Dialog({ children, open, defaultOpen, onOpenChange }: DialogProps) {
   const restoreFocusRef = React.useRef<HTMLElement | null>(null);
   const triggerRef = React.useRef<HTMLElement | null>(null);
   const isOpen = open ?? uncontrolledOpen;
+  const wasOpenRef = React.useRef(isOpen);
   const setOpen = React.useCallback((nextOpen: boolean) => {
     if (nextOpen && typeof document !== "undefined") {
       const activeElement = getActiveElement(document);
@@ -100,6 +101,22 @@ function Dialog({ children, open, defaultOpen, onOpenChange }: DialogProps) {
     }
     onOpenChange?.(nextOpen);
   }, [onOpenChange, open]);
+
+  React.useLayoutEffect(() => {
+    if (typeof document === "undefined") {
+      wasOpenRef.current = isOpen;
+      return;
+    }
+
+    if (!wasOpenRef.current && isOpen && restoreFocusRef.current === null) {
+      const activeElement = getActiveElement(document);
+      restoreFocusRef.current = activeElement && activeElement !== document.body
+        ? activeElement
+        : triggerRef.current;
+    }
+
+    wasOpenRef.current = isOpen;
+  }, [isOpen]);
 
   return (
     <DialogContext.Provider value={{ open: isOpen, restoreFocusRef, triggerRef, setOpen }}>{children}</DialogContext.Provider>
@@ -210,11 +227,14 @@ function DialogContent({
   const handleEscapeDismiss = React.useCallback(
     (event: KeyboardEvent) => {
       allowDismissRef.current = true;
-      const nativePreventDefault = event.preventDefault.bind(event);
-      const syntheticEvent = Object.assign(event, {
+      event.stopPropagation();
+      const syntheticEvent = Object.assign(Object.create(event), {
         preventDefault: () => {
           allowDismissRef.current = false;
-          nativePreventDefault();
+          event.preventDefault();
+        },
+        stopPropagation: () => {
+          event.stopPropagation();
         },
       });
       onEscapeKeyDown?.(syntheticEvent as KeyboardEvent);

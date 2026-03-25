@@ -50,7 +50,7 @@ type JsonRpcRequestMessage = z.infer<typeof jsonRpcRequestSchema>;
 type JsonRpcNotificationMessage = z.infer<typeof jsonRpcNotificationSchema>;
 type JsonRpcResponseMessage = z.infer<typeof jsonRpcResponseSchema>;
 
-type JsonRpcServerRequest =
+export type JsonRpcServerRequest =
   | {
       method: "item/tool/requestUserInput";
       id: JsonRpcId;
@@ -292,7 +292,7 @@ export class CoworkJsonRpcClient {
       return;
     }
     if ("method" in message) {
-    const notification = normalizeNotification(message as JsonRpcNotificationMessage);
+      const notification = normalizeNotification(message as JsonRpcNotificationMessage);
       if (notification) {
         this.onNotification?.(notification);
       }

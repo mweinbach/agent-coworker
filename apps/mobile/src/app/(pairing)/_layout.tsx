@@ -26,14 +26,15 @@ export default function PairingLayout() {
       <Stack.Screen
         name="index"
         options={{
-          title: "Pairing",
+          title: "Connect",
         }}
       />
       <Stack.Screen
         name="scan"
         options={{
-          title: "Scan QR",
+          title: "Scan Computer",
           headerLargeTitle: false,
+          headerBackButtonDisplayMode: "minimal",
           presentation: "card",
         }}
       />

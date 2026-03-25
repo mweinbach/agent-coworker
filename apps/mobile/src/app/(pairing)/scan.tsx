@@ -43,8 +43,8 @@ export default function PairingScanScreen() {
   return (
     <Screen scroll>
       <SectionCard
-        title="Scan the desktop code"
-        description="Point your camera at the QR shown in Cowork Desktop → Settings → Remote Access."
+        title="Scan your computer"
+        description="On your computer, open Cowork Desktop and show the QR from the remote access screen, then point this camera at it."
         action={<StatusPill label={granted ? "camera ready" : "permission needed"} tone={granted ? "success" : "warning"} />}
       >
         {!granted ? (

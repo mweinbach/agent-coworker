@@ -24,6 +24,17 @@ type ReadJsonFileResult = {
   parsed: JsonRecord | null;
 };
 
+export type RemodexStateReadResult =
+  | {
+      status: "resolved";
+      state: ResolvedRemodexState;
+    }
+  | {
+      status: "missing" | "invalid";
+      stateDir: string;
+      errorMessage: string;
+    };
+
 export type RemodexPairingSessionSnapshot = {
   createdAt: string | null;
   pairingPayload: MobileRelayPairingPayload | null;
@@ -58,42 +69,82 @@ export function resolveRemodexStateDir(options: ResolveRemodexStateOptions = {})
   return options.stateDir ?? path.join(options.homeDir ?? os.homedir(), REMODEX_STATE_DIRNAME);
 }
 
-export function readResolvedRemodexState(options: ResolveRemodexStateOptions = {}): ResolvedRemodexState {
+export function readRemodexStateResult(options: ResolveRemodexStateOptions = {}): RemodexStateReadResult {
   const stateDir = resolveRemodexStateDir(options);
   const daemonConfigPath = path.join(stateDir, REMODEX_DAEMON_CONFIG_FILE);
   const deviceStatePath = path.join(stateDir, REMODEX_DEVICE_STATE_FILE);
   const bridgeStatusPath = path.join(stateDir, REMODEX_BRIDGE_STATUS_FILE);
   const pairingSessionPath = path.join(stateDir, REMODEX_PAIRING_SESSION_FILE);
+  const daemonConfigErrorMessage = `Remodex daemon config is missing or unreadable at ${daemonConfigPath}.`;
+  const deviceStateErrorMessage = `Remodex device state is missing or unreadable at ${deviceStatePath}.`;
 
-  const daemonConfig = readRequiredJsonFile(
-    daemonConfigPath,
-    `Remodex daemon config is missing or unreadable at ${daemonConfigPath}.`,
-  );
-  const relayUrl = normalizeNonEmptyString(daemonConfig.relayUrl);
-  if (!relayUrl) {
-    throw new Error(`Remodex relay URL is missing in ${daemonConfigPath}.`);
-  }
-
+  const daemonConfigResult = readJsonFile(daemonConfigPath);
+  const deviceStateResult = readJsonFile(deviceStatePath);
   const bridgeStatusResult = readJsonFile(bridgeStatusPath);
   const pairingSessionResult = readJsonFile(pairingSessionPath);
+  const hasAnyStateFile = daemonConfigResult.exists
+    || deviceStateResult.exists
+    || bridgeStatusResult.exists
+    || pairingSessionResult.exists;
+
+  if (!daemonConfigResult.parsed) {
+    return {
+      status: hasAnyStateFile ? "invalid" : "missing",
+      stateDir,
+      errorMessage: daemonConfigErrorMessage,
+    };
+  }
+
+  const daemonConfig = daemonConfigResult.parsed;
+  const relayUrl = normalizeNonEmptyString(daemonConfig.relayUrl);
+  if (!relayUrl) {
+    return {
+      status: "invalid",
+      stateDir,
+      errorMessage: `Remodex relay URL is missing in ${daemonConfigPath}.`,
+    };
+  }
+
   const pairingSession = parsePairingSession(pairingSessionResult.parsed);
   const serviceStatus = deriveServiceStatus(bridgeStatusResult.parsed);
   const serviceMessage = deriveServiceMessage(bridgeStatusResult);
   const serviceUpdatedAt = normalizeNonEmptyString(bridgeStatusResult.parsed?.updatedAt) || null;
-  const deviceState = readRequiredJsonFile(
-    deviceStatePath,
-    `Remodex device state is missing or unreadable at ${deviceStatePath}.`,
-  );
+  if (!deviceStateResult.parsed) {
+    return {
+      status: "invalid",
+      stateDir,
+      errorMessage: deviceStateErrorMessage,
+    };
+  }
 
-  return {
-    stateDir,
-    relayUrl,
-    identityState: parseIdentityState(deviceState, pairingSession?.createdAt ?? serviceUpdatedAt),
-    serviceStatus,
-    serviceMessage,
-    serviceUpdatedAt,
-    pairingSession,
-  };
+  try {
+    return {
+      status: "resolved",
+      state: {
+        stateDir,
+        relayUrl,
+        identityState: parseIdentityState(deviceStateResult.parsed, pairingSession?.createdAt ?? serviceUpdatedAt),
+        serviceStatus,
+        serviceMessage,
+        serviceUpdatedAt,
+        pairingSession,
+      },
+    };
+  } catch (error) {
+    return {
+      status: "invalid",
+      stateDir,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function readResolvedRemodexState(options: ResolveRemodexStateOptions = {}): ResolvedRemodexState {
+  const result = readRemodexStateResult(options);
+  if (result.status !== "resolved") {
+    throw new Error(result.errorMessage);
+  }
+  return result.state;
 }
 
 export async function rememberRemodexTrustedPhoneRecord(

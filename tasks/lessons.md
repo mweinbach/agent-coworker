@@ -1,5 +1,6 @@
 # Lessons
 
+- For desktop remote-access fallback in this repo, when Remodex is absent, keep using the Remodex relay and only fall back on Cowork-managed local state; missing local Remodex files are not a reason to switch relays.
 - For Google native citation UX in this repo, do not assume the stored annotation title is the best source label; opaque grounding redirects can often be resolved in the harness to the final article URL and page title, which is better than piling more logic into the desktop renderer.
 - For JSON-RPC CLI migrations in this repo, move the whole client contract together: read thread ids from the `{ thread }` envelope, hydrate local CLI state from control-event result payloads, fetch provider auth methods before `/connect`, send API keys through `setApiKey`, clear budgets through `usageBudget/set`, and match streamed `delta`/`toolCall` payload names exactly.
 - When the user says an archived surface should be removed entirely, do the full deletion pass in one go: code, tests, docs, entrypoint scripts, and now-unused dependencies should all disappear together instead of leaving a dormant compatibility shell behind.
@@ -215,6 +216,8 @@
 - When the default CI lane hits transient `mcp.grep.app` 5xxs, keep `RUN_REMOTE_MCP_TESTS` on connect/discover smoke only and require `RUN_REMOTE_MCP_AGENT_TESTS` for live remote tool execution.
 - When a desktop Linux smoke run shows a blank renderer or `Render frame was disposed` errors, do not treat native window chrome or menu interactivity alone as proof the UI is healthy; debug the renderer failure and visible content before signing off.
 - For Expo mobile verification in this repo, do not treat native `run:ios` or `run:android` success as sufficient by itself; always run an explicit Metro bundle path too (for example `expo export`) so repo-root imports, Babel/plugin drift, and other JS-resolution failures are caught before declaring the mobile app buildable.
+- When Windows title-band controls need to visually belong to the sidebar in this repo, do not rely on max-width tweaks on the shared inline toggle cluster; render an explicit left chrome strip sized from `sidebarWidth` so collapse and `New Chat` stay deterministically anchored in the sidebar-owned band.
+- For the Windows sidebar-owned chrome strip in this repo, order the controls like a sidebar header: put the primary `New Chat` action first and the collapse/show toggle on its right, instead of leading with the chrome toggle.
 
 ## 2026-03-18 Tool Output Overflow Audit
 

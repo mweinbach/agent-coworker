@@ -5,6 +5,7 @@ import path from "node:path";
 
 const {
   forgetRemodexTrustedPhoneRecord,
+  readRemodexStateResult,
   readResolvedRemodexState,
   rememberRemodexTrustedPhoneRecord,
   resolveRemodexStateDir,
@@ -32,8 +33,10 @@ describe("remodex state reader", () => {
   test("reads valid remodex state and extracts the trusted phone", async () => {
     await writeRemodexState(tmpDir);
 
+    const result = readRemodexStateResult({ stateDir: tmpDir });
     const state = readResolvedRemodexState({ stateDir: tmpDir });
 
+    expect(result.status).toBe("resolved");
     expect(state.relayUrl).toBe("wss://api.phodex.app/relay");
     expect(state.serviceStatus).toBe("running");
     expect(state.identityState.macDeviceId).toBe("mac-1");
@@ -41,10 +44,31 @@ describe("remodex state reader", () => {
     expect(state.pairingSession?.pairingPayload?.sessionId).toBe("remodex-session");
   });
 
-  test("throws when required state files are missing", async () => {
+  test("classifies a fully absent remodex state as missing", async () => {
+    const result = readRemodexStateResult({ stateDir: tmpDir });
+
+    expect(result).toMatchObject({
+      status: "missing",
+      stateDir: tmpDir,
+    });
     await expect(async () => readResolvedRemodexState({ stateDir: tmpDir })).toThrow(
       "Remodex daemon config is missing or unreadable",
     );
+  });
+
+  test("classifies partial remodex state as invalid", async () => {
+    await fs.mkdir(tmpDir, { recursive: true });
+    await fs.writeFile(path.join(tmpDir, "daemon-config.json"), JSON.stringify({
+      relayUrl: "wss://api.phodex.app/relay",
+    }, null, 2));
+
+    const result = readRemodexStateResult({ stateDir: tmpDir });
+
+    expect(result).toMatchObject({
+      status: "invalid",
+      stateDir: tmpDir,
+    });
+    expect(result.errorMessage).toContain("Remodex device state is missing or unreadable");
   });
 
   test("throws when device state is invalid", async () => {
@@ -54,6 +78,9 @@ describe("remodex state reader", () => {
     }, null, 2));
     await fs.writeFile(path.join(tmpDir, "device-state.json"), "{not-json");
 
+    const result = readRemodexStateResult({ stateDir: tmpDir });
+
+    expect(result.status).toBe("invalid");
     await expect(async () => readResolvedRemodexState({ stateDir: tmpDir })).toThrow(
       "Remodex device state is missing or unreadable",
     );

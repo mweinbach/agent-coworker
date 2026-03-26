@@ -14,10 +14,12 @@ import {
   stopMobileRelay,
 } from "../../../lib/desktopCommands";
 
-function describeRelaySource(source: Awaited<ReturnType<typeof getMobileRelayState>>["relaySource"]): string {
+export function describeRelaySource(source: Awaited<ReturnType<typeof getMobileRelayState>>["relaySource"]): string {
   switch (source) {
     case "remodex":
-      return "Remodex-backed";
+      return "Remodex";
+    case "managed":
+      return "Cowork-managed";
     case "override":
       return "Custom override";
     case "unavailable":
@@ -26,7 +28,7 @@ function describeRelaySource(source: Awaited<ReturnType<typeof getMobileRelaySta
   }
 }
 
-function describeRelayServiceStatus(
+export function describeRelayServiceStatus(
   status: Awaited<ReturnType<typeof getMobileRelayState>>["relayServiceStatus"],
 ): string {
   switch (status) {
@@ -97,7 +99,7 @@ export function RemoteAccessPage() {
       <div className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight text-foreground">Remote Access</h1>
         <p className="text-sm text-muted-foreground">
-          Pair one phone to the selected workspace using the Remodex relay and Cowork JSON-RPC.
+          Pair one phone to the selected workspace using the remote relay and Cowork JSON-RPC.
         </p>
       </div>
 
@@ -155,7 +157,7 @@ export function RemoteAccessPage() {
               Relay source: {describeRelaySource(state?.relaySource ?? "unavailable")}
             </div>
             <div className="mt-1 text-xs text-muted-foreground">
-              Remodex service: {describeRelayServiceStatus(state?.relayServiceStatus ?? "unknown")}
+              Relay service: {describeRelayServiceStatus(state?.relayServiceStatus ?? "unknown")}
             </div>
             {state?.relayUrl ? (
               <div className="mt-1 text-xs text-muted-foreground">

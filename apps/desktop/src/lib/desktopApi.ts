@@ -22,7 +22,7 @@ export type MobileRelayBridgeState = {
   status: "idle" | "starting" | "pairing" | "connected" | "reconnecting" | "error";
   workspaceId: string | null;
   workspacePath: string | null;
-  relaySource: "remodex" | "override" | "unavailable";
+  relaySource: "remodex" | "managed" | "override" | "unavailable";
   relaySourceMessage: string | null;
   relayServiceStatus: "unknown" | "running" | "not-running" | "disconnected" | "unavailable";
   relayServiceMessage: string | null;

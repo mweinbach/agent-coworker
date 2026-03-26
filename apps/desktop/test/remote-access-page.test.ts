@@ -164,7 +164,7 @@ mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
 }));
 
 const { useAppStore } = await import("../src/app/store");
-const { RemoteAccessPage } = await import("../src/ui/settings/pages/RemoteAccessPage");
+const { RemoteAccessPage, describeRelaySource } = await import("../src/ui/settings/pages/RemoteAccessPage");
 
 describe("desktop remote access page", () => {
   beforeEach(() => {
@@ -190,8 +190,16 @@ describe("desktop remote access page", () => {
   test("renders pairing and trusted phone sections", () => {
     const html = renderToStaticMarkup(createElement(RemoteAccessPage));
     expect(html).toContain("Remote Access");
+    expect(html).toContain("using the remote relay and Cowork JSON-RPC");
     expect(html).toContain("Workspace bridge");
+    expect(html).toContain("Relay service:");
     expect(html).toContain("Pairing QR");
     expect(html).toContain("Trusted phone");
+    expect(html).not.toContain("Remodex-backed");
+    expect(html).not.toContain("Remodex service:");
+  });
+
+  test("describes the managed relay source", () => {
+    expect(describeRelaySource("managed")).toBe("Cowork-managed");
   });
 });

@@ -14,6 +14,7 @@ mock.module("electron", () => ({
 }));
 
 const { MobileRelayBridge } = await import("../electron/services/mobileRelayBridge");
+const MANAGED_RELAY_URL = "wss://api.phodex.app/relay";
 
 class FakeServerManager {
   readonly starts: Array<{ workspaceId: string; workspacePath: string; yolo: boolean }> = [];
@@ -75,7 +76,7 @@ describe("mobile relay bridge", () => {
     remodexStateDir = "";
   });
 
-  test("initial snapshot starts idle with generated device state", async () => {
+  test("initial snapshot starts idle from remodex state when available", async () => {
     const bridge = new MobileRelayBridge({
       serverManager: new FakeServerManager() as never,
       userDataPath: userDataDir,
@@ -97,6 +98,53 @@ describe("mobile relay bridge", () => {
     expect(snapshot.sessionId).toBeNull();
     expect(snapshot.pairingPayload).toBeNull();
     expect(snapshot.trustedPhoneDeviceId).toBe("phone-1");
+  });
+
+  test("explicit relay override wins over remodex state", async () => {
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      relayUrl: "wss://override.example.test/relay",
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      createSidecarSocket: () => sidecarSocket,
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        return socket;
+      },
+    });
+
+    const snapshot = bridge.getSnapshot();
+    expect(snapshot.relaySource).toBe("override");
+    expect(snapshot.relayUrl).toBe("wss://override.example.test/relay");
+    expect(snapshot.relayServiceStatus).toBe("unknown");
+    expect(snapshot.trustedPhoneDeviceId).toBeNull();
+  });
+
+  test("initial snapshot falls back to managed state when remodex is missing", async () => {
+    await fs.rm(remodexStateDir, { recursive: true, force: true });
+
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      createSidecarSocket: () => sidecarSocket,
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        return socket;
+      },
+    });
+
+    const snapshot = bridge.getSnapshot();
+    expect(snapshot.status).toBe("idle");
+    expect(snapshot.relaySource).toBe("managed");
+    expect(snapshot.relayUrl).toBe(MANAGED_RELAY_URL);
+    expect(snapshot.relayServiceStatus).toBe("unknown");
+    expect(snapshot.relaySourceMessage).toContain("Cowork-managed");
+    expect(snapshot.trustedPhoneDeviceId).toBeNull();
   });
 
   test("start creates a pairing snapshot for the workspace using remodex state", async () => {
@@ -224,6 +272,63 @@ describe("mobile relay bridge", () => {
     expect(forgotten.trustedPhoneFingerprint).toBeNull();
   });
 
+  test("missing remodex state falls back to managed mode and persists trust in userData", async () => {
+    await fs.rm(remodexStateDir, { recursive: true, force: true });
+
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    const snapshot = await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+    const relaySocket = relaySockets.at(-1);
+
+    expect(snapshot.relaySource).toBe("managed");
+    expect(snapshot.relayUrl).toBe(MANAGED_RELAY_URL);
+    expect(snapshot.pairingPayload?.relay).toBe(MANAGED_RELAY_URL);
+    expect(snapshot.pairingPayload?.macDeviceId).toBeTruthy();
+
+    relaySocket?.emitMessage(JSON.stringify({
+      kind: "clientHello",
+      phoneDeviceId: "phone-managed",
+      phoneIdentityPublicKey: Buffer.from("managed-phone-public-key").toString("base64"),
+    }));
+    relaySocket?.emitMessage(JSON.stringify({ kind: "secureReady" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const trusted = bridge.getSnapshot();
+    expect(trusted.trustedPhoneDeviceId).toBe("phone-managed");
+    expect(trusted.status).toBe("connected");
+
+    const managedState = JSON.parse(
+      await fs.readFile(path.join(userDataDir, "mobile-relay", "device-state.json"), "utf8"),
+    );
+    expect(managedState.trustedPhone).toEqual(expect.objectContaining({
+      phoneDeviceId: "phone-managed",
+      phoneIdentityPublicKey: Buffer.from("managed-phone-public-key").toString("base64"),
+    }));
+  });
+
   test("start closes existing sockets before replacing the bridge session", async () => {
     const sidecarSockets: FakeSocket[] = [];
     const bridge = new MobileRelayBridge({
@@ -315,8 +420,8 @@ describe("mobile relay bridge", () => {
     expect((bridge as any).relaySocket).toBeNull();
   });
 
-  test("start fails clearly when remodex state is unavailable", async () => {
-    await fs.rm(remodexStateDir, { recursive: true, force: true });
+  test("invalid remodex state still fails clearly and does not fall back", async () => {
+    await fs.rm(path.join(remodexStateDir, "device-state.json"), { force: true });
     const bridge = new MobileRelayBridge({
       serverManager: new FakeServerManager() as never,
       userDataPath: userDataDir,
@@ -334,7 +439,7 @@ describe("mobile relay bridge", () => {
       workspaceId: "ws_1",
       workspacePath: "/tmp/workspace",
       yolo: false,
-    })).rejects.toThrow("Remodex daemon config is missing or unreadable");
+    })).rejects.toThrow("Remodex device state is missing or unreadable");
 
     expect(bridge.getSnapshot().relaySource).toBe("remodex");
     expect(bridge.getSnapshot().relayUrl).toBeNull();

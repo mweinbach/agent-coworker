@@ -8,6 +8,7 @@ export type MobileRelayStatus =
 
 export type MobileRelaySource =
   | "remodex"
+  | "managed"
   | "override"
   | "unavailable";
 

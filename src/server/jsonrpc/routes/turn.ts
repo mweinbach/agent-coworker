@@ -69,7 +69,7 @@ export function createTurnRouteHandlers(
     "turn/steer": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      const { text } = context.utils.extractInput(params.input);
+      const { text, attachments } = context.utils.extractInput(params.input);
       const clientMessageId =
         typeof params.clientMessageId === "string" && params.clientMessageId.trim()
           ? params.clientMessageId.trim()
@@ -96,7 +96,7 @@ export function createTurnRouteHandlers(
       const outcome = await captureBindingOutcome(
         context,
         binding,
-        () => session.sendSteerMessage(text, expectedTurnId, clientMessageId),
+        () => session.sendSteerMessage(text, expectedTurnId, clientMessageId, attachments.length > 0 ? attachments : undefined),
         (event): event is JsonRpcTurnSteerOutcome => (
           (event.type === "steer_accepted"
             && event.sessionId === session.id

@@ -283,7 +283,7 @@ export class TurnExecutionManager {
     return this.context.state.currentTurnOutcome === "error" ? "errored" : "completed";
   }
 
-  async sendSteerMessage(text: string, expectedTurnId: string, clientMessageId?: string) {
+  async sendSteerMessage(text: string, expectedTurnId: string, clientMessageId?: string, attachments?: FileAttachment[]) {
     if (!this.context.state.running) {
       this.context.emitError("validation_failed", "session", "No active turn to steer.");
       return;
@@ -313,6 +313,7 @@ export class TurnExecutionManager {
     this.context.state.pendingSteers.push({
       text,
       ...(clientMessageId ? { clientMessageId } : {}),
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
       acceptedAt: new Date().toISOString(),
     });
     this.context.emit({
@@ -324,14 +325,15 @@ export class TurnExecutionManager {
     });
   }
 
-  private commitPendingSteers(): ModelMessage[] {
+  private async commitPendingSteers(): Promise<ModelMessage[]> {
     const drained = this.context.state.pendingSteers.splice(0);
     if (drained.length === 0) return [];
 
-    const steerMessages = drained.map<ModelMessage>((steer) => ({
-      role: "user",
-      content: steer.text,
-    }));
+    const steerMessages: ModelMessage[] = [];
+    for (const steer of drained) {
+      const content = await this.buildUserMessageContent(steer.text, steer.attachments);
+      steerMessages.push({ role: "user", content });
+    }
     this.deps.historyManager.appendMessagesToHistory(steerMessages);
     for (const steer of drained) {
       this.context.emit({
@@ -345,8 +347,8 @@ export class TurnExecutionManager {
     return steerMessages;
   }
 
-  private drainPendingSteers(stepMessages: ModelMessage[]): { messages: ModelMessage[] } | undefined {
-    const steerMessages = this.commitPendingSteers();
+  private async drainPendingSteers(stepMessages: ModelMessage[]): Promise<{ messages: ModelMessage[] } | undefined> {
+    const steerMessages = await this.commitPendingSteers();
     if (steerMessages.length === 0) return undefined;
     return {
       messages: [...stepMessages, ...steerMessages],
@@ -684,7 +686,7 @@ export class TurnExecutionManager {
           continue;
         }
 
-        const lateSteersCommitted = this.commitPendingSteers().length > 0;
+        const lateSteersCommitted = (await this.commitPendingSteers()).length > 0;
         continueSameTurn =
           lateSteersCommitted &&
           !this.context.state.abortController?.signal.aborted;

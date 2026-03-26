@@ -763,8 +763,9 @@ export function ChatView() {
         if (!composerText.trim() && pendingAttachments.length === 0) return;
         const attachments = pendingAttachments.length > 0 ? pendingAttachments : undefined;
         const messageText = composerText.trim() || (attachments ? `[${attachments.map((a) => a.filename).join(", ")}]` : "");
-        void sendMessage(messageText, resolveComposerBusyPolicy(rt?.busy === true), attachments);
-        setPendingAttachments([]);
+        void sendMessage(messageText, resolveComposerBusyPolicy(rt?.busy === true), attachments).then((accepted) => {
+          if (accepted) setPendingAttachments([]);
+        });
       }
     },
     [composerText, rt?.busy, sendMessage, pendingAttachments],
@@ -882,8 +883,9 @@ export function ChatView() {
                 if (!composerText.trim() && pendingAttachments.length === 0) return;
                 const attachments = pendingAttachments.length > 0 ? pendingAttachments : undefined;
                 const messageText = composerText.trim() || (attachments ? `[${attachments.map((a) => a.filename).join(", ")}]` : "");
-                void sendMessage(messageText, resolveComposerBusyPolicy(busy), attachments);
-                setPendingAttachments([]);
+                void sendMessage(messageText, resolveComposerBusyPolicy(busy), attachments).then((accepted) => {
+                  if (accepted) setPendingAttachments([]);
+                });
               }}
             >
               <PromptInputBody>

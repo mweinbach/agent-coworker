@@ -215,7 +215,7 @@ export type AppStoreState = {
   reconnectThread: (threadId: string, firstMessage?: string, opts?: { selectionRequestId?: number; skipWorkspaceSelect?: boolean; attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[] }) => Promise<void>;
   renameThread: (threadId: string, newTitle: string) => void;
 
-  sendMessage: (text: string, busyPolicy?: ThreadBusyPolicy, attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[]) => Promise<void>;
+  sendMessage: (text: string, busyPolicy?: ThreadBusyPolicy, attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[]) => Promise<boolean>;
   cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => void;
   clearThreadUsageHardCap: (threadId: string) => void;
   setThreadModel: (threadId: string, provider: ProviderName, model: string) => void;

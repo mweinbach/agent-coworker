@@ -886,24 +886,24 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
     },
   
 
-    sendMessage: async (text: string, busyPolicy: ThreadBusyPolicy = "reject", attachments?: import("../store.helpers/jsonRpcSocket").FileAttachmentInput[]) => {
+    sendMessage: async (text: string, busyPolicy: ThreadBusyPolicy = "reject", attachments?: import("../store.helpers/jsonRpcSocket").FileAttachmentInput[]): Promise<boolean> => {
       const activeThreadId = get().selectedThreadId;
-      if (!activeThreadId) return;
-  
+      if (!activeThreadId) return false;
+
       const thread = get().threads.find((t) => t.id === activeThreadId);
-      if (!thread) return;
-  
+      if (!thread) return false;
+
       const rt = get().threadRuntimeById[activeThreadId];
       const trimmed = text.trim();
       const hasAttachments = attachments && attachments.length > 0;
-      if (!trimmed && !hasAttachments) return;
-  
+      if (!trimmed && !hasAttachments) return false;
+
       if (rt?.transcriptOnly) {
         const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
         const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
         await get().newThread({ workspaceId: thread.workspaceId, titleHint: thread.title, firstMessage, attachments });
         set({ composerText: "" });
-        return;
+        return true;
       }
 
       if (thread.status !== "active" || !rt?.sessionId) {
@@ -911,14 +911,15 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
         await get().reconnectThread(activeThreadId, firstMessage, { attachments });
         set({ composerText: "" });
-        return;
+        return true;
       }
-  
+
       const accepted = sendUserMessageToThread(get, set, activeThreadId, trimmed, busyPolicy, attachments);
-      if (!accepted) return;
-      if (busyPolicy === "steer" && rt?.busy) return;
+      if (!accepted) return false;
+      if (busyPolicy === "steer" && rt?.busy) return true;
 
       set({ composerText: "" });
+      return true;
     },
   
 

@@ -20,6 +20,20 @@ export const jsonRpcThreadSchema = z.object({
   }).strict(),
 }).strict();
 
+const textInputPart = z.object({
+  type: z.literal("text"),
+  text: z.string(),
+}).strict();
+
+const fileInputPart = z.object({
+  type: z.literal("file"),
+  filename: z.string().min(1),
+  contentBase64: z.string().min(1),
+  mimeType: z.string().min(1),
+}).strict();
+
+const inputPart = z.discriminatedUnion("type", [textInputPart, fileInputPart]);
+
 export const jsonRpcThreadTurnRequestSchemas = {
   "thread/start": z.object({
     cwd: nonEmptyTrimmedStringSchema.optional(),
@@ -43,19 +57,13 @@ export const jsonRpcThreadTurnRequestSchemas = {
   "turn/start": z.object({
     threadId: nonEmptyTrimmedStringSchema,
     clientMessageId: nonEmptyTrimmedStringSchema.optional(),
-    input: z.array(z.object({
-      type: z.literal("text"),
-      text: z.string(),
-    }).strict()),
+    input: z.array(inputPart),
   }).strict(),
   "turn/steer": z.object({
     threadId: nonEmptyTrimmedStringSchema,
     turnId: nonEmptyTrimmedStringSchema,
     clientMessageId: nonEmptyTrimmedStringSchema.optional(),
-    input: z.array(z.object({
-      type: z.literal("text"),
-      text: z.string(),
-    }).strict()),
+    input: z.array(inputPart),
   }).strict(),
   "turn/interrupt": z.object({
     threadId: nonEmptyTrimmedStringSchema,

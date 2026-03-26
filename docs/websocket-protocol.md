@@ -109,6 +109,32 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 
 `turn/start` and `turn/steer` also accept an optional `clientMessageId` string so JSON-RPC clients can correlate optimistic user UI state with the projected `user_message` notification stream.
 
+#### File attachments in `turn/start` and `turn/steer`
+
+The `input` array accepts two part types:
+
+- `{ "type": "text", "text": "..." }` — a text message part
+- `{ "type": "file", "filename": "image.png", "contentBase64": "iVBORw0KGgo...", "mimeType": "image/png" }` — a file attachment
+
+All uploaded files are saved to a `User Uploads/` directory in the workspace. The model receives a hidden system note with the file path. For models that support multimodal input (`supportsImageInput: true`), image files are also sent inline as base64 content. For Google/Gemini models, audio, video, and PDF files are additionally sent inline.
+
+Example request with a file attachment:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "method": "turn/start",
+  "params": {
+    "threadId": "abc-123",
+    "input": [
+      { "type": "text", "text": "What's in this image?" },
+      { "type": "file", "filename": "photo.jpg", "contentBase64": "...", "mimeType": "image/jpeg" }
+    ]
+  }
+}
+```
+
 ### Cowork JSON-RPC control namespace
 
 Cowork also exposes a workspace-scoped control namespace over the same JSON-RPC connection. These methods return a legacy-compatible event payload inside `{ "event": ... }` so existing UI reducers can adapt incrementally while the transport modernizes.

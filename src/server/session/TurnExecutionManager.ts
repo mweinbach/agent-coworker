@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 import { z } from "zod";
 import {
   MODEL_STREAM_NORMALIZER_VERSION,
@@ -15,6 +18,8 @@ import {
   type ServerErrorCode,
   type ServerErrorSource,
 } from "../../types";
+import { supportsImageInput } from "../../models/registry";
+import type { FileAttachment } from "../jsonrpc/routes/shared";
 import type { HistoryManager } from "./HistoryManager";
 import type { InteractionManager } from "./InteractionManager";
 import type { SessionBackupController } from "./SessionBackupController";
@@ -354,7 +359,7 @@ export class TurnExecutionManager {
     this.context.emitError("validation_failed", "session", message);
   }
 
-  async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
+  async sendUserMessage(text: string, clientMessageId?: string, displayText?: string, attachments?: import("../jsonrpc/routes/shared").FileAttachment[]) {
     if (this.context.state.running) {
       this.context.emitError("busy", "session", "Agent is busy");
       return;
@@ -592,7 +597,9 @@ export class TurnExecutionManager {
         provider: this.context.state.config.provider,
         model: this.context.state.config.model,
       });
-      this.deps.historyManager.appendMessagesToHistory([{ role: "user", content: text }]);
+
+      const userMessageContent = await this.buildUserMessageContent(text, attachments);
+      this.deps.historyManager.appendMessagesToHistory([{ role: "user", content: userMessageContent }]);
       this.deps.metadataManager.maybeGenerateTitleFromQuery(text);
       this.context.queuePersistSessionSnapshot("session.user_message");
       let continueSameTurn = true;
@@ -774,6 +781,66 @@ export class TurnExecutionManager {
       this.context.state.abortController.abort();
     }
     this.deps.interactionManager.rejectAllPending("Cancelled by user");
+  }
+
+  private async buildUserMessageContent(
+    text: string,
+    attachments?: FileAttachment[],
+  ): Promise<string | Array<Record<string, unknown>>> {
+    if (!attachments || attachments.length === 0) {
+      return text;
+    }
+
+    const config = this.context.state.config;
+    const uploadsDir = path.resolve(config.workingDirectory, "User Uploads");
+    await fs.mkdir(uploadsDir, { recursive: true });
+
+    const provider = config.provider;
+    const model = config.model;
+    const modelSupportsImages = supportsImageInput(provider, model);
+    const isGoogleProvider = provider === "google";
+
+    const contentParts: Array<Record<string, unknown>> = [];
+    contentParts.push({ type: "text", text });
+
+    for (const attachment of attachments) {
+      const safeName = path.basename(attachment.filename);
+      if (!safeName || safeName === "." || safeName === "..") continue;
+
+      const filePath = path.resolve(uploadsDir, safeName);
+      if (!filePath.startsWith(path.resolve(uploadsDir))) continue;
+
+      const decoded = Buffer.from(attachment.contentBase64, "base64");
+      await fs.writeFile(filePath, decoded);
+
+      contentParts.push({
+        type: "text",
+        text: `[System: The user uploaded a file which has been saved to ${filePath}]`,
+      });
+
+      const mime = attachment.mimeType.toLowerCase();
+      const isImage = mime.startsWith("image/");
+      const isGeminiMultimodal =
+        mime.startsWith("audio/") ||
+        mime.startsWith("video/") ||
+        mime === "application/pdf";
+
+      if (isImage && modelSupportsImages) {
+        contentParts.push({
+          type: "image",
+          data: attachment.contentBase64,
+          mimeType: attachment.mimeType,
+        });
+      } else if (isGeminiMultimodal && isGoogleProvider) {
+        contentParts.push({
+          type: "image",
+          data: attachment.contentBase64,
+          mimeType: attachment.mimeType,
+        });
+      }
+    }
+
+    return contentParts;
   }
 
   private classifyTurnError(err: unknown): ClassifiedTurnError {

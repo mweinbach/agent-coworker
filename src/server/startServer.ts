@@ -35,6 +35,7 @@ import {
   buildControlSessionStateEvents,
   buildJsonRpcThreadFromRecord,
   buildJsonRpcThreadFromSession,
+  extractJsonRpcInput,
   extractJsonRpcTextInput,
   isJsonRpcSessionError,
   requireWorkspacePath,
@@ -849,6 +850,7 @@ export async function startAgentServer(
     utils: {
       resolveWorkspacePath: (params, method) => requireWorkspacePath(params, method, config.workingDirectory),
       extractTextInput: extractJsonRpcTextInput,
+      extractInput: extractJsonRpcInput,
       buildThreadFromSession: buildJsonRpcThreadFromSession,
       buildThreadFromRecord: buildJsonRpcThreadFromRecord,
       shouldIncludeThreadSummary: shouldIncludeJsonRpcThreadSummary,

@@ -320,6 +320,12 @@ export async function resumeJsonRpcThread(
   return await requestJsonRpc(get, set, workspaceId, "thread/resume", { threadId });
 }
 
+export type FileAttachmentInput = {
+  filename: string;
+  contentBase64: string;
+  mimeType: string;
+};
+
 export async function startJsonRpcTurn(
   get: StoreGet,
   set: StoreSet | undefined,
@@ -327,10 +333,17 @@ export async function startJsonRpcTurn(
   threadId: string,
   text: string,
   clientMessageId?: string,
+  attachments?: FileAttachmentInput[],
 ): Promise<any> {
+  const input: Array<Record<string, unknown>> = [{ type: "text", text }];
+  if (attachments && attachments.length > 0) {
+    for (const a of attachments) {
+      input.push({ type: "file", filename: a.filename, contentBase64: a.contentBase64, mimeType: a.mimeType });
+    }
+  }
   return await requestJsonRpc(get, set, workspaceId, "turn/start", {
     threadId,
-    input: [{ type: "text", text }],
+    input,
     ...(clientMessageId ? { clientMessageId } : {}),
   });
 }

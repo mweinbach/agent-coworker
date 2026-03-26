@@ -64,6 +64,7 @@ import {
   startJsonRpcThread,
   startJsonRpcTurn,
   steerJsonRpcTurn,
+  type FileAttachmentInput,
   interruptJsonRpcTurn,
   unsubscribeJsonRpcThread,
 } from "./jsonRpcSocket";
@@ -859,8 +860,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     text: string,
     threadId: string,
     clientMessageId: string,
+    attachments?: FileAttachmentInput[],
   ) {
-    void startJsonRpcTurn(get, set, workspaceId, sessionId, text, clientMessageId)
+    void startJsonRpcTurn(get, set, workspaceId, sessionId, text, clientMessageId, attachments)
       .catch(() => {
         surfaceJsonRpcTurnSendFailure(set, threadId);
       });
@@ -890,6 +892,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     threadId: string,
     text: string,
     busyPolicy: ThreadBusyPolicy = "reject",
+    attachments?: FileAttachmentInput[],
   ): boolean {
     const trimmed = text.trim();
     if (!trimmed) return false;
@@ -973,7 +976,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       clientMessageId,
     });
 
-    dispatchJsonRpcTurnStart(get, set, workspaceId, rt.sessionId, trimmed, threadId, clientMessageId);
+    dispatchJsonRpcTurnStart(get, set, workspaceId, rt.sessionId, trimmed, threadId, clientMessageId, attachments);
     return true;
   }
 

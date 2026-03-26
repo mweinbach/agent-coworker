@@ -1,10 +1,11 @@
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
-import { AlertTriangleIcon, LoaderCircleIcon, MessageSquareIcon, RotateCcwIcon } from "lucide-react";
+import { AlertTriangleIcon, LoaderCircleIcon, MessageSquareIcon, PaperclipIcon, RotateCcwIcon, XIcon } from "lucide-react";
 import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
 
 import { useAppStore } from "../app/store";
+import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
 import type { FeedItem, ThreadAgentSummary, ThreadPendingSteer, ThreadStatus } from "../app/types";
 import {
   Conversation,
@@ -552,6 +553,7 @@ export function ChatView() {
     () => new Map(),
   );
   const [cancelScopeDialogOpen, setCancelScopeDialogOpen] = useState(false);
+  const [pendingAttachments, setPendingAttachments] = useState<FileAttachmentInput[]>([]);
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
@@ -561,8 +563,33 @@ export function ChatView() {
 
   const feedRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const lastCountRef = useRef<number>(0);
   const autoScrolledThreadIdRef = useRef<string | null>(null);
+
+  const handleFileSelect = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    const newAttachments: FileAttachmentInput[] = [];
+    for (const file of Array.from(files)) {
+      const buffer = await file.arrayBuffer();
+      const base64 = btoa(
+        new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ""),
+      );
+      newAttachments.push({
+        filename: file.name,
+        contentBase64: base64,
+        mimeType: file.type || "application/octet-stream",
+      });
+    }
+    setPendingAttachments((prev) => [...prev, ...newAttachments]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, []);
+
+  const removeAttachment = useCallback((index: number) => {
+    setPendingAttachments((prev) => prev.filter((_, i) => i !== index));
+  }, []);
 
   const feed = rt?.feed ?? [];
   const normalizedFeed = normalizeFeedForToolCards(feed, developerMode);
@@ -848,11 +875,33 @@ export function ChatView() {
             <PromptInputForm
               onSubmit={(event) => {
                 event.preventDefault();
-                if (!composerText.trim()) return;
-                void sendMessage(composerText, resolveComposerBusyPolicy(busy));
+                if (!composerText.trim() && pendingAttachments.length === 0) return;
+                const attachments = pendingAttachments.length > 0 ? pendingAttachments : undefined;
+                void sendMessage(composerText, resolveComposerBusyPolicy(busy), attachments);
+                setPendingAttachments([]);
               }}
             >
               <PromptInputBody>
+                {pendingAttachments.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 px-3 pt-2">
+                    {pendingAttachments.map((att, i) => (
+                      <span
+                        key={`${att.filename}-${i}`}
+                        className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                      >
+                        {att.filename}
+                        <button
+                          type="button"
+                          onClick={() => removeAttachment(i)}
+                          className="ml-0.5 rounded hover:bg-muted-foreground/20"
+                          aria-label={`Remove ${att.filename}`}
+                        >
+                          <XIcon className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <PromptInputTextarea
                   ref={textareaRef}
                   value={composerText}
@@ -865,6 +914,23 @@ export function ChatView() {
               </PromptInputBody>
               <PromptInputFooter>
                 <PromptInputTools>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={handleFileSelect}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={disabled}
+                    className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    aria-label="Attach files"
+                    title="Attach files"
+                  >
+                    <PaperclipIcon className="h-4 w-4" />
+                  </button>
                   {threadModelConfig ? (
                     thread.draft ? (
                       <DraftThreadModelSelector

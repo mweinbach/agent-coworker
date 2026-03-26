@@ -880,7 +880,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
     },
   
 
-    sendMessage: async (text: string, busyPolicy: ThreadBusyPolicy = "reject") => {
+    sendMessage: async (text: string, busyPolicy: ThreadBusyPolicy = "reject", attachments?: import("../store.helpers/jsonRpcSocket").FileAttachmentInput[]) => {
       const activeThreadId = get().selectedThreadId;
       if (!activeThreadId) return;
   
@@ -907,7 +907,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         return;
       }
   
-      const accepted = sendUserMessageToThread(get, set, activeThreadId, trimmed, busyPolicy);
+      const accepted = sendUserMessageToThread(get, set, activeThreadId, trimmed, busyPolicy, attachments);
       if (!accepted) return;
       if (busyPolicy === "steer" && rt?.busy) return;
 

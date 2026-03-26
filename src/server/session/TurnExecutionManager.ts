@@ -305,8 +305,8 @@ export class TurnExecutionManager {
       return;
     }
 
-    if (text.trim().length === 0) {
-      this.context.emitError("validation_failed", "session", "Steer text must be non-empty.");
+    if (text.trim().length === 0 && (!attachments || attachments.length === 0)) {
+      this.context.emitError("validation_failed", "session", "Steer input must be non-empty.");
       return;
     }
 
@@ -803,21 +803,53 @@ export class TurnExecutionManager {
     const isGoogleProvider = provider === "google";
 
     const contentParts: Array<Record<string, unknown>> = [];
-    contentParts.push({ type: "text", text });
+    if (text) {
+      contentParts.push({ type: "text", text });
+    }
 
+    const usedNames = new Set<string>();
     for (const attachment of attachments) {
       const safeName = path.basename(attachment.filename);
       if (!safeName || safeName === "." || safeName === "..") continue;
 
-      const filePath = path.resolve(uploadsDir, safeName);
+      let finalName = safeName;
+      if (usedNames.has(finalName)) {
+        const ext = path.extname(safeName);
+        const base = safeName.slice(0, safeName.length - ext.length);
+        let counter = 1;
+        while (usedNames.has(finalName)) {
+          finalName = `${base}_${counter}${ext}`;
+          counter++;
+        }
+      }
+      usedNames.add(finalName);
+
+      const filePath = path.resolve(uploadsDir, finalName);
       if (!filePath.startsWith(path.resolve(uploadsDir))) continue;
 
+      // Also check for existing file on disk to avoid overwriting prior uploads
+      let diskPath = filePath;
+      try {
+        await fs.access(diskPath);
+        // File exists - find a unique name
+        const ext = path.extname(finalName);
+        const base = finalName.slice(0, finalName.length - ext.length);
+        let counter = 1;
+        while (true) {
+          diskPath = path.resolve(uploadsDir, `${base}_${counter}${ext}`);
+          try { await fs.access(diskPath); counter++; } catch { break; }
+        }
+        finalName = path.basename(diskPath);
+      } catch {
+        // File doesn't exist, use as-is
+      }
+
       const decoded = Buffer.from(attachment.contentBase64, "base64");
-      await fs.writeFile(filePath, decoded);
+      await fs.writeFile(diskPath, decoded);
 
       contentParts.push({
         type: "text",
-        text: `[System: The user uploaded a file which has been saved to ${filePath}]`,
+        text: `[System: The user uploaded a file which has been saved to ${diskPath}]`,
       });
 
       const mime = attachment.mimeType.toLowerCase();

@@ -79,10 +79,11 @@ export function createTurnRouteHandlers(
         ? params.turnId.trim()
         : context.threads.getLive(threadId)?.session?.activeTurnId ?? "";
       const session = context.threads.getLive(threadId)?.session;
-      if (!session || !text || !expectedTurnId) {
+      const hasSteerInput = text || attachments.length > 0;
+      if (!session || !hasSteerInput || !expectedTurnId) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
-          message: "turn/steer requires threadId, active turnId, and non-empty text input",
+          message: "turn/steer requires threadId, active turnId, and non-empty input",
         });
         return;
       }

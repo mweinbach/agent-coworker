@@ -48,6 +48,7 @@ import {
   rekeyThreadRuntimeMaps,
   resetModelStreamRuntime,
   shiftPendingThreadMessage,
+  shiftPendingThreadAttachments,
 } from "./runtimeState";
 import {
   buildSyntheticServerHelloFromJsonRpcThread,
@@ -908,7 +909,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
 
     if (rt.busy) {
       if (busyPolicy === "queue") {
-        queuePendingThreadMessage(threadId, trimmed);
+        queuePendingThreadMessage(threadId, trimmed, attachments);
         return true;
       }
 
@@ -988,7 +989,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     }
     const next = shiftPendingThreadMessage(threadId);
     if (!next) return false;
-    const accepted = sendUserMessageToThread(get, set, threadId, next);
+    const queuedAttachments = shiftPendingThreadAttachments(threadId);
+    const accepted = sendUserMessageToThread(get, set, threadId, next, undefined, queuedAttachments);
     if (!accepted) {
       prependPendingThreadMessage(threadId, next);
     }

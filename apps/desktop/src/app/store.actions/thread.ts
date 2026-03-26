@@ -640,6 +640,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       closeThreadSession(threadId);
       RUNTIME.optimisticUserMessageIds.delete(threadId);
       RUNTIME.pendingThreadMessages.delete(threadId);
+      RUNTIME.pendingThreadAttachments.delete(threadId);
       RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
       RUNTIME.modelStreamByThread.delete(threadId);
       RUNTIME.threadSelectionRequests.delete(threadId);
@@ -824,6 +825,9 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         return;
       }
 
+      if (opts?.attachments && opts.attachments.length > 0) {
+        RUNTIME.pendingThreadAttachments.set(threadId, opts.attachments);
+      }
       ensureThreadSocket(get, set, threadId, url, opts?.firstMessage, false);
     },
   
@@ -836,7 +840,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
     },
   
 
-    reconnectThread: async (threadId: string, firstMessage?: string, opts?: { selectionRequestId?: number; skipWorkspaceSelect?: boolean }) => {
+    reconnectThread: async (threadId: string, firstMessage?: string, opts?: { selectionRequestId?: number; skipWorkspaceSelect?: boolean; attachments?: import("../store.helpers/jsonRpcSocket").FileAttachmentInput[] }) => {
       const isReconnectCurrent = () =>
         opts?.selectionRequestId === undefined
         || (get().selectedThreadId === threadId && isCurrentThreadSelectionRequest(threadId, opts.selectionRequestId));
@@ -874,7 +878,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       if (!isReconnectCurrent()) return;
   
       if (firstMessage && firstMessage.trim()) {
-        queuePendingThreadMessage(threadId, firstMessage);
+        queuePendingThreadMessage(threadId, firstMessage, opts?.attachments);
       }
       ensureThreadSocket(get, set, threadId, url, firstMessage, Boolean(firstMessage?.trim()));
     },
@@ -895,15 +899,15 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       if (rt?.transcriptOnly) {
         const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
         const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
-        await get().newThread({ workspaceId: thread.workspaceId, titleHint: thread.title, firstMessage });
+        await get().newThread({ workspaceId: thread.workspaceId, titleHint: thread.title, firstMessage, attachments });
         set({ composerText: "" });
         return;
       }
-  
+
       if (thread.status !== "active" || !rt?.sessionId) {
         const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
         const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
-        await get().reconnectThread(activeThreadId, firstMessage);
+        await get().reconnectThread(activeThreadId, firstMessage, { attachments });
         set({ composerText: "" });
         return;
       }

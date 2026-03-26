@@ -35,6 +35,7 @@ import type {
   UpdaterReleaseInfo,
   UpdaterState,
   TrashPathInput,
+  WindowDragPointInput,
 } from "./desktopApi";
 import type { PersistedState } from "../app/types";
 
@@ -140,6 +141,11 @@ export const transcriptBatchInputSchema: z.ZodType<TranscriptBatchInput> = z.obj
 
 export const showContextMenuInputSchema: z.ZodType<ShowContextMenuInput> = z.object({
   items: z.array(contextMenuItemSchema),
+});
+
+export const windowDragPointInputSchema: z.ZodType<WindowDragPointInput> = z.object({
+  screenX: z.number().finite(),
+  screenY: z.number().finite(),
 });
 
 export const listDirectoryInputSchema: z.ZodType<ListDirectoryInput> = z.object({

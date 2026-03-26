@@ -67,6 +67,11 @@ export type ShowContextMenuInput = {
   items: ContextMenuItem[];
 };
 
+export type WindowDragPointInput = {
+  screenX: number;
+  screenY: number;
+};
+
 export type ListDirectoryInput = {
   path: string;
   includeHidden?: boolean;
@@ -242,6 +247,9 @@ export interface DesktopApi {
   windowMinimize(): Promise<void>;
   windowMaximize(): Promise<void>;
   windowClose(): Promise<void>;
+  windowDragStart(opts: WindowDragPointInput): Promise<void>;
+  windowDragMove(opts: WindowDragPointInput): Promise<void>;
+  windowDragEnd(): Promise<void>;
   getPlatform(): Promise<string>;
   listDirectory(opts: ListDirectoryInput): Promise<ExplorerEntry[]>;
   readFile(opts: ReadFileInput): Promise<ReadFileOutput>;
@@ -286,6 +294,9 @@ export const DESKTOP_IPC_CHANNELS = {
   windowMinimize: "desktop:windowMinimize",
   windowMaximize: "desktop:windowMaximize",
   windowClose: "desktop:windowClose",
+  windowDragStart: "desktop:windowDragStart",
+  windowDragMove: "desktop:windowDragMove",
+  windowDragEnd: "desktop:windowDragEnd",
   getPlatform: "desktop:getPlatform",
   listDirectory: "desktop:listDirectory",
   readFile: "desktop:readFile",

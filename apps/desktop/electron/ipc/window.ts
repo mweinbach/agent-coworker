@@ -1,8 +1,17 @@
 import { BrowserWindow, Menu } from "electron";
 
-import { DESKTOP_IPC_CHANNELS, type ShowContextMenuInput } from "../../src/lib/desktopApi";
-import { showContextMenuInputSchema } from "../../src/lib/desktopSchemas";
+import { DESKTOP_IPC_CHANNELS, type ShowContextMenuInput, type WindowDragPointInput } from "../../src/lib/desktopApi";
+import { showContextMenuInputSchema, windowDragPointInputSchema } from "../../src/lib/desktopSchemas";
 import type { DesktopIpcModuleContext } from "./types";
+
+type ActiveWindowDrag = {
+  startScreenX: number;
+  startScreenY: number;
+  startWindowX: number;
+  startWindowY: number;
+};
+
+const activeWindowDrags = new Map<number, ActiveWindowDrag>();
 
 export function registerWindowIpc(context: DesktopIpcModuleContext): void {
   const { handleDesktopInvoke, parseWithSchema } = context;
@@ -49,6 +58,38 @@ export function registerWindowIpc(context: DesktopIpcModuleContext): void {
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.windowClose, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     win?.close();
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.windowDragStart, (event, args: WindowDragPointInput) => {
+    const input = parseWithSchema(windowDragPointInputSchema, args, "window drag options");
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed() || win.isMaximized() || win.isFullScreen()) {
+      activeWindowDrags.delete(event.sender.id);
+      return;
+    }
+    const { x, y } = win.getBounds();
+    activeWindowDrags.set(event.sender.id, {
+      startScreenX: input.screenX,
+      startScreenY: input.screenY,
+      startWindowX: x,
+      startWindowY: y,
+    });
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.windowDragMove, (event, args: WindowDragPointInput) => {
+    const input = parseWithSchema(windowDragPointInputSchema, args, "window drag options");
+    const dragState = activeWindowDrags.get(event.sender.id);
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!dragState || !win || win.isDestroyed() || win.isMaximized() || win.isFullScreen()) {
+      return;
+    }
+    const nextX = Math.round(dragState.startWindowX + (input.screenX - dragState.startScreenX));
+    const nextY = Math.round(dragState.startWindowY + (input.screenY - dragState.startScreenY));
+    win.setPosition(nextX, nextY);
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.windowDragEnd, (event) => {
+    activeWindowDrags.delete(event.sender.id);
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getPlatform, () => {

@@ -321,7 +321,13 @@ describe("desktop sidebar", () => {
       if (!(newChatButton instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing new chat button");
       }
-      expect(newChatButton.className).toContain("w-full");
+      expect(newChatButton.className).toMatch(/w-full|flex-1/);
+      const titlebandButtons = Array.from(
+        container.querySelectorAll(".app-sidebar__titleband-row > button"),
+      );
+      expect(titlebandButtons).toHaveLength(2);
+      expect(titlebandButtons[0]?.textContent).toContain("New Chat");
+      expect(titlebandButtons[1]?.getAttribute("aria-label")).toBe("Hide sidebar");
 
       const skillsButton = Array.from(container.querySelectorAll("button")).find((button) =>
         button.textContent?.includes("Skills"),

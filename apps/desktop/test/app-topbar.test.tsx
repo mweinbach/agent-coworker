@@ -2,7 +2,11 @@ import { describe, expect, mock, test } from "bun:test";
 import { createElement } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+
+import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
+
+mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock());
 
 const { AppTopBar } = await import("../src/ui/layout/AppTopBar");
 
@@ -81,10 +85,8 @@ describe("desktop app top bar", () => {
       expect(sidebarFill?.className).toContain("border-border/70");
       expect(sidebarToggle).not.toBeNull();
       expect(sidebarToggle?.className).toContain("app-topbar__plain-icon-button");
-      expect(newChatButton).not.toBeNull();
-      expect(newChatReveal?.getAttribute("aria-hidden")).toBe("true");
-      expect(newChatReveal?.className).toContain("max-w-0");
-      expect(newChatReveal?.className).toContain("opacity-0");
+      expect(newChatButton).toBeNull();
+      expect(newChatReveal).toBeUndefined();
       expect(titleShell).not.toBeNull();
       expect(titleShell?.getAttribute("style")).toContain("left: 280px");
       expect(titleShell?.className).not.toContain("app-topbar__controls");
@@ -165,6 +167,93 @@ describe("desktop app top bar", () => {
       });
 
       expect(onNewChat).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("hides topbar sidebar strip on win32 when the sidebar is expanded", async () => {
+    const harness = setupJsdom();
+
+    try {
+      harness.dom.window.document.documentElement.dataset.platform = "win32";
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(AppTopBar, {
+            busy: false,
+            onToggleSidebar: () => {},
+            onNewChat: () => {},
+            sidebarCollapsed: false,
+            sidebarWidth: 280,
+            contextSidebarCollapsed: false,
+            onToggleContextSidebar: () => {},
+            title: "Refine desktop app UI",
+            subtitle: "agent-coworker",
+            sessionUsage: null,
+            lastTurnUsage: null,
+          }),
+        );
+      });
+
+      expect(container.querySelector(".app-sidebar-collapse-control")).toBeNull();
+      expect(container.querySelector(".app-topbar__sidebar-strip")).toBeNull();
+      expect(container.querySelector(".app-topbar__inline-sidebar-toggle")).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("shows new chat + expand strip on win32 when sidebar is collapsed", async () => {
+    const harness = setupJsdom();
+
+    try {
+      harness.dom.window.document.documentElement.dataset.platform = "win32";
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(AppTopBar, {
+            busy: false,
+            onToggleSidebar: () => {},
+            onNewChat: () => {},
+            sidebarCollapsed: true,
+            sidebarWidth: 280,
+            contextSidebarCollapsed: false,
+            onToggleContextSidebar: () => {},
+            title: "New thread",
+            subtitle: "agent-coworker",
+            sessionUsage: null,
+            lastTurnUsage: null,
+          }),
+        );
+      });
+
+      const leftRail = container.querySelector(".app-topbar__win32-left-rail");
+      const strip = container.querySelector(".app-topbar__sidebar-strip");
+      const titleShell = container.querySelector(".app-topbar__thread-shell");
+      const buttons = Array.from(strip?.querySelectorAll("button") ?? []);
+
+      expect(container.querySelector(".app-sidebar-collapse-control")).toBeNull();
+      expect(leftRail).not.toBeNull();
+      expect(strip).not.toBeNull();
+      expect(buttons).toHaveLength(2);
+      expect(buttons[0]?.getAttribute("aria-label")).toBe("New Chat");
+      expect(buttons[1]?.getAttribute("aria-label")).toBe("Show sidebar");
+      expect(titleShell?.getAttribute("style")).toContain("left: 96px");
 
       await act(async () => {
         root.unmount();

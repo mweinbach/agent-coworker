@@ -218,6 +218,8 @@
 - For Expo mobile verification in this repo, do not treat native `run:ios` or `run:android` success as sufficient by itself; always run an explicit Metro bundle path too (for example `expo export`) so repo-root imports, Babel/plugin drift, and other JS-resolution failures are caught before declaring the mobile app buildable.
 - When Windows title-band controls need to visually belong to the sidebar in this repo, do not rely on max-width tweaks on the shared inline toggle cluster; render an explicit left chrome strip sized from `sidebarWidth` so collapse and `New Chat` stay deterministically anchored in the sidebar-owned band.
 - For the Windows sidebar-owned chrome strip in this repo, order the controls like a sidebar header: put the primary `New Chat` action first and the collapse/show toggle on its right, instead of leading with the chrome toggle.
+- For Windows desktop title bands in this repo, do not leave alternate control owners mounted behind CSS `display: none` or depend on overlap tricks for dragging; render one owner per state and put explicit drag layers behind the left control rows so blank chrome still drags while the buttons stay anchored and clickable.
+- For collapsed Windows sidebar chrome in this repo, mirror the expanded header layout instead of compressing the buttons into one tight cluster; keep `New Chat` on the left, the sidebar toggle on the right, and use an explicit renderer-to-main drag bridge if drag gestures need to start on those clickable controls.
 
 ## 2026-03-18 Tool Output Overflow Audit
 

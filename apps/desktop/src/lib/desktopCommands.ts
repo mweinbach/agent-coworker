@@ -87,6 +87,18 @@ export async function windowClose(): Promise<void> {
   await requireDesktopApi().windowClose();
 }
 
+export async function windowDragStart(opts: { screenX: number; screenY: number }): Promise<void> {
+  await requireDesktopApi().windowDragStart(opts);
+}
+
+export async function windowDragMove(opts: { screenX: number; screenY: number }): Promise<void> {
+  await requireDesktopApi().windowDragMove(opts);
+}
+
+export async function windowDragEnd(): Promise<void> {
+  await requireDesktopApi().windowDragEnd();
+}
+
 export async function getPlatform(): Promise<string> {
   return await requireDesktopApi().getPlatform();
 }

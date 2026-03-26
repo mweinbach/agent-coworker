@@ -1,12 +1,69 @@
-/* Windows title bar overlay + caption button reserve */
+/* Windows title bar overlay + caption button reserve
+ *
+ * titleBarOverlay height = WINDOWS_TITLE_BAR_HEIGHT in electron/services/windowChrome/win32.ts.
+ * Keep .settings-shell__drag-zone and .app-topbar--frame aligned to that pixel height here.
+ */
 
-:root[data-platform="win32"] .app-topbar__inline-sidebar-toggle {
-  left: auto;
-  right: 8.75rem;
+/*
+ * Disable the blanket drag on the topbar. The content-fill provides a drag
+ * surface for the area right of the sidebar, and the top-edge drag-strip
+ * covers the full width. This lets the sidebar pane (which extends behind
+ * the topbar via negative margin) receive clicks on its buttons.
+ */
+:root[data-platform="win32"] .app-topbar {
+  position: relative;
+  z-index: 4;
+  -webkit-app-region: no-drag;
 }
 
-:root[data-platform="win32"] .app-topbar {
-  padding-right: 12rem; /* Native caption buttons */
+/* Hide the sidebar-fill — the real sidebar pane extends behind the topbar and paints its own bg. */
+:root[data-platform="win32"] .app-topbar__sidebar-fill {
+  display: none;
+}
+
+/*
+ * The content-fill is the main drag surface for the title band to the right
+ * of the sidebar. Visible controls stay above it with no-drag so the empty
+ * band keeps native window dragging.
+ */
+:root[data-platform="win32"] .app-topbar__content-fill {
+  pointer-events: auto;
+  -webkit-app-region: drag;
+}
+
+/* Right toolbar sits just left of the native caption buttons. */
+:root[data-platform="win32"] .app-topbar__toolbar--right {
+  right: calc(var(--win32-caption-button-reserve) + var(--win32-toolbar-gap));
+  z-index: 3;
+}
+
+/*
+ * The collapsed left rail gets its own drag layer so the empty space around
+ * the buttons can drag the window while the buttons remain clickable.
+ */
+:root[data-platform="win32"] .app-topbar__win32-left-rail {
+  width: var(--win32-collapsed-left-rail-width);
+  z-index: 3;
+}
+
+:root[data-platform="win32"] .app-topbar__win32-left-drag-zone {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  -webkit-app-region: drag;
+}
+
+:root[data-platform="win32"] .app-topbar__win32-left-strip {
+  pointer-events: none;
+}
+
+:root[data-platform="win32"] .app-topbar__win32-left-strip > * {
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+:root[data-platform="win32"] .app-topbar--frame {
+  height: 48px;
 }
 
 :root[data-platform="win32"] .app-window-drag-strip {
@@ -19,8 +76,68 @@
   -webkit-app-region: drag;
 }
 
+/*
+ * Pull the chat body up behind the topbar so the sidebar extends to the
+ * window top. The sidebar pane stacks above the topbar fills and its
+ * no-drag ensures buttons are clickable. Main content pads down to clear
+ * the topbar.
+ */
+:root[data-platform="win32"] .app-chat-body {
+  margin-top: -48px;
+}
+
+:root[data-platform="win32"] .app-chat-body > .app-left-sidebar-pane {
+  position: relative;
+  z-index: 5;
+  -webkit-app-region: no-drag;
+}
+
+:root[data-platform="win32"] .app-chat-body > .app-main-content {
+  padding-top: 48px;
+}
+
+:root[data-platform="win32"] .app-sidebar {
+  padding-top: 0;
+}
+
+/*
+ * The expanded sidebar owns the left title band on Windows. A dedicated drag
+ * layer sits behind the header actions so blank space still drags the window.
+ */
+:root[data-platform="win32"] .app-sidebar__titleband {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+}
+
+:root[data-platform="win32"] .app-sidebar__titleband-drag-zone {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  -webkit-app-region: drag;
+}
+
+:root[data-platform="win32"] .app-sidebar__titleband-row {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+
+:root[data-platform="win32"] .app-sidebar__titleband-row > * {
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+/* Sidebar collapse button: hidden by default, shown on Windows where it lives in the rail. */
+:root[data-platform="win32"] .app-sidebar__collapse-toggle {
+  display: inline-flex;
+}
+
+/* Tighter than macOS: no traffic lights in the top-left; no-drag keeps controls clickable in the title band. */
 :root[data-platform="win32"] .settings-shell__nav {
-  padding-top: 2.75rem;
+  padding-top: 0.75rem;
+  -webkit-app-region: no-drag;
 }
 
 :root[data-platform="win32"] .settings-shell__back-button {
@@ -32,7 +149,7 @@
   top: 0;
   left: 0;
   right: 0;
-  height: 2.75rem;
+  height: 48px;
   z-index: 80;
   -webkit-app-region: drag;
 }

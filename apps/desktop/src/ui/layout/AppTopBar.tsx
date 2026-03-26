@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { ChevronDownIcon, LoaderCircleIcon, PanelLeftIcon, PanelRightIcon, SquarePenIcon } from "lucide-react";
 
@@ -8,6 +8,7 @@ import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
 import { formatCost, formatTokenCount } from "../../../../../src/session/pricing";
 import { SidebarCollapseControl } from "./SidebarCollapseControl";
+import { useWindowDragHandle } from "./useWindowDragHandle";
 
 interface AppTopBarProps {
   busy: boolean;
@@ -25,6 +26,10 @@ interface AppTopBarProps {
   onClearHardCap?: () => void;
   showContextToggle?: boolean;
 }
+
+const WIN32_COLLAPSED_LEFT_RAIL_WIDTH = 96;
+const WIN32_CAPTION_BUTTON_RESERVE = 136;
+const WIN32_RIGHT_TOOLBAR_GAP = 6;
 
 export function AppTopBar({
   busy,
@@ -45,7 +50,11 @@ export function AppTopBar({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsRef = useRef<HTMLDivElement | null>(null);
   const detailsId = useId();
-  const isDarwin = typeof document !== "undefined" && document.documentElement.dataset.platform === "darwin";
+  const platform = typeof document !== "undefined" ? document.documentElement.dataset.platform : undefined;
+  const isDarwin = platform === "darwin";
+  const isWin32 = platform === "win32";
+  const showWin32CollapsedStrip = isWin32 && sidebarCollapsed;
+  const win32LeftButtonDragHandle = useWindowDragHandle<HTMLButtonElement>(showWin32CollapsedStrip);
   const sidebarLabel = sidebarCollapsed ? "Show sidebar" : "Hide sidebar";
   const rightSidebarLabel = contextSidebarCollapsed ? "Show context" : "Hide context";
   const hasUsage = sessionUsage !== null || lastTurnUsage !== null;
@@ -91,9 +100,20 @@ export function AppTopBar({
     if (budget.stopAtUsd !== null) parts.push(`Cap ${formatCost(budget.stopAtUsd)}`);
     return parts.length > 0 ? `Budget ${parts.join(" • ")}` : null;
   }, [sessionUsage]);
-  const titleOffset = sidebarCollapsed ? 0 : sidebarWidth;
-  const titleRightInset = busy ? 8.75 * 16 : 4.75 * 16;
+  const titleOffset = showWin32CollapsedStrip ? WIN32_COLLAPSED_LEFT_RAIL_WIDTH : sidebarCollapsed ? 0 : sidebarWidth;
+  const defaultRightInset = busy ? 8.75 * 16 : showContextToggle ? 4.75 * 16 : 12;
+  const win32RightInset = busy ? 8.75 * 16 : showContextToggle ? 2.75 * 16 : 12;
+  const titleRightInset = isWin32
+    ? WIN32_CAPTION_BUTTON_RESERVE + WIN32_RIGHT_TOOLBAR_GAP + win32RightInset
+    : defaultRightInset;
   const collapsedThreadAnchorStyle = sidebarCollapsed && isDarwin ? { paddingLeft: "10rem" } : undefined;
+  const win32TopbarStyle = isWin32
+    ? ({
+        "--win32-collapsed-left-rail-width": `${WIN32_COLLAPSED_LEFT_RAIL_WIDTH}px`,
+        "--win32-caption-button-reserve": `${WIN32_CAPTION_BUTTON_RESERVE}px`,
+        "--win32-toolbar-gap": `${WIN32_RIGHT_TOOLBAR_GAP}px`,
+      } as CSSProperties)
+    : undefined;
 
   useEffect(() => {
     setDetailsOpen(false);
@@ -127,7 +147,10 @@ export function AppTopBar({
   }, [detailsOpen]);
 
   return (
-    <div className="app-topbar app-topbar--frame relative flex w-full shrink-0 items-center justify-end px-3">
+    <div
+      className="app-topbar app-topbar--frame relative flex w-full shrink-0 items-center justify-end px-3"
+      style={win32TopbarStyle}
+    >
       <div
         className="app-topbar__sidebar-fill border-r border-border/70"
         aria-hidden="true"
@@ -138,35 +161,68 @@ export function AppTopBar({
         aria-hidden="true"
         style={{ left: sidebarCollapsed ? 0 : sidebarWidth }}
       />
-      <SidebarCollapseControl
-        onToggleSidebar={onToggleSidebar}
-        onNewChat={onNewChat}
-        sidebarCollapsed={sidebarCollapsed}
-      />
-      <div className="app-topbar__inline-sidebar-toggle app-topbar__toolbar app-topbar__controls absolute left-3 top-1/2 flex min-w-0 -translate-y-1/2 items-center gap-1">
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          onClick={onToggleSidebar}
-          title={sidebarLabel}
-          aria-label={sidebarLabel}
-          className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
-        >
-          <PanelLeftIcon className="h-4 w-4" />
-        </Button>
-        {sidebarCollapsed ? (
+      {isDarwin ? (
+        <SidebarCollapseControl
+          onToggleSidebar={onToggleSidebar}
+          onNewChat={onNewChat}
+          sidebarCollapsed={sidebarCollapsed}
+        />
+      ) : null}
+      {/* On Windows, the expanded sidebar owns New Chat + collapse; topbar only shows expand + New Chat when collapsed. */}
+      {showWin32CollapsedStrip ? (
+        <div className="app-topbar__win32-left-rail absolute inset-y-0 left-0">
+          <div className="app-topbar__win32-left-drag-zone" aria-hidden="true" />
+          <div className="app-topbar__sidebar-strip app-topbar__win32-left-strip app-topbar__toolbar app-topbar__controls absolute inset-0 flex min-w-0 items-center justify-between px-2">
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onNewChat}
+              title="New Chat"
+              aria-label="New Chat"
+              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+              {...win32LeftButtonDragHandle}
+            >
+              <SquarePenIcon className="h-4 w-4" />
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onToggleSidebar}
+              title={sidebarLabel}
+              aria-label={sidebarLabel}
+              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+              {...win32LeftButtonDragHandle}
+            >
+              <PanelLeftIcon className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      ) : isWin32 ? null : (
+        <div className="app-topbar__inline-sidebar-toggle app-topbar__toolbar app-topbar__controls absolute left-3 top-1/2 flex min-w-0 -translate-y-1/2 items-center gap-1">
           <Button
             size="icon-sm"
             variant="ghost"
-            onClick={onNewChat}
-            title="New Chat"
-            aria-label="New Chat"
+            onClick={onToggleSidebar}
+            title={sidebarLabel}
+            aria-label={sidebarLabel}
             className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
           >
-            <SquarePenIcon className="h-4 w-4" />
+            <PanelLeftIcon className="h-4 w-4" />
           </Button>
-        ) : null}
-      </div>
+          {sidebarCollapsed ? (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onNewChat}
+              title="New Chat"
+              aria-label="New Chat"
+              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+            >
+              <SquarePenIcon className="h-4 w-4" />
+            </Button>
+          ) : null}
+        </div>
+      )}
 
       <div
         className="app-topbar__thread-shell absolute inset-y-0 flex min-w-0 items-center"
@@ -176,7 +232,7 @@ export function AppTopBar({
           ref={detailsRef}
           className={cn(
             "app-topbar__thread-anchor relative flex min-w-0",
-            sidebarCollapsed && "app-topbar__thread-anchor--collapsed",
+            sidebarCollapsed && !showWin32CollapsedStrip && "app-topbar__thread-anchor--collapsed",
           )}
           style={collapsedThreadAnchorStyle}
         >

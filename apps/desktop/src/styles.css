@@ -170,6 +170,14 @@ body {
   z-index: 2;
 }
 
+.app-topbar__sidebar-strip {
+  z-index: 2;
+}
+
+.app-sidebar__collapse-toggle {
+  display: none;
+}
+
 .app-sidebar-collapse-control {
   display: none;
 }

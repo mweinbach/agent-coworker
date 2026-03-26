@@ -29,6 +29,7 @@ import {
   type TranscriptBatchInput,
   type TrashPathInput,
   type UpdaterState,
+  type WindowDragPointInput,
 } from "../src/lib/desktopApi";
 import type { PersistedState } from "../src/app/types";
 import {
@@ -57,6 +58,7 @@ import {
   transcriptBatchInputSchema,
   trashPathInputSchema,
   updaterStateSchema,
+  windowDragPointInputSchema,
 } from "../src/lib/desktopSchemas";
 
 function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
@@ -91,6 +93,10 @@ function assertTranscriptBatchInput(opts: TranscriptBatchInput): void {
 
 function assertShowContextMenuInput(opts: ShowContextMenuInput): void {
   parseWithSchema(showContextMenuInputSchema, opts, "showContextMenu options");
+}
+
+function assertWindowDragPointInput(opts: WindowDragPointInput): void {
+  parseWithSchema(windowDragPointInputSchema, opts, "window drag options");
 }
 
 function assertListDirectoryInput(opts: ListDirectoryInput): void {
@@ -255,6 +261,18 @@ const desktopApi = Object.freeze<DesktopApi>({
   windowMaximize: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowMaximize),
 
   windowClose: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowClose),
+
+  windowDragStart: (opts: WindowDragPointInput) => {
+    assertWindowDragPointInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowDragStart, opts);
+  },
+
+  windowDragMove: (opts: WindowDragPointInput) => {
+    assertWindowDragPointInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowDragMove, opts);
+  },
+
+  windowDragEnd: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowDragEnd),
 
   getPlatform: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getPlatform),
 

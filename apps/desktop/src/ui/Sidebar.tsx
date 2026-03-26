@@ -6,6 +6,7 @@ import {
   FolderOpenIcon,
   FolderPlusIcon,
   MessageSquareIcon,
+  PanelLeftIcon,
   Settings2Icon,
   SquarePenIcon,
   SparklesIcon,
@@ -18,6 +19,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/utils";
 import { formatSidebarRelativeAge, getVisibleSidebarThreads, shouldEmphasizeWorkspaceRow } from "./sidebarHelpers";
+import { useWindowDragHandle } from "./layout/useWindowDragHandle";
 
 const MAX_VISIBLE_THREADS = 10;
 
@@ -47,6 +49,8 @@ function formatWorkspaceMeta(opts: {
 }
 
 export const Sidebar = memo(function Sidebar() {
+  const platform = typeof document !== "undefined" ? document.documentElement.dataset.platform : undefined;
+  const isWin32 = platform === "win32";
   const view = useAppStore((s) => s.view);
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
@@ -248,21 +252,41 @@ export const Sidebar = memo(function Sidebar() {
     }
   };
 
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const win32TitlebandButtonDragHandle = useWindowDragHandle<HTMLButtonElement>(isWin32);
+
   return (
-    <aside className="app-sidebar sidebar-rail-enter flex h-full w-full flex-col gap-1.5 px-2 pt-1.5 pb-3">
+    <aside className="app-sidebar sidebar-rail-enter relative flex h-full w-full flex-col gap-1.5 px-2 pt-1.5 pb-3">
+      <div className="app-sidebar__titleband">
+        <div className="app-sidebar__titleband-drag-zone" aria-hidden="true" />
+        <div className="app-sidebar__titleband-row flex w-full items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn(
+              "sidebar-lift h-8 min-w-0 flex-1 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+              "hover:bg-foreground/[0.045] hover:text-foreground",
+            )}
+            onClick={() => void newThread()}
+            {...win32TitlebandButtonDragHandle}
+          >
+            <SquarePenIcon className="h-4 w-4 text-muted-foreground" />
+            New Chat
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={toggleSidebar}
+            title="Hide sidebar"
+            aria-label="Hide sidebar"
+            className="app-sidebar__collapse-toggle sidebar-lift shrink-0 text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground"
+            {...win32TitlebandButtonDragHandle}
+          >
+            <PanelLeftIcon className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
       <nav className="grid w-full gap-1.5">
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(
-            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
-            "hover:bg-foreground/[0.045] hover:text-foreground",
-          )}
-          onClick={() => void newThread()}
-        >
-          <SquarePenIcon className="h-4 w-4 text-muted-foreground" />
-          New Chat
-        </Button>
         <Button
           variant="ghost"
           size="sm"

@@ -1,6 +1,7 @@
 import { Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
-import { KeyboardAvoidingView, Pressable, ScrollView, Text, View } from "react-native";
+import { KeyboardAvoidingView, Pressable, FlatList, Text, View } from "react-native";
+import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ComposerBar } from "@/components/ComposerBar";
@@ -8,6 +9,7 @@ import { PendingRequestCard } from "@/components/thread/pending-request-card";
 import { ThreadFeedItem } from "@/components/thread/thread-feed-item";
 import { Screen } from "@/components/ui/screen";
 import { StatusPill } from "@/components/ui/status-pill";
+import { FileExplorerDrawer } from "@/components/FileExplorerDrawer";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { useAppTheme } from "@/theme/use-app-theme";
@@ -24,6 +26,7 @@ export default function ThreadDetailScreen() {
   const interruptThread = useThreadStore((state) => state.interruptThread);
   const clearPendingRequest = useThreadStore((state) => state.clearPendingRequest);
   const [askDraft, setAskDraft] = useState("");
+  const [drawerVisible, setDrawerVisible] = useState(false);
   const runtimeClient = getActiveCoworkJsonRpcClient();
 
   const isDraftThread = threadId.startsWith("draft-");
@@ -70,9 +73,19 @@ export default function ThreadDetailScreen() {
         options={{
           title: activeThread.title,
           headerRight: () => (
-            <Pressable onPress={() => { void interruptCurrentThread(); }}>
-              <Text style={{ color: theme.danger, fontWeight: "700" }}>Stop</Text>
-            </Pressable>
+            <View style={{ flexDirection: "row", gap: 16 }}>
+              <Pressable onPress={() => setDrawerVisible(true)}>
+                <Image source="sf:folder" style={{ width: 24, height: 24, tintColor: theme.text }} />
+              </Pressable>
+              <Pressable onPress={() => {/* open overflow */}}>
+                <Image source="sf:ellipsis" style={{ width: 24, height: 24, tintColor: theme.text }} />
+              </Pressable>
+              {pendingRequest ? (
+                <Pressable onPress={() => { void interruptCurrentThread(); }}>
+                  <Text style={{ color: theme.danger, fontWeight: "700" }}>Stop</Text>
+                </Pressable>
+              ) : null}
+            </View>
           ),
         }}
       />
@@ -80,7 +93,7 @@ export default function ThreadDetailScreen() {
         style={{ flex: 1, backgroundColor: theme.background }}
         behavior={process.env.EXPO_OS === "ios" ? "padding" : undefined}
       >
-        <ScrollView
+        <FlatList
           style={{ flex: 1, backgroundColor: theme.background }}
           contentInsetAdjustmentBehavior="automatic"
           contentContainerStyle={{
@@ -90,35 +103,22 @@ export default function ThreadDetailScreen() {
             paddingBottom: 28,
           }}
           keyboardShouldPersistTaps="handled"
-        >
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-            <StatusPill label={isDraftThread ? "local draft" : "remote session"} tone={isDraftThread ? "primary" : "success"} />
-            {pendingRequest ? <StatusPill label="needs response" tone="warning" /> : null}
-          </View>
-
-          {pendingRequest ? (
-            <PendingRequestCard
-              request={pendingRequest}
-              askDraft={askDraft}
-              onChangeAskDraft={setAskDraft}
-              onAnswerOption={(answer) => {
-                void answerServerRequest({ answer });
-              }}
-              onAnswerText={() => {
-                void answerServerRequest({ answer: askDraft || "ok" }).then(() => {
-                  setAskDraft("");
-                });
-              }}
-              onApprove={() => {
-                void answerServerRequest({ decision: "accept" });
-              }}
-              onReject={() => {
-                void answerServerRequest({ decision: "reject" });
-              }}
-            />
-          ) : null}
-
-          {activeThread.feed.length === 0 ? (
+          inverted
+          data={
+            // Reversed feed + pending request at the top (visually bottom since it's inverted)
+            [
+              ...(pendingRequest ? [{ type: "pending", data: pendingRequest }] : []),
+              ...[...activeThread.feed].reverse().map(item => ({ type: "feed", data: item }))
+            ]
+          }
+          keyExtractor={(item) => item.type === "pending" ? "pending" : (item.data as any).id}
+          ListFooterComponent={() => (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+              <StatusPill label={isDraftThread ? "local draft" : "remote session"} tone={isDraftThread ? "primary" : "success"} />
+              {pendingRequest ? <StatusPill label="needs response" tone="warning" /> : null}
+            </View>
+          )}
+          ListEmptyComponent={() => (
             <View
               style={{
                 gap: 8,
@@ -137,12 +137,34 @@ export default function ThreadDetailScreen() {
                 Start the conversation below and Cowork will stream new items into this feed.
               </Text>
             </View>
-          ) : (
-            activeThread.feed.map((item) => (
-              <ThreadFeedItem key={item.id} item={item} />
-            ))
           )}
-        </ScrollView>
+          renderItem={({ item }) => {
+            if (item.type === "pending") {
+              return (
+                <PendingRequestCard
+                  request={pendingRequest!}
+                  askDraft={askDraft}
+                  onChangeAskDraft={setAskDraft}
+                  onAnswerOption={(answer) => {
+                    void answerServerRequest({ answer });
+                  }}
+                  onAnswerText={() => {
+                    void answerServerRequest({ answer: askDraft || "ok" }).then(() => {
+                      setAskDraft("");
+                    });
+                  }}
+                  onApprove={() => {
+                    void answerServerRequest({ decision: "accept" });
+                  }}
+                  onReject={() => {
+                    void answerServerRequest({ decision: "reject" });
+                  }}
+                />
+              );
+            }
+            return <ThreadFeedItem item={item.data as any} />;
+          }}
+        />
 
         <View
           style={{
@@ -174,6 +196,12 @@ export default function ThreadDetailScreen() {
           />
         </View>
       </KeyboardAvoidingView>
+
+      <FileExplorerDrawer 
+        visible={drawerVisible} 
+        onClose={() => setDrawerVisible(false)} 
+        workspaceName="Cowork" 
+      />
     </>
   );
 }

@@ -30,12 +30,12 @@ export default function SettingsHubScreen() {
             label="Providers"
             description="API keys, OAuth, account state, and rate limits."
             detail={controlSnapshot?.config?.provider}
-            href="/(app)/(tabs)/(settings)/providers"
+            href={"/(app)/settings/providers" as any}
           />
           <HubLinkRow
             label="Integrations"
             description="Add, validate, authenticate, and migrate MCP servers."
-            href="/(app)/(tabs)/(settings)/mcp"
+            href={"/(app)/settings/mcp" as any}
           />
         </View>
       </SectionCard>
@@ -48,7 +48,7 @@ export default function SettingsHubScreen() {
           <HubLinkRow
             label="Usage"
             description="Threads, token totals, and estimated spend."
-            href="/(app)/(tabs)/(settings)/usage"
+            href={"/(app)/settings/usage" as any}
           />
         </View>
       </SectionCard>

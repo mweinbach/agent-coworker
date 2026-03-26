@@ -1,6 +1,7 @@
-import { Link } from "expo-router";
-import { useState } from "react";
+import { Stack, Link } from "expo-router";
+import { Fragment, useState } from "react";
 import { Pressable, Text, View } from "react-native";
+import { Image } from "expo-image";
 
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
@@ -27,11 +28,52 @@ export default function ThreadsScreen() {
   const [switcherVisible, setSwitcherVisible] = useState(false);
   const connectionTone = toneForTransportState(connectionState);
   const isConnected = isWorkspaceConnectionReady(connectionState);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const modelLabel = controlSnapshot?.config?.model ?? null;
 
+  const filteredThreads = threads.filter(t => t.title.toLowerCase().includes(searchQuery.toLowerCase()) || t.preview.toLowerCase().includes(searchQuery.toLowerCase()));
+
   return (
-    <Screen scroll contentStyle={{ gap: 18 }}>
+    <Fragment>
+      <Stack.Screen
+        options={{
+          title: activeWorkspaceName ?? "Cowork Mobile",
+          headerLargeTitle: true,
+          headerRight: () => (
+            <View style={{ flexDirection: "row", gap: 16 }}>
+              <Link href={"/(app)/skills" as any} asChild>
+                <Pressable>
+                  <Image source="sf:sparkles" style={{ width: 24, height: 24, tintColor: theme.text }} />
+                </Pressable>
+              </Link>
+              <Link href={"/(app)/settings" as any} asChild>
+                <Pressable>
+                  <Image source="sf:gearshape" style={{ width: 24, height: 24, tintColor: theme.text }} />
+                </Pressable>
+              </Link>
+            </View>
+          ),
+          headerLeft: () => (
+            <Pressable
+              onPress={() => setSwitcherVisible(true)}
+              style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
+            >
+              <Text style={{ color: theme.text, fontSize: 17, fontWeight: "600" }}>
+                {activeWorkspaceName ?? "Cowork Mobile"}
+              </Text>
+              <Image source="sf:chevron.down" style={{ width: 14, height: 14, tintColor: theme.textSecondary }} />
+            </Pressable>
+          ),
+          headerSearchBarOptions: {
+            placeholder: "Search threads...",
+            hideWhenScrolling: false,
+            onChangeText: (event) => setSearchQuery(event.nativeEvent.text),
+            onCancelButtonPress: () => setSearchQuery(""),
+          },
+        }}
+      />
+      <Screen scroll contentStyle={{ gap: 18 }}>
       <SectionCard
         title={activeWorkspaceName ?? "Cowork Mobile"}
         description={
@@ -95,17 +137,21 @@ export default function ThreadsScreen() {
 
       <SectionCard
         title="Conversations"
-        description={threads.length === 0 ? "No threads yet" : `${threads.length} available on mobile`}
+        description={filteredThreads.length === 0 ? "No threads found" : `${filteredThreads.length} available on mobile`}
       >
         {threads.length === 0 ? (
           <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
             Your mobile thread list will populate from the shared Cowork snapshot feed after pairing, and you can also start local drafts from here.
           </Text>
+        ) : filteredThreads.length === 0 ? (
+          <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
+            No threads match your search.
+          </Text>
         ) : (
-          threads.map((thread) => (
+          filteredThreads.map((thread) => (
             <Link
               key={thread.id}
-              href={`/(app)/(tabs)/(threads)/thread/${thread.id}`}
+              href={`/(app)/thread/${thread.id}` as any}
               asChild
             >
               <Pressable
@@ -167,5 +213,6 @@ export default function ThreadsScreen() {
         )}
       </SectionCard>
     </Screen>
+    </Fragment>
   );
 }

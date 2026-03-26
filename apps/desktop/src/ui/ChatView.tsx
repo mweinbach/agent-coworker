@@ -760,10 +760,14 @@ export function ChatView() {
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
-        void sendMessage(composerText, resolveComposerBusyPolicy(rt?.busy === true));
+        if (!composerText.trim() && pendingAttachments.length === 0) return;
+        const attachments = pendingAttachments.length > 0 ? pendingAttachments : undefined;
+        const messageText = composerText.trim() || (attachments ? `[${attachments.map((a) => a.filename).join(", ")}]` : "");
+        void sendMessage(messageText, resolveComposerBusyPolicy(rt?.busy === true), attachments);
+        setPendingAttachments([]);
       }
     },
-    [composerText, rt?.busy, sendMessage],
+    [composerText, rt?.busy, sendMessage, pendingAttachments],
   );
 
   if (!selectedThreadId || !thread) {

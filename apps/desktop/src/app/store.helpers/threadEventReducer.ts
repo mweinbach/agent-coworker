@@ -988,11 +988,16 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       return false;
     }
     const next = shiftPendingThreadMessage(threadId);
-    if (!next) return false;
+    if (next === undefined) return false;
     const queuedAttachments = shiftPendingThreadAttachments(threadId);
     const accepted = sendUserMessageToThread(get, set, threadId, next, undefined, queuedAttachments);
     if (!accepted) {
       prependPendingThreadMessage(threadId, next);
+      if (queuedAttachments && queuedAttachments.length > 0) {
+        const existing = RUNTIME.pendingThreadAttachments.get(threadId) ?? [];
+        existing.unshift(queuedAttachments);
+        RUNTIME.pendingThreadAttachments.set(threadId, existing);
+      }
     }
     return accepted;
   }
@@ -1238,9 +1243,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             prependPendingThreadMessage(threadId, pendingFirstMessage);
           }
         } else {
-          acceptedPendingFirstMessage = pendingFirstMessageQueued
-            ? flushOneQueuedThreadMessageIfReady(get, set, threadId)
-            : sendUserMessageToThread(get, set, threadId, pendingFirstMessage);
+          if (pendingFirstMessageQueued) {
+            acceptedPendingFirstMessage = flushOneQueuedThreadMessageIfReady(get, set, threadId);
+          } else {
+            const firstMsgAttachments = shiftPendingThreadAttachments(threadId);
+            acceptedPendingFirstMessage = sendUserMessageToThread(get, set, threadId, pendingFirstMessage, undefined, firstMsgAttachments);
+          }
         }
       }
 

@@ -42,7 +42,7 @@ export type RuntimeMaps = {
   skillInstallWaiters: Map<string, SkillInstallWaiter>;
   optimisticUserMessageIds: Map<string, Set<string>>;
   pendingThreadMessages: Map<string, string[]>;
-  pendingThreadAttachments: Map<string, import("./jsonRpcSocket").FileAttachmentInput[]>;
+  pendingThreadAttachments: Map<string, Array<import("./jsonRpcSocket").FileAttachmentInput[] | undefined>>;
   pendingThreadSteers: Map<string, Map<string, PendingThreadSteer>>;
   threadSelectionRequests: Map<string, number>;
   nextThreadSelectionRequestId: number;
@@ -98,17 +98,21 @@ export function queuePendingThreadMessage(threadId: string, text: string, attach
   const existing = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
   existing.push(trimmed);
   RUNTIME.pendingThreadMessages.set(threadId, existing);
-  if (attachments && attachments.length > 0) {
-    RUNTIME.pendingThreadAttachments.set(threadId, attachments);
-  }
+  const existingAttachments = RUNTIME.pendingThreadAttachments.get(threadId) ?? [];
+  existingAttachments.push(attachments && attachments.length > 0 ? attachments : undefined);
+  RUNTIME.pendingThreadAttachments.set(threadId, existingAttachments);
 }
 
 export function shiftPendingThreadAttachments(threadId: string): import("./jsonRpcSocket").FileAttachmentInput[] | undefined {
-  const attachments = RUNTIME.pendingThreadAttachments.get(threadId);
-  if (attachments) {
+  const existing = RUNTIME.pendingThreadAttachments.get(threadId);
+  if (!existing || existing.length === 0) return undefined;
+  const next = existing.shift();
+  if (existing.length === 0) {
     RUNTIME.pendingThreadAttachments.delete(threadId);
+  } else {
+    RUNTIME.pendingThreadAttachments.set(threadId, existing);
   }
-  return attachments;
+  return next;
 }
 
 export function drainPendingThreadMessages(threadId: string): string[] {

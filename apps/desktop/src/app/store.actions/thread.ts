@@ -826,7 +826,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       }
 
       if (opts?.attachments && opts.attachments.length > 0) {
-        RUNTIME.pendingThreadAttachments.set(threadId, opts.attachments);
+        RUNTIME.pendingThreadAttachments.set(threadId, [opts.attachments]);
       }
       ensureThreadSocket(get, set, threadId, url, opts?.firstMessage, false);
     },
@@ -877,8 +877,10 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       }
       if (!isReconnectCurrent()) return;
   
-      if (firstMessage && firstMessage.trim()) {
-        queuePendingThreadMessage(threadId, firstMessage, opts?.attachments);
+      const hasFirstMessage = firstMessage && firstMessage.trim();
+      const hasQueuedAttachments = opts?.attachments && opts.attachments.length > 0;
+      if (hasFirstMessage || hasQueuedAttachments) {
+        queuePendingThreadMessage(threadId, firstMessage ?? "", opts?.attachments);
       }
       ensureThreadSocket(get, set, threadId, url, firstMessage, Boolean(firstMessage?.trim()));
     },

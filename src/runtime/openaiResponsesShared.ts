@@ -224,7 +224,7 @@ export function convertResponsesMessages(
         for (const part of msg.content) {
           if (part.type === "text") {
             contentParts.push({ type: "input_text", text: sanitizeSurrogates(part.text) });
-          } else if (part.type === "image" && model.input.includes("image")) {
+          } else if (part.type === "image" && model.input.includes("image") && typeof part.mimeType === "string" && part.mimeType.startsWith("image/")) {
             contentParts.push({
               type: "input_image",
               detail: "auto",

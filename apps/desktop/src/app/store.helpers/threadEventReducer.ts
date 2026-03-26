@@ -877,8 +877,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     text: string,
     threadId: string,
     clientMessageId: string,
+    attachments?: FileAttachmentInput[],
   ) {
-    void steerJsonRpcTurn(get, set, workspaceId, sessionId, turnId, text, clientMessageId)
+    void steerJsonRpcTurn(get, set, workspaceId, sessionId, turnId, text, clientMessageId, attachments)
       .catch(() => {
         surfaceJsonRpcTurnSendFailure(set, threadId, { clientMessageId });
       });
@@ -895,7 +896,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     attachments?: FileAttachmentInput[],
   ): boolean {
     const trimmed = text.trim();
-    if (!trimmed) return false;
+    const hasAttachments = attachments && attachments.length > 0;
+    if (!trimmed && !hasAttachments) return false;
 
     const thread = get().threads.find((t) => t.id === threadId);
     if (!thread) return false;
@@ -949,7 +951,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           clientMessageId,
         });
 
-        dispatchJsonRpcTurnSteer(get, set, workspaceId, rt.sessionId, rt.activeTurnId, trimmed, threadId, clientMessageId);
+        dispatchJsonRpcTurnSteer(get, set, workspaceId, rt.sessionId, rt.activeTurnId, trimmed, threadId, clientMessageId, attachments);
         return true;
       }
 

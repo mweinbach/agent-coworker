@@ -24,10 +24,11 @@ export function createTurnRouteHandlers(
         typeof params.clientMessageId === "string" && params.clientMessageId.trim()
           ? params.clientMessageId.trim()
           : undefined;
-      if (!threadId || !text) {
+      const hasInput = text || attachments.length > 0;
+      if (!threadId || !hasInput) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
-          message: "turn/start requires threadId and non-empty text input",
+          message: "turn/start requires threadId and non-empty input",
         });
         return;
       }

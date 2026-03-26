@@ -356,11 +356,18 @@ export async function steerJsonRpcTurn(
   turnId: string,
   text: string,
   clientMessageId?: string,
+  attachments?: FileAttachmentInput[],
 ): Promise<any> {
+  const input: Array<Record<string, unknown>> = [{ type: "text", text }];
+  if (attachments && attachments.length > 0) {
+    for (const a of attachments) {
+      input.push({ type: "file", filename: a.filename, contentBase64: a.contentBase64, mimeType: a.mimeType });
+    }
+  }
   return await requestJsonRpc(get, set, workspaceId, "turn/steer", {
     threadId,
     turnId,
-    input: [{ type: "text", text }],
+    input,
     ...(clientMessageId ? { clientMessageId } : {}),
   });
 }

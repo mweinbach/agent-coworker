@@ -889,7 +889,8 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
   
       const rt = get().threadRuntimeById[activeThreadId];
       const trimmed = text.trim();
-      if (!trimmed) return;
+      const hasAttachments = attachments && attachments.length > 0;
+      if (!trimmed && !hasAttachments) return;
   
       if (rt?.transcriptOnly) {
         const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";

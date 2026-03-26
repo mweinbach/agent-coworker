@@ -877,7 +877,8 @@ export function ChatView() {
                 event.preventDefault();
                 if (!composerText.trim() && pendingAttachments.length === 0) return;
                 const attachments = pendingAttachments.length > 0 ? pendingAttachments : undefined;
-                void sendMessage(composerText, resolveComposerBusyPolicy(busy), attachments);
+                const messageText = composerText.trim() || (attachments ? `[${attachments.map((a) => a.filename).join(", ")}]` : "");
+                void sendMessage(messageText, resolveComposerBusyPolicy(busy), attachments);
                 setPendingAttachments([]);
               }}
             >

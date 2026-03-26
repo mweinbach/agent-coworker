@@ -283,7 +283,10 @@ export function modelMessagesToPiMessages(messages: ModelMessage[], provider: st
         const parts = message.content as Array<unknown>;
         const hasMultimodal = parts.some((p) => {
           const rec = asRecord(p);
-          return rec && (rec.type === "image" || rec.type === "input_image");
+          return rec &&
+            (rec.type === "image" || rec.type === "input_image") &&
+            typeof rec.data === "string" &&
+            typeof rec.mimeType === "string";
         });
         if (hasMultimodal) {
           const piContent: Array<Record<string, unknown>> = [];

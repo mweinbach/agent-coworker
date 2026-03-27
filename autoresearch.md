@@ -10,11 +10,11 @@ Make the repository's unit-test/CI experience reliable:
 This session uses the real Bun test workload and CI-adjacent validation, not a synthetic proxy benchmark.
 
 ## Metrics
-- **Primary**: `unsafe_jsonrpc_teardowns` (count, lower is better) — number of plain `await server.stop();` teardown callsites remaining in websocket-heavy JSON-RPC flow tests, as measured by `./autoresearch.sh`.
+- **Primary**: `unsafe_toolstream_teardowns` (count, lower is better) — number of plain `await server.stop();` teardown callsites remaining in `test/server.toolstream.test.ts`, as measured by `./autoresearch.sh`.
 - **Secondary**:
   - `elapsed_s` — wall-clock runtime for the benchmark script.
 
-A score of `0` means the targeted JSON-RPC flow tests no longer use the known-risk plain-stop teardown pattern. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
+A score of `0` means the remaining websocket-heavy toolstream spec no longer uses the known-risk plain-stop teardown pattern. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
 
 ## How to Run
 - Benchmark: `./autoresearch.sh`
@@ -54,4 +54,5 @@ Both scripts print diagnostics on failure; the benchmark also prints structured 
 - The merge-ref stress harness proved the race is intrinsic to the exact `thread/resume` test path: 17 failures in 200 targeted CI-like reruns.
 - Kept fix: `await server.stop(true)` in the flaky test cleanup reduced the current-repo stress benchmark from 1/100 failures to 0/100, and a second 0/100 confirmation run increased confidence.
 - Kept follow-up: main CI now runs typecheck and the stable per-file unit test pass, and `test/ci.workflow.test.ts` locks those guardrails in.
-- Current focus: codify the `server.stop(true)` teardown pattern across the websocket-heavy JSON-RPC flow spec so sibling tests do not regress into the same shutdown race class.
+- Kept follow-up: the websocket-heavy JSON-RPC flow spec now uses a shared forced-close teardown helper (`stopTestServer`) instead of plain `await server.stop();`.
+- Current focus: apply the same helper to the remaining websocket-heavy sibling file `test/server.toolstream.test.ts`, which still has 2 plain-stop teardown callsites.

@@ -1016,6 +1016,7 @@ export function ChatView() {
       : busy
         ? "Type to steer the current run..."
         : "Message...";
+  const composerHint = composerBusyHint(composerSubmitState);
 
   return (
     <ChatViewContext.Provider value={contextValue}>
@@ -1167,6 +1168,12 @@ export function ChatView() {
                     disabled={composerSubmitState.disabled || preparingAttachments}
                     onStop={selectedThreadId ? handleStop : undefined}
                   />
+                </div>
+                <div
+                  aria-live={busy ? "polite" : undefined}
+                  className="basis-full px-0.5 text-[11px] leading-4 text-muted-foreground"
+                >
+                  {composerHint}
                 </div>
               </PromptInputFooter>
             </PromptInputForm>

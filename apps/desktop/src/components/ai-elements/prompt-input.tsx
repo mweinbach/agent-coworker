@@ -87,7 +87,7 @@ export function PromptInputRoot({ className, fileDrop, ...props }: PromptInputRo
       onDragOver={onDragOver}
       onDrop={onDrop}
       className={cn(
-        "relative mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col rounded-[28px] border border-border/45 bg-panel px-3 py-2.5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition-shadow focus-within:shadow-[0_14px_34px_rgba(15,23,42,0.1)]",
+        "app-shadow-surface relative mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col rounded-[28px] border border-border/45 bg-panel px-3 py-2.5 transition-shadow focus-within:shadow-[var(--shadow-overlay)]",
         dropEnabled && dragActive && "ring-2 ring-primary/30 ring-offset-2 ring-offset-background",
         className,
       )}
@@ -121,7 +121,7 @@ export function PromptInputAttachmentPreviews({ attachments, onRemove, className
           return (
             <div
               key={`${item.filename}-${index}`}
-              className="group relative inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-border/50 bg-muted/35 py-1 pl-1 pr-9 text-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.35)]"
+              className="group relative inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-border/50 bg-muted/35 py-1 pl-1 pr-9 text-sm shadow-[inset_0_1px_0_var(--border-glass)]"
             >
               <div className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-background/80 ring-1 ring-border/45">
                 {src ? (

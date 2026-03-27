@@ -36,8 +36,12 @@ type ToolResultLike = {
   timestamp?: number;
 };
 
+type UserMessageContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
 type PiMessageLike =
-  | { role: "user"; content: string }
+  | { role: "user"; content: string | UserMessageContentPart[] }
   | AssistantMessageLike
   | ToolResultLike;
 
@@ -215,10 +219,28 @@ export function convertResponsesMessages(
   let msgIndex = 0;
   for (const msg of transformedMessages) {
     if (msg.role === "user") {
-      messages.push({
-        role: "user",
-        content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }],
-      });
+      if (Array.isArray(msg.content)) {
+        const contentParts: Array<Record<string, unknown>> = [];
+        for (const part of msg.content) {
+          if (part.type === "text") {
+            contentParts.push({ type: "input_text", text: sanitizeSurrogates(part.text) });
+          } else if (part.type === "image" && model.input.includes("image") && typeof part.mimeType === "string" && part.mimeType.startsWith("image/")) {
+            contentParts.push({
+              type: "input_image",
+              detail: "auto",
+              image_url: `data:${part.mimeType};base64,${part.data}`,
+            });
+          }
+        }
+        if (contentParts.length > 0) {
+          messages.push({ role: "user", content: contentParts });
+        }
+      } else {
+        messages.push({
+          role: "user",
+          content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }],
+        });
+      }
       msgIndex += 1;
       continue;
     }

@@ -51,6 +51,62 @@ export function extractJsonRpcTextInput(input: unknown): string {
     .trim();
 }
 
+export type InlineFileAttachment = {
+  filename: string;
+  contentBase64: string;
+  mimeType: string;
+};
+
+export type UploadedFileAttachment = {
+  filename: string;
+  mimeType: string;
+  path: string;
+};
+
+export type FileAttachment = InlineFileAttachment | UploadedFileAttachment;
+
+export type ExtractedInput = {
+  text: string;
+  attachments: FileAttachment[];
+};
+
+export function extractJsonRpcInput(input: unknown): ExtractedInput {
+  const text = extractJsonRpcTextInput(input);
+  const attachments: FileAttachment[] = [];
+
+  if (Array.isArray(input)) {
+    for (const entry of input) {
+      if (!entry || typeof entry !== "object") continue;
+      const record = entry as Record<string, unknown>;
+      if (
+        record.type === "file" &&
+        typeof record.filename === "string" &&
+        typeof record.contentBase64 === "string" &&
+        typeof record.mimeType === "string"
+      ) {
+        attachments.push({
+          filename: record.filename,
+          contentBase64: record.contentBase64,
+          mimeType: record.mimeType,
+        });
+      } else if (
+        record.type === "uploadedFile" &&
+        typeof record.filename === "string" &&
+        typeof record.path === "string" &&
+        typeof record.mimeType === "string"
+      ) {
+        attachments.push({
+          filename: record.filename,
+          path: record.path,
+          mimeType: record.mimeType,
+        });
+      }
+    }
+  }
+
+  return { text, attachments };
+}
+
 export function buildJsonRpcThreadFromSession(session: AgentSession): JsonRpcThread {
   const info = session.getSessionInfoEvent();
   const snapshot = session.peekSessionSnapshot();

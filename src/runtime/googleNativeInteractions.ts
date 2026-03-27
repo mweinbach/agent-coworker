@@ -57,8 +57,16 @@ function resolveGoogleApiKey(explicitKey?: string): string {
   throw new Error("No API key for Google provider. Set GOOGLE_GENERATIVE_AI_API_KEY or GOOGLE_API_KEY.");
 }
 
-function createGoogleClient(apiKey: string): GoogleGenAI {
-  return new GoogleGenAI({ apiKey });
+const googleInteractionsClientCache = new Map<string, Interactions>();
+
+function getGoogleInteractionsClient(apiKey: string): Interactions {
+  const cached = googleInteractionsClientCache.get(apiKey);
+  if (cached) return cached;
+
+  const client = new GoogleGenAI({ apiKey });
+  const interactions = client.interactions;
+  googleInteractionsClientCache.set(apiKey, interactions);
+  return interactions;
 }
 
 // ---------------------------------------------------------------------------
@@ -1122,12 +1130,12 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
   opts: GoogleNativeStepRequest,
 ): Promise<GoogleNativeStepResult> => {
   const apiKey = resolveGoogleApiKey(opts.apiKey);
-  const client = createGoogleClient(apiKey);
+  const client = getGoogleInteractionsClient(apiKey);
 
   const request = buildGoogleNativeRequest(opts);
 
   // Create streaming interaction
-  const stream = await client.interactions.create({
+  const stream = await client.create({
     ...request,
     stream: true,
   } as Interactions.CreateModelInteractionParamsStreaming);
@@ -1256,9 +1264,14 @@ export const __internal = {
   convertMessagesToInteractionsInput,
   convertToolsToInteractionsTools,
   enrichTextBlockAnnotations,
+  getGoogleInteractionsClient,
   googleTurnMessagesToModelMessages,
   mapGoogleEventToStreamParts,
   processStreamEvent,
   queueTextBlockAnnotationEnrichment,
   resolveGoogleApiKey,
+  __testResetGoogleInteractionsClientCache: () => {
+    googleInteractionsClientCache.clear();
+  },
+  __testGetGoogleInteractionsClientCacheSize: () => googleInteractionsClientCache.size,
 } as const;

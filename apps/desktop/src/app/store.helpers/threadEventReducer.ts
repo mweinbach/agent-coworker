@@ -14,6 +14,7 @@ import {
   shouldIgnoreNormalizedChunkForRawBackedTurn,
   type ModelStreamUpdate,
 } from "../modelStream";
+import { buildAttachmentDisplayText, buildAttachmentSignature } from "../attachmentInputs";
 import {
   applyModelStreamUpdateToThreadFeed as applyModelStreamUpdateToThreadFeedCore,
   developerDiagnosticSystemLineFromServerEvent,
@@ -43,11 +44,13 @@ import {
   hasPendingThreadSteer,
   markPendingThreadSteerAccepted,
   prependPendingThreadMessage,
+  prependPendingThreadMessageWithAttachments,
   queuePendingThreadMessage,
   rememberPendingThreadSteer,
   rekeyThreadRuntimeMaps,
   resetModelStreamRuntime,
   shiftPendingThreadMessage,
+  shiftPendingThreadAttachments,
 } from "./runtimeState";
 import {
   buildSyntheticServerHelloFromJsonRpcThread,
@@ -64,6 +67,7 @@ import {
   startJsonRpcThread,
   startJsonRpcTurn,
   steerJsonRpcTurn,
+  type FileAttachmentInput,
   interruptJsonRpcTurn,
   unsubscribeJsonRpcThread,
 } from "./jsonRpcSocket";
@@ -859,8 +863,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     text: string,
     threadId: string,
     clientMessageId: string,
+    attachments?: FileAttachmentInput[],
   ) {
-    void startJsonRpcTurn(get, set, workspaceId, sessionId, text, clientMessageId)
+    void startJsonRpcTurn(get, set, workspaceId, sessionId, text, clientMessageId, attachments)
       .catch(() => {
         surfaceJsonRpcTurnSendFailure(set, threadId);
       });
@@ -875,8 +880,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     text: string,
     threadId: string,
     clientMessageId: string,
+    attachments?: FileAttachmentInput[],
   ) {
-    void steerJsonRpcTurn(get, set, workspaceId, sessionId, turnId, text, clientMessageId)
+    void steerJsonRpcTurn(get, set, workspaceId, sessionId, turnId, text, clientMessageId, attachments)
       .catch(() => {
         surfaceJsonRpcTurnSendFailure(set, threadId, { clientMessageId });
       });
@@ -890,9 +896,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     threadId: string,
     text: string,
     busyPolicy: ThreadBusyPolicy = "reject",
+    attachments?: FileAttachmentInput[],
   ): boolean {
     const trimmed = text.trim();
-    if (!trimmed) return false;
+    const hasAttachments = attachments && attachments.length > 0;
+    if (!trimmed && !hasAttachments) return false;
+    const attachmentSignature = buildAttachmentSignature(attachments);
+    const displayText = trimmed || buildAttachmentDisplayText(attachments);
 
     const thread = get().threads.find((t) => t.id === threadId);
     if (!thread) return false;
@@ -903,13 +913,17 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
 
     if (rt.busy) {
       if (busyPolicy === "queue") {
-        queuePendingThreadMessage(threadId, trimmed);
+        queuePendingThreadMessage(threadId, trimmed, attachments);
         return true;
       }
 
       if (busyPolicy === "steer") {
         if (!rt.activeTurnId) return false;
-        if (rt.pendingSteer?.status === "sending" && rt.pendingSteer.text.trim() === trimmed) {
+        if (
+          rt.pendingSteer?.status === "sending"
+          && rt.pendingSteer.text.trim() === trimmed
+          && (rt.pendingSteer.attachmentSignature ?? "") === attachmentSignature
+        ) {
           return false;
         }
 
@@ -917,6 +931,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         rememberPendingThreadSteer(threadId, {
           clientMessageId,
           text: trimmed,
+          attachmentSignature,
           expectedTurnId: rt.activeTurnId,
           accepted: false,
         });
@@ -931,6 +946,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
                 pendingSteer: {
                   clientMessageId,
                   text: trimmed,
+                  attachmentSignature,
                   status: "sending",
                 },
               },
@@ -942,11 +958,11 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           type: "steer_message",
           sessionId: rt.sessionId,
           expectedTurnId: rt.activeTurnId,
-          text: trimmed,
+          text: displayText,
           clientMessageId,
         });
 
-        dispatchJsonRpcTurnSteer(get, set, workspaceId, rt.sessionId, rt.activeTurnId, trimmed, threadId, clientMessageId);
+        dispatchJsonRpcTurnSteer(get, set, workspaceId, rt.sessionId, rt.activeTurnId, trimmed, threadId, clientMessageId, attachments);
         return true;
       }
 
@@ -963,17 +979,17 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       kind: "message",
       role: "user",
       ts: deps.nowIso(),
-      text: trimmed,
+      text: displayText,
     });
 
     deps.appendThreadTranscript(threadId, "client", {
       type: "user_message",
       sessionId: rt.sessionId,
-      text: trimmed,
+      text: displayText,
       clientMessageId,
     });
 
-    dispatchJsonRpcTurnStart(get, set, workspaceId, rt.sessionId, trimmed, threadId, clientMessageId);
+    dispatchJsonRpcTurnStart(get, set, workspaceId, rt.sessionId, trimmed, threadId, clientMessageId, attachments);
     return true;
   }
 
@@ -982,10 +998,11 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       return false;
     }
     const next = shiftPendingThreadMessage(threadId);
-    if (!next) return false;
-    const accepted = sendUserMessageToThread(get, set, threadId, next);
+    if (next === undefined) return false;
+    const queuedAttachments = shiftPendingThreadAttachments(threadId);
+    const accepted = sendUserMessageToThread(get, set, threadId, next, undefined, queuedAttachments);
     if (!accepted) {
-      prependPendingThreadMessage(threadId, next);
+      prependPendingThreadMessageWithAttachments(threadId, next, queuedAttachments);
     }
     return accepted;
   }
@@ -1231,9 +1248,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             prependPendingThreadMessage(threadId, pendingFirstMessage);
           }
         } else {
-          acceptedPendingFirstMessage = pendingFirstMessageQueued
-            ? flushOneQueuedThreadMessageIfReady(get, set, threadId)
-            : sendUserMessageToThread(get, set, threadId, pendingFirstMessage);
+          if (pendingFirstMessageQueued) {
+            acceptedPendingFirstMessage = flushOneQueuedThreadMessageIfReady(get, set, threadId);
+          } else {
+            const firstMsgAttachments = shiftPendingThreadAttachments(threadId);
+            acceptedPendingFirstMessage = sendUserMessageToThread(get, set, threadId, pendingFirstMessage, undefined, firstMsgAttachments);
+          }
         }
       }
 

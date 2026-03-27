@@ -279,6 +279,36 @@ export function modelMessagesToPiMessages(messages: ModelMessage[], provider: st
     if (!role) continue;
 
     if (role === "user") {
+      if (Array.isArray(message.content)) {
+        const parts = message.content as Array<unknown>;
+        const hasMultimodal = parts.some((p) => {
+          const rec = asRecord(p);
+          return rec &&
+            (rec.type === "image" || rec.type === "input_image") &&
+            typeof rec.data === "string" &&
+            typeof rec.mimeType === "string";
+        });
+        if (hasMultimodal) {
+          const piContent: Array<Record<string, unknown>> = [];
+          for (const part of parts) {
+            const rec = asRecord(part);
+            if (!rec) continue;
+            if ((rec.type === "text" || rec.type === "input_text") && typeof rec.text === "string") {
+              if (rec.text.trim()) piContent.push({ type: "text", text: rec.text });
+            } else if (
+              (rec.type === "image" || rec.type === "input_image") &&
+              typeof rec.data === "string" &&
+              typeof rec.mimeType === "string"
+            ) {
+              piContent.push({ type: "image", data: rec.data, mimeType: rec.mimeType });
+            }
+          }
+          if (piContent.length > 0) {
+            out.push({ role: "user", content: piContent, timestamp: now } as unknown as PiMessage);
+          }
+          continue;
+        }
+      }
       const textParts = contentTextParts(message.content);
       const text = textParts.join("\n").trim();
       if (!text) continue;

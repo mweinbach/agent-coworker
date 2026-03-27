@@ -1,5 +1,6 @@
 import type { ServerEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
+import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
 
 import { captureBindingOutcome, type JsonRpcSessionError, sendSessionMutationError } from "./outcomes";
 import { toJsonRpcParams } from "./shared";
@@ -17,17 +18,23 @@ export function createTurnRouteHandlers(
 ): JsonRpcRequestHandlerMap {
   return {
     "turn/start": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      const text = context.utils.extractTextInput(params.input);
-      const clientMessageId =
-        typeof params.clientMessageId === "string" && params.clientMessageId.trim()
-          ? params.clientMessageId.trim()
-          : undefined;
-      if (!threadId || !text) {
+      const parsed = jsonRpcThreadTurnRequestSchemas["turn/start"].safeParse(message.params);
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
-          message: "turn/start requires threadId and non-empty text input",
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+
+      const { threadId, input, clientMessageId } = parsed.data;
+      const { text, attachments } = context.utils.extractInput(input);
+      const hasInput = text || attachments.length > 0;
+      if (!threadId || !hasInput) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: "turn/start requires threadId and non-empty input",
         });
         return;
       }
@@ -42,7 +49,7 @@ export function createTurnRouteHandlers(
       const outcome = await captureBindingOutcome(
         context,
         binding,
-        () => binding.session!.sendUserMessage(text, clientMessageId),
+        () => binding.session!.sendUserMessage(text, clientMessageId, undefined, attachments.length > 0 ? attachments : undefined),
         (event): event is JsonRpcTurnStartOutcome => (
           (event.type === "session_busy"
             && event.sessionId === binding.session!.id
@@ -67,21 +74,25 @@ export function createTurnRouteHandlers(
     },
 
     "turn/steer": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      const text = context.utils.extractTextInput(params.input);
-      const clientMessageId =
-        typeof params.clientMessageId === "string" && params.clientMessageId.trim()
-          ? params.clientMessageId.trim()
-          : undefined;
-      const expectedTurnId = typeof params.turnId === "string" && params.turnId.trim()
-        ? params.turnId.trim()
-        : context.threads.getLive(threadId)?.session?.activeTurnId ?? "";
-      const session = context.threads.getLive(threadId)?.session;
-      if (!session || !text || !expectedTurnId) {
+      const parsed = jsonRpcThreadTurnRequestSchemas["turn/steer"].safeParse(message.params);
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
-          message: "turn/steer requires threadId, active turnId, and non-empty text input",
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+
+      const { threadId, turnId, input, clientMessageId } = parsed.data;
+      const { text, attachments } = context.utils.extractInput(input);
+      const expectedTurnId = turnId || (context.threads.getLive(threadId)?.session?.activeTurnId ?? "");
+      const session = context.threads.getLive(threadId)?.session;
+      const hasSteerInput = text || attachments.length > 0;
+      if (!session || !hasSteerInput || !expectedTurnId) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: "turn/steer requires threadId, active turnId, and non-empty input",
         });
         return;
       }
@@ -96,7 +107,7 @@ export function createTurnRouteHandlers(
       const outcome = await captureBindingOutcome(
         context,
         binding,
-        () => session.sendSteerMessage(text, expectedTurnId, clientMessageId),
+        () => session.sendSteerMessage(text, expectedTurnId, clientMessageId, attachments.length > 0 ? attachments : undefined),
         (event): event is JsonRpcTurnSteerOutcome => (
           (event.type === "steer_accepted"
             && event.sessionId === session.id

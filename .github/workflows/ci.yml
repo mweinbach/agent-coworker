@@ -33,8 +33,18 @@ jobs:
       - name: Docs consistency check
         run: bun run docs:check
 
+      - name: Typecheck
+        run: bun run typecheck
+
+      # Serialize async tests: many desktop tests swap global JSDOM document/window and
+      # cannot run concurrently without clobbering each other on shared globalThis.
       - name: Unit tests
-        run: bun test --max-concurrency 4
+        run: bun test --max-concurrency 1
+
+      # Re-run each file in isolation to catch order/global-state issues that can hide
+      # inside a single aggregate Bun invocation.
+      - name: Stable per-file unit tests
+        run: bun run test:stable -- --max-concurrency 1
 
       - name: Remote MCP smoke
         env:

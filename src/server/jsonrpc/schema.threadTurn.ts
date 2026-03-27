@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import {
+  getAttachmentCountValidationMessage,
+  getAttachmentValidationMessage,
+  MAX_ATTACHMENT_BASE64_SIZE,
+} from "../../shared/attachments";
 import { projectedItemSchema } from "../../shared/projectedItems";
 import { sessionSnapshotSchema } from "../../shared/sessionSnapshot";
 import { nonEmptyTrimmedStringSchema } from "./schema.shared";
@@ -19,6 +24,55 @@ export const jsonRpcThreadSchema = z.object({
     type: z.string(),
   }).strict(),
 }).strict();
+
+const textInputPart = z.object({
+  type: z.literal("text"),
+  text: z.string(),
+}).strict();
+
+const legacyInputTextPart = z.object({
+  type: z.literal("inputText"),
+  text: z.string(),
+}).strict();
+
+const fileInputPart = z.object({
+  type: z.literal("file"),
+  filename: z.string().min(1),
+  contentBase64: z.string().min(1).max(MAX_ATTACHMENT_BASE64_SIZE),
+  mimeType: z.string().min(1),
+}).strict();
+
+const uploadedFileInputPart = z.object({
+  type: z.literal("uploadedFile"),
+  filename: z.string().min(1),
+  path: z.string().min(1),
+  mimeType: z.string().min(1),
+}).strict();
+
+const inputPart = z.discriminatedUnion("type", [textInputPart, legacyInputTextPart, fileInputPart, uploadedFileInputPart]);
+const turnInputPartsSchema = z.array(inputPart).superRefine((input, ctx) => {
+  const attachments = input.filter((part): part is z.infer<typeof fileInputPart> | z.infer<typeof uploadedFileInputPart> => (
+    part.type === "file" || part.type === "uploadedFile"
+  ));
+  const countMessage = getAttachmentCountValidationMessage(attachments.length);
+  if (countMessage) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: countMessage,
+    });
+    return;
+  }
+  const inlineAttachments = attachments.filter((part): part is z.infer<typeof fileInputPart> => part.type === "file");
+  const message = getAttachmentValidationMessage(inlineAttachments);
+  if (!message) {
+    return;
+  }
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message,
+  });
+});
+const turnInputSchema = z.union([z.string(), turnInputPartsSchema]);
 
 export const jsonRpcThreadTurnRequestSchemas = {
   "thread/start": z.object({
@@ -43,19 +97,13 @@ export const jsonRpcThreadTurnRequestSchemas = {
   "turn/start": z.object({
     threadId: nonEmptyTrimmedStringSchema,
     clientMessageId: nonEmptyTrimmedStringSchema.optional(),
-    input: z.array(z.object({
-      type: z.literal("text"),
-      text: z.string(),
-    }).strict()),
+    input: turnInputSchema,
   }).strict(),
   "turn/steer": z.object({
     threadId: nonEmptyTrimmedStringSchema,
     turnId: nonEmptyTrimmedStringSchema,
     clientMessageId: nonEmptyTrimmedStringSchema.optional(),
-    input: z.array(z.object({
-      type: z.literal("text"),
-      text: z.string(),
-    }).strict()),
+    input: turnInputSchema,
   }).strict(),
   "turn/interrupt": z.object({
     threadId: nonEmptyTrimmedStringSchema,

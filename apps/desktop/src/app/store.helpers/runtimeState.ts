@@ -11,6 +11,7 @@ import type { CachedSessionSnapshot, ThreadRuntime, WorkspaceRuntime } from "../
 export type PendingThreadSteer = {
   clientMessageId: string;
   text: string;
+  attachmentSignature?: string;
   expectedTurnId: string;
   accepted: boolean;
 };
@@ -42,6 +43,7 @@ export type RuntimeMaps = {
   skillInstallWaiters: Map<string, SkillInstallWaiter>;
   optimisticUserMessageIds: Map<string, Set<string>>;
   pendingThreadMessages: Map<string, string[]>;
+  pendingThreadAttachments: Map<string, Array<import("./jsonRpcSocket").FileAttachmentInput[] | undefined>>;
   pendingThreadSteers: Map<string, Map<string, PendingThreadSteer>>;
   threadSelectionRequests: Map<string, number>;
   nextThreadSelectionRequestId: number;
@@ -61,6 +63,7 @@ export const RUNTIME: RuntimeMaps = {
   skillInstallWaiters: new Map(),
   optimisticUserMessageIds: new Map(),
   pendingThreadMessages: new Map(),
+  pendingThreadAttachments: new Map(),
   pendingThreadSteers: new Map(),
   threadSelectionRequests: new Map(),
   nextThreadSelectionRequestId: 0,
@@ -90,18 +93,34 @@ export function resetModelStreamRuntime(threadId: string) {
   RUNTIME.modelStreamByThread.set(threadId, createThreadModelStreamRuntime());
 }
 
-export function queuePendingThreadMessage(threadId: string, text: string) {
+export function queuePendingThreadMessage(threadId: string, text: string, attachments?: import("./jsonRpcSocket").FileAttachmentInput[]) {
   const trimmed = text.trim();
-  if (!trimmed) return;
+  if (!trimmed && (!attachments || attachments.length === 0)) return;
   const existing = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
   existing.push(trimmed);
   RUNTIME.pendingThreadMessages.set(threadId, existing);
+  const existingAttachments = RUNTIME.pendingThreadAttachments.get(threadId) ?? [];
+  existingAttachments.push(attachments && attachments.length > 0 ? attachments : undefined);
+  RUNTIME.pendingThreadAttachments.set(threadId, existingAttachments);
+}
+
+export function shiftPendingThreadAttachments(threadId: string): import("./jsonRpcSocket").FileAttachmentInput[] | undefined {
+  const existing = RUNTIME.pendingThreadAttachments.get(threadId);
+  if (!existing || existing.length === 0) return undefined;
+  const next = existing.shift();
+  if (existing.length === 0) {
+    RUNTIME.pendingThreadAttachments.delete(threadId);
+  } else {
+    RUNTIME.pendingThreadAttachments.set(threadId, existing);
+  }
+  return next;
 }
 
 export function drainPendingThreadMessages(threadId: string): string[] {
   const existing = RUNTIME.pendingThreadMessages.get(threadId);
   if (!existing || existing.length === 0) return [];
   RUNTIME.pendingThreadMessages.delete(threadId);
+  RUNTIME.pendingThreadAttachments.delete(threadId);
   return existing;
 }
 
@@ -123,6 +142,21 @@ export function prependPendingThreadMessage(threadId: string, text: string) {
   const existing = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
   existing.unshift(trimmed);
   RUNTIME.pendingThreadMessages.set(threadId, existing);
+}
+
+export function prependPendingThreadMessageWithAttachments(
+  threadId: string,
+  text: string,
+  attachments?: import("./jsonRpcSocket").FileAttachmentInput[],
+) {
+  const trimmed = text.trim();
+  if (!trimmed && (!attachments || attachments.length === 0)) return;
+  const existingMessages = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
+  existingMessages.unshift(trimmed);
+  RUNTIME.pendingThreadMessages.set(threadId, existingMessages);
+  const existingAttachments = RUNTIME.pendingThreadAttachments.get(threadId) ?? [];
+  existingAttachments.unshift(attachments && attachments.length > 0 ? attachments : undefined);
+  RUNTIME.pendingThreadAttachments.set(threadId, existingAttachments);
 }
 
 export function rememberPendingThreadSteer(threadId: string, steer: PendingThreadSteer) {
@@ -175,6 +209,7 @@ export function rekeyThreadRuntimeMaps(fromThreadId: string, toThreadId: string)
 
   moveMapEntry(RUNTIME.optimisticUserMessageIds, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingThreadMessages, fromThreadId, toThreadId);
+  moveMapEntry(RUNTIME.pendingThreadAttachments, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingThreadSteers, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.pendingWorkspaceDefaultApplyByThread, fromThreadId, toThreadId);
   moveMapEntry(RUNTIME.modelStreamByThread, fromThreadId, toThreadId);

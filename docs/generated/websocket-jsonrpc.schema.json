@@ -140,24 +140,109 @@
               "minLength": 1
             },
             "input": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "const": "text"
-                  },
-                  "text": {
-                    "type": "string"
-                  }
+              "anyOf": [
+                {
+                  "type": "string"
                 },
-                "required": [
-                  "type",
-                  "text"
-                ],
-                "additionalProperties": false
-              }
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "text"
+                          },
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "inputText"
+                          },
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "file"
+                          },
+                          "filename": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "contentBase64": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 34952536
+                          },
+                          "mimeType": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "filename",
+                          "contentBase64",
+                          "mimeType"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "uploadedFile"
+                          },
+                          "filename": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "path": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "mimeType": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "filename",
+                          "path",
+                          "mimeType"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                }
+              ]
             }
           },
           "required": [
@@ -182,24 +267,109 @@
               "minLength": 1
             },
             "input": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "const": "text"
-                  },
-                  "text": {
-                    "type": "string"
-                  }
+              "anyOf": [
+                {
+                  "type": "string"
                 },
-                "required": [
-                  "type",
-                  "text"
-                ],
-                "additionalProperties": false
-              }
+                {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "text"
+                          },
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "inputText"
+                          },
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "file"
+                          },
+                          "filename": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "contentBase64": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 34952536
+                          },
+                          "mimeType": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "filename",
+                          "contentBase64",
+                          "mimeType"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "uploadedFile"
+                          },
+                          "filename": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "path": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "mimeType": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "filename",
+                          "path",
+                          "mimeType"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                }
+              ]
             }
           },
           "required": [
@@ -659,6 +829,28 @@
               "additionalProperties": {}
             }
           },
+          "additionalProperties": false
+        },
+        "cowork/session/file/upload": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "minLength": 1
+            },
+            "filename": {
+              "type": "string",
+              "minLength": 1
+            },
+            "contentBase64": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "filename",
+            "contentBase64"
+          ],
           "additionalProperties": false
         },
         "cowork/session/delete": {
@@ -1793,6 +1985,7 @@
         "cowork/session/harnessContext/get",
         "cowork/session/harnessContext/set",
         "cowork/session/defaults/apply",
+        "cowork/session/file/upload",
         "cowork/session/delete",
         "cowork/session/agent/spawn",
         "cowork/session/agent/list",
@@ -4825,6 +5018,38 @@
                 "type",
                 "sessionId",
                 "config"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "event"
+          ],
+          "additionalProperties": false
+        },
+        "cowork/session/file/upload": {
+          "type": "object",
+          "properties": {
+            "event": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "file_uploaded"
+                },
+                "filename": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "type",
+                "filename",
+                "path"
               ],
               "additionalProperties": {}
             }
@@ -14395,6 +14620,7 @@
         "cowork/session/harnessContext/get",
         "cowork/session/harnessContext/set",
         "cowork/session/defaults/apply",
+        "cowork/session/file/upload",
         "cowork/session/delete",
         "cowork/session/agent/spawn",
         "cowork/session/agent/list",

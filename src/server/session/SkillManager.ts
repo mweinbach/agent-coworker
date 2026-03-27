@@ -25,7 +25,7 @@ export class SkillManager {
   constructor(
     private readonly context: SessionContext,
     private readonly handlers: {
-      sendUserMessage: (text: string, clientMessageId?: string, displayText?: string) => Promise<void>;
+      sendUserMessage: (text: string, clientMessageId?: string, displayText?: string, attachments?: import("../jsonrpc/routes/shared").FileAttachment[]) => Promise<void>;
     }
   ) {}
 

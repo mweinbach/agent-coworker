@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { startAgentServer } from "../src/server/startServer";
+import { stopTestServer } from "./helpers/wsHarness";
 
 async function makeTmpProject(): Promise<string> {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-toolstream-test-"));
@@ -176,6 +177,7 @@ describe("JSON-RPC tool loop notifications", () => {
       env: {
         AGENT_WORKING_DIR: tmpDir,
         AGENT_PROVIDER: "google",
+        AGENT_OBSERVABILITY_ENABLED: "false",
         COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
       },
       runTurnImpl: runTurnImpl as any,
@@ -254,7 +256,7 @@ describe("JSON-RPC tool loop notifications", () => {
       expect(agentCompletedIndex).toBeGreaterThan(agentDeltaIndex);
       expect(turnCompletedIndex).toBeGreaterThan(agentCompletedIndex);
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   }, 30_000);
 });
@@ -284,6 +286,7 @@ describe("JSON-RPC turn usage notifications", () => {
       env: {
         AGENT_WORKING_DIR: tmpDir,
         AGENT_PROVIDER: "google",
+        AGENT_OBSERVABILITY_ENABLED: "false",
         COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
       },
       runTurnImpl: runTurnImpl as any,
@@ -311,7 +314,7 @@ describe("JSON-RPC turn usage notifications", () => {
       expect(usageIndex).toBeGreaterThan(agentCompletedIndex);
       expect(turnCompletedIndex).toBeGreaterThan(usageIndex);
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   }, 30_000);
 });

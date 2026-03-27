@@ -55,6 +55,8 @@ import {
   queuePendingThreadMessage,
   rememberPendingThreadSteer,
   prependPendingThreadMessage,
+  prependPendingThreadMessageWithAttachments,
+  shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
 } from "./store.helpers/runtimeState";
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
@@ -208,14 +210,14 @@ export type AppStoreState = {
   selectWorkspace: (workspaceId: string) => Promise<void>;
   reorderWorkspaces: (sourceWorkspaceId: string, targetWorkspaceId: string) => Promise<void>;
 
-  newThread: (opts?: { workspaceId?: string; titleHint?: string; firstMessage?: string; mode?: "draft" | "session" }) => Promise<void>;
+  newThread: (opts?: { workspaceId?: string; titleHint?: string; firstMessage?: string; mode?: "draft" | "session"; attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[] }) => Promise<boolean>;
   removeThread: (threadId: string) => Promise<void>;
   deleteThreadHistory: (threadId: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
-  reconnectThread: (threadId: string, firstMessage?: string, opts?: { selectionRequestId?: number; skipWorkspaceSelect?: boolean }) => Promise<void>;
+  reconnectThread: (threadId: string, firstMessage?: string, opts?: { selectionRequestId?: number; skipWorkspaceSelect?: boolean; attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[] }) => Promise<boolean>;
   renameThread: (threadId: string, newTitle: string) => void;
 
-  sendMessage: (text: string, busyPolicy?: ThreadBusyPolicy) => Promise<void>;
+  sendMessage: (text: string, busyPolicy?: ThreadBusyPolicy, attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[]) => Promise<boolean>;
   cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => void;
   clearThreadUsageHardCap: (threadId: string) => void;
   setThreadModel: (threadId: string, provider: ProviderName, model: string) => void;
@@ -537,5 +539,7 @@ export {
   queuePendingThreadMessage,
   rememberPendingThreadSteer,
   prependPendingThreadMessage,
+  prependPendingThreadMessageWithAttachments,
+  shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
 };

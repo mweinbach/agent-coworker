@@ -30,6 +30,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     skillsDirs: [],
     memoryDirs: [],
     configDirs: [],
+    observabilityEnabled: false,
     ...overrides,
   };
 }

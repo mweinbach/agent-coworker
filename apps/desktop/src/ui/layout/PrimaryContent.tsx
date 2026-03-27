@@ -49,10 +49,10 @@ export function PrimaryContent({ init, ready, startupError, view }: PrimaryConte
     case "error":
       return <ErrorContent startupError={startupError ?? "Startup error"} init={init} />;
     case "skills":
-      return <SkillsView />;
+      return <div className="h-full min-h-0 bg-panel"><SkillsView /></div>;
     case "chat":
-      return <ChatView />;
+      return <div className="h-full min-h-0 bg-panel"><ChatView /></div>;
     default:
-      return <ChatView />;
+      return <div className="h-full min-h-0 bg-panel"><ChatView /></div>;
   }
 }

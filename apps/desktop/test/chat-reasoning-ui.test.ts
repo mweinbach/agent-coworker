@@ -212,6 +212,8 @@ describe("desktop reasoning UI helpers", () => {
       busy: true,
       hasPromptModal: false,
       composerText: "",
+      hasPendingAttachments: false,
+      pendingAttachmentSignature: "",
       pendingSteer: null,
       sessionId: "session-1",
       threadStatus: "active",
@@ -221,6 +223,8 @@ describe("desktop reasoning UI helpers", () => {
       busy: true,
       hasPromptModal: false,
       composerText: "",
+      hasPendingAttachments: false,
+      pendingAttachmentSignature: "",
       pendingSteer: null,
       sessionId: null,
       threadStatus: "active",
@@ -230,6 +234,8 @@ describe("desktop reasoning UI helpers", () => {
       busy: true,
       hasPromptModal: false,
       composerText: "tighten scope",
+      hasPendingAttachments: false,
+      pendingAttachmentSignature: "",
       pendingSteer: null,
       sessionId: "session-1",
       threadStatus: "active",
@@ -239,9 +245,12 @@ describe("desktop reasoning UI helpers", () => {
       busy: true,
       hasPromptModal: false,
       composerText: "tighten scope",
+      hasPendingAttachments: false,
+      pendingAttachmentSignature: "",
       pendingSteer: {
         clientMessageId: "cmid-1",
         text: "tighten scope",
+        attachmentSignature: "",
         status: "sending",
       },
       sessionId: "session-1",
@@ -252,10 +261,39 @@ describe("desktop reasoning UI helpers", () => {
       busy: false,
       hasPromptModal: false,
       composerText: "",
+      hasPendingAttachments: false,
+      pendingAttachmentSignature: "",
       pendingSteer: null,
       sessionId: "session-1",
       threadStatus: "active",
     })).toEqual({ status: "ready", disabled: true, mode: "send" });
+
+    expect(getComposerSubmitState({
+      busy: false,
+      hasPromptModal: false,
+      composerText: "",
+      hasPendingAttachments: true,
+      pendingAttachmentSignature: "sig-1",
+      pendingSteer: null,
+      sessionId: "session-1",
+      threadStatus: "active",
+    })).toEqual({ status: "ready", disabled: false, mode: "send" });
+
+    expect(getComposerSubmitState({
+      busy: true,
+      hasPromptModal: false,
+      composerText: "",
+      hasPendingAttachments: true,
+      pendingAttachmentSignature: "sig-1",
+      pendingSteer: {
+        clientMessageId: "cmid-2",
+        text: "",
+        attachmentSignature: "sig-1",
+        status: "sending",
+      },
+      sessionId: "session-1",
+      threadStatus: "active",
+    })).toEqual({ status: "ready", disabled: true, mode: "steer-pending" });
   });
 
   test("routes busy composer submits through steer mode", () => {

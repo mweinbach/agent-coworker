@@ -1,5 +1,102 @@
 # Task Plan
 
+## Cap Attachment Picker and Pending Steer Queues
+
+- [x] Confirm the three new unresolved review threads are still real against current HEAD.
+- [x] Reject oversized attachment selections in the desktop picker before `arrayBuffer()` and base64 encoding run in the renderer.
+- [x] Bound pending steer attachment payload growth while a turn is still accepting queued steers.
+- [x] Deduplicate attachment-aware requeue logic and rerun focused verification, typecheck, and the full suite.
+
+## Cap Attachment Picker and Pending Steer Queues Review
+
+- `apps/desktop/src/ui/ChatView.tsx` was still reading selected files into memory and base64-encoding them before any size check. That made the new attachment limits enforceable only after the renderer had already buffered the payload.
+- `src/shared/attachments.ts` now exposes shared base64-size helpers, and `apps/desktop/src/app/attachmentInputs.ts` uses them to validate raw file sizes plus already-queued attachments before the picker starts reading any file bytes.
+- `src/server/session/TurnExecutionManager.ts` was still letting repeated accepted steers accumulate arbitrarily large attachment payloads in `pendingSteers`. It now rejects new steer attachments once the queued attachment payload would exceed one turn-sized combined budget.
+- `apps/desktop/src/app/store.helpers/runtimeState.ts` now owns `prependPendingThreadMessageWithAttachments(...)`, and both `threadEventReducer.ts` and `workspaceDefaults.ts` use it so attachment-only requeues cannot drift out of sync across the two FIFOs.
+- Added focused regressions in `apps/desktop/test/attachment-inputs.test.ts`, `apps/desktop/test/runtimeState.test.ts`, and `test/session.test.ts`.
+- Verification passed with:
+  - `~/.bun/bin/bun test apps/desktop/test/attachment-inputs.test.ts apps/desktop/test/runtimeState.test.ts test/session.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test --max-concurrency 1` on 2026-03-27 (`2750 pass`, `3 skip`, `0 fail`)
+
+## Resolve Attachment Review Threads
+
+- [x] Confirm each unresolved attachment review thread is still real against current HEAD before editing.
+- [x] Fix the server attachment path so turn-start and steer attachments honor `uploadsDirectory` and reject oversized payloads before decode.
+- [x] Fix the desktop attachment send path so attachment-only sends/steers stop injecting fake prompt text, the file picker uses linear-time base64 conversion, and pending-steer duplicate detection stays attachment-aware.
+- [x] Update focused tests plus generated JSON-RPC schema artifacts, then rerun targeted verification, typecheck, and the full suite.
+
+## Resolve Attachment Review Threads Review
+
+- Confirmed real before patching:
+  - `src/server/session/TurnExecutionManager.ts` was decoding `contentBase64` without a size guard and hardcoding attachment writes to `workingDirectory/User Uploads`, ignoring `config.uploadsDirectory`.
+  - `apps/desktop/src/ui/ChatView.tsx` was synthesizing fake user text like `[photo.png]` for attachment-only sends and using a quadratic `Uint8Array.reduce(... String.fromCharCode ...)` base64 conversion in the picker.
+  - `apps/desktop/src/app/store.helpers/threadEventReducer.ts` was still treating same-text pending steers as duplicates even when their attachments differed, which also collapsed attachment-only steers because the text key was empty in both cases.
+- The harness now shares a single attachment payload cap via `src/shared/attachments.ts`, enforces it in the JSON-RPC turn schemas, validates it again in the session runtime before any decode, and uses the configured `uploadsDirectory` for message/steer attachment writes when one is set.
+- Attachment-only turns and steers now keep the model input empty while still projecting a user-visible attachment label in the transcript/feed/session events. That keeps replay/history readable without mutating model context.
+- The desktop picker now uses a chunked linear-time array-buffer-to-base64 helper, and pending-steer state now carries an attachment signature so duplicate suppression only triggers when both text and attachments match.
+- Regenerated `docs/generated/websocket-jsonrpc.schema.json` and `docs/generated/websocket-jsonrpc.d.ts` after the JSON-RPC schema change.
+- Verification passed with:
+  - `~/.bun/bin/bun test test/session.test.ts test/server.jsonrpc.flow.test.ts apps/desktop/test/jsonrpc-single-connection.test.ts apps/desktop/test/chat-reasoning-ui.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test test/jsonrpc.codegen.test.ts`
+  - `~/.bun/bin/bun test --max-concurrency 1` on 2026-03-26 (`2740 pass`, `3 skip`, `0 fail`)
+
+## Preserve Queued Attachments During Workspace-Default Flush
+
+- [x] Confirm the remaining unresolved workspace-default review thread is still real against current HEAD.
+- [x] Make the workspace-default queued-message flush path replay attachment payloads atomically with their queued text.
+- [x] Add a desktop regression covering attachment-only queued sends after defaults apply, then rerun focused verification plus repo-wide checks.
+
+## Preserve Queued Attachments During Workspace-Default Flush Review
+
+- `apps/desktop/src/app/store.actions/workspaceDefaults.ts` was still draining only `pendingThreadMessages` and replaying text-only sends after defaults applied. That dropped queued attachments entirely, and attachment-only queued sends were discarded because the empty string was trimmed before replay.
+- The workspace-default flush path now mirrors the shared thread reducer behavior: it shifts queued attachments alongside queued text, replays them together through `sendUserMessageToThread(...)`, and requeues both FIFOs atomically if the send cannot proceed yet.
+- `apps/desktop/src/app/store.helpers.ts` now re-exports `shiftPendingThreadAttachments`, which the workspace-default action needs for the shared runtime helper contract.
+- `apps/desktop/test/workspace-settings-sync.test.ts` now clears `RUNTIME.pendingThreadAttachments` in test setup and covers the attachment-only queued-send regression so the workspace-default replay path stays aligned with the normal reducer path.
+- Verification passed with:
+  - `~/.bun/bin/bun test apps/desktop/test/workspace-settings-sync.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test --max-concurrency 1` on 2026-03-26 (`2741 pass`, `3 skip`, `0 fail`)
+
+## Finish Attachment Turn Limits
+
+- [x] Confirm the remaining transcript-only attachment send and aggregate turn-size review threads are still real.
+- [x] Ensure attachment-only transcript sends start a live session immediately instead of returning success on a draft-only path.
+- [x] Add shared aggregate/count attachment limits for JSON-RPC turn requests and session runtime validation, regenerate JSON-RPC artifacts, and rerun verification.
+
+## Finish Attachment Turn Limits Review
+
+- `apps/desktop/src/app/store.actions/thread.ts` was still treating `newThread({ attachments, firstMessage: "" })` as a draft path unless `mode === "session"` or the text was non-empty. That meant transcript-only attachment sends returned success, cleared the composer, and never started a live session.
+- `newThread(...)` now treats attachments as real first-turn input, mirrors `reconnectThread(...)` by queueing the initial text/attachment pair through `queuePendingThreadMessage(...)`, and lets the shared thread reducer flush attachment-only first turns once the JSON-RPC thread is live.
+- `src/shared/attachments.ts` now defines shared per-turn attachment limits: max file count, max per-file base64 size, and a combined base64 budget. `src/server/jsonrpc/schema.threadTurn.ts` enforces those limits at request validation time, and `src/server/session/TurnExecutionManager.ts` reuses the same helper for runtime validation.
+- Added regressions for attachment-only transcript sends in `apps/desktop/test/jsonrpc-single-connection.test.ts`, request-layer aggregate/count failures in `test/server.jsonrpc.flow.test.ts`, and runtime count validation in `test/session.test.ts`.
+- Regenerated `docs/generated/websocket-jsonrpc.schema.json` and `docs/generated/websocket-jsonrpc.d.ts` after the turn-schema change.
+- Verification passed with:
+  - `~/.bun/bin/bun test apps/desktop/test/jsonrpc-single-connection.test.ts test/server.jsonrpc.flow.test.ts test/session.test.ts`
+  - `~/.bun/bin/bun run docs:generate-jsonrpc`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test --max-concurrency 1` on 2026-03-27 (`2745 pass`, `3 skip`, `0 fail`)
+
+## Stabilize JSON-RPC Replay Test Timeouts
+
+- [x] Inspect the failing GitHub Actions `Docs + Tests` job and confirm whether the failures are timeout-budget related.
+- [x] Compare the failing replay-heavy JSON-RPC tests locally to determine whether they are functionally broken or just exceeding the CI budget intermittently.
+- [x] Widen only the replay-heavy test budgets that are hitting the 20s cap, rerun focused verification, and capture the evidence below.
+
+## Stabilize JSON-RPC Replay Test Timeouts Review
+
+- GitHub Actions runs on PR #61 showed multiple replay-heavy `test/server.jsonrpc.flow.test.ts` cases timing out exactly at the 20 second test budget on `ubuntu-latest`, including `thread/read can include journal-projected turns and thread/resume can replay from a journal cursor` (run `23628476285`) and, on an earlier commit in the same branch, `thread/read and thread/resume replay journals beyond 1000 events` (run `23628376698`).
+- Local focused reruns did not reproduce a logic failure: the affected tests completed in roughly 70-130 ms in isolation, and repeated reruns stayed green. That points to CI-only replay/teardown slowness rather than a deterministic contract regression in the JSON-RPC replay flow.
+- `test/server.jsonrpc.flow.test.ts` now uses explicit replay-test timeout constants so only the replay-heavy cases get a wider budget, and the mixed timeout declaration on the journal-projection test was normalized to a single Bun timeout style.
+- Verification passed with:
+  - `~/.bun/bin/bun test test/server.jsonrpc.flow.test.ts --max-concurrency 1 --test-name-pattern "thread/read can include journal-projected turns and thread/resume can replay from a journal cursor" --rerun-each 50`
+  - `~/.bun/bin/bun test test/server.jsonrpc.flow.test.ts --max-concurrency 1 --test-name-pattern "thread/resume replays a journal cursor once before reattaching the live thread sink" --rerun-each 50`
+  - `~/.bun/bin/bun test test/server.jsonrpc.flow.test.ts --max-concurrency 1 --test-name-pattern "thread/read and thread/resume replay journals beyond 1000 events" --rerun-each 20`
+  - `~/.bun/bin/bun test test/server.jsonrpc.flow.test.ts --max-concurrency 1 --rerun-each 10`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test --max-concurrency 1` on 2026-03-26 (`2734 pass`, `3 skip`, `0 fail`)
+
 ## Keep thread/read Citation Enrichment Off the Response Path
 
 - [x] Confirm `thread/read` is awaiting network-backed citation enrichment before responding.

@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 import { z } from "zod";
 import {
   MODEL_STREAM_NORMALIZER_VERSION,
@@ -5,6 +8,13 @@ import {
   reasoningModeForProvider,
 } from "../modelStream";
 import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
+import {
+  formatAttachmentDisplayText,
+  getAttachmentCountValidationMessage,
+  getAttachmentTotalBase64Size,
+  getAttachmentValidationMessage,
+  MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
+} from "../../shared/attachments";
 import { supportsProviderManagedContinuationProvider } from "../../shared/providerContinuation";
 import type { AgentExecutionState } from "../../shared/agents";
 import type { TurnUsage } from "../../session/costTracker";
@@ -15,6 +25,8 @@ import {
   type ServerErrorCode,
   type ServerErrorSource,
 } from "../../types";
+import { supportsImageInput } from "../../models/registry";
+import type { FileAttachment } from "../jsonrpc/routes/shared";
 import type { HistoryManager } from "./HistoryManager";
 import type { InteractionManager } from "./InteractionManager";
 import type { SessionBackupController } from "./SessionBackupController";
@@ -72,6 +84,49 @@ function classifyStructuredTurnError(err: unknown): ClassifiedTurnError | null {
 
 function makeId(): string {
   return crypto.randomUUID();
+}
+
+const MAX_PENDING_STEER_ATTACHMENT_TOTAL_BASE64_SIZE = MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE;
+
+function makeStructuredSessionError(
+  code: ServerErrorCode,
+  message: string,
+): Error & { code: ServerErrorCode; source: ServerErrorSource } {
+  return Object.assign(new Error(message), { code, source: "session" as const });
+}
+
+function isInlineFileAttachment(attachment: FileAttachment): attachment is Extract<FileAttachment, { contentBase64: string }> {
+  return "contentBase64" in attachment;
+}
+
+function getInlineAttachments(attachments?: readonly FileAttachment[]): Array<Extract<FileAttachment, { contentBase64: string }>> {
+  return (attachments ?? []).filter(isInlineFileAttachment);
+}
+
+function getTurnAttachmentValidationMessage(attachments?: readonly FileAttachment[]): string | null {
+  const countMessage = getAttachmentCountValidationMessage(attachments?.length);
+  if (countMessage) {
+    return countMessage;
+  }
+  return getAttachmentValidationMessage(getInlineAttachments(attachments));
+}
+
+function resolveUserInputDisplayText(
+  text: string,
+  attachments?: readonly Pick<FileAttachment, "filename">[],
+): string {
+  const trimmed = text.trim();
+  if (trimmed) {
+    return trimmed;
+  }
+  if (!attachments || attachments.length === 0) {
+    return "";
+  }
+  return formatAttachmentDisplayText(
+    attachments
+      .map((attachment) => path.basename(attachment.filename))
+      .filter((fileName) => fileName && fileName !== "." && fileName !== ".."),
+  );
 }
 
 function extractAssistantTextFromMessageContent(content: unknown): string {
@@ -278,7 +333,7 @@ export class TurnExecutionManager {
     return this.context.state.currentTurnOutcome === "error" ? "errored" : "completed";
   }
 
-  async sendSteerMessage(text: string, expectedTurnId: string, clientMessageId?: string) {
+  async sendSteerMessage(text: string, expectedTurnId: string, clientMessageId?: string, attachments?: FileAttachment[]) {
     if (!this.context.state.running) {
       this.context.emitError("validation_failed", "session", "No active turn to steer.");
       return;
@@ -300,16 +355,50 @@ export class TurnExecutionManager {
       return;
     }
 
-    if (text.trim().length === 0) {
-      this.context.emitError("validation_failed", "session", "Steer text must be non-empty.");
+    if (text.trim().length === 0 && (!attachments || attachments.length === 0)) {
+      this.context.emitError("validation_failed", "session", "Steer input must be non-empty.");
       return;
     }
+    const attachmentValidationMessage = getTurnAttachmentValidationMessage(attachments);
+    if (attachmentValidationMessage) {
+      this.context.emitError("validation_failed", "session", attachmentValidationMessage);
+      return;
+    }
+    const nextPendingSteerAttachmentBase64Size =
+      this.context.state.pendingSteers.reduce(
+        (total, steer) => total + getAttachmentTotalBase64Size(getInlineAttachments(steer.attachments)),
+        0,
+      ) + getAttachmentTotalBase64Size(getInlineAttachments(attachments));
+    if (nextPendingSteerAttachmentBase64Size > MAX_PENDING_STEER_ATTACHMENT_TOTAL_BASE64_SIZE) {
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "Pending steer attachments are too large. Wait for the current turn to consume queued steers.",
+      );
+      return;
+    }
+    const MAX_PENDING_STEER_COUNT = 32;
+    if (this.context.state.pendingSteers.length >= MAX_PENDING_STEER_COUNT) {
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "Too many pending steers. Wait for the current turn to consume queued steers.",
+      );
+      return;
+    }
+    const displayText = resolveUserInputDisplayText(text, attachments);
 
     this.context.state.pendingSteers.push({
       text,
+      ...(displayText ? { displayText } : {}),
       ...(clientMessageId ? { clientMessageId } : {}),
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
       acceptedAt: new Date().toISOString(),
     });
+    // TODO(P2): Validate uploaded file attachment paths BEFORE emitting steer_accepted. Currently
+    // buildUserMessageContent validates at line ~950 (path traversal + file existence) in commitPendingSteers,
+    // which runs AFTER steer is acknowledged. This can cause an accepted steer to fail during commit,
+    // unexpectedly aborting the active turn. Fix: Add pre-validation for uploaded file paths here.
     this.context.emit({
       type: "steer_accepted",
       sessionId: this.context.id,
@@ -319,20 +408,21 @@ export class TurnExecutionManager {
     });
   }
 
-  private commitPendingSteers(): ModelMessage[] {
+  private async commitPendingSteers(): Promise<ModelMessage[]> {
     const drained = this.context.state.pendingSteers.splice(0);
     if (drained.length === 0) return [];
 
-    const steerMessages = drained.map<ModelMessage>((steer) => ({
-      role: "user",
-      content: steer.text,
-    }));
+    const steerMessages: ModelMessage[] = [];
+    for (const steer of drained) {
+      const content = await this.buildUserMessageContent(steer.text, steer.attachments);
+      steerMessages.push({ role: "user", content });
+    }
     this.deps.historyManager.appendMessagesToHistory(steerMessages);
     for (const steer of drained) {
       this.context.emit({
         type: "user_message",
         sessionId: this.context.id,
-        text: steer.text,
+        text: steer.displayText ?? resolveUserInputDisplayText(steer.text, steer.attachments),
         ...(steer.clientMessageId ? { clientMessageId: steer.clientMessageId } : {}),
       });
     }
@@ -340,8 +430,8 @@ export class TurnExecutionManager {
     return steerMessages;
   }
 
-  private drainPendingSteers(stepMessages: ModelMessage[]): { messages: ModelMessage[] } | undefined {
-    const steerMessages = this.commitPendingSteers();
+  private async drainPendingSteers(stepMessages: ModelMessage[]): Promise<{ messages: ModelMessage[] } | undefined> {
+    const steerMessages = await this.commitPendingSteers();
     if (steerMessages.length === 0) return undefined;
     return {
       messages: [...stepMessages, ...steerMessages],
@@ -354,7 +444,7 @@ export class TurnExecutionManager {
     this.context.emitError("validation_failed", "session", message);
   }
 
-  async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
+  async sendUserMessage(text: string, clientMessageId?: string, displayText?: string, attachments?: import("../jsonrpc/routes/shared").FileAttachment[]) {
     if (this.context.state.running) {
       this.context.emitError("busy", "session", "Agent is busy");
       return;
@@ -368,6 +458,12 @@ export class TurnExecutionManager {
       );
       return;
     }
+    const attachmentValidationMessage = getTurnAttachmentValidationMessage(attachments);
+    if (attachmentValidationMessage) {
+      this.context.emitError("validation_failed", "session", attachmentValidationMessage);
+      return;
+    }
+    const visibleText = displayText ?? resolveUserInputDisplayText(text, attachments);
 
     if (this.context.state.persistenceStatus === "closed") {
       this.context.state.persistenceStatus = "active";
@@ -382,7 +478,7 @@ export class TurnExecutionManager {
     this.context.state.currentTurnId = turnId;
     this.context.state.currentTurnOutcome = "completed";
     this.updateSessionExecutionState("running");
-    const cause: "user_message" | "command" = displayText?.startsWith("/") ? "command" : "user_message";
+    const cause: "user_message" | "command" = visibleText.startsWith("/") ? "command" : "user_message";
     let lastStreamError: unknown = null;
     let lastMessagePreview: string | undefined;
     let aggregatedUsage: TurnUsage | undefined;
@@ -585,15 +681,21 @@ export class TurnExecutionManager {
       });
     };
     try {
-      this.context.emit({ type: "user_message", sessionId: this.context.id, text: displayText ?? text, clientMessageId });
+      this.context.emit({ type: "user_message", sessionId: this.context.id, text: visibleText, clientMessageId });
       this.context.emit({ type: "session_busy", sessionId: this.context.id, busy: true, turnId, cause });
+      // TODO(P2): Validate uploaded file paths BEFORE emitting session_busy. Currently buildUserMessageContent
+      // validates at line ~938 (path traversal + file existence) AFTER session_busy is emitted. This means
+      // clients get a JSON-RPC success response and clear composer state, only to receive an async error later.
+      // Fix: Extract path validation into a reusable helper and call it before setting session state.
       this.context.emitTelemetry("agent.turn.started", "ok", {
         sessionId: this.context.id,
         provider: this.context.state.config.provider,
         model: this.context.state.config.model,
       });
-      this.deps.historyManager.appendMessagesToHistory([{ role: "user", content: text }]);
-      this.deps.metadataManager.maybeGenerateTitleFromQuery(text);
+
+      const userMessageContent = await this.buildUserMessageContent(text, attachments);
+      this.deps.historyManager.appendMessagesToHistory([{ role: "user", content: userMessageContent }]);
+      this.deps.metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
       this.context.queuePersistSessionSnapshot("session.user_message");
       let continueSameTurn = true;
       while (continueSameTurn) {
@@ -677,7 +779,7 @@ export class TurnExecutionManager {
           continue;
         }
 
-        const lateSteersCommitted = this.commitPendingSteers().length > 0;
+        const lateSteersCommitted = (await this.commitPendingSteers()).length > 0;
         continueSameTurn =
           lateSteersCommitted &&
           !this.context.state.abortController?.signal.aborted;
@@ -774,6 +876,123 @@ export class TurnExecutionManager {
       this.context.state.abortController.abort();
     }
     this.deps.interactionManager.rejectAllPending("Cancelled by user");
+  }
+
+  private async buildUserMessageContent(
+    text: string,
+    attachments?: FileAttachment[],
+  ): Promise<string | Array<Record<string, unknown>>> {
+    if (!attachments || attachments.length === 0) {
+      return text;
+    }
+
+    const config = this.context.state.config;
+    const uploadsDir = config.uploadsDirectory ?? path.resolve(config.workingDirectory, "User Uploads");
+    await fs.mkdir(uploadsDir, { recursive: true });
+
+    const provider = config.provider;
+    const model = config.model;
+    const modelSupportsImages = supportsImageInput(provider, model);
+    const isGoogleProvider = provider === "google";
+
+    const contentParts: Array<Record<string, unknown>> = [];
+    if (text) {
+      contentParts.push({ type: "text", text });
+    }
+
+    const resolvedUploadsDir = path.resolve(uploadsDir);
+    const usedNames = new Set<string>();
+    for (const attachment of attachments) {
+      const safeName = path.basename(attachment.filename);
+      if (!safeName || safeName === "." || safeName === "..") continue;
+
+      const inlineAttachment = isInlineFileAttachment(attachment) ? attachment : null;
+      let diskPath: string;
+
+      if (inlineAttachment) {
+        let finalName = safeName;
+        if (usedNames.has(finalName)) {
+          const ext = path.extname(safeName);
+          const base = safeName.slice(0, safeName.length - ext.length);
+          let counter = 1;
+          while (usedNames.has(finalName)) {
+            finalName = `${base}_${counter}${ext}`;
+            counter++;
+          }
+        }
+
+        const filePath = path.resolve(resolvedUploadsDir, finalName);
+        if (!filePath.startsWith(resolvedUploadsDir)) continue;
+
+        diskPath = filePath;
+        try {
+          await fs.access(diskPath);
+          const ext = path.extname(finalName);
+          const base = finalName.slice(0, finalName.length - ext.length);
+          let counter = 1;
+          while (true) {
+            diskPath = path.resolve(resolvedUploadsDir, `${base}_${counter}${ext}`);
+            try {
+              await fs.access(diskPath);
+              counter++;
+            } catch {
+              break;
+            }
+          }
+          finalName = path.basename(diskPath);
+        } catch {
+          // File doesn't exist, use as-is.
+        }
+        usedNames.add(finalName);
+
+        const attachmentValidationMessage = getAttachmentValidationMessage([inlineAttachment]);
+        if (attachmentValidationMessage) {
+          throw makeStructuredSessionError("validation_failed", attachmentValidationMessage);
+        }
+
+        const decoded = Buffer.from(inlineAttachment.contentBase64, "base64");
+        await fs.writeFile(diskPath, decoded);
+      } else {
+        const uploadedAttachment = attachment as Extract<FileAttachment, { path: string }>;
+        diskPath = path.resolve(uploadedAttachment.path);
+        if (!diskPath.startsWith(resolvedUploadsDir + path.sep)) {
+          throw makeStructuredSessionError("validation_failed", "Uploaded file path is outside the uploads directory.");
+        }
+        try {
+          await fs.access(diskPath);
+        } catch {
+          throw makeStructuredSessionError("validation_failed", `Uploaded file does not exist: ${diskPath}`);
+        }
+      }
+
+      contentParts.push({
+        type: "text",
+        text: `[System: The user uploaded a file which has been saved to ${diskPath}]`,
+      });
+
+      const mime = attachment.mimeType.toLowerCase();
+      const isImage = mime.startsWith("image/");
+      const isGeminiMultimodal =
+        mime.startsWith("audio/") ||
+        mime.startsWith("video/") ||
+        mime === "application/pdf";
+
+      if (inlineAttachment && isImage && modelSupportsImages) {
+        contentParts.push({
+          type: "image",
+          data: inlineAttachment.contentBase64,
+          mimeType: attachment.mimeType,
+        });
+      } else if (inlineAttachment && isGeminiMultimodal && isGoogleProvider) {
+        contentParts.push({
+          type: "image",
+          data: inlineAttachment.contentBase64,
+          mimeType: attachment.mimeType,
+        });
+      }
+    }
+
+    return contentParts;
   }
 
   private classifyTurnError(err: unknown): ClassifiedTurnError {

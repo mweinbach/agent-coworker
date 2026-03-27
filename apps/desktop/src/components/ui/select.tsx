@@ -93,27 +93,41 @@ function SelectValue({
 type SelectTriggerProps = Omit<HeroSelectTriggerProps, "children"> & {
   children?: React.ReactNode;
   size?: SelectSize;
+  /** When true, the label stays next to the chevron (width follows content). When false, the label grows to fill the trigger (full-width fields). */
+  compact?: boolean;
 };
 
 function SelectTrigger({
   className,
   children,
   size = "default",
+  compact = false,
   ...props
 }: SelectTriggerProps) {
   return (
     <HeroSelect.Trigger
       data-size={size}
       data-slot="select-trigger"
+      data-compact={compact ? "true" : undefined}
       className={cn(
-        "app-focus-ring app-surface-field app-border-subtle app-shadow-field flex w-fit min-w-40 items-center justify-between gap-2 rounded-[10px] border text-sm outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        "app-focus-ring app-surface-field app-border-subtle app-shadow-field min-w-0 rounded-[10px] border text-sm outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        compact
+          ? "!grid w-max max-w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5"
+          : "flex w-fit max-w-full min-w-0 items-center gap-1.5",
         size === "sm" ? "h-8 px-2.5 text-xs" : "h-9 px-3 py-2",
         className,
       )}
       {...props}
     >
-      {children}
-      <HeroSelect.Indicator className="size-4 opacity-60" />
+      <span
+        className={cn(
+          "min-w-0 overflow-hidden text-left",
+          compact ? "pr-0.5" : "flex-1",
+        )}
+      >
+        {children}
+      </span>
+      <HeroSelect.Indicator className="!relative !right-auto !top-auto !translate-y-0 size-4 shrink-0 justify-self-end opacity-60" />
     </HeroSelect.Trigger>
   );
 }
@@ -141,7 +155,7 @@ function SelectContent({
   return (
     <HeroSelect.Popover
       data-slot="select-content"
-      className={cn("min-w-full", className)}
+      className={cn("w-auto min-w-[var(--trigger-width)] max-w-[min(24rem,calc(100vw-2rem))]", className)}
       placement={placement}
       {...props}
     >

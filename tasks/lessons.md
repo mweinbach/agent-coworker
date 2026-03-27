@@ -220,6 +220,7 @@
 - For the Windows sidebar-owned chrome strip in this repo, order the controls like a sidebar header: put the primary `New Chat` action first and the collapse/show toggle on its right, instead of leading with the chrome toggle.
 - For Windows desktop title bands in this repo, do not leave alternate control owners mounted behind CSS `display: none` or depend on overlap tricks for dragging; render one owner per state and put explicit drag layers behind the left control rows so blank chrome still drags while the buttons stay anchored and clickable.
 - For collapsed Windows sidebar chrome in this repo, mirror the expanded header layout instead of compressing the buttons into one tight cluster; keep `New Chat` on the left, the sidebar toggle on the right, and use an explicit renderer-to-main drag bridge if drag gestures need to start on those clickable controls.
+- When the user corrects attachment transport limits in this repo, treat upload-path and inline-model budgets as separate contracts; do not carry the inline cap over to uploaded files, and confirm which limit applies to each path before wiring validation.
 
 ## 2026-03-18 Tool Output Overflow Audit
 

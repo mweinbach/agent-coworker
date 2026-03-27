@@ -89,8 +89,10 @@ export type SeededSessionContext = {
 
 export type PendingSteer = {
   text: string;
+  displayText?: string;
   clientMessageId?: string;
   acceptedAt: string;
+  attachments?: import("../jsonrpc/routes/shared").FileAttachment[];
 };
 
 export type SessionRuntimeState = {

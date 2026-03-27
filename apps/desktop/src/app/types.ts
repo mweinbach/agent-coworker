@@ -101,6 +101,7 @@ export type ThreadRecord = {
 export type ThreadPendingSteer = {
   clientMessageId: string;
   text: string;
+  attachmentSignature?: string;
   status: "sending" | "accepted";
 };
 

@@ -1386,14 +1386,14 @@ export class AgentSession {
     await this.backupController.reloadSessionBackupStateFromDisk();
   }
 
-  async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
+  async sendUserMessage(text: string, clientMessageId?: string, displayText?: string, attachments?: import("../jsonrpc/routes/shared").FileAttachment[]) {
     await this.pendingConfigMutation.catch(() => {});
-    await this.turnExecutionManager.sendUserMessage(text, clientMessageId, displayText);
+    await this.turnExecutionManager.sendUserMessage(text, clientMessageId, displayText, attachments);
   }
 
-  async sendSteerMessage(text: string, expectedTurnId: string, clientMessageId?: string) {
+  async sendSteerMessage(text: string, expectedTurnId: string, clientMessageId?: string, attachments?: import("../jsonrpc/routes/shared").FileAttachment[]) {
     await this.pendingConfigMutation.catch(() => {});
-    await this.turnExecutionManager.sendSteerMessage(text, expectedTurnId, clientMessageId);
+    await this.turnExecutionManager.sendSteerMessage(text, expectedTurnId, clientMessageId, attachments);
   }
 
   getSessionUsage() {

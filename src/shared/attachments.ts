@@ -1,0 +1,81 @@
+export const MAX_TURN_ATTACHMENT_COUNT = 8;
+export const MAX_ATTACHMENT_INLINE_BYTE_SIZE = 25 * 1024 * 1024;
+export const MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE = 25 * 1024 * 1024;
+export const MAX_ATTACHMENT_BASE64_SIZE = getBase64SizeFromByteLength(MAX_ATTACHMENT_INLINE_BYTE_SIZE);
+export const MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE = getBase64SizeFromByteLength(MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE);
+
+export function getBase64SizeFromByteLength(byteLength: number): number {
+  return Math.ceil(Math.max(0, byteLength) / 3) * 4;
+}
+
+export function getAttachmentCountValidationMessage(count?: number): string | null {
+  if ((count ?? 0) > MAX_TURN_ATTACHMENT_COUNT) {
+    return `Too many file attachments (max ${MAX_TURN_ATTACHMENT_COUNT})`;
+  }
+  return null;
+}
+
+export function getAttachmentValidationMessageForBase64Sizes(
+  base64Sizes?: readonly number[],
+): string | null {
+  if (!base64Sizes || base64Sizes.length === 0) {
+    return null;
+  }
+  const attachmentCountMessage = getAttachmentCountValidationMessage(base64Sizes.length);
+  if (attachmentCountMessage) {
+    return attachmentCountMessage;
+  }
+
+  let totalBase64Size = 0;
+  for (const base64Size of base64Sizes) {
+    if (base64Size > MAX_ATTACHMENT_BASE64_SIZE) {
+      return "File too large to send inline (max 25MB)";
+    }
+    totalBase64Size += base64Size;
+    if (totalBase64Size > MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE) {
+      return "Inline attachments too large in total (max 25MB combined)";
+    }
+  }
+
+  return null;
+}
+export function getAttachmentByteLengthValidationMessage(
+  byteLengths?: readonly number[],
+): string | null {
+  if (!byteLengths || byteLengths.length === 0) {
+    return null;
+  }
+  return getAttachmentValidationMessageForBase64Sizes(
+    byteLengths.map((byteLength) => getBase64SizeFromByteLength(byteLength)),
+  );
+}
+
+export function getAttachmentTotalBase64Size(
+  attachments?: readonly Pick<{ contentBase64: string }, "contentBase64">[],
+): number {
+  if (!attachments || attachments.length === 0) {
+    return 0;
+  }
+  return attachments.reduce((total, attachment) => total + attachment.contentBase64.length, 0);
+}
+
+export function getAttachmentValidationMessage(
+  attachments?: readonly Pick<{ contentBase64: string }, "contentBase64">[],
+): string | null {
+  if (!attachments || attachments.length === 0) {
+    return null;
+  }
+  return getAttachmentValidationMessageForBase64Sizes(
+    attachments.map((attachment) => attachment.contentBase64.length),
+  );
+}
+
+export function formatAttachmentDisplayText(fileNames: readonly string[]): string {
+  const visibleNames = fileNames
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+  if (visibleNames.length === 0) {
+    return "";
+  }
+  return `[${visibleNames.join(", ")}]`;
+}

@@ -108,6 +108,7 @@ export interface JsonRpcRouteContext {
   utils: {
     resolveWorkspacePath(params: Record<string, unknown>, method: string): string;
     extractTextInput(input: unknown): string;
+    extractInput(input: unknown): import("./shared").ExtractedInput;
     buildThreadFromSession(session: AgentSession): JsonRpcThread;
     buildThreadFromRecord(record: PersistedSessionRecord): JsonRpcThread;
     shouldIncludeThreadSummary(summary: JsonRpcThreadSummaryFilter): boolean;

@@ -640,6 +640,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       closeThreadSession(threadId);
       RUNTIME.optimisticUserMessageIds.delete(threadId);
       RUNTIME.pendingThreadMessages.delete(threadId);
+      RUNTIME.pendingThreadAttachments.delete(threadId);
       RUNTIME.pendingWorkspaceDefaultApplyByThread.delete(threadId);
       RUNTIME.modelStreamByThread.delete(threadId);
       RUNTIME.threadSelectionRequests.delete(threadId);
@@ -742,14 +743,15 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       if (!workspaceId) {
         await get().addWorkspace();
         workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-        if (!workspaceId) return;
+        if (!workspaceId) return false;
       }
   
       if (get().selectedWorkspaceId !== workspaceId) {
         set({ selectedWorkspaceId: workspaceId });
       }
 
-      const createSessionImmediately = opts?.mode === "session" || Boolean(opts?.firstMessage?.trim());
+      const hasQueuedAttachments = opts?.attachments && opts.attachments.length > 0;
+      const createSessionImmediately = opts?.mode === "session" || Boolean(opts?.firstMessage?.trim()) || hasQueuedAttachments;
       if (!createSessionImmediately) {
         const existingDraft = get().threads.find((thread) => thread.workspaceId === workspaceId && thread.draft === true);
         if (existingDraft) {
@@ -759,7 +761,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
           });
           ensureThreadRuntime(get, set, existingDraft.id);
           await persistNow(get);
-          return;
+          return true;
         }
       }
 
@@ -780,7 +782,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
               detail: wsRt?.error ?? "Workspace server is not ready.",
             }),
           }));
-          return;
+          return false;
         }
       }
 
@@ -806,6 +808,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         threads: [thread, ...s.threads],
         selectedThreadId: threadId,
         view: "chat",
+        composerText: "",
       }));
       ensureThreadRuntime(get, set, threadId);
       set((s) => ({
@@ -817,14 +820,19 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       await persistNow(get);
 
       if (!createSessionImmediately) {
-        return;
+        return true;
       }
 
       if (!url) {
-        return;
+        return false;
       }
 
-      ensureThreadSocket(get, set, threadId, url, opts?.firstMessage, false);
+      const hasFirstMessage = Boolean(opts?.firstMessage?.trim());
+      if (hasFirstMessage || hasQueuedAttachments) {
+        queuePendingThreadMessage(threadId, opts?.firstMessage ?? "", opts?.attachments);
+      }
+      ensureThreadSocket(get, set, threadId, url, opts?.firstMessage, hasFirstMessage);
+      return true;
     },
   
 
@@ -836,7 +844,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
     },
   
 
-    reconnectThread: async (threadId: string, firstMessage?: string, opts?: { selectionRequestId?: number; skipWorkspaceSelect?: boolean }) => {
+    reconnectThread: async (threadId: string, firstMessage?: string, opts?: { selectionRequestId?: number; skipWorkspaceSelect?: boolean; attachments?: import("../store.helpers/jsonRpcSocket").FileAttachmentInput[] }) => {
       const isReconnectCurrent = () =>
         opts?.selectionRequestId === undefined
         || (get().selectedThreadId === threadId && isCurrentThreadSelectionRequest(threadId, opts.selectionRequestId));
@@ -844,18 +852,19 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       ensureThreadRuntime(get, set, threadId);
   
       const thread = get().threads.find((t) => t.id === threadId);
-      if (!thread) return;
+      if (!thread) return false;
 
-      if (thread.draft && !firstMessage?.trim()) {
-        return;
+      const hasQueuedAttachments = opts?.attachments && opts.attachments.length > 0;
+      if (thread.draft && !firstMessage?.trim() && !hasQueuedAttachments) {
+        return false;
       }
   
       if (!opts?.skipWorkspaceSelect) {
         await get().selectWorkspace(thread.workspaceId);
-        if (!isReconnectCurrent()) return;
+        if (!isReconnectCurrent()) return false;
       }
       await ensureServerRunning(get, set, thread.workspaceId);
-      if (!isReconnectCurrent()) return;
+      if (!isReconnectCurrent()) return false;
       ensureControlSocket(get, set, thread.workspaceId);
   
       const url = get().workspaceRuntimeById[thread.workspaceId]?.serverUrl;
@@ -869,49 +878,60 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
             detail: "Workspace server is not ready.",
           }),
         }));
-        return;
+        return false;
       }
-      if (!isReconnectCurrent()) return;
+      if (!isReconnectCurrent()) return false;
   
-      if (firstMessage && firstMessage.trim()) {
-        queuePendingThreadMessage(threadId, firstMessage);
+      const hasFirstMessage = firstMessage && firstMessage.trim();
+      if (hasFirstMessage || hasQueuedAttachments) {
+        queuePendingThreadMessage(threadId, firstMessage ?? "", opts?.attachments);
       }
       ensureThreadSocket(get, set, threadId, url, firstMessage, Boolean(firstMessage?.trim()));
+      return true;
     },
   
 
-    sendMessage: async (text: string, busyPolicy: ThreadBusyPolicy = "reject") => {
+    sendMessage: async (text: string, busyPolicy: ThreadBusyPolicy = "reject", attachments?: import("../store.helpers/jsonRpcSocket").FileAttachmentInput[]): Promise<boolean> => {
       const activeThreadId = get().selectedThreadId;
-      if (!activeThreadId) return;
-  
+      if (!activeThreadId) return false;
+
       const thread = get().threads.find((t) => t.id === activeThreadId);
-      if (!thread) return;
-  
+      if (!thread) return false;
+
       const rt = get().threadRuntimeById[activeThreadId];
       const trimmed = text.trim();
-      if (!trimmed) return;
-  
+      const hasAttachments = attachments && attachments.length > 0;
+      if (!trimmed && !hasAttachments) return false;
+
       if (rt?.transcriptOnly) {
         const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
         const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
-        await get().newThread({ workspaceId: thread.workspaceId, titleHint: thread.title, firstMessage });
+        const started = await get().newThread({
+          workspaceId: thread.workspaceId,
+          titleHint: thread.title,
+          firstMessage,
+          attachments,
+        });
+        if (!started) return false;
         set({ composerText: "" });
-        return;
+        return true;
       }
-  
+
       if (thread.status !== "active" || !rt?.sessionId) {
         const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
         const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
-        await get().reconnectThread(activeThreadId, firstMessage);
+        const reconnected = await get().reconnectThread(activeThreadId, firstMessage, { attachments });
+        if (!reconnected) return false;
         set({ composerText: "" });
-        return;
+        return true;
       }
-  
-      const accepted = sendUserMessageToThread(get, set, activeThreadId, trimmed, busyPolicy);
-      if (!accepted) return;
-      if (busyPolicy === "steer" && rt?.busy) return;
+
+      const accepted = sendUserMessageToThread(get, set, activeThreadId, trimmed, busyPolicy, attachments);
+      if (!accepted) return false;
+      if (busyPolicy === "steer" && rt?.busy) return true;
 
       set({ composerText: "" });
+      return true;
     },
   
 

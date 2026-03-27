@@ -11,15 +11,29 @@ mock.module("../src/ui/skills/InstallSkillDialog", () => ({
 
 const { useAppStore } = await import("../src/app/store");
 const { HeaderAndFilters } = await import("../src/ui/skills/HeaderAndFilters");
+mock.restore();
 
-const defaultStoreState = useAppStore.getState();
+async function waitForTextContent(
+  container: HTMLElement,
+  predicate: (text: string) => boolean,
+  timeoutMs = 2_000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const text = container.textContent ?? "";
+    if (predicate(text)) return text;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  return container.textContent ?? "";
+}
 
 describe("skills header and filters", () => {
   test("shows workspace context without the current chat callout", async () => {
     const harness = setupJsdom();
+    const previousState = useAppStore.getState();
 
     useAppStore.setState({
-      ...defaultStoreState,
+      ...previousState,
       workspaces: [{
         id: "ws-1",
         name: "Cowork Test",
@@ -67,18 +81,28 @@ describe("skills header and filters", () => {
         );
       });
 
-      expect(container.textContent).toContain("Skills for");
-      expect(container.textContent).toContain("Cowork Test");
-      expect(container.textContent).toContain("1 session");
-      expect(container.textContent).not.toContain("Current chat");
-      expect(container.textContent).toContain("Open chat");
-      expect(container.textContent).toContain("Refresh");
+      const text = await waitForTextContent(
+        container,
+        (value) =>
+          value.includes("Skills for")
+          && value.includes("Cowork Test")
+          && value.includes("1 session")
+          && value.includes("Open chat")
+          && value.includes("Refresh"),
+      );
+
+      expect(text).toContain("Skills for");
+      expect(text).toContain("Cowork Test");
+      expect(text).toContain("1 session");
+      expect(text).not.toContain("Current chat");
+      expect(text).toContain("Open chat");
+      expect(text).toContain("Refresh");
 
       await act(async () => {
         root.unmount();
       });
     } finally {
-      useAppStore.setState(defaultStoreState);
+      useAppStore.setState(previousState);
       harness.restore();
     }
   });

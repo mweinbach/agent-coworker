@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
+import { buildAttachmentSignature } from "../src/app/attachmentInputs";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -763,6 +764,164 @@ describe("desktop chat view stability", () => {
           root.unmount();
         });
       }
+      harness.restore();
+    }
+  });
+
+  test("keeps attachment-only steers pending until acceptance, then clears them", async () => {
+    const originalState = useAppStore.getState();
+    let submittedAttachmentSignature = "";
+
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Thread 1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:00.000Z",
+          status: "active",
+          sessionId: "session-1",
+          lastEventSeq: 0,
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          wsUrl: null,
+          connected: true,
+          sessionId: "session-1",
+          config: {
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+          sessionConfig: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: true,
+          busySince: "2026-03-12T00:00:05.000Z",
+          feed: [],
+          pendingSteer: null,
+          transcriptOnly: false,
+          activeTurnId: "turn-1",
+        },
+      },
+      composerText: "",
+      sendMessage: async (text: string, busyPolicy?: "reject" | "steer", attachments?: Array<{ filename: string; contentBase64: string; mimeType: string }>) => {
+        expect(text).toBe("");
+        expect(busyPolicy).toBe("steer");
+        submittedAttachmentSignature = buildAttachmentSignature(attachments);
+        return true;
+      },
+    } as any);
+
+    const harness = setupChatViewJsdom();
+
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+      const form = container.querySelector("form");
+      if (!fileInput || !form) throw new Error("missing composer controls");
+
+      const fakeFile = {
+        name: "diagram.png",
+        type: "image/png",
+        size: 3,
+        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+      } as File;
+      Object.defineProperty(fileInput, "files", {
+        configurable: true,
+        value: [fakeFile],
+      });
+
+      await act(async () => {
+        fileInput.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
+        await Promise.resolve();
+      });
+
+      expect(container.textContent).toContain("diagram.png");
+
+      await act(async () => {
+        form.dispatchEvent(new harness.dom.window.Event("submit", { bubbles: true, cancelable: true }));
+        await Promise.resolve();
+      });
+
+      expect(submittedAttachmentSignature).not.toBe("");
+      expect(container.textContent).toContain("diagram.png");
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            "thread-1": {
+              ...state.threadRuntimeById["thread-1"]!,
+              pendingSteer: {
+                clientMessageId: "cmid-attachment-steer",
+                text: "",
+                attachmentSignature: submittedAttachmentSignature,
+                status: "sending",
+              },
+            },
+          },
+        }));
+        await Promise.resolve();
+      });
+
+      const pendingSteerButton = container.querySelector('button[aria-label="Steer current response"]');
+      expect(pendingSteerButton).not.toBeNull();
+      expect((pendingSteerButton as HTMLButtonElement | null)?.disabled).toBe(true);
+      expect(container.textContent).toContain("Steer sent. Waiting for the running turn to accept it.");
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            "thread-1": {
+              ...state.threadRuntimeById["thread-1"]!,
+              pendingSteer: {
+                ...state.threadRuntimeById["thread-1"]!.pendingSteer!,
+                status: "accepted",
+              },
+            },
+          },
+        }));
+        await Promise.resolve();
+      });
+
+      expect(container.textContent).not.toContain("diagram.png");
+      expect(container.querySelector('[aria-label="Stop generating response"]')).not.toBeNull();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(originalState as any);
       harness.restore();
     }
   });

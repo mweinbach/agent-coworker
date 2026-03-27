@@ -38,13 +38,14 @@ import {
   persistNow,
   providerAuthMethodsFor,
   pushNotification,
-  prependPendingThreadMessage,
   requestJsonRpcControlEvent,
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,
+  prependPendingThreadMessageWithAttachments,
   truncateTitle,
   waitForControlSession,
+  shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
 } from "../store.helpers";
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
@@ -359,14 +360,15 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       return false;
     }
 
-    const next = shiftPendingThreadMessage(threadId)?.trim();
-    if (!next) {
+    const next = shiftPendingThreadMessage(threadId);
+    if (next === undefined) {
       return false;
     }
+    const queuedAttachments = shiftPendingThreadAttachments(threadId);
 
-    const accepted = sendUserMessageToThread(get, set, threadId, next);
+    const accepted = sendUserMessageToThread(get, set, threadId, next, undefined, queuedAttachments);
     if (!accepted) {
-      prependPendingThreadMessage(threadId, next);
+      prependPendingThreadMessageWithAttachments(threadId, next, queuedAttachments);
     }
     return accepted;
   };

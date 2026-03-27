@@ -63,6 +63,17 @@ body {
   box-shadow: var(--focus-ring-shadow);
 }
 
+/* Composer textarea: no field frame — global focus ring reads as a heavy “inner border”. */
+[data-slot="prompt-input"] textarea {
+  border: none;
+  box-shadow: none;
+}
+
+[data-slot="prompt-input"] textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 .app-topbar {
   -webkit-app-region: drag;
 }

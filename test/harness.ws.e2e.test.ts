@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createRunTurn } from "../src/agent";
 import { startAgentServer } from "../src/server/startServer";
-import { makeTmpProject, serverOpts, withSession } from "./helpers/wsHarness";
+import { makeTmpProject, serverOpts, stopTestServer, withSession } from "./helpers/wsHarness";
 
 describe("WebSocket harness context runtime visibility", () => {
   test("root-session turns inject harness context into the runtime system prompt", async () => {
@@ -60,7 +60,7 @@ describe("WebSocket harness context runtime visibility", () => {
       expect(capturedSystems[0]).toContain("- Run ID: run-root");
       expect(capturedSystems[0]).toContain("- Objective: Verify root runtime prompt injection");
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   }, 30_000);
 
@@ -126,7 +126,7 @@ describe("WebSocket harness context runtime visibility", () => {
       expect(workerSystems.some((system) => system.includes("- Run ID: run-child"))).toBe(true);
       expect(workerSystems.some((system) => system.includes("- Objective: Verify child runtime prompt injection"))).toBe(true);
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   }, 30_000);
 
@@ -160,7 +160,7 @@ describe("WebSocket harness context runtime visibility", () => {
       );
       await new Promise((resolve) => setTimeout(resolve, 50));
     } finally {
-      first.server.stop();
+      await stopTestServer(first.server);
     }
 
     const second = await startAgentServer(serverOpts(tmpDir));
@@ -190,7 +190,7 @@ describe("WebSocket harness context runtime visibility", () => {
         objective: "Persist harness context across restart",
       });
     } finally {
-      second.server.stop();
+      await stopTestServer(second.server);
     }
   }, 30_000);
 });
@@ -235,7 +235,7 @@ describe("WebSocket harness golden flows", () => {
 
       expect(assistantText).toBe("answer:b");
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   }, 30_000);
 
@@ -281,7 +281,7 @@ describe("WebSocket harness golden flows", () => {
       expect(await runApprovalFlow(true)).toBe("approved");
       expect(await runApprovalFlow(false)).toBe("denied");
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   }, 30_000);
 
@@ -350,7 +350,7 @@ describe("WebSocket harness golden flows", () => {
       expect(result.waited).toBe(true);
       expect(result.childId).toEqual(expect.any(String));
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   }, 30_000);
 
@@ -406,7 +406,7 @@ describe("WebSocket harness golden flows", () => {
 
       expect(workerTools).toEqual(expect.arrayContaining(["bash", "glob", "grep", "read", "write", "edit"]));
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   }, 30_000);
 
@@ -529,7 +529,7 @@ describe("WebSocket harness golden flows", () => {
       expect(childMessageSnapshots[0]?.map((message) => message.role)).toEqual(["user"]);
       expect(childMessageSnapshots[1]?.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   }, 30_000);
 });

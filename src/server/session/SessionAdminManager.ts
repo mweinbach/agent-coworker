@@ -469,7 +469,7 @@ export class SessionAdminManager {
     const uploadsDir = this.context.state.config.uploadsDirectory ?? path.resolve(this.context.state.config.workingDirectory, "User Uploads");
     const resolvedUploadsDir = path.resolve(uploadsDir);
     let filePath = path.resolve(resolvedUploadsDir, safeName);
-    if (!filePath.startsWith(resolvedUploadsDir)) {
+    if (!filePath.startsWith(resolvedUploadsDir + path.sep)) {
       this.context.emitError("validation_failed", "session", "Invalid filename (path traversal)");
       return;
     }
@@ -486,6 +486,11 @@ export class SessionAdminManager {
         } catch {
           break;
         }
+      }
+      const MAX_UPLOAD_BASE64_SIZE = 100 * 1024 * 1024 * 4 / 3; // ~100MB decoded ≈ 133MB base64
+      if (contentBase64.length > MAX_UPLOAD_BASE64_SIZE) {
+        this.context.emitError("validation_failed", "session", "File too large (max 100MB)");
+        return;
       }
       const decoded = Buffer.from(contentBase64, "base64");
       await fs.mkdir(resolvedUploadsDir, { recursive: true });

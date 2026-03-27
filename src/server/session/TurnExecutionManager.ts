@@ -377,6 +377,15 @@ export class TurnExecutionManager {
       );
       return;
     }
+    const MAX_PENDING_STEER_COUNT = 32;
+    if (this.context.state.pendingSteers.length >= MAX_PENDING_STEER_COUNT) {
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "Too many pending steers. Wait for the current turn to consume queued steers.",
+      );
+      return;
+    }
     const displayText = resolveUserInputDisplayText(text, attachments);
 
     this.context.state.pendingSteers.push({
@@ -938,7 +947,7 @@ export class TurnExecutionManager {
       } else {
         const uploadedAttachment = attachment as Extract<FileAttachment, { path: string }>;
         diskPath = path.resolve(uploadedAttachment.path);
-        if (!diskPath.startsWith(resolvedUploadsDir)) {
+        if (!diskPath.startsWith(resolvedUploadsDir + path.sep)) {
           throw makeStructuredSessionError("validation_failed", "Uploaded file path is outside the uploads directory.");
         }
         try {

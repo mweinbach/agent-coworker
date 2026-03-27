@@ -10,12 +10,12 @@ Make the repository's unit-test/CI experience reliable:
 This session uses the real Bun test workload and CI-adjacent validation, not a synthetic proxy benchmark.
 
 ## Metrics
-- **Primary**: `jsonrpc_flow_failures` (failures, lower is better) — number of failures across repeated CI-like reruns of `test/server.jsonrpc.flow.test.ts` in `./autoresearch.sh`.
+- **Primary**: `merge_ci_failures` (failures, lower is better) — number of failures across repeated CI-like reruns of the PR #61 **merge ref** unit suite in `./autoresearch.sh`.
 - **Secondary**:
-  - `flow_runs` — number of file-level reproducer runs executed by the benchmark script.
+  - `merge_ci_runs` — number of merge-ref CI-style suite reruns executed by the benchmark script.
   - `elapsed_s` — wall-clock runtime for the benchmark script.
 
-A score of `0` means the entire JSON-RPC flow file survived all targeted reruns. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
+A score of `0` means the merge-ref unit suite survived all targeted reruns. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact merge-ref CI unit-suite invocation, and the merge-ref per-file stable runner before a result can be kept.
 
 ## How to Run
 - Benchmark: `./autoresearch.sh`
@@ -49,5 +49,7 @@ Both scripts print diagnostics on failure; the benchmark also prints structured 
 ## What's Been Tried
 - Initial local baseline was green: `bun test --max-concurrency 1` succeeded twice, and docs/typecheck plus `bun run test:stable -- --max-concurrency 1` also passed.
 - GitHub PR #61 revealed the real failing signal to optimize against: workflow `CI` / job `Docs + Tests` timed out in `server JSON-RPC flows > thread/resume replays a journal cursor once before reattaching the live thread sink`.
-- Focus widened after the single-test reproducer stayed green locally: now repeatedly rerun the entire `test/server.jsonrpc.flow.test.ts` file under `CI=true` to capture file-local ordering/state interactions that the one-test reproducer might miss.
-- Full keeps must also pass docs, typecheck, `CI=true bun test --max-concurrency 1`, and `bun run test:stable -- --max-concurrency 1`.
+- The single-test reproducer stayed green locally across 6 reruns, and the whole `test/server.jsonrpc.flow.test.ts` file also stayed green locally across 8 reruns.
+- Key discovery: PR #61 targets `cursor/mobile-remote-access-3f82`, so GitHub tested the merge ref, not just the head commit. The merge ref includes substantial changes in `src/server/jsonrpc/**`, `src/server/session/**`, and `test/server.jsonrpc.flow.test.ts` that can affect this failure.
+- Breakthrough: the merge-ref unit suite passed twice in the benchmark but the next merge-ref CI-style suite run in checks reproduced the exact 45s timeout, confirming a real intermittent flake on the PR merge ref.
+- Current focus: run 4 repeated `CI=true bun test --max-concurrency 1` suite runs in a dedicated worktree at the PR merge ref so the flake shows up directly in the primary metric.

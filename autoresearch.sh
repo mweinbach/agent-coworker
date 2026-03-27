@@ -1,15 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+repo_root="$(cd "$(dirname "$0")" && pwd)"
+worktree_dir="/tmp/agent-coworker-pr61"
+merge_ref="refs/tmp/pr61-merge"
 tmp_dir="$(mktemp -d)"
 cleanup() {
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
 
+ensure_merge_worktree() {
+  git -C "$repo_root" fetch origin pull/61/merge:"$merge_ref" >/dev/null 2>&1
+  if [ ! -e "$worktree_dir/.git" ]; then
+    rm -rf "$worktree_dir"
+    git -C "$repo_root" worktree add --detach "$worktree_dir" "$merge_ref" >/dev/null 2>&1
+  else
+    git -C "$worktree_dir" reset --hard "$merge_ref" >/dev/null 2>&1
+    git -C "$worktree_dir" clean -fd >/dev/null 2>&1
+  fi
+
+  [ -e "$worktree_dir/node_modules" ] || ln -s "$repo_root/node_modules" "$worktree_dir/node_modules"
+  [ -e "$worktree_dir/apps/desktop/node_modules" ] || ln -s "$repo_root/apps/desktop/node_modules" "$worktree_dir/apps/desktop/node_modules"
+  [ -e "$worktree_dir/apps/mobile/node_modules" ] || ln -s "$repo_root/apps/mobile/node_modules" "$worktree_dir/apps/mobile/node_modules"
+}
+
 failures=0
-runs=8
+runs=4
 started_at="$(date +%s)"
+
+ensure_merge_worktree
 
 autorepro() {
   local label="$1"
@@ -32,14 +52,14 @@ autorepro() {
 
 for i in $(seq 1 "$runs"); do
   autorepro \
-    "server-jsonrpc-flow-${i}" \
-    env CI=true bun test test/server.jsonrpc.flow.test.ts --max-concurrency 1
+    "pr61-merge-ci-${i}" \
+    bash -lc "cd '$worktree_dir' && CI=true bun test --max-concurrency 1"
 done
 
 elapsed_s="$(( $(date +%s) - started_at ))"
 
-echo "METRIC jsonrpc_flow_failures=${failures}"
-echo "METRIC flow_runs=${runs}"
+echo "METRIC merge_ci_failures=${failures}"
+echo "METRIC merge_ci_runs=${runs}"
 echo "METRIC elapsed_s=${elapsed_s}"
 
 if [ "$failures" -ne 0 ]; then

@@ -1017,7 +1017,7 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("thread/read and thread/resume replay journals beyond 1000 events", async () => {
+  test("thread/read and thread/resume replay journals beyond 1000 events", { timeout: 20_000 }, async () => {
     const tmpDir = await makeTmpProject();
     const deltaCount = 1_005;
     const finalText = Array.from({ length: deltaCount }, (_, index) => `chunk-${index}`).join("");

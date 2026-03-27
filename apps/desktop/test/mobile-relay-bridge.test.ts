@@ -16,6 +16,21 @@ mock.module("electron", () => ({
 const { MobileRelayBridge } = await import("../electron/services/mobileRelayBridge");
 const MANAGED_RELAY_URL = "wss://api.phodex.app/relay";
 
+type RelaySnapshot = ReturnType<MobileRelayBridge["getSnapshot"]>;
+
+async function waitForRelaySnapshot(
+  bridge: MobileRelayBridge,
+  predicate: (snapshot: RelaySnapshot) => boolean,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate(bridge.getSnapshot())) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("timed out waiting for mobile relay snapshot");
+}
+
 class FakeServerManager {
   readonly starts: Array<{ workspaceId: string; workspacePath: string; yolo: boolean }> = [];
 
@@ -255,7 +270,10 @@ describe("mobile relay bridge", () => {
       phoneIdentityPublicKey: Buffer.from("phone-public-key").toString("base64"),
     }));
     relaySocket?.emitMessage(JSON.stringify({ kind: "secureReady" }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForRelaySnapshot(
+      bridge,
+      (s) => s.status === "connected" && s.trustedPhoneDeviceId === "phone-1",
+    );
 
     const trusted = bridge.getSnapshot();
     expect(trusted.trustedPhoneDeviceId).toBe("phone-1");
@@ -314,7 +332,10 @@ describe("mobile relay bridge", () => {
       phoneIdentityPublicKey: Buffer.from("managed-phone-public-key").toString("base64"),
     }));
     relaySocket?.emitMessage(JSON.stringify({ kind: "secureReady" }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForRelaySnapshot(
+      bridge,
+      (s) => s.status === "connected" && s.trustedPhoneDeviceId === "phone-managed",
+    );
 
     const trusted = bridge.getSnapshot();
     expect(trusted.trustedPhoneDeviceId).toBe("phone-managed");

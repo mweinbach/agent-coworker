@@ -11,15 +11,15 @@ mock.module("../src/ui/skills/InstallSkillDialog", () => ({
 
 const { useAppStore } = await import("../src/app/store");
 const { HeaderAndFilters } = await import("../src/ui/skills/HeaderAndFilters");
-
-const defaultStoreState = useAppStore.getState();
+mock.restore();
 
 describe("skills header and filters", () => {
   test("shows workspace context without the current chat callout", async () => {
     const harness = setupJsdom();
+    const previousState = useAppStore.getState();
 
     useAppStore.setState({
-      ...defaultStoreState,
+      ...previousState,
       workspaces: [{
         id: "ws-1",
         name: "Cowork Test",
@@ -78,7 +78,7 @@ describe("skills header and filters", () => {
         root.unmount();
       });
     } finally {
-      useAppStore.setState(defaultStoreState);
+      useAppStore.setState(previousState);
       harness.restore();
     }
   });

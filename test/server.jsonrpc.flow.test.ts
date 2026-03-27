@@ -1084,7 +1084,7 @@ describe("server JSON-RPC flows", () => {
       replayRpc.close();
     } finally {
       releaseSecondChunk?.();
-      await server.stop();
+      await server.stop(true);
     }
   });
 

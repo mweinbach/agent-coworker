@@ -26,7 +26,7 @@ ensure_merge_worktree() {
 }
 
 failures=0
-runs=4
+runs=200
 started_at="$(date +%s)"
 
 ensure_merge_worktree
@@ -52,14 +52,14 @@ autorepro() {
 
 for i in $(seq 1 "$runs"); do
   autorepro \
-    "pr61-merge-ci-${i}" \
-    bash -lc "cd '$worktree_dir' && CI=true bun test --max-concurrency 1"
+    "pr61-merge-resume-${i}" \
+    bash -lc "cd '$worktree_dir' && CI=true bun test test/server.jsonrpc.flow.test.ts --max-concurrency 1 --test-name-pattern 'thread/resume replays a journal cursor once before reattaching the live thread sink'"
 done
 
 elapsed_s="$(( $(date +%s) - started_at ))"
 
-echo "METRIC merge_ci_failures=${failures}"
-echo "METRIC merge_ci_runs=${runs}"
+echo "METRIC merge_resume_failures=${failures}"
+echo "METRIC merge_resume_runs=${runs}"
 echo "METRIC elapsed_s=${elapsed_s}"
 
 if [ "$failures" -ne 0 ]; then

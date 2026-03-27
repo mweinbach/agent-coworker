@@ -22,6 +22,7 @@ export function serverOpts(
     env: {
       AGENT_WORKING_DIR: tmpDir,
       AGENT_PROVIDER: "google",
+      AGENT_OBSERVABILITY_ENABLED: "false",
       COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
     },
     ...overrides,

@@ -567,8 +567,14 @@ describe("desktop bootstrap cache", () => {
 
   test("init preserves cached state when authoritative load fails", async () => {
     loadStateError = new Error("state load exploded");
+    const realError = console.error;
+    console.error = mock(() => {});
 
-    await useAppStore.getState().init();
+    try {
+      await useAppStore.getState().init();
+    } finally {
+      console.error = realError;
+    }
 
     const state = useAppStore.getState();
     expect(state.bootstrapPending).toBe(false);

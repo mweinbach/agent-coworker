@@ -769,6 +769,7 @@ describe("desktop chat view stability", () => {
   });
 
   test("keeps attachment-only steers pending until acceptance, then clears them", async () => {
+    const originalState = useAppStore.getState();
     let submittedAttachmentSignature = "";
 
     useAppStore.setState({
@@ -920,6 +921,7 @@ describe("desktop chat view stability", () => {
           root.unmount();
         });
       }
+      useAppStore.setState(originalState as any);
       harness.restore();
     }
   });

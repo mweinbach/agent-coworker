@@ -335,7 +335,10 @@ export async function startJsonRpcTurn(
   clientMessageId?: string,
   attachments?: FileAttachmentInput[],
 ): Promise<any> {
-  const input: Array<Record<string, unknown>> = [{ type: "text", text }];
+  const input: Array<Record<string, unknown>> = [];
+  if (text) {
+    input.push({ type: "text", text });
+  }
   if (attachments && attachments.length > 0) {
     for (const a of attachments) {
       input.push({ type: "file", filename: a.filename, contentBase64: a.contentBase64, mimeType: a.mimeType });
@@ -358,7 +361,10 @@ export async function steerJsonRpcTurn(
   clientMessageId?: string,
   attachments?: FileAttachmentInput[],
 ): Promise<any> {
-  const input: Array<Record<string, unknown>> = [{ type: "text", text }];
+  const input: Array<Record<string, unknown>> = [];
+  if (text) {
+    input.push({ type: "text", text });
+  }
   if (attachments && attachments.length > 0) {
     for (const a of attachments) {
       input.push({ type: "file", filename: a.filename, contentBase64: a.contentBase64, mimeType: a.mimeType });

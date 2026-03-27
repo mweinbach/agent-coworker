@@ -789,12 +789,20 @@ export function ChatView() {
     if (!composerText.trim() && pendingAttachments.length === 0) return;
     const attachments = pendingAttachments.length > 0 ? pendingAttachments : undefined;
     void sendMessage(composerText, busyPolicy, attachments).then((accepted) => {
-      if (accepted) {
+      if (accepted && busyPolicy !== "steer") {
         setPendingAttachments([]);
         setAttachmentPickerError(null);
       }
     });
   }, [composerText, pendingAttachments, sendMessage]);
+
+  useEffect(() => {
+    if (pendingAttachments.length === 0) return;
+    if (rt?.pendingSteer?.status !== "accepted") return;
+    if ((rt.pendingSteer.attachmentSignature ?? "") !== pendingAttachmentSignature) return;
+    setPendingAttachments([]);
+    setAttachmentPickerError(null);
+  }, [pendingAttachmentSignature, pendingAttachments.length, rt?.pendingSteer]);
 
   const onComposerKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {

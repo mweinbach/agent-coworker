@@ -29,6 +29,11 @@ const textInputPart = z.object({
   text: z.string(),
 }).strict();
 
+const legacyInputTextPart = z.object({
+  type: z.literal("inputText"),
+  text: z.string(),
+}).strict();
+
 const fileInputPart = z.object({
   type: z.literal("file"),
   filename: z.string().min(1),
@@ -36,8 +41,8 @@ const fileInputPart = z.object({
   mimeType: z.string().min(1),
 }).strict();
 
-const inputPart = z.discriminatedUnion("type", [textInputPart, fileInputPart]);
-const turnInputSchema = z.array(inputPart).superRefine((input, ctx) => {
+const inputPart = z.discriminatedUnion("type", [textInputPart, legacyInputTextPart, fileInputPart]);
+const turnInputPartsSchema = z.array(inputPart).superRefine((input, ctx) => {
   const attachments = input.filter((part): part is z.infer<typeof fileInputPart> => part.type === "file");
   const message = getAttachmentValidationMessage(attachments);
   if (!message) {
@@ -48,6 +53,7 @@ const turnInputSchema = z.array(inputPart).superRefine((input, ctx) => {
     message,
   });
 });
+const turnInputSchema = z.union([z.string(), turnInputPartsSchema]);
 
 export const jsonRpcThreadTurnRequestSchemas = {
   "thread/start": z.object({

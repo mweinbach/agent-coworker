@@ -269,6 +269,41 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("turn/start accepts legacy string input payloads", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => ({
+        text: "streamed reply",
+        responseMessages: [],
+      })) as any,
+    }));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      const turnResponse = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        clientMessageId: "msg-legacy-1",
+        input: "hello there",
+      });
+      expect(turnResponse.result.turn.threadId).toBe(started.result.thread.id);
+
+      await rpc.waitFor((message) => message.method === "turn/started");
+      const userItemStarted = await rpc.waitFor((message) =>
+        message.method === "item/started" && message.params.item.type === "userMessage",
+      );
+      expect(userItemStarted.params.item.content[0].text).toBe("hello there");
+      expect(userItemStarted.params.item.clientMessageId).toBe("msg-legacy-1");
+
+      await rpc.waitFor((message) => message.method === "turn/completed");
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("turn/start rejects oversized attachment payloads at the request layer", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -489,6 +524,50 @@ describe("server JSON-RPC flows", () => {
       const steerAccepted = await rpc.waitFor((message) => message.method === "cowork/session/steerAccepted");
       expect(steerAccepted.params.turnId).toBe(turnId);
       expect(steerAccepted.params.clientMessageId).toBe("steer-1");
+
+      releaseTurn.resolve();
+      await rpc.waitFor((message) => message.method === "turn/completed");
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("turn/steer accepts legacy inputText parts", async () => {
+    const tmpDir = await makeTmpProject();
+    const releaseTurn = Promise.withResolvers<void>();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => {
+        await releaseTurn.promise;
+        return {
+          text: "done",
+          responseMessages: [],
+        };
+      }) as any,
+    }));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      const turnStart = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "start turn" }],
+      });
+      const turnId = turnStart.result.turn.id;
+
+      const steerResponse = await rpc.sendRequest("turn/steer", {
+        threadId: started.result.thread.id,
+        turnId,
+        input: [{ type: "inputText", text: "keep going" }],
+        clientMessageId: "steer-legacy-1",
+      });
+      expect(steerResponse.result.turnId).toBe(turnId);
+
+      const steerAccepted = await rpc.waitFor((message) => message.method === "cowork/session/steerAccepted");
+      expect(steerAccepted.params.turnId).toBe(turnId);
+      expect(steerAccepted.params.clientMessageId).toBe("steer-legacy-1");
 
       releaseTurn.resolve();
       await rpc.waitFor((message) => message.method === "turn/completed");

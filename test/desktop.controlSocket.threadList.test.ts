@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { createControlSocketHelpers } from "../apps/desktop/src/app/store.helpers/controlSocket";
 import { defaultThreadRuntime, defaultWorkspaceRuntime } from "../apps/desktop/src/app/store.helpers/runtimeState";
 import { startAgentServer } from "../src/server/startServer";
-import { makeTmpProject, serverOpts } from "./helpers/wsHarness";
+import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
 
 async function connectJsonRpc(url: string): Promise<{
   close: () => void;
@@ -169,7 +169,7 @@ describe("desktop control socket thread list mapping", () => {
       expect(state.threads[0].messageCount).toBe(sessions?.[0]?.messageCount);
       expect(state.threads[0].lastEventSeq).toBe(sessions?.[0]?.lastEventSeq);
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 });

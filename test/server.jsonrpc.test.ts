@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { WebSocket as NodeWebSocket } from "ws";
 
 import { startAgentServer } from "../src/server/startServer";
-import { makeTmpProject, serverOpts } from "./helpers/wsHarness";
+import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
 
 function waitForOpen(ws: WebSocket): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -97,7 +97,7 @@ describe("server JSON-RPC websocket mode", () => {
       expect(notInitialized.error?.code).toBe(-32002);
       ws.close();
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -156,7 +156,7 @@ describe("server JSON-RPC websocket mode", () => {
       });
       ws.close();
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -184,7 +184,7 @@ describe("server JSON-RPC websocket mode", () => {
       expect(response.result.serverInfo.subprotocol).toBe("cowork.jsonrpc.v1");
       ws.close();
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -211,7 +211,7 @@ describe("server JSON-RPC websocket mode", () => {
       expect(response.result.serverInfo.subprotocol).toBe("cowork.jsonrpc.v1");
       ws.close();
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -257,7 +257,7 @@ describe("server JSON-RPC websocket mode", () => {
       });
       ws.close();
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -292,7 +292,7 @@ describe("server JSON-RPC websocket mode", () => {
       expect(Array.isArray(response.result?.event?.providers)).toBe(true);
       ws.close();
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 });

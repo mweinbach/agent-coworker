@@ -12,6 +12,7 @@ import {
   ASK_SKIP_TOKEN,
 } from "../src/server/protocol";
 import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
+import { stopTestServer } from "./helpers/wsHarness";
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -409,7 +410,7 @@ describe("Server Startup", () => {
       expect(system.length).toBeGreaterThan(0);
       expect(url).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/ws$/);
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -422,7 +423,7 @@ describe("Server Startup", () => {
       const stat = await fs.stat(config.projectAgentDir);
       expect(stat.isDirectory()).toBe(true);
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -437,7 +438,7 @@ describe("Server Startup", () => {
       await expect(fs.stat(path.join(tmpDir, "output"))).rejects.toThrow();
       await expect(fs.stat(path.join(tmpDir, "uploads"))).rejects.toThrow();
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -450,7 +451,7 @@ describe("Server Startup", () => {
       expect(server.port).toBeGreaterThan(0);
       expect(url).toContain("127.0.0.1");
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -468,7 +469,7 @@ describe("Server Startup", () => {
     try {
       expect(config.provider).toBe("anthropic");
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -482,7 +483,7 @@ describe("Server Startup", () => {
       expect(system).toContain("## Available Skills");
       expect(system).toContain("**slides**");
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -500,7 +501,7 @@ describe("Server Startup", () => {
       expect(config.skillsDirs).toHaveLength(3);
       expect(config.skillsDirs).not.toContain(path.join(config.builtInDir, "skills"));
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -511,7 +512,7 @@ describe("Server Startup", () => {
       expect(typeof system).toBe("string");
       expect(system.length).toBeGreaterThan(10);
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -521,7 +522,7 @@ describe("Server Startup", () => {
     try {
       expect(config.workingDirectory).toBe(tmpDir);
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 });
@@ -537,7 +538,7 @@ describe("HTTP Handler", () => {
       const text = await res.text();
       expect(text).toBe("OK");
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -549,7 +550,7 @@ describe("HTTP Handler", () => {
       const res = await fetch(httpUrl);
       expect(res.status).toBe(200);
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -563,7 +564,7 @@ describe("HTTP Handler", () => {
       const text = await res.text();
       expect(text).toBe("WebSocket upgrade failed");
     } finally {
-      server.stop();
+      await stopTestServer(server);
     }
   });
 

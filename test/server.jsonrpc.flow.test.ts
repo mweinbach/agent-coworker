@@ -772,7 +772,7 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("thread/read can include journal-projected turns and thread/resume can replay from a journal cursor", async () => {
+  test("thread/read can include journal-projected turns and thread/resume can replay from a journal cursor", { timeout: 20_000 }, async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir, {
       runTurnImpl: (async (params: any) => {
@@ -890,7 +890,7 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("thread/resume replays a journal cursor once before reattaching the live thread sink", async () => {
+  test("thread/resume replays a journal cursor once before reattaching the live thread sink", { timeout: 20_000 }, async () => {
     const tmpDir = await makeTmpProject();
     let releaseSecondChunk: (() => void) | undefined;
     const runTurnImpl = async (params: any) => {

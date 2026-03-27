@@ -10,11 +10,11 @@ Make the repository's unit-test/CI experience reliable:
 This session uses the real Bun test workload and CI-adjacent validation, not a synthetic proxy benchmark.
 
 ## Metrics
-- **Primary**: `ci_guardrail_failures` (failures, lower is better) — number of missing required main-CI guardrails in `./autoresearch.sh`.
+- **Primary**: `unsafe_jsonrpc_teardowns` (count, lower is better) — number of plain `await server.stop();` teardown callsites remaining in websocket-heavy JSON-RPC flow tests, as measured by `./autoresearch.sh`.
 - **Secondary**:
   - `elapsed_s` — wall-clock runtime for the benchmark script.
 
-A score of `0` means the checked-in main CI workflow includes the required reliability guardrails: docs check, typecheck, serialized full unit suite, and per-file stable unit test execution. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
+A score of `0` means the targeted JSON-RPC flow tests no longer use the known-risk plain-stop teardown pattern. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
 
 ## How to Run
 - Benchmark: `./autoresearch.sh`
@@ -53,4 +53,5 @@ Both scripts print diagnostics on failure; the benchmark also prints structured 
 - Breakthrough: the merge-ref unit suite passed twice in the benchmark but the next merge-ref CI-style suite run in checks reproduced the exact 45s timeout, confirming a real intermittent flake on the PR merge ref.
 - The merge-ref stress harness proved the race is intrinsic to the exact `thread/resume` test path: 17 failures in 200 targeted CI-like reruns.
 - Kept fix: `await server.stop(true)` in the flaky test cleanup reduced the current-repo stress benchmark from 1/100 failures to 0/100, and a second 0/100 confirmation run increased confidence.
-- Current focus: harden `.github/workflows/ci.yml` so main CI enforces the same typecheck + stable per-file guardrails that proved useful during autoresearch, and lock that in with a workflow regression test.
+- Kept follow-up: main CI now runs typecheck and the stable per-file unit test pass, and `test/ci.workflow.test.ts` locks those guardrails in.
+- Current focus: codify the `server.stop(true)` teardown pattern across the websocket-heavy JSON-RPC flow spec so sibling tests do not regress into the same shutdown race class.

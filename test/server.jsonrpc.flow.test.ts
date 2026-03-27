@@ -6,7 +6,7 @@ import {
   MAX_TURN_ATTACHMENT_COUNT,
   MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
 } from "../src/shared/attachments";
-import { makeTmpProject, serverOpts } from "./helpers/wsHarness";
+import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
 
 type JsonRpcConnection = {
   ws: WebSocket;
@@ -147,7 +147,7 @@ describe("server JSON-RPC flows", () => {
       expect(read.result.coworkSnapshot.sessionId).toBe(thread1.result.thread.id);
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -170,7 +170,7 @@ describe("server JSON-RPC flows", () => {
       expect(listed.result.threads.every((thread: any) => thread.cwd === tmpDir)).toBe(true);
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
       await Bun.$`rm -rf ${otherTmpDir}`.quiet();
     }
   });
@@ -265,7 +265,7 @@ describe("server JSON-RPC flows", () => {
       expect(turnCompleted.params.turn.status).toBe("completed");
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -293,7 +293,7 @@ describe("server JSON-RPC flows", () => {
       expect(turnResponse.result).toBeUndefined();
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -337,7 +337,7 @@ describe("server JSON-RPC flows", () => {
       expect(turnResponse.result).toBeUndefined();
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -411,7 +411,7 @@ describe("server JSON-RPC flows", () => {
       expect(turnCompleted.params.turn.status).toBe("completed");
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -450,7 +450,7 @@ describe("server JSON-RPC flows", () => {
       await rpc.waitFor((message) => message.method === "turn/completed");
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -494,7 +494,7 @@ describe("server JSON-RPC flows", () => {
       await rpc.waitFor((message) => message.method === "turn/completed");
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -533,7 +533,7 @@ describe("server JSON-RPC flows", () => {
       await rpc.waitFor((message) => message.method === "turn/completed");
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -579,7 +579,7 @@ describe("server JSON-RPC flows", () => {
       await rpc.waitFor((message) => message.method === "turn/completed");
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -619,7 +619,7 @@ describe("server JSON-RPC flows", () => {
 
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -663,7 +663,7 @@ describe("server JSON-RPC flows", () => {
       expect(agentCompleted.params.item.text).toBe("answer:b");
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -707,7 +707,7 @@ describe("server JSON-RPC flows", () => {
       expect(agentCompleted.params.item.text).toBe("approved");
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -768,7 +768,7 @@ describe("server JSON-RPC flows", () => {
       expect(agentCompleted.params.item.text).toBe("answer:b");
       replayRpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -829,7 +829,7 @@ describe("server JSON-RPC flows", () => {
       expect(agentCompleted.params.item.text).toBe("approved");
       replayRpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -894,7 +894,7 @@ describe("server JSON-RPC flows", () => {
       expect(agentCompleted.params.item.text).toBe("answer:a");
       replayRpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -965,7 +965,7 @@ describe("server JSON-RPC flows", () => {
       replayRpc.close();
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -1014,7 +1014,7 @@ describe("server JSON-RPC flows", () => {
       replayRpc.close();
       rpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -1084,7 +1084,7 @@ describe("server JSON-RPC flows", () => {
       replayRpc.close();
     } finally {
       releaseSecondChunk?.();
-      await server.stop(true);
+      await stopTestServer(server);
     }
   });
 
@@ -1143,7 +1143,7 @@ describe("server JSON-RPC flows", () => {
       replayRpc.close();
     } finally {
       releaseFinish?.();
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 
@@ -1204,7 +1204,7 @@ describe("server JSON-RPC flows", () => {
       expect(replayedLastDelta.params.delta).toBe("chunk-1004");
       replayRpc.close();
     } finally {
-      await server.stop();
+      await stopTestServer(server);
     }
   });
 });

@@ -2,26 +2,18 @@
 set -euo pipefail
 
 started_at="$(date +%s)"
-failures=0
-
-if ! grep -q 'run: bun run typecheck' .github/workflows/ci.yml; then
-  failures=$((failures + 1))
-fi
-if ! grep -q 'run: bun run test:stable -- --max-concurrency 1' .github/workflows/ci.yml; then
-  failures=$((failures + 1))
-fi
-if ! grep -q 'run: bun test --max-concurrency 1' .github/workflows/ci.yml; then
-  failures=$((failures + 1))
-fi
-if ! grep -q 'run: bun run docs:check' .github/workflows/ci.yml; then
-  failures=$((failures + 1))
-fi
+unsafe_count="$(python - <<'PY'
+from pathlib import Path
+text = Path('test/server.jsonrpc.flow.test.ts').read_text()
+print(text.count('await server.stop();'))
+PY
+)"
 
 elapsed_s="$(( $(date +%s) - started_at ))"
 
-echo "METRIC ci_guardrail_failures=${failures}"
+echo "METRIC unsafe_jsonrpc_teardowns=${unsafe_count}"
 echo "METRIC elapsed_s=${elapsed_s}"
 
-if [ "$failures" -ne 0 ]; then
+if [ "$unsafe_count" -ne 0 ]; then
   exit 1
 fi

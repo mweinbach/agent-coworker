@@ -28,6 +28,12 @@ export function serverOpts(
   };
 }
 
+export async function stopTestServer(
+  server: { stop: (closeActiveConnections?: boolean) => Promise<void> | void },
+): Promise<void> {
+  await server.stop(true);
+}
+
 type JsonRpcConnection = {
   sendRequest: (method: string, params?: unknown) => Promise<any>;
   sendResponse: (id: string | number, result: unknown) => void;

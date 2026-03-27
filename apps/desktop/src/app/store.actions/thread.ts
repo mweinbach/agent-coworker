@@ -743,7 +743,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       if (!workspaceId) {
         await get().addWorkspace();
         workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-        if (!workspaceId) return;
+        if (!workspaceId) return false;
       }
   
       if (get().selectedWorkspaceId !== workspaceId) {
@@ -760,7 +760,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
           });
           ensureThreadRuntime(get, set, existingDraft.id);
           await persistNow(get);
-          return;
+          return true;
         }
       }
 
@@ -781,7 +781,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
               detail: wsRt?.error ?? "Workspace server is not ready.",
             }),
           }));
-          return;
+          return false;
         }
       }
 
@@ -818,17 +818,18 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       await persistNow(get);
 
       if (!createSessionImmediately) {
-        return;
+        return true;
       }
 
       if (!url) {
-        return;
+        return false;
       }
 
       if (opts?.attachments && opts.attachments.length > 0) {
         RUNTIME.pendingThreadAttachments.set(threadId, [opts.attachments]);
       }
       ensureThreadSocket(get, set, threadId, url, opts?.firstMessage, false);
+      return true;
     },
   
 
@@ -848,18 +849,19 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       ensureThreadRuntime(get, set, threadId);
   
       const thread = get().threads.find((t) => t.id === threadId);
-      if (!thread) return;
+      if (!thread) return false;
 
-      if (thread.draft && !firstMessage?.trim()) {
-        return;
+      const hasQueuedAttachments = opts?.attachments && opts.attachments.length > 0;
+      if (thread.draft && !firstMessage?.trim() && !hasQueuedAttachments) {
+        return false;
       }
   
       if (!opts?.skipWorkspaceSelect) {
         await get().selectWorkspace(thread.workspaceId);
-        if (!isReconnectCurrent()) return;
+        if (!isReconnectCurrent()) return false;
       }
       await ensureServerRunning(get, set, thread.workspaceId);
-      if (!isReconnectCurrent()) return;
+      if (!isReconnectCurrent()) return false;
       ensureControlSocket(get, set, thread.workspaceId);
   
       const url = get().workspaceRuntimeById[thread.workspaceId]?.serverUrl;
@@ -873,16 +875,16 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
             detail: "Workspace server is not ready.",
           }),
         }));
-        return;
+        return false;
       }
-      if (!isReconnectCurrent()) return;
+      if (!isReconnectCurrent()) return false;
   
       const hasFirstMessage = firstMessage && firstMessage.trim();
-      const hasQueuedAttachments = opts?.attachments && opts.attachments.length > 0;
       if (hasFirstMessage || hasQueuedAttachments) {
         queuePendingThreadMessage(threadId, firstMessage ?? "", opts?.attachments);
       }
       ensureThreadSocket(get, set, threadId, url, firstMessage, Boolean(firstMessage?.trim()));
+      return true;
     },
   
 
@@ -901,7 +903,13 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       if (rt?.transcriptOnly) {
         const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
         const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
-        await get().newThread({ workspaceId: thread.workspaceId, titleHint: thread.title, firstMessage, attachments });
+        const started = await get().newThread({
+          workspaceId: thread.workspaceId,
+          titleHint: thread.title,
+          firstMessage,
+          attachments,
+        });
+        if (!started) return false;
         set({ composerText: "" });
         return true;
       }
@@ -909,7 +917,8 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       if (thread.status !== "active" || !rt?.sessionId) {
         const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
         const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
-        await get().reconnectThread(activeThreadId, firstMessage, { attachments });
+        const reconnected = await get().reconnectThread(activeThreadId, firstMessage, { attachments });
+        if (!reconnected) return false;
         set({ composerText: "" });
         return true;
       }

@@ -555,6 +555,10 @@ export function ChatView() {
   const [cancelScopeDialogOpen, setCancelScopeDialogOpen] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<FileAttachmentInput[]>([]);
 
+  useEffect(() => {
+    setPendingAttachments([]);
+  }, [selectedThreadId]);
+
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
   const cancelThread = useAppStore((s) => s.cancelThread);

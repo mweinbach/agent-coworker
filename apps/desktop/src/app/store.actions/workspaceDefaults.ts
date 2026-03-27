@@ -42,6 +42,7 @@ import {
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,
+  prependPendingThreadMessageWithAttachments,
   truncateTitle,
   waitForControlSession,
   shiftPendingThreadAttachments,
@@ -367,12 +368,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
 
     const accepted = sendUserMessageToThread(get, set, threadId, next, undefined, queuedAttachments);
     if (!accepted) {
-      const msgs = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
-      msgs.unshift(next);
-      RUNTIME.pendingThreadMessages.set(threadId, msgs);
-      const atts = RUNTIME.pendingThreadAttachments.get(threadId) ?? [];
-      atts.unshift(queuedAttachments);
-      RUNTIME.pendingThreadAttachments.set(threadId, atts);
+      prependPendingThreadMessageWithAttachments(threadId, next, queuedAttachments);
     }
     return accepted;
   };

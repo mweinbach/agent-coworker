@@ -1,10 +1,15 @@
-import { formatAttachmentDisplayText } from "../../../../src/shared/attachments";
+import {
+  formatAttachmentDisplayText,
+  getAttachmentValidationMessageForBase64Sizes,
+  getBase64SizeFromByteLength,
+} from "../../../../src/shared/attachments";
 
 import type { FileAttachmentInput } from "./store.helpers/jsonRpcSocket";
 
 const BASE64_BINARY_CHUNK_SIZE = 0x8000;
 const FNV1A_OFFSET_BASIS = 0x811c9dc5;
 const FNV1A_PRIME = 0x01000193;
+type FileSizeLike = Pick<File, "size">;
 
 export function encodeArrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -23,6 +28,19 @@ export function buildAttachmentDisplayText(
     return "";
   }
   return formatAttachmentDisplayText(attachments.map((attachment) => attachment.filename));
+}
+
+export function getAttachmentPickerValidationMessage(
+  existingAttachments?: readonly Pick<FileAttachmentInput, "contentBase64">[],
+  selectedFiles?: readonly FileSizeLike[],
+): string | null {
+  if ((!existingAttachments || existingAttachments.length === 0) && (!selectedFiles || selectedFiles.length === 0)) {
+    return null;
+  }
+  return getAttachmentValidationMessageForBase64Sizes([
+    ...(existingAttachments ?? []).map((attachment) => attachment.contentBase64.length),
+    ...(selectedFiles ?? []).map((file) => getBase64SizeFromByteLength(file.size)),
+  ]);
 }
 
 function hashString(value: string): string {

@@ -4,7 +4,11 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { AlertTriangleIcon, LoaderCircleIcon, MessageSquareIcon, PaperclipIcon, RotateCcwIcon, XIcon } from "lucide-react";
 import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
 
-import { buildAttachmentSignature, encodeArrayBufferToBase64 } from "../app/attachmentInputs";
+import {
+  buildAttachmentSignature,
+  encodeArrayBufferToBase64,
+  getAttachmentPickerValidationMessage,
+} from "../app/attachmentInputs";
 import { useAppStore } from "../app/store";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
 import type { FeedItem, ThreadAgentSummary, ThreadPendingSteer, ThreadStatus } from "../app/types";
@@ -560,9 +564,11 @@ export function ChatView() {
   );
   const [cancelScopeDialogOpen, setCancelScopeDialogOpen] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<FileAttachmentInput[]>([]);
+  const [attachmentPickerError, setAttachmentPickerError] = useState<string | null>(null);
 
   useEffect(() => {
     setPendingAttachments([]);
+    setAttachmentPickerError(null);
   }, [selectedThreadId]);
 
   const setComposerText = useAppStore((s) => s.setComposerText);
@@ -581,8 +587,16 @@ export function ChatView() {
     const files = event.target.files;
     if (!files || files.length === 0) return;
 
+    const selectedFiles = Array.from(files);
+    const validationMessage = getAttachmentPickerValidationMessage(pendingAttachments, selectedFiles);
+    if (validationMessage) {
+      setAttachmentPickerError(validationMessage);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
     const newAttachments: FileAttachmentInput[] = [];
-    for (const file of Array.from(files)) {
+    for (const file of selectedFiles) {
       const buffer = await file.arrayBuffer();
       const base64 = encodeArrayBufferToBase64(buffer);
       newAttachments.push({
@@ -591,11 +605,13 @@ export function ChatView() {
         mimeType: file.type || "application/octet-stream",
       });
     }
+    setAttachmentPickerError(null);
     setPendingAttachments((prev) => [...prev, ...newAttachments]);
     if (fileInputRef.current) fileInputRef.current.value = "";
-  }, []);
+  }, [pendingAttachments]);
 
   const removeAttachment = useCallback((index: number) => {
+    setAttachmentPickerError(null);
     setPendingAttachments((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
@@ -773,7 +789,10 @@ export function ChatView() {
     if (!composerText.trim() && pendingAttachments.length === 0) return;
     const attachments = pendingAttachments.length > 0 ? pendingAttachments : undefined;
     void sendMessage(composerText, busyPolicy, attachments).then((accepted) => {
-      if (accepted) setPendingAttachments([]);
+      if (accepted) {
+        setPendingAttachments([]);
+        setAttachmentPickerError(null);
+      }
     });
   }, [composerText, pendingAttachments, sendMessage]);
 
@@ -922,6 +941,12 @@ export function ChatView() {
                     ))}
                   </div>
                 )}
+                {attachmentPickerError ? (
+                  <div className="flex items-center gap-1.5 px-3 pt-2 text-xs text-destructive">
+                    <AlertTriangleIcon className="size-3.5 shrink-0" />
+                    <span>{attachmentPickerError}</span>
+                  </div>
+                ) : null}
                 <PromptInputTextarea
                   ref={textareaRef}
                   value={composerText}

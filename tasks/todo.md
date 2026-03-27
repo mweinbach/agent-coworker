@@ -1,5 +1,24 @@
 # Task Plan
 
+## Cap Attachment Picker and Pending Steer Queues
+
+- [x] Confirm the three new unresolved review threads are still real against current HEAD.
+- [x] Reject oversized attachment selections in the desktop picker before `arrayBuffer()` and base64 encoding run in the renderer.
+- [x] Bound pending steer attachment payload growth while a turn is still accepting queued steers.
+- [x] Deduplicate attachment-aware requeue logic and rerun focused verification, typecheck, and the full suite.
+
+## Cap Attachment Picker and Pending Steer Queues Review
+
+- `apps/desktop/src/ui/ChatView.tsx` was still reading selected files into memory and base64-encoding them before any size check. That made the new attachment limits enforceable only after the renderer had already buffered the payload.
+- `src/shared/attachments.ts` now exposes shared base64-size helpers, and `apps/desktop/src/app/attachmentInputs.ts` uses them to validate raw file sizes plus already-queued attachments before the picker starts reading any file bytes.
+- `src/server/session/TurnExecutionManager.ts` was still letting repeated accepted steers accumulate arbitrarily large attachment payloads in `pendingSteers`. It now rejects new steer attachments once the queued attachment payload would exceed one turn-sized combined budget.
+- `apps/desktop/src/app/store.helpers/runtimeState.ts` now owns `prependPendingThreadMessageWithAttachments(...)`, and both `threadEventReducer.ts` and `workspaceDefaults.ts` use it so attachment-only requeues cannot drift out of sync across the two FIFOs.
+- Added focused regressions in `apps/desktop/test/attachment-inputs.test.ts`, `apps/desktop/test/runtimeState.test.ts`, and `test/session.test.ts`.
+- Verification passed with:
+  - `~/.bun/bin/bun test apps/desktop/test/attachment-inputs.test.ts apps/desktop/test/runtimeState.test.ts test/session.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test --max-concurrency 1` on 2026-03-27 (`2750 pass`, `3 skip`, `0 fail`)
+
 ## Resolve Attachment Review Threads
 
 - [x] Confirm each unresolved attachment review thread is still real against current HEAD before editing.

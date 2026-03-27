@@ -16,7 +16,11 @@ import type {
   SessionBackupPublicState,
 } from "../src/server/sessionBackup";
 import type { SessionInfoState } from "../src/server/session/SessionContext";
-import { MAX_ATTACHMENT_BASE64_SIZE, MAX_TURN_ATTACHMENT_COUNT } from "../src/shared/attachments";
+import {
+  MAX_ATTACHMENT_BASE64_SIZE,
+  MAX_TURN_ATTACHMENT_COUNT,
+  MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
+} from "../src/shared/attachments";
 import * as REAL_AGENT from "../src/agent";
 
 // ---------------------------------------------------------------------------
@@ -2908,6 +2912,47 @@ describe("AgentSession", () => {
           && (e as any).text === "[diagram.png]"),
       ).toBe(true);
       await expect(fs.readFile(path.join(uploadsDir, "diagram.png"), "utf8")).resolves.toBe("hello");
+
+      resolveRunTurn();
+      await turnPromise;
+    });
+
+    test("rejects steer attachments once the queued payload would exceed the pending steer budget", async () => {
+      const { session, events } = makeSession();
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          }),
+      );
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const activeTurnId = session.activeTurnId;
+      expect(activeTurnId).toBeTruthy();
+
+      await session.sendSteerMessage("first attachment steer", activeTurnId!, "steer-attachment-1", [{
+        filename: "large-1.txt",
+        contentBase64: "a".repeat(MAX_ATTACHMENT_BASE64_SIZE),
+        mimeType: "text/plain",
+      }]);
+      await session.sendSteerMessage("second attachment steer", activeTurnId!, "steer-attachment-2", [{
+        filename: "large-2.txt",
+        contentBase64: "b".repeat(MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE - MAX_ATTACHMENT_BASE64_SIZE + 4),
+        mimeType: "text/plain",
+      }]);
+
+      const errorEvt = events.findLast((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt?.message).toBe(
+        "Pending steer attachments are too large. Wait for the current turn to consume queued steers.",
+      );
+      expect(events.some((e) => e.type === "steer_accepted" && (e as any).clientMessageId === "steer-attachment-1")).toBe(true);
+      expect(events.some((e) => e.type === "steer_accepted" && (e as any).clientMessageId === "steer-attachment-2")).toBe(false);
+      expect((session as any).state.pendingSteers).toHaveLength(1);
+      (session as any).state.pendingSteers.splice(0);
 
       resolveRunTurn();
       await turnPromise;

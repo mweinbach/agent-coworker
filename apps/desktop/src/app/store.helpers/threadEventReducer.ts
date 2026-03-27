@@ -44,6 +44,7 @@ import {
   hasPendingThreadSteer,
   markPendingThreadSteerAccepted,
   prependPendingThreadMessage,
+  prependPendingThreadMessageWithAttachments,
   queuePendingThreadMessage,
   rememberPendingThreadSteer,
   rekeyThreadRuntimeMaps,
@@ -1001,14 +1002,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     const queuedAttachments = shiftPendingThreadAttachments(threadId);
     const accepted = sendUserMessageToThread(get, set, threadId, next, undefined, queuedAttachments);
     if (!accepted) {
-      // Re-queue both text and attachments atomically to keep the parallel FIFOs in sync.
-      // Can't use prependPendingThreadMessage here because it drops empty strings.
-      const msgs = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
-      msgs.unshift(next);
-      RUNTIME.pendingThreadMessages.set(threadId, msgs);
-      const atts = RUNTIME.pendingThreadAttachments.get(threadId) ?? [];
-      atts.unshift(queuedAttachments);
-      RUNTIME.pendingThreadAttachments.set(threadId, atts);
+      prependPendingThreadMessageWithAttachments(threadId, next, queuedAttachments);
     }
     return accepted;
   }

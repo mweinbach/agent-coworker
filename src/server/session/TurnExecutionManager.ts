@@ -8,7 +8,12 @@ import {
   reasoningModeForProvider,
 } from "../modelStream";
 import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
-import { formatAttachmentDisplayText, getAttachmentValidationMessage } from "../../shared/attachments";
+import {
+  formatAttachmentDisplayText,
+  getAttachmentTotalBase64Size,
+  getAttachmentValidationMessage,
+  MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
+} from "../../shared/attachments";
 import { supportsProviderManagedContinuationProvider } from "../../shared/providerContinuation";
 import type { AgentExecutionState } from "../../shared/agents";
 import type { TurnUsage } from "../../session/costTracker";
@@ -79,6 +84,8 @@ function classifyStructuredTurnError(err: unknown): ClassifiedTurnError | null {
 function makeId(): string {
   return crypto.randomUUID();
 }
+
+const MAX_PENDING_STEER_ATTACHMENT_TOTAL_BASE64_SIZE = MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE;
 
 function makeStructuredSessionError(
   code: ServerErrorCode,
@@ -338,6 +345,19 @@ export class TurnExecutionManager {
     const attachmentValidationMessage = getAttachmentValidationMessage(attachments);
     if (attachmentValidationMessage) {
       this.context.emitError("validation_failed", "session", attachmentValidationMessage);
+      return;
+    }
+    const nextPendingSteerAttachmentBase64Size =
+      this.context.state.pendingSteers.reduce(
+        (total, steer) => total + getAttachmentTotalBase64Size(steer.attachments),
+        0,
+      ) + getAttachmentTotalBase64Size(attachments);
+    if (nextPendingSteerAttachmentBase64Size > MAX_PENDING_STEER_ATTACHMENT_TOTAL_BASE64_SIZE) {
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "Pending steer attachments are too large. Wait for the current turn to consume queued steers.",
+      );
       return;
     }
     const displayText = resolveUserInputDisplayText(text, attachments);

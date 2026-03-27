@@ -144,6 +144,21 @@ export function prependPendingThreadMessage(threadId: string, text: string) {
   RUNTIME.pendingThreadMessages.set(threadId, existing);
 }
 
+export function prependPendingThreadMessageWithAttachments(
+  threadId: string,
+  text: string,
+  attachments?: import("./jsonRpcSocket").FileAttachmentInput[],
+) {
+  const trimmed = text.trim();
+  if (!trimmed && (!attachments || attachments.length === 0)) return;
+  const existingMessages = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
+  existingMessages.unshift(trimmed);
+  RUNTIME.pendingThreadMessages.set(threadId, existingMessages);
+  const existingAttachments = RUNTIME.pendingThreadAttachments.get(threadId) ?? [];
+  existingAttachments.unshift(attachments && attachments.length > 0 ? attachments : undefined);
+  RUNTIME.pendingThreadAttachments.set(threadId, existingAttachments);
+}
+
 export function rememberPendingThreadSteer(threadId: string, steer: PendingThreadSteer) {
   const existing = RUNTIME.pendingThreadSteers.get(threadId) ?? new Map<string, PendingThreadSteer>();
   existing.set(steer.clientMessageId, steer);

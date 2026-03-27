@@ -55,6 +55,7 @@ import {
   queuePendingThreadMessage,
   rememberPendingThreadSteer,
   prependPendingThreadMessage,
+  prependPendingThreadMessageWithAttachments,
   shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
 } from "./store.helpers/runtimeState";
@@ -538,6 +539,7 @@ export {
   queuePendingThreadMessage,
   rememberPendingThreadSteer,
   prependPendingThreadMessage,
+  prependPendingThreadMessageWithAttachments,
   shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
 };

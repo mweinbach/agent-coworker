@@ -10,12 +10,11 @@ Make the repository's unit-test/CI experience reliable:
 This session uses the real Bun test workload and CI-adjacent validation, not a synthetic proxy benchmark.
 
 ## Metrics
-- **Primary**: `resume_failures` (failures, lower is better) — number of failures across repeated CI-like reruns of the exact flaky `thread/resume` JSON-RPC test in the current repo in `./autoresearch.sh`.
+- **Primary**: `ci_guardrail_failures` (failures, lower is better) — number of missing required main-CI guardrails in `./autoresearch.sh`.
 - **Secondary**:
-  - `resume_runs` — number of targeted reproducer runs executed by the benchmark script.
   - `elapsed_s` — wall-clock runtime for the benchmark script.
 
-A score of `0` means the exact flaky test survived all targeted reruns. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
+A score of `0` means the checked-in main CI workflow includes the required reliability guardrails: docs check, typecheck, serialized full unit suite, and per-file stable unit test execution. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
 
 ## How to Run
 - Benchmark: `./autoresearch.sh`
@@ -24,7 +23,7 @@ A score of `0` means the exact flaky test survived all targeted reruns. Any pass
 Both scripts print diagnostics on failure; the benchmark also prints structured `METRIC ...` lines.
 
 ## Files in Scope
-- `.github/workflows/ci.yml` — CI job definition and test invocation.
+- `.github/workflows/ci.yml` — main CI job definition and test invocation.
 - `package.json` — test/typecheck/docs scripts.
 - `scripts/run_tests_stable.ts` — sequential/batched test runner useful for flake detection.
 - `test/ci.workflow.test.ts` — workflow regression coverage for CI guardrails.
@@ -53,4 +52,5 @@ Both scripts print diagnostics on failure; the benchmark also prints structured 
 - Key discovery: PR #61 targets `cursor/mobile-remote-access-3f82`, so GitHub tested the merge ref, not just the head commit. The merge ref includes substantial changes in `src/server/jsonrpc/**`, `src/server/session/**`, and `test/server.jsonrpc.flow.test.ts` that can affect this failure.
 - Breakthrough: the merge-ref unit suite passed twice in the benchmark but the next merge-ref CI-style suite run in checks reproduced the exact 45s timeout, confirming a real intermittent flake on the PR merge ref.
 - The merge-ref stress harness proved the race is intrinsic to the exact `thread/resume` test path: 17 failures in 200 targeted CI-like reruns.
-- Current focus: run the same targeted stress harness against the current repo so candidate fixes can be measured directly, while keeping docs/typecheck/full CI-style suite/test:stable as backpressure checks.
+- Kept fix: `await server.stop(true)` in the flaky test cleanup reduced the current-repo stress benchmark from 1/100 failures to 0/100, and a second 0/100 confirmation run increased confidence.
+- Current focus: harden `.github/workflows/ci.yml` so main CI enforces the same typecheck + stable per-file guardrails that proved useful during autoresearch, and lock that in with a workflow regression test.

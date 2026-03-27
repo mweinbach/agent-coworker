@@ -1,1 +1,1 @@
-- Add a workflow regression test for `.github/workflows/ci.yml` and consider hardening the main CI job with `bun run typecheck` plus `bun run test:stable -- --max-concurrency 1` once the JSON-RPC resume flake is resolved and runtime impact is measured.
+- Consider a shared test helper for `startAgentServer` cleanup that calls `await server.stop(true)` for websocket-heavy tests, so rare Bun connection shutdown stalls do not reappear in other reconnect/spec files.

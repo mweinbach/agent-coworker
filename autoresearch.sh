@@ -1,46 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "$0")" && pwd)"
-tmp_dir="$(mktemp -d)"
-cleanup() {
-  rm -rf "$tmp_dir"
-}
-trap cleanup EXIT
-
-failures=0
-runs=100
 started_at="$(date +%s)"
+failures=0
 
-autorepro() {
-  local label="$1"
-  shift
-  local log_file="$tmp_dir/${label}.log"
-
-  echo "[autoresearch] running ${label}: $*"
-  set +e
-  "$@" >"$log_file" 2>&1
-  local status=$?
-  set -e
-
-  echo "[autoresearch] ${label} exit=${status}"
-  if [ "$status" -ne 0 ]; then
-    failures=$((failures + 1))
-    echo "[autoresearch] ${label} failed; last 80 lines:"
-    tail -80 "$log_file"
-  fi
-}
-
-for i in $(seq 1 "$runs"); do
-  autorepro \
-    "resume-stress-${i}" \
-    bash -lc "cd '$repo_root' && CI=true bun test test/server.jsonrpc.flow.test.ts --max-concurrency 1 --test-name-pattern 'thread/resume replays a journal cursor once before reattaching the live thread sink'"
-done
+if ! grep -q 'run: bun run typecheck' .github/workflows/ci.yml; then
+  failures=$((failures + 1))
+fi
+if ! grep -q 'run: bun run test:stable -- --max-concurrency 1' .github/workflows/ci.yml; then
+  failures=$((failures + 1))
+fi
+if ! grep -q 'run: bun test --max-concurrency 1' .github/workflows/ci.yml; then
+  failures=$((failures + 1))
+fi
+if ! grep -q 'run: bun run docs:check' .github/workflows/ci.yml; then
+  failures=$((failures + 1))
+fi
 
 elapsed_s="$(( $(date +%s) - started_at ))"
 
-echo "METRIC resume_failures=${failures}"
-echo "METRIC resume_runs=${runs}"
+echo "METRIC ci_guardrail_failures=${failures}"
 echo "METRIC elapsed_s=${elapsed_s}"
 
 if [ "$failures" -ne 0 ]; then

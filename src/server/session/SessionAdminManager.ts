@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { MAX_ATTACHMENT_BASE64_SIZE } from "../../shared/attachments";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 import { sameWorkspacePath } from "../../utils/workspacePath";
@@ -471,8 +472,7 @@ export class SessionAdminManager {
       return;
     }
 
-    const MAX_BASE64_SIZE = 10 * 1024 * 1024;
-    if (contentBase64.length > MAX_BASE64_SIZE) {
+    if (contentBase64.length > MAX_ATTACHMENT_BASE64_SIZE) {
       this.context.emitError("validation_failed", "session", "File too large (max ~7.5MB)");
       return;
     }

@@ -11,6 +11,7 @@ import type { CachedSessionSnapshot, ThreadRuntime, WorkspaceRuntime } from "../
 export type PendingThreadSteer = {
   clientMessageId: string;
   text: string;
+  attachmentSignature?: string;
   expectedTurnId: string;
   accepted: boolean;
 };

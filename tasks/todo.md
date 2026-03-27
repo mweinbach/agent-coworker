@@ -1,5 +1,28 @@
 # Task Plan
 
+## Resolve Attachment Review Threads
+
+- [x] Confirm each unresolved attachment review thread is still real against current HEAD before editing.
+- [x] Fix the server attachment path so turn-start and steer attachments honor `uploadsDirectory` and reject oversized payloads before decode.
+- [x] Fix the desktop attachment send path so attachment-only sends/steers stop injecting fake prompt text, the file picker uses linear-time base64 conversion, and pending-steer duplicate detection stays attachment-aware.
+- [x] Update focused tests plus generated JSON-RPC schema artifacts, then rerun targeted verification, typecheck, and the full suite.
+
+## Resolve Attachment Review Threads Review
+
+- Confirmed real before patching:
+  - `src/server/session/TurnExecutionManager.ts` was decoding `contentBase64` without a size guard and hardcoding attachment writes to `workingDirectory/User Uploads`, ignoring `config.uploadsDirectory`.
+  - `apps/desktop/src/ui/ChatView.tsx` was synthesizing fake user text like `[photo.png]` for attachment-only sends and using a quadratic `Uint8Array.reduce(... String.fromCharCode ...)` base64 conversion in the picker.
+  - `apps/desktop/src/app/store.helpers/threadEventReducer.ts` was still treating same-text pending steers as duplicates even when their attachments differed, which also collapsed attachment-only steers because the text key was empty in both cases.
+- The harness now shares a single attachment payload cap via `src/shared/attachments.ts`, enforces it in the JSON-RPC turn schemas, validates it again in the session runtime before any decode, and uses the configured `uploadsDirectory` for message/steer attachment writes when one is set.
+- Attachment-only turns and steers now keep the model input empty while still projecting a user-visible attachment label in the transcript/feed/session events. That keeps replay/history readable without mutating model context.
+- The desktop picker now uses a chunked linear-time array-buffer-to-base64 helper, and pending-steer state now carries an attachment signature so duplicate suppression only triggers when both text and attachments match.
+- Regenerated `docs/generated/websocket-jsonrpc.schema.json` and `docs/generated/websocket-jsonrpc.d.ts` after the JSON-RPC schema change.
+- Verification passed with:
+  - `~/.bun/bin/bun test test/session.test.ts test/server.jsonrpc.flow.test.ts apps/desktop/test/jsonrpc-single-connection.test.ts apps/desktop/test/chat-reasoning-ui.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test test/jsonrpc.codegen.test.ts`
+  - `~/.bun/bin/bun test --max-concurrency 1` on 2026-03-26 (`2740 pass`, `3 skip`, `0 fail`)
+
 ## Stabilize JSON-RPC Replay Test Timeouts
 
 - [x] Inspect the failing GitHub Actions `Docs + Tests` job and confirm whether the failures are timeout-budget related.

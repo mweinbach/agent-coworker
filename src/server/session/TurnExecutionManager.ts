@@ -8,6 +8,7 @@ import {
   reasoningModeForProvider,
 } from "../modelStream";
 import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
+import { MAX_ATTACHMENT_BASE64_SIZE, formatAttachmentDisplayText } from "../../shared/attachments";
 import { supportsProviderManagedContinuationProvider } from "../../shared/providerContinuation";
 import type { AgentExecutionState } from "../../shared/agents";
 import type { TurnUsage } from "../../session/costTracker";
@@ -77,6 +78,45 @@ function classifyStructuredTurnError(err: unknown): ClassifiedTurnError | null {
 
 function makeId(): string {
   return crypto.randomUUID();
+}
+
+function makeStructuredSessionError(
+  code: ServerErrorCode,
+  message: string,
+): Error & { code: ServerErrorCode; source: ServerErrorSource } {
+  return Object.assign(new Error(message), { code, source: "session" as const });
+}
+
+function getAttachmentValidationMessage(
+  attachments?: readonly Pick<FileAttachment, "contentBase64">[],
+): string | null {
+  if (!attachments || attachments.length === 0) {
+    return null;
+  }
+  for (const attachment of attachments) {
+    if (attachment.contentBase64.length > MAX_ATTACHMENT_BASE64_SIZE) {
+      return "File too large (max ~7.5MB)";
+    }
+  }
+  return null;
+}
+
+function resolveUserInputDisplayText(
+  text: string,
+  attachments?: readonly Pick<FileAttachment, "filename">[],
+): string {
+  const trimmed = text.trim();
+  if (trimmed) {
+    return trimmed;
+  }
+  if (!attachments || attachments.length === 0) {
+    return "";
+  }
+  return formatAttachmentDisplayText(
+    attachments
+      .map((attachment) => path.basename(attachment.filename))
+      .filter((fileName) => fileName && fileName !== "." && fileName !== ".."),
+  );
 }
 
 function extractAssistantTextFromMessageContent(content: unknown): string {
@@ -309,9 +349,16 @@ export class TurnExecutionManager {
       this.context.emitError("validation_failed", "session", "Steer input must be non-empty.");
       return;
     }
+    const attachmentValidationMessage = getAttachmentValidationMessage(attachments);
+    if (attachmentValidationMessage) {
+      this.context.emitError("validation_failed", "session", attachmentValidationMessage);
+      return;
+    }
+    const displayText = resolveUserInputDisplayText(text, attachments);
 
     this.context.state.pendingSteers.push({
       text,
+      ...(displayText ? { displayText } : {}),
       ...(clientMessageId ? { clientMessageId } : {}),
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
       acceptedAt: new Date().toISOString(),
@@ -339,7 +386,7 @@ export class TurnExecutionManager {
       this.context.emit({
         type: "user_message",
         sessionId: this.context.id,
-        text: steer.text,
+        text: steer.displayText ?? resolveUserInputDisplayText(steer.text, steer.attachments),
         ...(steer.clientMessageId ? { clientMessageId: steer.clientMessageId } : {}),
       });
     }
@@ -375,6 +422,12 @@ export class TurnExecutionManager {
       );
       return;
     }
+    const attachmentValidationMessage = getAttachmentValidationMessage(attachments);
+    if (attachmentValidationMessage) {
+      this.context.emitError("validation_failed", "session", attachmentValidationMessage);
+      return;
+    }
+    const visibleText = displayText ?? resolveUserInputDisplayText(text, attachments);
 
     if (this.context.state.persistenceStatus === "closed") {
       this.context.state.persistenceStatus = "active";
@@ -389,7 +442,7 @@ export class TurnExecutionManager {
     this.context.state.currentTurnId = turnId;
     this.context.state.currentTurnOutcome = "completed";
     this.updateSessionExecutionState("running");
-    const cause: "user_message" | "command" = displayText?.startsWith("/") ? "command" : "user_message";
+    const cause: "user_message" | "command" = visibleText.startsWith("/") ? "command" : "user_message";
     let lastStreamError: unknown = null;
     let lastMessagePreview: string | undefined;
     let aggregatedUsage: TurnUsage | undefined;
@@ -592,7 +645,7 @@ export class TurnExecutionManager {
       });
     };
     try {
-      this.context.emit({ type: "user_message", sessionId: this.context.id, text: displayText ?? text, clientMessageId });
+      this.context.emit({ type: "user_message", sessionId: this.context.id, text: visibleText, clientMessageId });
       this.context.emit({ type: "session_busy", sessionId: this.context.id, busy: true, turnId, cause });
       this.context.emitTelemetry("agent.turn.started", "ok", {
         sessionId: this.context.id,
@@ -602,7 +655,7 @@ export class TurnExecutionManager {
 
       const userMessageContent = await this.buildUserMessageContent(text, attachments);
       this.deps.historyManager.appendMessagesToHistory([{ role: "user", content: userMessageContent }]);
-      this.deps.metadataManager.maybeGenerateTitleFromQuery(text);
+      this.deps.metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
       this.context.queuePersistSessionSnapshot("session.user_message");
       let continueSameTurn = true;
       while (continueSameTurn) {
@@ -794,7 +847,7 @@ export class TurnExecutionManager {
     }
 
     const config = this.context.state.config;
-    const uploadsDir = path.resolve(config.workingDirectory, "User Uploads");
+    const uploadsDir = config.uploadsDirectory ?? path.resolve(config.workingDirectory, "User Uploads");
     await fs.mkdir(uploadsDir, { recursive: true });
 
     const provider = config.provider;
@@ -842,6 +895,11 @@ export class TurnExecutionManager {
         finalName = path.basename(diskPath);
       } catch {
         // File doesn't exist, use as-is
+      }
+
+      const attachmentValidationMessage = getAttachmentValidationMessage([attachment]);
+      if (attachmentValidationMessage) {
+        throw makeStructuredSessionError("validation_failed", attachmentValidationMessage);
       }
 
       const decoded = Buffer.from(attachment.contentBase64, "base64");

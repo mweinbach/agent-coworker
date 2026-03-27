@@ -16,6 +16,7 @@ import type {
   SessionBackupPublicState,
 } from "../src/server/sessionBackup";
 import type { SessionInfoState } from "../src/server/session/SessionContext";
+import { MAX_ATTACHMENT_BASE64_SIZE } from "../src/shared/attachments";
 import * as REAL_AGENT from "../src/agent";
 
 // ---------------------------------------------------------------------------
@@ -2862,6 +2863,56 @@ describe("AgentSession", () => {
       await turnPromise;
     });
 
+    test("uses an attachment label when an attachment-only steer is committed", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-steer-attachments-"));
+      const uploadsDir = path.join(dir, "custom-uploads");
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+        },
+      });
+      let capturedPrepareStep: ((step: { stepNumber: number; messages: any[] }) => Promise<any>) | undefined;
+      let resolveRunTurn!: () => void;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        capturedPrepareStep = params.prepareStep;
+        await new Promise<void>((resolve) => {
+          resolveRunTurn = resolve;
+        });
+        return {
+          text: "done",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "done" }],
+        };
+      });
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      await session.sendSteerMessage("", session.activeTurnId!, "steer-attachment", [{
+        filename: "diagram.png",
+        contentBase64: "aGVsbG8=",
+        mimeType: "image/png",
+      }]);
+
+      await capturedPrepareStep?.({
+        stepNumber: 2,
+        messages: [{ role: "user", content: "go" }],
+      });
+
+      expect(
+        events.some((e) =>
+          e.type === "user_message"
+          && (e as any).clientMessageId === "steer-attachment"
+          && (e as any).text === "[diagram.png]"),
+      ).toBe(true);
+      await expect(fs.readFile(path.join(uploadsDir, "diagram.png"), "utf8")).resolves.toBe("hello");
+
+      resolveRunTurn();
+      await turnPromise;
+    });
+
     test("injects a steer before the next model step in the same pass", async () => {
       const { session } = makeSession();
       const stepMessages: any[][] = [];
@@ -3425,6 +3476,50 @@ describe("AgentSession", () => {
 
       const userEvt = events.find((e) => e.type === "user_message") as any;
       expect(userEvt.clientMessageId).toBe("msg-123");
+    });
+
+    test("uses an attachment label for attachment-only user_message events without mutating model input text", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const uploadsDir = path.join(dir, "custom-uploads");
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+        },
+      });
+
+      await session.sendUserMessage("", "msg-attachment", undefined, [{
+        filename: "photo.png",
+        contentBase64: "aGVsbG8=",
+        mimeType: "image/png",
+      }]);
+
+      const userEvt = events.find((e) => e.type === "user_message") as any;
+      expect(userEvt).toMatchObject({
+        text: "[photo.png]",
+        clientMessageId: "msg-attachment",
+      });
+      await expect(fs.readFile(path.join(uploadsDir, "photo.png"), "utf8")).resolves.toBe("hello");
+    });
+
+    test("rejects oversized attachment payloads before emitting a user_message event", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const { session, events } = makeSession({
+        config: makeConfig(dir),
+      });
+
+      await session.sendUserMessage("", "msg-too-large", undefined, [{
+        filename: "large.bin",
+        contentBase64: "a".repeat(MAX_ATTACHMENT_BASE64_SIZE + 1),
+        mimeType: "application/octet-stream",
+      }]);
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toMatchObject({
+        code: "validation_failed",
+        message: "File too large (max ~7.5MB)",
+      });
+      expect(events.some((e) => e.type === "user_message")).toBe(false);
     });
 
     test("emits user_message event without clientMessageId when not provided", async () => {

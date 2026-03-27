@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { MAX_ATTACHMENT_BASE64_SIZE } from "../../shared/attachments";
 import { projectedItemSchema } from "../../shared/projectedItems";
 import { sessionSnapshotSchema } from "../../shared/sessionSnapshot";
 import { nonEmptyTrimmedStringSchema } from "./schema.shared";
@@ -28,7 +29,7 @@ const textInputPart = z.object({
 const fileInputPart = z.object({
   type: z.literal("file"),
   filename: z.string().min(1),
-  contentBase64: z.string().min(1),
+  contentBase64: z.string().min(1).max(MAX_ATTACHMENT_BASE64_SIZE),
   mimeType: z.string().min(1),
 }).strict();
 

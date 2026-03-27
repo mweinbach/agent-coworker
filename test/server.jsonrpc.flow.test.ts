@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { startAgentServer } from "../src/server/startServer";
+import { MAX_ATTACHMENT_BASE64_SIZE } from "../src/shared/attachments";
 import { makeTmpProject, serverOpts } from "./helpers/wsHarness";
 
 type JsonRpcConnection = {
@@ -258,6 +259,34 @@ describe("server JSON-RPC flows", () => {
       expect(agentDelta.params.delta).toBe("streamed reply");
       expect(agentCompleted.params.item.text).toBe("streamed reply");
       expect(turnCompleted.params.turn.status).toBe("completed");
+      rpc.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("turn/start rejects oversized attachment payloads at the request layer", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      const turnResponse = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{
+          type: "file",
+          filename: "large.bin",
+          contentBase64: "a".repeat(MAX_ATTACHMENT_BASE64_SIZE + 1),
+          mimeType: "application/octet-stream",
+        }],
+      });
+
+      expect(turnResponse.error?.code).toBe(-32602);
+      expect(turnResponse.error?.message).toContain("turn/start:");
+      expect(turnResponse.result).toBeUndefined();
       rpc.close();
     } finally {
       await server.stop();

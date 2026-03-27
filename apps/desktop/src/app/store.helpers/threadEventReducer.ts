@@ -14,6 +14,7 @@ import {
   shouldIgnoreNormalizedChunkForRawBackedTurn,
   type ModelStreamUpdate,
 } from "../modelStream";
+import { buildAttachmentDisplayText, buildAttachmentSignature } from "../attachmentInputs";
 import {
   applyModelStreamUpdateToThreadFeed as applyModelStreamUpdateToThreadFeedCore,
   developerDiagnosticSystemLineFromServerEvent,
@@ -899,6 +900,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     const trimmed = text.trim();
     const hasAttachments = attachments && attachments.length > 0;
     if (!trimmed && !hasAttachments) return false;
+    const attachmentSignature = buildAttachmentSignature(attachments);
+    const displayText = trimmed || buildAttachmentDisplayText(attachments);
 
     const thread = get().threads.find((t) => t.id === threadId);
     if (!thread) return false;
@@ -915,7 +918,11 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
 
       if (busyPolicy === "steer") {
         if (!rt.activeTurnId) return false;
-        if (rt.pendingSteer?.status === "sending" && rt.pendingSteer.text.trim() === trimmed) {
+        if (
+          rt.pendingSteer?.status === "sending"
+          && rt.pendingSteer.text.trim() === trimmed
+          && (rt.pendingSteer.attachmentSignature ?? "") === attachmentSignature
+        ) {
           return false;
         }
 
@@ -923,6 +930,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         rememberPendingThreadSteer(threadId, {
           clientMessageId,
           text: trimmed,
+          attachmentSignature,
           expectedTurnId: rt.activeTurnId,
           accepted: false,
         });
@@ -937,6 +945,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
                 pendingSteer: {
                   clientMessageId,
                   text: trimmed,
+                  attachmentSignature,
                   status: "sending",
                 },
               },
@@ -948,7 +957,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           type: "steer_message",
           sessionId: rt.sessionId,
           expectedTurnId: rt.activeTurnId,
-          text: trimmed,
+          text: displayText,
           clientMessageId,
         });
 
@@ -969,13 +978,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       kind: "message",
       role: "user",
       ts: deps.nowIso(),
-      text: trimmed,
+      text: displayText,
     });
 
     deps.appendThreadTranscript(threadId, "client", {
       type: "user_message",
       sessionId: rt.sessionId,
-      text: trimmed,
+      text: displayText,
       clientMessageId,
     });
 

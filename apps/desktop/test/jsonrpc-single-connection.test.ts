@@ -399,7 +399,9 @@ describe("desktop JSON-RPC single connection path", () => {
     jsonRpcRequestFailures.clear();
     MockJsonRpcSocket.instances.length = 0;
     RUNTIME.jsonRpcSockets.clear();
+    RUNTIME.pendingThreadAttachments.clear();
     RUNTIME.pendingThreadMessages.clear();
+    RUNTIME.pendingThreadSteers.clear();
     RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
     RUNTIME.threadSelectionRequests.clear();
     RUNTIME.modelStreamByThread.clear();
@@ -513,6 +515,30 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("turn/start");
   });
 
+  test("sends attachment-only turns without placeholder text in the JSON-RPC input", async () => {
+    seedActiveThreadState();
+    const attachment = {
+      filename: "photo.png",
+      contentBase64: "aGVsbG8=",
+      mimeType: "image/png",
+    };
+
+    await useAppStore.getState().sendMessage("", "reject", [attachment]);
+    await flushAsyncWork();
+
+    const runtime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
+    expect(runtime?.feed.at(-1)).toMatchObject({
+      kind: "message",
+      role: "user",
+      text: "[photo.png]",
+    });
+    expect(jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+      threadId: "jsonrpc-thread-1",
+      input: [{ type: "file", ...attachment }],
+      clientMessageId: expect.any(String),
+    });
+  });
+
   test("clears pending steer state when turn/steer rejects", async () => {
     seedActiveThreadState();
     useAppStore.setState({
@@ -543,6 +569,72 @@ describe("desktop JSON-RPC single connection path", () => {
       source: "protocol",
     });
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("turn/steer");
+  });
+
+  test("does not drop same-text steer requests when the attachments change", async () => {
+    seedActiveThreadState();
+    useAppStore.setState({
+      threadRuntimeById: {
+        ...useAppStore.getState().threadRuntimeById,
+        "jsonrpc-thread-1": {
+          ...defaultThreadRuntime(),
+          wsUrl: "ws://jsonrpc-workspace",
+          connected: true,
+          sessionId: "jsonrpc-thread-1",
+          busy: true,
+          activeTurnId: "turn-1",
+        },
+      },
+    } as any);
+
+    await useAppStore.getState().sendMessage("", "steer", [{
+      filename: "first.png",
+      contentBase64: "Zmlyc3Q=",
+      mimeType: "image/png",
+    }]);
+    await flushAsyncWork();
+    useAppStore.setState((state) => ({
+      selectedWorkspaceId: "ws-jsonrpc",
+      selectedThreadId: "jsonrpc-thread-1",
+      workspaces: state.workspaces.length > 0 ? state.workspaces : [{
+        id: "ws-jsonrpc",
+        name: "JSON-RPC Workspace",
+        path: "/tmp/jsonrpc-workspace",
+        createdAt: "2026-03-21T00:00:00.000Z",
+        lastOpenedAt: "2026-03-21T00:00:00.000Z",
+        wsProtocol: "jsonrpc",
+        defaultEnableMcp: true,
+        defaultBackupsEnabled: true,
+        yolo: false,
+      }],
+      threads: state.threads.length > 0 ? state.threads : [{
+        id: "jsonrpc-thread-1",
+        workspaceId: "ws-jsonrpc",
+        title: "New session",
+        createdAt: "2026-03-21T00:00:00.000Z",
+        lastMessageAt: "2026-03-21T00:00:00.000Z",
+        status: "active",
+        sessionId: "jsonrpc-thread-1",
+        messageCount: 0,
+        lastEventSeq: 0,
+      }],
+    }) as any);
+
+    const secondAccepted = await useAppStore.getState().sendMessage("", "steer", [{
+      filename: "second.png",
+      contentBase64: "c2Vjb25k",
+      mimeType: "image/png",
+    }]);
+    await flushAsyncWork();
+
+    expect(secondAccepted).toBe(true);
+    expect(jsonRpcRequests.filter((entry) => entry.method === "turn/steer")).toHaveLength(2);
+    const runtime = useAppStore.getState().threadRuntimeById["jsonrpc-thread-1"];
+    expect(runtime?.pendingSteer).toMatchObject({
+      text: "",
+      attachmentSignature: expect.any(String),
+      status: "sending",
+    });
   });
 
   test("routes provider, memory, and backup control requests over the shared JsonRpcSocket", async () => {

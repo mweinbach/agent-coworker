@@ -4,6 +4,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { AlertTriangleIcon, LoaderCircleIcon, MessageSquareIcon, PaperclipIcon, RotateCcwIcon, XIcon } from "lucide-react";
 import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
 
+import { buildAttachmentSignature, encodeArrayBufferToBase64 } from "../app/attachmentInputs";
 import { useAppStore } from "../app/store";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
 import type { FeedItem, ThreadAgentSummary, ThreadPendingSteer, ThreadStatus } from "../app/types";
@@ -180,18 +181,23 @@ export function getComposerSubmitState(opts: {
   busy: boolean;
   hasPromptModal: boolean;
   composerText: string;
+  hasPendingAttachments: boolean;
+  pendingAttachmentSignature: string;
   pendingSteer: ThreadPendingSteer | null;
   sessionId: string | null;
   threadStatus: ThreadStatus;
 }): { status: "ready" | "streaming"; disabled: boolean; mode: "send" | "steer-ready" | "steer-pending" } {
   const composerText = opts.composerText.trim();
   const hasComposerText = composerText.length > 0;
+  const hasPendingInput = hasComposerText || opts.hasPendingAttachments;
   const steerPending = opts.busy
-    && hasComposerText
+    && hasPendingInput
     && opts.pendingSteer?.status === "sending"
     && opts.pendingSteer.text.trim() === composerText;
+  const samePendingAttachments =
+    (opts.pendingSteer?.attachmentSignature ?? "") === opts.pendingAttachmentSignature;
 
-  if (opts.busy && !hasComposerText) {
+  if (opts.busy && !hasPendingInput) {
     return {
       status: "streaming",
       disabled: opts.hasPromptModal || !opts.sessionId || opts.threadStatus !== "active",
@@ -201,11 +207,11 @@ export function getComposerSubmitState(opts: {
 
   return {
     status: "ready",
-    mode: opts.busy ? (steerPending ? "steer-pending" : "steer-ready") : "send",
+    mode: opts.busy && steerPending && samePendingAttachments ? "steer-pending" : (opts.busy ? "steer-ready" : "send"),
     disabled:
       opts.hasPromptModal
-      || !hasComposerText
-      || steerPending
+      || !hasPendingInput
+      || (steerPending && samePendingAttachments)
       || (opts.busy && (!opts.sessionId || opts.threadStatus !== "active")),
   };
 }
@@ -578,9 +584,7 @@ export function ChatView() {
     const newAttachments: FileAttachmentInput[] = [];
     for (const file of Array.from(files)) {
       const buffer = await file.arrayBuffer();
-      const base64 = btoa(
-        new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ""),
-      );
+      const base64 = encodeArrayBufferToBase64(buffer);
       newAttachments.push({
         filename: file.name,
         contentBase64: base64,
@@ -759,20 +763,28 @@ export function ChatView() {
     }
   }, [activeChildAgentCount, rt?.busy]);
 
+  const pendingAttachmentSignature = useMemo(
+    () => buildAttachmentSignature(pendingAttachments),
+    [pendingAttachments],
+  );
+  const hasPendingAttachments = pendingAttachments.length > 0;
+
+  const submitComposer = useCallback((busyPolicy: "reject" | "steer") => {
+    if (!composerText.trim() && pendingAttachments.length === 0) return;
+    const attachments = pendingAttachments.length > 0 ? pendingAttachments : undefined;
+    void sendMessage(composerText, busyPolicy, attachments).then((accepted) => {
+      if (accepted) setPendingAttachments([]);
+    });
+  }, [composerText, pendingAttachments, sendMessage]);
 
   const onComposerKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
-        if (!composerText.trim() && pendingAttachments.length === 0) return;
-        const attachments = pendingAttachments.length > 0 ? pendingAttachments : undefined;
-        const messageText = composerText.trim() || (attachments ? `[${attachments.map((a) => a.filename).join(", ")}]` : "");
-        void sendMessage(messageText, resolveComposerBusyPolicy(rt?.busy === true), attachments).then((accepted) => {
-          if (accepted) setPendingAttachments([]);
-        });
+        submitComposer(resolveComposerBusyPolicy(rt?.busy === true));
       }
     },
-    [composerText, rt?.busy, sendMessage, pendingAttachments],
+    [rt?.busy, submitComposer],
   );
 
   if (!selectedThreadId || !thread) {
@@ -802,6 +814,8 @@ export function ChatView() {
     busy,
     hasPromptModal,
     composerText,
+    hasPendingAttachments,
+    pendingAttachmentSignature,
     pendingSteer: rt?.pendingSteer ?? null,
     sessionId: rt?.sessionId ?? null,
     threadStatus: thread.status,
@@ -884,12 +898,7 @@ export function ChatView() {
             <PromptInputForm
               onSubmit={(event) => {
                 event.preventDefault();
-                if (!composerText.trim() && pendingAttachments.length === 0) return;
-                const attachments = pendingAttachments.length > 0 ? pendingAttachments : undefined;
-                const messageText = composerText.trim() || (attachments ? `[${attachments.map((a) => a.filename).join(", ")}]` : "");
-                void sendMessage(messageText, resolveComposerBusyPolicy(busy), attachments).then((accepted) => {
-                  if (accepted) setPendingAttachments([]);
-                });
+                submitComposer(resolveComposerBusyPolicy(busy));
               }}
             >
               <PromptInputBody>

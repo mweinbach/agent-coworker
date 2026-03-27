@@ -881,7 +881,6 @@ export class TurnExecutionManager {
           counter++;
         }
       }
-      usedNames.add(finalName);
 
       const filePath = path.resolve(uploadsDir, finalName);
       if (!filePath.startsWith(path.resolve(uploadsDir))) continue;
@@ -902,6 +901,7 @@ export class TurnExecutionManager {
       } catch {
         // File doesn't exist, use as-is
       }
+      usedNames.add(finalName);
 
       const attachmentValidationMessage = getAttachmentValidationMessage([attachment]);
       if (attachmentValidationMessage) {

@@ -3547,6 +3547,36 @@ describe("AgentSession", () => {
       await expect(fs.readFile(path.join(uploadsDir, "photo.png"), "utf8")).resolves.toBe("hello");
     });
 
+    test("deduplicates attachment filenames against existing uploads without stale in-memory names", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const uploadsDir = path.join(dir, "custom-uploads");
+      await fs.mkdir(uploadsDir, { recursive: true });
+      await fs.writeFile(path.join(uploadsDir, "photo.png"), "existing");
+      const { session } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          uploadsDirectory: uploadsDir,
+        },
+      });
+
+      await session.sendUserMessage("", undefined, undefined, [
+        {
+          filename: "photo.png",
+          contentBase64: "b25l",
+          mimeType: "image/png",
+        },
+        {
+          filename: "photo.png",
+          contentBase64: "dHdv",
+          mimeType: "image/png",
+        },
+      ]);
+
+      await expect(fs.readFile(path.join(uploadsDir, "photo.png"), "utf8")).resolves.toBe("existing");
+      await expect(fs.readFile(path.join(uploadsDir, "photo_1.png"), "utf8")).resolves.toBe("one");
+      await expect(fs.readFile(path.join(uploadsDir, "photo_2.png"), "utf8")).resolves.toBe("two");
+    });
+
     test("rejects oversized attachment payloads before emitting a user_message event", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
       const { session, events } = makeSession({

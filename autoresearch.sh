@@ -8,7 +8,7 @@ cleanup() {
 trap cleanup EXIT
 
 failures=0
-runs=6
+runs=8
 started_at="$(date +%s)"
 
 autorepro() {
@@ -32,14 +32,14 @@ autorepro() {
 
 for i in $(seq 1 "$runs"); do
   autorepro \
-    "resume-replay-${i}" \
-    env CI=true bun test test/server.jsonrpc.flow.test.ts --max-concurrency 1 --test-name-pattern "thread/resume replays a journal cursor once before reattaching the live thread sink"
+    "server-jsonrpc-flow-${i}" \
+    env CI=true bun test test/server.jsonrpc.flow.test.ts --max-concurrency 1
 done
 
 elapsed_s="$(( $(date +%s) - started_at ))"
 
-echo "METRIC resume_replay_failures=${failures}"
-echo "METRIC repro_runs=${runs}"
+echo "METRIC jsonrpc_flow_failures=${failures}"
+echo "METRIC flow_runs=${runs}"
 echo "METRIC elapsed_s=${elapsed_s}"
 
 if [ "$failures" -ne 0 ]; then

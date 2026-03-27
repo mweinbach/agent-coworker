@@ -10,12 +10,12 @@ Make the repository's unit-test/CI experience reliable:
 This session uses the real Bun test workload and CI-adjacent validation, not a synthetic proxy benchmark.
 
 ## Metrics
-- **Primary**: `resume_replay_failures` (failures, lower is better) — number of failures across repeated CI-like reruns of the specific PR-failing JSON-RPC resume test in `./autoresearch.sh`.
+- **Primary**: `jsonrpc_flow_failures` (failures, lower is better) — number of failures across repeated CI-like reruns of `test/server.jsonrpc.flow.test.ts` in `./autoresearch.sh`.
 - **Secondary**:
-  - `repro_runs` — number of targeted reproducer runs executed by the benchmark script.
+  - `flow_runs` — number of file-level reproducer runs executed by the benchmark script.
   - `elapsed_s` — wall-clock runtime for the benchmark script.
 
-A score of `0` means the known PR-failing test survived all targeted reruns. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
+A score of `0` means the entire JSON-RPC flow file survived all targeted reruns. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
 
 ## How to Run
 - Benchmark: `./autoresearch.sh`
@@ -49,4 +49,5 @@ Both scripts print diagnostics on failure; the benchmark also prints structured 
 ## What's Been Tried
 - Initial local baseline was green: `bun test --max-concurrency 1` succeeded twice, and docs/typecheck plus `bun run test:stable -- --max-concurrency 1` also passed.
 - GitHub PR #61 revealed the real failing signal to optimize against: workflow `CI` / job `Docs + Tests` timed out in `server JSON-RPC flows > thread/resume replays a journal cursor once before reattaching the live thread sink`.
-- Current focus: reproduce that exact timeout under CI-like env settings, then fix it without weakening coverage. Full keeps must also pass docs, typecheck, `CI=true bun test --max-concurrency 1`, and `bun run test:stable -- --max-concurrency 1`.
+- Focus widened after the single-test reproducer stayed green locally: now repeatedly rerun the entire `test/server.jsonrpc.flow.test.ts` file under `CI=true` to capture file-local ordering/state interactions that the one-test reproducer might miss.
+- Full keeps must also pass docs, typecheck, `CI=true bun test --max-concurrency 1`, and `bun run test:stable -- --max-concurrency 1`.

@@ -10,12 +10,14 @@ Make the repository's unit-test/CI experience reliable:
 This session uses the real Bun test workload and CI-adjacent validation, not a synthetic proxy benchmark.
 
 ## Metrics
-- **Primary**: `stable_failures` (failures, lower is better) — number of failed repeated `bun run test:stable -- --max-concurrency 1` runs in `./autoresearch.sh`.
+- **Primary**: `ci_noise_lines` (count, lower is better) — number of known noisy-but-non-failing log lines emitted by one `CI=true bun test --max-concurrency 1` run in `./autoresearch.sh`.
 - **Secondary**:
-  - `stable_runs` — number of repeated stable-runner passes executed by the benchmark script.
+  - `google_warning_lines` — count of repeated Google GenAI experimental warnings.
+  - `observability_warning_lines` — count of repeated Langfuse degraded-config warnings.
+  - `expected_error_lines` — count of expected test-path error logs that should be locally suppressed in tests.
   - `elapsed_s` — wall-clock runtime for the benchmark script.
 
-A score of `0` means the per-file stable runner survived all repeated benchmark runs. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
+A score of `0` means the full CI-style unit suite runs without emitting the currently-known noisy warnings/errors. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
 
 ## How to Run
 - Benchmark: `./autoresearch.sh`
@@ -60,4 +62,5 @@ Both scripts print diagnostics on failure; the benchmark also prints structured 
 - Kept follow-up: the remaining 48 plain-stop teardown callsites across `test/server.jsonrpc.control.test.ts`, `test/server.jsonrpc.test.ts`, `test/harness.ws.e2e.test.ts`, `test/desktop.controlSocket.threadList.test.ts`, and `test/server.test.ts` have been replaced with `stopTestServer()`.
 - Kept follow-up: the final 2 plain-stop teardown callsites in the persisted/live handoff test inside `test/server.jsonrpc.flow.test.ts` have also been removed.
 - Kept follow-up: 5 repeated `CI=true bun test --max-concurrency 1` full-suite runs passed after the teardown and workflow hardening.
-- Current focus: probe the stricter per-file stable runner repeatedly so we catch any remaining order/global-state flake that a monolithic Bun invocation might hide.
+- Kept follow-up: repeated `bun run test:stable -- --max-concurrency 1` passes are also clean, including a confirmation rerun.
+- Current focus: reduce noisy but passing CI log output (`GoogleGenAI.interactions` experimental warnings, Langfuse degraded-config warnings, and expected test-path error logs) so real failures are easier to spot.

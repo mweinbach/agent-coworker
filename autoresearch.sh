@@ -7,37 +7,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
-failures=0
-runs=3
+log_file="$tmp_dir/ci-noise.log"
 started_at="$(date +%s)"
 
-run_suite() {
-  local label="$1"
-  shift
-  local log_file="$tmp_dir/${label}.log"
-  echo "[autoresearch] running ${label}: $*"
-  set +e
-  "$@" >"$log_file" 2>&1
-  local status=$?
-  set -e
-  echo "[autoresearch] ${label} exit=${status}"
-  if [ "$status" -ne 0 ]; then
-    failures=$((failures + 1))
-    echo "[autoresearch] ${label} failed; last 80 lines:"
-    tail -80 "$log_file"
-  fi
-}
+set +e
+CI=true bun test --max-concurrency 1 >"$log_file" 2>&1
+status=$?
+set -e
 
-for i in $(seq 1 "$runs"); do
-  run_suite "stable-${i}" bun run test:stable -- --max-concurrency 1
-done
+if [ "$status" -ne 0 ]; then
+  echo "[autoresearch] CI suite failed; last 80 lines:"
+  tail -80 "$log_file"
+  exit "$status"
+fi
 
+google_warning_lines="$(grep -F -c 'GoogleGenAI.interactions: Interactions usage is experimental and may change in future versions.' "$log_file" || true)"
+observability_warning_lines="$(grep -F -c '[observability] Langfuse observability is enabled but base URL and credentials are not fully configured.' "$log_file" || true)"
+expected_error_lines="$(grep -F -c 'error: state load exploded' "$log_file" || true)"
+noise_lines=$((google_warning_lines + observability_warning_lines + expected_error_lines))
 elapsed_s="$(( $(date +%s) - started_at ))"
 
-echo "METRIC stable_failures=${failures}"
-echo "METRIC stable_runs=${runs}"
+echo "METRIC ci_noise_lines=${noise_lines}"
+echo "METRIC google_warning_lines=${google_warning_lines}"
+echo "METRIC observability_warning_lines=${observability_warning_lines}"
+echo "METRIC expected_error_lines=${expected_error_lines}"
 echo "METRIC elapsed_s=${elapsed_s}"
-
-if [ "$failures" -ne 0 ]; then
-  exit 1
-fi

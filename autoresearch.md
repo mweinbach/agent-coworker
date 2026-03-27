@@ -10,11 +10,12 @@ Make the repository's unit-test/CI experience reliable:
 This session uses the real Bun test workload and CI-adjacent validation, not a synthetic proxy benchmark.
 
 ## Metrics
-- **Primary**: `unsafe_all_server_teardowns` (count, lower is better) — number of remaining plain `.stop();` teardown callsites anywhere in `test/**/*.test.ts`, as measured by `./autoresearch.sh`.
+- **Primary**: `full_ci_failures` (failures, lower is better) — number of failed repeated `CI=true bun test --max-concurrency 1` runs in `./autoresearch.sh`.
 - **Secondary**:
+  - `ci_runs` — number of repeated full-suite CI-style runs executed by the benchmark script.
   - `elapsed_s` — wall-clock runtime for the benchmark script.
 
-A score of `0` means the test suite no longer contains the known-risk plain-stop teardown pattern. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
+A score of `0` means the full CI-style unit suite survived all repeated benchmark runs. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
 
 ## How to Run
 - Benchmark: `./autoresearch.sh`
@@ -57,4 +58,5 @@ Both scripts print diagnostics on failure; the benchmark also prints structured 
 - Kept follow-up: the websocket-heavy JSON-RPC flow spec now uses a shared forced-close teardown helper (`stopTestServer`) instead of plain `await server.stop();`.
 - Kept follow-up: `test/server.toolstream.test.ts` now also uses `stopTestServer`, removing its 2 plain-stop teardown callsites.
 - Kept follow-up: the remaining 48 plain-stop teardown callsites across `test/server.jsonrpc.control.test.ts`, `test/server.jsonrpc.test.ts`, `test/harness.ws.e2e.test.ts`, `test/desktop.controlSocket.threadList.test.ts`, and `test/server.test.ts` have been replaced with `stopTestServer()`.
-- Current focus: remove the last 2 plain-stop teardown callsites still present in the persisted/live handoff test inside `test/server.jsonrpc.flow.test.ts`.
+- Kept follow-up: the final 2 plain-stop teardown callsites in the persisted/live handoff test inside `test/server.jsonrpc.flow.test.ts` have also been removed.
+- Current focus: validate the overall result against repeated full CI-style suite runs so we do not overfit to teardown-count proxies.

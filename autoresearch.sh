@@ -1,19 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+tmp_dir="$(mktemp -d)"
+cleanup() {
+  rm -rf "$tmp_dir"
+}
+trap cleanup EXIT
+
+failures=0
+runs=5
 started_at="$(date +%s)"
-unsafe_count="$(python - <<'PY'
-from pathlib import Path
-files = sorted(Path('test').glob('**/*.test.ts'))
-print(sum(p.read_text().count('server.stop();') for p in files))
-PY
-)"
+
+run_suite() {
+  local label="$1"
+  shift
+  local log_file="$tmp_dir/${label}.log"
+  echo "[autoresearch] running ${label}: $*"
+  set +e
+  "$@" >"$log_file" 2>&1
+  local status=$?
+  set -e
+  echo "[autoresearch] ${label} exit=${status}"
+  if [ "$status" -ne 0 ]; then
+    failures=$((failures + 1))
+    echo "[autoresearch] ${label} failed; last 80 lines:"
+    tail -80 "$log_file"
+  fi
+}
+
+for i in $(seq 1 "$runs"); do
+  run_suite "ci-suite-${i}" env CI=true bun test --max-concurrency 1
+done
 
 elapsed_s="$(( $(date +%s) - started_at ))"
 
-echo "METRIC unsafe_all_server_teardowns=${unsafe_count}"
+echo "METRIC full_ci_failures=${failures}"
+echo "METRIC ci_runs=${runs}"
 echo "METRIC elapsed_s=${elapsed_s}"
 
-if [ "$unsafe_count" -ne 0 ]; then
+if [ "$failures" -ne 0 ]; then
   exit 1
 fi

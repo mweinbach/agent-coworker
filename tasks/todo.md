@@ -564,3 +564,9 @@
 - The root cause was a file-level `mock.module("../src/ui/skills/SkillDetailDialog", ...)` in `apps/desktop/test/skills-catalog-page.test.ts`. On Bun/Linux CI that mock can leak into the adjacent skill dialog test file, causing `SkillDetailDialog` to stay mocked as `null`.
 - `apps/desktop/test/skills-catalog-page.test.ts` no longer mocks `SkillDetailDialog`. Those catalog-page tests only assert loading and empty states while the dialog remains closed, so the extra mock was unnecessary and destabilized CI.
 - Verification passed with `bun test apps/desktop/test/skills-catalog-page.test.ts apps/desktop/test/skill-detail-dialog.test.ts --rerun-each 25`, `bun test apps/desktop/test/skill-detail-dialog.test.ts apps/desktop/test/protocol-v2-events.test.ts apps/desktop/test/thread-reconnect.test.ts apps/desktop/test/jsonrpc-single-connection.test.ts apps/desktop/test/bootstrap-cache.test.ts`, `bun run typecheck`, and `bun test`.
+
+## PR Build Fixes Review Sweep
+
+- [ ] Reconcile the remaining open PR review comments against the current branch and fix only the issues that are still accurate.
+- [ ] Restore CI/root test compatibility for mobile store imports and tighten the remaining attachment transport/runtime edge cases.
+- [ ] Re-run the focused JSON-RPC, session, mobile-store, and desktop queue verification slices plus repo `typecheck`, then update the PR.

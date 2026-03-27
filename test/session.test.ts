@@ -2753,6 +2753,23 @@ describe("AgentSession", () => {
       expect(busyFalseIdxAfter).toBeGreaterThan(busyTrueIdx);
     });
 
+    test("rejects malformed attachment payloads before the turn starts", async () => {
+      const { session, events } = makeSession();
+
+      await session.sendUserMessage("go", "user-1", undefined, [{
+        filename: "broken.txt",
+        contentBase64: "%%%not-base64%%%",
+        mimeType: "text/plain",
+      }]);
+
+      expect(mockRunTurn).not.toHaveBeenCalled();
+      expect(events.find((event) => event.type === "user_message")).toBeUndefined();
+      expect(events.find((event) => event.type === "session_busy")).toBeUndefined();
+      const errorEvt = events.find((event) => event.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt?.code).toBe("validation_failed");
+      expect(errorEvt?.message).toBe("Invalid attachment content.");
+    });
+
     test("accepts steer_message for the active turn without emitting another busy=true", async () => {
       const { session, events } = makeSession();
 
@@ -2857,6 +2874,58 @@ describe("AgentSession", () => {
           && (e as any).text === "mention the queue behavior"
           && (e as any).clientMessageId === "steer-commit"),
       ).toBe(true);
+
+      resolveRunTurn();
+      await turnPromise;
+    });
+
+    test("commits attachment-only steer content when prepareStep drains it", async () => {
+      const { session } = makeSession();
+      let capturedPrepareStep: ((step: { stepNumber: number; messages: any[] }) => Promise<any>) | undefined;
+      let resolveRunTurn!: () => void;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        capturedPrepareStep = params.prepareStep;
+        await new Promise<void>((resolve) => {
+          resolveRunTurn = resolve;
+        });
+        return {
+          text: "done",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "done" }],
+        };
+      });
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const activeTurnId = session.activeTurnId;
+      expect(activeTurnId).toBeTruthy();
+      await session.sendSteerMessage("", activeTurnId!, "steer-attachment", [{
+        filename: "diagram.png",
+        contentBase64: Buffer.from("png-bytes").toString("base64"),
+        mimeType: "image/png",
+      }]);
+
+      const prepareResult = await capturedPrepareStep?.({
+        stepNumber: 2,
+        messages: [{ role: "user", content: "go" }],
+      });
+      expect(prepareResult?.messages).toHaveLength(2);
+      expect(prepareResult?.messages?.[1]).toMatchObject({
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: expect.stringContaining("diagram.png"),
+          },
+          {
+            type: "image",
+            data: Buffer.from("png-bytes").toString("base64"),
+            mimeType: "image/png",
+          },
+        ],
+      });
 
       resolveRunTurn();
       await turnPromise;
@@ -4239,6 +4308,21 @@ describe("AgentSession", () => {
       expect(thirdCall.messages[2]).toEqual({ role: "user", content: "msg2" });
       expect(thirdCall.messages[3]).toEqual(responseMsg2);
       expect(thirdCall.messages[4]).toEqual({ role: "user", content: "msg3" });
+    });
+  });
+
+  describe("uploadFile", () => {
+    test("rejects malformed base64 payloads as validation errors", async () => {
+      const { session, events } = makeSession();
+
+      await session.uploadFile("notes.txt", "%%%not-base64%%%");
+
+      expect(events.find((event) => event.type === "file_uploaded")).toBeUndefined();
+      const errorEvt = events.find((event) => event.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      expect(errorEvt?.code).toBe("validation_failed");
+      expect(errorEvt?.source).toBe("session");
+      expect(errorEvt?.message).toBe("Invalid file content.");
     });
   });
 

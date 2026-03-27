@@ -9,6 +9,7 @@ import {
   listPersistedSessionSnapshots,
   type PersistedSessionSummary,
 } from "../sessionStore";
+import { decodeValidatedBase64 } from "./base64";
 import type { SessionContext } from "./SessionContext";
 
 function snapshotToTopLevelSessionSummary(liveSnapshot: SessionSnapshot | null): PersistedSessionSummary | null {
@@ -485,7 +486,7 @@ export class SessionAdminManager {
     }
 
     try {
-      const decoded = Buffer.from(contentBase64, "base64");
+      const { bytes: decoded } = decodeValidatedBase64(contentBase64, "Invalid file content.");
       if (this.context.state.config.uploadsDirectory) {
         await fs.mkdir(uploadsDir, { recursive: true });
       }

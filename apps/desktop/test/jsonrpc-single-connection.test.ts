@@ -545,6 +545,64 @@ describe("desktop JSON-RPC single connection path", () => {
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("turn/steer");
   });
 
+  test("omits empty text parts for attachment-only turn/start requests", async () => {
+    seedActiveThreadState();
+
+    await useAppStore.getState().sendMessage("", "reject", [{
+      filename: "diagram.png",
+      contentBase64: "ZmFrZS1wbmc=",
+      mimeType: "image/png",
+    }]);
+    await flushAsyncWork();
+
+    expect(jsonRpcRequests.findLast((entry) => entry.method === "turn/start")?.params).toMatchObject({
+      threadId: "jsonrpc-thread-1",
+      input: [{
+        type: "file",
+        filename: "diagram.png",
+        contentBase64: "ZmFrZS1wbmc=",
+        mimeType: "image/png",
+      }],
+      clientMessageId: expect.any(String),
+    });
+  });
+
+  test("omits empty text parts for attachment-only turn/steer requests", async () => {
+    seedActiveThreadState();
+    useAppStore.setState({
+      threadRuntimeById: {
+        ...useAppStore.getState().threadRuntimeById,
+        "jsonrpc-thread-1": {
+          ...defaultThreadRuntime(),
+          wsUrl: "ws://jsonrpc-workspace",
+          connected: true,
+          sessionId: "jsonrpc-thread-1",
+          busy: true,
+          activeTurnId: "turn-1",
+        },
+      },
+    } as any);
+
+    await useAppStore.getState().sendMessage("", "steer", [{
+      filename: "trace.txt",
+      contentBase64: "dHJhY2U=",
+      mimeType: "text/plain",
+    }]);
+    await flushAsyncWork();
+
+    expect(jsonRpcRequests.findLast((entry) => entry.method === "turn/steer")?.params).toMatchObject({
+      threadId: "jsonrpc-thread-1",
+      turnId: "turn-1",
+      input: [{
+        type: "file",
+        filename: "trace.txt",
+        contentBase64: "dHJhY2U=",
+        mimeType: "text/plain",
+      }],
+      clientMessageId: expect.any(String),
+    });
+  });
+
   test("routes provider, memory, and backup control requests over the shared JsonRpcSocket", async () => {
     await useAppStore.getState().selectWorkspace("ws-jsonrpc");
     await useAppStore.getState().requestProviderCatalog();

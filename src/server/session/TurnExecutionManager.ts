@@ -20,6 +20,7 @@ import {
 } from "../../types";
 import { supportsImageInput } from "../../models/registry";
 import type { FileAttachment } from "../jsonrpc/routes/shared";
+import { decodeValidatedBase64 } from "./base64";
 import type { HistoryManager } from "./HistoryManager";
 import type { InteractionManager } from "./InteractionManager";
 import type { SessionBackupController } from "./SessionBackupController";
@@ -283,6 +284,22 @@ export class TurnExecutionManager {
     return this.context.state.currentTurnOutcome === "error" ? "errored" : "completed";
   }
 
+  private normalizeAttachments(
+    attachments?: FileAttachment[],
+    invalidMessage = "Invalid attachment content.",
+  ): FileAttachment[] | undefined {
+    if (!attachments || attachments.length === 0) {
+      return undefined;
+    }
+
+    return attachments.map((attachment) => {
+      const { normalizedBase64 } = decodeValidatedBase64(attachment.contentBase64, invalidMessage);
+      return normalizedBase64 === attachment.contentBase64
+        ? attachment
+        : { ...attachment, contentBase64: normalizedBase64 };
+    });
+  }
+
   async sendSteerMessage(text: string, expectedTurnId: string, clientMessageId?: string, attachments?: FileAttachment[]) {
     if (!this.context.state.running) {
       this.context.emitError("validation_failed", "session", "No active turn to steer.");
@@ -305,7 +322,15 @@ export class TurnExecutionManager {
       return;
     }
 
-    if (text.trim().length === 0 && (!attachments || attachments.length === 0)) {
+    let normalizedAttachments: FileAttachment[] | undefined;
+    try {
+      normalizedAttachments = this.normalizeAttachments(attachments);
+    } catch (err) {
+      this.context.emitError("validation_failed", "session", this.context.formatError(err));
+      return;
+    }
+
+    if (text.trim().length === 0 && (!normalizedAttachments || normalizedAttachments.length === 0)) {
       this.context.emitError("validation_failed", "session", "Steer input must be non-empty.");
       return;
     }
@@ -313,7 +338,7 @@ export class TurnExecutionManager {
     this.context.state.pendingSteers.push({
       text,
       ...(clientMessageId ? { clientMessageId } : {}),
-      ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      ...(normalizedAttachments && normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       acceptedAt: new Date().toISOString(),
     });
     this.context.emit({
@@ -373,6 +398,14 @@ export class TurnExecutionManager {
         "session",
         "Session hard-stop budget has been exceeded. Raise or clear the stop threshold before sending another message."
       );
+      return;
+    }
+
+    let normalizedAttachments: FileAttachment[] | undefined;
+    try {
+      normalizedAttachments = this.normalizeAttachments(attachments);
+    } catch (err) {
+      this.context.emitError("validation_failed", "session", this.context.formatError(err));
       return;
     }
 
@@ -600,7 +633,7 @@ export class TurnExecutionManager {
         model: this.context.state.config.model,
       });
 
-      const userMessageContent = await this.buildUserMessageContent(text, attachments);
+      const userMessageContent = await this.buildUserMessageContent(text, normalizedAttachments);
       this.deps.historyManager.appendMessagesToHistory([{ role: "user", content: userMessageContent }]);
       this.deps.metadataManager.maybeGenerateTitleFromQuery(text);
       this.context.queuePersistSessionSnapshot("session.user_message");
@@ -844,7 +877,10 @@ export class TurnExecutionManager {
         // File doesn't exist, use as-is
       }
 
-      const decoded = Buffer.from(attachment.contentBase64, "base64");
+      const { bytes: decoded, normalizedBase64 } = decodeValidatedBase64(
+        attachment.contentBase64,
+        "Invalid attachment content.",
+      );
       await fs.writeFile(diskPath, decoded);
 
       contentParts.push({
@@ -862,13 +898,13 @@ export class TurnExecutionManager {
       if (isImage && modelSupportsImages) {
         contentParts.push({
           type: "image",
-          data: attachment.contentBase64,
+          data: normalizedBase64,
           mimeType: attachment.mimeType,
         });
       } else if (isGeminiMultimodal && isGoogleProvider) {
         contentParts.push({
           type: "image",
-          data: attachment.contentBase64,
+          data: normalizedBase64,
           mimeType: attachment.mimeType,
         });
       }

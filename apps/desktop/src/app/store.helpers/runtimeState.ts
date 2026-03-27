@@ -119,6 +119,7 @@ export function drainPendingThreadMessages(threadId: string): string[] {
   const existing = RUNTIME.pendingThreadMessages.get(threadId);
   if (!existing || existing.length === 0) return [];
   RUNTIME.pendingThreadMessages.delete(threadId);
+  RUNTIME.pendingThreadAttachments.delete(threadId);
   return existing;
 }
 

@@ -395,6 +395,10 @@ export class TurnExecutionManager {
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
       acceptedAt: new Date().toISOString(),
     });
+    // TODO(P2): Validate uploaded file attachment paths BEFORE emitting steer_accepted. Currently
+    // buildUserMessageContent validates at line ~950 (path traversal + file existence) in commitPendingSteers,
+    // which runs AFTER steer is acknowledged. This can cause an accepted steer to fail during commit,
+    // unexpectedly aborting the active turn. Fix: Add pre-validation for uploaded file paths here.
     this.context.emit({
       type: "steer_accepted",
       sessionId: this.context.id,
@@ -679,6 +683,10 @@ export class TurnExecutionManager {
     try {
       this.context.emit({ type: "user_message", sessionId: this.context.id, text: visibleText, clientMessageId });
       this.context.emit({ type: "session_busy", sessionId: this.context.id, busy: true, turnId, cause });
+      // TODO(P2): Validate uploaded file paths BEFORE emitting session_busy. Currently buildUserMessageContent
+      // validates at line ~938 (path traversal + file existence) AFTER session_busy is emitted. This means
+      // clients get a JSON-RPC success response and clear composer state, only to receive an async error later.
+      // Fix: Extract path validation into a reusable helper and call it before setting session state.
       this.context.emitTelemetry("agent.turn.started", "ok", {
         sessionId: this.context.id,
         provider: this.context.state.config.provider,

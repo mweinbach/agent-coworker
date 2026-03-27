@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { MAX_ATTACHMENT_BASE64_SIZE } from "../../shared/attachments";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 import { sameWorkspacePath } from "../../utils/workspacePath";
@@ -461,36 +460,37 @@ export class SessionAdminManager {
   }
 
   async uploadFile(filename: string, contentBase64: string) {
-    if (this.context.state.running) {
-      this.context.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-
     const safeName = path.basename(filename);
     if (!safeName || safeName === "." || safeName === "..") {
       this.context.emitError("validation_failed", "session", "Invalid filename");
       return;
     }
 
-    if (contentBase64.length > MAX_ATTACHMENT_BASE64_SIZE) {
-      this.context.emitError("validation_failed", "session", "File too large (max ~7.5MB)");
-      return;
-    }
-
-    const uploadsDir = this.context.state.config.uploadsDirectory ?? this.context.state.config.workingDirectory;
-    const filePath = path.resolve(uploadsDir, safeName);
-    if (!filePath.startsWith(path.resolve(uploadsDir))) {
+    const uploadsDir = this.context.state.config.uploadsDirectory ?? path.resolve(this.context.state.config.workingDirectory, "User Uploads");
+    const resolvedUploadsDir = path.resolve(uploadsDir);
+    let filePath = path.resolve(resolvedUploadsDir, safeName);
+    if (!filePath.startsWith(resolvedUploadsDir)) {
       this.context.emitError("validation_failed", "session", "Invalid filename (path traversal)");
       return;
     }
 
     try {
-      const decoded = Buffer.from(contentBase64, "base64");
-      if (this.context.state.config.uploadsDirectory) {
-        await fs.mkdir(uploadsDir, { recursive: true });
+      const ext = path.extname(safeName);
+      const base = safeName.slice(0, safeName.length - ext.length);
+      let counter = 1;
+      while (true) {
+        try {
+          await fs.access(filePath);
+          filePath = path.resolve(resolvedUploadsDir, `${base}_${counter}${ext}`);
+          counter += 1;
+        } catch {
+          break;
+        }
       }
+      const decoded = Buffer.from(contentBase64, "base64");
+      await fs.mkdir(resolvedUploadsDir, { recursive: true });
       await fs.writeFile(filePath, decoded);
-      this.context.emit({ type: "file_uploaded", sessionId: this.context.id, filename: safeName, path: filePath });
+      this.context.emit({ type: "file_uploaded", sessionId: this.context.id, filename: path.basename(filePath), path: filePath });
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to upload file: ${String(err)}`);
     }

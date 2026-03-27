@@ -320,11 +320,19 @@ export async function resumeJsonRpcThread(
   return await requestJsonRpc(get, set, workspaceId, "thread/resume", { threadId });
 }
 
-export type FileAttachmentInput = {
+export type InlineFileAttachmentInput = {
   filename: string;
   contentBase64: string;
   mimeType: string;
 };
+
+export type UploadedFileAttachmentInput = {
+  filename: string;
+  path: string;
+  mimeType: string;
+};
+
+export type FileAttachmentInput = InlineFileAttachmentInput | UploadedFileAttachmentInput;
 
 export async function startJsonRpcTurn(
   get: StoreGet,
@@ -341,7 +349,11 @@ export async function startJsonRpcTurn(
   }
   if (attachments && attachments.length > 0) {
     for (const a of attachments) {
-      input.push({ type: "file", filename: a.filename, contentBase64: a.contentBase64, mimeType: a.mimeType });
+      if ("contentBase64" in a) {
+        input.push({ type: "file", filename: a.filename, contentBase64: a.contentBase64, mimeType: a.mimeType });
+      } else {
+        input.push({ type: "uploadedFile", filename: a.filename, path: a.path, mimeType: a.mimeType });
+      }
     }
   }
   return await requestJsonRpc(get, set, workspaceId, "turn/start", {
@@ -367,7 +379,11 @@ export async function steerJsonRpcTurn(
   }
   if (attachments && attachments.length > 0) {
     for (const a of attachments) {
-      input.push({ type: "file", filename: a.filename, contentBase64: a.contentBase64, mimeType: a.mimeType });
+      if ("contentBase64" in a) {
+        input.push({ type: "file", filename: a.filename, contentBase64: a.contentBase64, mimeType: a.mimeType });
+      } else {
+        input.push({ type: "uploadedFile", filename: a.filename, path: a.path, mimeType: a.mimeType });
+      }
     }
   }
   return await requestJsonRpc(get, set, workspaceId, "turn/steer", {
@@ -385,6 +401,26 @@ export async function interruptJsonRpcTurn(
   threadId: string,
 ): Promise<any> {
   return await requestJsonRpc(get, set, workspaceId, "turn/interrupt", { threadId });
+}
+
+export async function uploadJsonRpcWorkspaceFile(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  filename: string,
+  contentBase64: string,
+): Promise<{ filename: string; path: string }> {
+  const workspace = getWorkspaceById(get, workspaceId);
+  const result = await requestJsonRpc(get, set, workspaceId, "cowork/session/file/upload", {
+    cwd: workspace?.path,
+    filename,
+    contentBase64,
+  });
+  const event = (result as any)?.event;
+  return {
+    filename: typeof event?.filename === "string" ? event.filename : filename,
+    path: typeof event?.path === "string" ? event.path : "",
+  };
 }
 
 export async function unsubscribeJsonRpcThread(

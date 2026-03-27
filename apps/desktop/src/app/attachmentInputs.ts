@@ -1,7 +1,6 @@
 import {
   formatAttachmentDisplayText,
-  getAttachmentValidationMessageForBase64Sizes,
-  getBase64SizeFromByteLength,
+  getAttachmentCountValidationMessage,
 } from "../../../../src/shared/attachments";
 
 import type { FileAttachmentInput } from "./store.helpers/jsonRpcSocket";
@@ -9,7 +8,7 @@ import type { FileAttachmentInput } from "./store.helpers/jsonRpcSocket";
 const BASE64_BINARY_CHUNK_SIZE = 0x8000;
 const FNV1A_OFFSET_BASIS = 0x811c9dc5;
 const FNV1A_PRIME = 0x01000193;
-type FileSizeLike = Pick<File, "size">;
+type AttachmentCountLike = { length: number };
 
 export function encodeArrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -31,16 +30,14 @@ export function buildAttachmentDisplayText(
 }
 
 export function getAttachmentPickerValidationMessage(
-  existingAttachments?: readonly Pick<FileAttachmentInput, "contentBase64">[],
-  selectedFiles?: readonly FileSizeLike[],
+  existingAttachments?: AttachmentCountLike,
+  selectedFiles?: AttachmentCountLike,
 ): string | null {
-  if ((!existingAttachments || existingAttachments.length === 0) && (!selectedFiles || selectedFiles.length === 0)) {
+  const totalCount = (existingAttachments?.length ?? 0) + (selectedFiles?.length ?? 0);
+  if (totalCount === 0) {
     return null;
   }
-  return getAttachmentValidationMessageForBase64Sizes([
-    ...(existingAttachments ?? []).map((attachment) => attachment.contentBase64.length),
-    ...(selectedFiles ?? []).map((file) => getBase64SizeFromByteLength(file.size)),
-  ]);
+  return getAttachmentCountValidationMessage(totalCount);
 }
 
 function hashString(value: string): string {
@@ -57,8 +54,9 @@ export function buildAttachmentSignature(attachments?: readonly FileAttachmentIn
     return "";
   }
   return attachments
-    .map((attachment) => (
-      `${attachment.filename}\u0000${attachment.mimeType}\u0000${hashString(attachment.contentBase64)}`
-    ))
+    .map((attachment) => {
+      const payload = "contentBase64" in attachment ? attachment.contentBase64 : attachment.path;
+      return `${attachment.filename}\u0000${attachment.mimeType}\u0000${hashString(payload)}`;
+    })
     .join("\u0001");
 }

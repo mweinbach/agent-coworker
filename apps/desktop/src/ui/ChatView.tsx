@@ -1,7 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 
-import { AlertTriangleIcon, LoaderCircleIcon, MessageSquareIcon, PaperclipIcon, RotateCcwIcon, XIcon } from "lucide-react";
+import { AlertTriangleIcon, LoaderCircleIcon, MessageSquareIcon, MicIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
 
 import {
@@ -10,6 +10,7 @@ import {
   getAttachmentPickerValidationMessage,
 } from "../app/attachmentInputs";
 import { useAppStore } from "../app/store";
+import { uploadJsonRpcWorkspaceFile } from "../app/store.helpers/jsonRpcSocket";
 import type { FileAttachmentInput } from "../app/store.helpers/jsonRpcSocket";
 import type { FeedItem, ThreadAgentSummary, ThreadPendingSteer, ThreadStatus } from "../app/types";
 import {
@@ -23,6 +24,7 @@ import {
   MessageResponse,
 } from "../components/ai-elements/message";
 import {
+  PromptInputAttachmentPreviews,
   PromptInputBody,
   PromptInputFooter,
   PromptInputForm,
@@ -45,6 +47,10 @@ import {
   SelectValue,
 } from "../components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import {
+  MAX_ATTACHMENT_INLINE_BYTE_SIZE,
+  MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE,
+} from "../../../../src/shared/attachments";
 import {
   availableProvidersFromCatalog,
   modelChoicesFromCatalog,
@@ -235,6 +241,46 @@ export function composerBusyHint(submitState: ReturnType<typeof getComposerSubmi
 
 export function resolveComposerBusyPolicy(busy: boolean): "reject" | "steer" {
   return busy ? "steer" : "reject";
+}
+
+type PendingComposerAttachment = {
+  filename: string;
+  mimeType: string;
+  size: number;
+  file: File;
+  previewUrl?: string;
+  signature: string;
+};
+
+function buildPendingComposerAttachmentSignature(attachments: readonly PendingComposerAttachment[]): string {
+  if (attachments.length === 0) {
+    return "";
+  }
+  return attachments
+    .map((attachment) => (
+      `${attachment.filename}\u0000${attachment.mimeType}\u0000${attachment.signature}`
+    ))
+    .join("\u0001");
+}
+
+function createPendingComposerAttachment(file: File): PendingComposerAttachment {
+  const previewUrl = file.type.startsWith("image/") && file instanceof Blob
+    ? URL.createObjectURL(file)
+    : undefined;
+  return {
+    filename: file.name,
+    mimeType: file.type || "application/octet-stream",
+    size: file.size,
+    file,
+    previewUrl,
+    signature: `${file.name}\u0000${file.type}\u0000${file.size}\u0000${file.lastModified}`,
+  };
+}
+
+function revokePendingComposerAttachmentPreview(attachment: PendingComposerAttachment) {
+  if (attachment.previewUrl) {
+    URL.revokeObjectURL(attachment.previewUrl);
+  }
 }
 
 type OverflowCitationContext = {
@@ -483,38 +529,42 @@ function DraftThreadModelSelector({
   const value = `${provider}:${model}`;
 
   return (
-    <Select
-      value={value}
-      disabled={disabled}
-      onValueChange={(val) => {
-        const [p, ...mParts] = val.split(":");
-        setThreadModel(threadId, p as ProviderName, mParts.join(":"));
-      }}
-    >
-      <SelectTrigger
-        size="sm"
-        className="h-6 w-auto min-w-0 max-w-[220px] rounded-md border-none bg-transparent px-1.5 text-[11px] text-muted-foreground shadow-none transition-colors hover:bg-muted/40 hover:text-foreground focus:ring-0"
+    <div className="min-w-0 max-w-full">
+      <Select
+        className="inline-flex min-w-0 max-w-full"
+        value={value}
+        disabled={disabled}
+        onValueChange={(val) => {
+          const [p, ...mParts] = val.split(":");
+          setThreadModel(threadId, p as ProviderName, mParts.join(":"));
+        }}
       >
-        <span className="truncate"><SelectValue placeholder="Model" /></span>
-      </SelectTrigger>
-      <SelectContent>
-        {providers.map((p) => (
-          <SelectGroup key={p}>
-            <SelectLabel className="px-2 py-1.5 text-xs font-semibold">{PROVIDER_LABELS[p] ?? p}</SelectLabel>
-            {(choices[p] ?? []).map((m) => (
-              <SelectItem key={`${p}:${m}`} value={`${p}:${m}`} className="pl-6 text-xs">
-                {m}
-              </SelectItem>
-            ))}
-            {p === provider && model && !(choices[p] ?? []).includes(model) ? (
-              <SelectItem key={`${p}:${model}`} value={`${p}:${model}`} className="pl-6 text-xs">
-                {model} (custom)
-              </SelectItem>
-            ) : null}
-          </SelectGroup>
-        ))}
-      </SelectContent>
-    </Select>
+        <SelectTrigger
+          compact
+          size="sm"
+          className="!h-8 !min-w-0 !w-max !max-w-[min(220px,100%)] !rounded-none !border-0 !bg-transparent !pl-1.5 !pr-1.5 !text-[13px] !font-medium !text-foreground/80 !shadow-none transition-colors hover:!bg-transparent hover:!text-foreground focus:ring-0"
+        >
+          <SelectValue placeholder="Model" />
+        </SelectTrigger>
+        <SelectContent>
+          {providers.map((p) => (
+            <SelectGroup key={p}>
+              <SelectLabel className="px-2 py-1.5 text-xs font-semibold">{PROVIDER_LABELS[p] ?? p}</SelectLabel>
+              {(choices[p] ?? []).map((m) => (
+                <SelectItem key={`${p}:${m}`} value={`${p}:${m}`} className="pl-6 text-xs">
+                  {m}
+                </SelectItem>
+              ))}
+              {p === provider && model && !(choices[p] ?? []).includes(model) ? (
+                <SelectItem key={`${p}:${model}`} value={`${p}:${model}`} className="pl-6 text-xs">
+                  {model} (custom)
+                </SelectItem>
+              ) : null}
+            </SelectGroup>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
@@ -534,7 +584,7 @@ function ThreadModelIndicator({
       variant="outline"
       title={title}
       aria-label={`Session model ${title}`}
-      className="h-6 max-w-[220px] rounded-md border-border/55 bg-muted/20 px-2 font-normal text-muted-foreground shadow-none"
+      className="h-8 max-w-[220px] rounded-none border-0 bg-transparent px-1.5 text-[13px] font-medium text-foreground/80 shadow-none"
     >
       <span className="truncate">{label}</span>
     </Badge>
@@ -563,13 +613,10 @@ export function ChatView() {
     () => new Map(),
   );
   const [cancelScopeDialogOpen, setCancelScopeDialogOpen] = useState(false);
-  const [pendingAttachments, setPendingAttachments] = useState<FileAttachmentInput[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingComposerAttachment[]>([]);
   const [attachmentPickerError, setAttachmentPickerError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setPendingAttachments([]);
-    setAttachmentPickerError(null);
-  }, [selectedThreadId]);
+  const [preparingAttachments, setPreparingAttachments] = useState(false);
+  const [submittedAttachmentSignature, setSubmittedAttachmentSignature] = useState<string | null>(null);
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
@@ -582,37 +629,67 @@ export function ChatView() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const lastCountRef = useRef<number>(0);
   const autoScrolledThreadIdRef = useRef<string | null>(null);
+  const pendingAttachmentsRef = useRef<PendingComposerAttachment[]>([]);
 
-  const handleFileSelect = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
+  useEffect(() => {
+    pendingAttachmentsRef.current = pendingAttachments;
+  }, [pendingAttachments]);
 
-    const selectedFiles = Array.from(files);
+  useEffect(() => {
+    return () => {
+      pendingAttachmentsRef.current.forEach(revokePendingComposerAttachmentPreview);
+    };
+  }, []);
+
+  const clearPendingAttachments = useCallback(() => {
+    setPendingAttachments((current) => {
+      current.forEach(revokePendingComposerAttachmentPreview);
+      return [];
+    });
+    setSubmittedAttachmentSignature(null);
+  }, []);
+
+  useEffect(() => {
+    clearPendingAttachments();
+    setAttachmentPickerError(null);
+    setPreparingAttachments(false);
+  }, [clearPendingAttachments, selectedThreadId]);
+
+  const ingestAttachmentFiles = useCallback(async (selectedFiles: File[]) => {
+    if (selectedFiles.length === 0) return;
+
     const validationMessage = getAttachmentPickerValidationMessage(pendingAttachments, selectedFiles);
     if (validationMessage) {
       setAttachmentPickerError(validationMessage);
-      if (fileInputRef.current) fileInputRef.current.value = "";
       return;
     }
 
-    const newAttachments: FileAttachmentInput[] = [];
-    for (const file of selectedFiles) {
-      const buffer = await file.arrayBuffer();
-      const base64 = encodeArrayBufferToBase64(buffer);
-      newAttachments.push({
-        filename: file.name,
-        contentBase64: base64,
-        mimeType: file.type || "application/octet-stream",
-      });
-    }
     setAttachmentPickerError(null);
-    setPendingAttachments((prev) => [...prev, ...newAttachments]);
-    if (fileInputRef.current) fileInputRef.current.value = "";
+    setSubmittedAttachmentSignature(null);
+    setPendingAttachments((prev) => [...prev, ...selectedFiles.map(createPendingComposerAttachment)]);
   }, [pendingAttachments]);
+
+  const handleFileSelect = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files;
+      if (!files || files.length === 0) return;
+      await ingestAttachmentFiles(Array.from(files));
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    },
+    [ingestAttachmentFiles],
+  );
 
   const removeAttachment = useCallback((index: number) => {
     setAttachmentPickerError(null);
-    setPendingAttachments((prev) => prev.filter((_, i) => i !== index));
+    setSubmittedAttachmentSignature(null);
+    setPendingAttachments((prev) => {
+      const next = [...prev];
+      const [removed] = next.splice(index, 1);
+      if (removed) {
+        revokePendingComposerAttachmentPreview(removed);
+      }
+      return next;
+    });
   }, []);
 
   const feed = rt?.feed ?? [];
@@ -779,30 +856,114 @@ export function ChatView() {
     }
   }, [activeChildAgentCount, rt?.busy]);
 
+  const resolvePendingAttachmentsForSend = useCallback(
+    async (workspaceId: string, attachments: readonly PendingComposerAttachment[]): Promise<FileAttachmentInput[]> => {
+      let inlineByteLength = 0;
+      const resolvedAttachments: FileAttachmentInput[] = [];
+
+      for (const attachment of attachments) {
+        const buffer = await attachment.file.arrayBuffer();
+        const base64 = encodeArrayBufferToBase64(buffer);
+        const canInline = (
+          attachment.size <= MAX_ATTACHMENT_INLINE_BYTE_SIZE
+          && inlineByteLength + attachment.size <= MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE
+        );
+        if (canInline) {
+          inlineByteLength += attachment.size;
+          resolvedAttachments.push({
+            filename: attachment.filename,
+            contentBase64: base64,
+            mimeType: attachment.mimeType,
+          });
+          continue;
+        }
+
+        const uploaded = await uploadJsonRpcWorkspaceFile(
+          useAppStore.getState,
+          useAppStore.setState,
+          workspaceId,
+          attachment.filename,
+          base64,
+        );
+        if (!uploaded.path) {
+          throw new Error(`Failed to upload ${attachment.filename}`);
+        }
+        resolvedAttachments.push({
+          filename: uploaded.filename,
+          path: uploaded.path,
+          mimeType: attachment.mimeType,
+        });
+      }
+
+      return resolvedAttachments;
+    },
+    [],
+  );
+
   const pendingAttachmentSignature = useMemo(
-    () => buildAttachmentSignature(pendingAttachments),
-    [pendingAttachments],
+    () => submittedAttachmentSignature ?? buildPendingComposerAttachmentSignature(pendingAttachments),
+    [pendingAttachments, submittedAttachmentSignature],
   );
   const hasPendingAttachments = pendingAttachments.length > 0;
 
   const submitComposer = useCallback((busyPolicy: "reject" | "steer") => {
+    if (!thread) return;
+    if (preparingAttachments) return;
     if (!composerText.trim() && pendingAttachments.length === 0) return;
-    const attachments = pendingAttachments.length > 0 ? pendingAttachments : undefined;
-    void sendMessage(composerText, busyPolicy, attachments).then((accepted) => {
-      if (accepted && busyPolicy !== "steer") {
-        setPendingAttachments([]);
-        setAttachmentPickerError(null);
+
+    const targetThreadId = thread.id;
+    const targetWorkspaceId = thread.workspaceId;
+    setPreparingAttachments(true);
+    setAttachmentPickerError(null);
+    void (async () => {
+      try {
+        const attachments = pendingAttachments.length > 0
+          ? await resolvePendingAttachmentsForSend(targetWorkspaceId, pendingAttachments)
+          : undefined;
+        const attachmentSignature = attachments && attachments.length > 0
+          ? buildAttachmentSignature(attachments)
+          : null;
+        setSubmittedAttachmentSignature(attachmentSignature);
+
+        if (useAppStore.getState().selectedThreadId !== targetThreadId) {
+          setSubmittedAttachmentSignature(null);
+          return;
+        }
+
+        const accepted = await sendMessage(composerText, busyPolicy, attachments);
+        if (accepted && busyPolicy !== "steer") {
+          clearPendingAttachments();
+          setAttachmentPickerError(null);
+          return;
+        }
+        if (!accepted) {
+          setSubmittedAttachmentSignature(null);
+        }
+      } catch (error) {
+        setSubmittedAttachmentSignature(null);
+        const message = error instanceof Error ? error.message : String(error);
+        setAttachmentPickerError(message);
+      } finally {
+        setPreparingAttachments(false);
       }
-    });
-  }, [composerText, pendingAttachments, sendMessage]);
+    })();
+  }, [
+    clearPendingAttachments,
+    composerText,
+    pendingAttachments,
+    preparingAttachments,
+    resolvePendingAttachmentsForSend,
+    sendMessage,
+    thread,
+  ]);
 
   useEffect(() => {
     if (pendingAttachments.length === 0) return;
     if (rt?.pendingSteer?.status !== "accepted") return;
     if ((rt.pendingSteer.attachmentSignature ?? "") !== pendingAttachmentSignature) return;
-    setPendingAttachments([]);
+    clearPendingAttachments();
     setAttachmentPickerError(null);
-  }, [pendingAttachmentSignature, pendingAttachments.length, rt?.pendingSteer]);
+  }, [clearPendingAttachments, pendingAttachmentSignature, pendingAttachments.length, rt?.pendingSteer]);
 
   const onComposerKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -833,13 +994,13 @@ export function ChatView() {
   }
 
   const busy = rt?.busy === true;
-  const disabled = hasPromptModal;
+  const inputDisabled = hasPromptModal || preparingAttachments;
   const transcriptOnly = rt?.transcriptOnly === true;
   const hydrating = rt?.hydrating === true || (bootstrapPending && Boolean(selectedThreadId) && Boolean(thread) && rt === null);
   const disconnected = !hydrating && !transcriptOnly && thread.status !== "active";
   const composerSubmitState = getComposerSubmitState({
     busy,
-    hasPromptModal,
+    hasPromptModal: inputDisabled,
     composerText,
     hasPendingAttachments,
     pendingAttachmentSignature,
@@ -919,9 +1080,19 @@ export function ChatView() {
           </ConversationContent>
         </Conversation>
 
-        <div className="relative flex shrink-0 flex-col bg-panel/78 px-3 py-1.5 backdrop-blur-sm" style={{ height: messageBarHeight }}>
+        <div className="relative flex shrink-0 flex-col bg-panel px-4 pb-3 pt-2" style={{ height: messageBarHeight }}>
           <MessageBarResizer />
-          <PromptInputRoot>
+          <PromptInputRoot
+            className="max-w-[70rem]"
+            fileDrop={
+              inputDisabled || transcriptOnly ? undefined : { onFiles: (files) => void ingestAttachmentFiles(files) }
+            }
+          >
+            <PromptInputAttachmentPreviews
+              attachments={pendingAttachments}
+              onRemove={removeAttachment}
+              className="px-0"
+            />
             <PromptInputForm
               onSubmit={(event) => {
                 event.preventDefault();
@@ -929,28 +1100,8 @@ export function ChatView() {
               }}
             >
               <PromptInputBody>
-                {pendingAttachments.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 px-3 pt-2">
-                    {pendingAttachments.map((att, i) => (
-                      <span
-                        key={`${att.filename}-${i}`}
-                        className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-                      >
-                        {att.filename}
-                        <button
-                          type="button"
-                          onClick={() => removeAttachment(i)}
-                          className="ml-0.5 rounded hover:bg-muted-foreground/20"
-                          aria-label={`Remove ${att.filename}`}
-                        >
-                          <XIcon className="h-3 w-3" />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
                 {attachmentPickerError ? (
-                  <div className="flex items-center gap-1.5 px-3 pt-2 text-xs text-destructive">
+                  <div className="flex items-center gap-1.5 px-1 pb-1 text-xs text-destructive">
                     <AlertTriangleIcon className="size-3.5 shrink-0" />
                     <span>{attachmentPickerError}</span>
                   </div>
@@ -958,7 +1109,7 @@ export function ChatView() {
                 <PromptInputTextarea
                   ref={textareaRef}
                   value={composerText}
-                  disabled={disabled}
+                  disabled={inputDisabled}
                   placeholder={placeholder}
                   onChange={(event) => setComposerText(event.currentTarget.value)}
                   onKeyDown={onComposerKeyDown}
@@ -977,12 +1128,12 @@ export function ChatView() {
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    disabled={disabled}
-                    className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    disabled={inputDisabled}
+                    className="inline-flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground disabled:opacity-50"
                     aria-label="Attach files"
                     title="Attach files"
                   >
-                    <PaperclipIcon className="h-4 w-4" />
+                    <PlusIcon className="h-4 w-4" />
                   </button>
                   {threadModelConfig ? (
                     thread.draft ? (
@@ -990,7 +1141,7 @@ export function ChatView() {
                         threadId={selectedThreadId}
                         provider={threadModelConfig.provider}
                         model={threadModelConfig.model}
-                        disabled={disabled}
+                        disabled={inputDisabled}
                       />
                     ) : (
                       <ThreadModelIndicator
@@ -1000,14 +1151,20 @@ export function ChatView() {
                     )
                   ) : null}
                 </PromptInputTools>
-                <div className={cn("flex shrink-0 items-center gap-2", busy ? "opacity-100" : "opacity-70")}>
-                  <span className="hidden max-w-[18rem] text-right text-xs leading-tight text-muted-foreground sm:block">
-                    {composerBusyHint(composerSubmitState)}
-                  </span>
+                <div className={cn("flex shrink-0 items-center gap-2", busy ? "opacity-100" : "opacity-80")}>
+                  <button
+                    type="button"
+                    disabled
+                    aria-label="Voice input unavailable"
+                    title="Voice input unavailable"
+                    className="hidden size-9 items-center justify-center rounded-full text-muted-foreground/70 sm:inline-flex"
+                  >
+                    <MicIcon className="size-4" />
+                  </button>
                   <PromptInputSubmit
                     mode={composerSubmitState.mode}
                     status={composerSubmitState.status}
-                    disabled={composerSubmitState.disabled}
+                    disabled={composerSubmitState.disabled || preparingAttachments}
                     onStop={selectedThreadId ? handleStop : undefined}
                   />
                 </div>

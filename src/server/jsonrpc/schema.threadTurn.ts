@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  getAttachmentCountValidationMessage,
   getAttachmentValidationMessage,
   MAX_ATTACHMENT_BASE64_SIZE,
 } from "../../shared/attachments";
@@ -41,10 +42,28 @@ const fileInputPart = z.object({
   mimeType: z.string().min(1),
 }).strict();
 
-const inputPart = z.discriminatedUnion("type", [textInputPart, legacyInputTextPart, fileInputPart]);
+const uploadedFileInputPart = z.object({
+  type: z.literal("uploadedFile"),
+  filename: z.string().min(1),
+  path: z.string().min(1),
+  mimeType: z.string().min(1),
+}).strict();
+
+const inputPart = z.discriminatedUnion("type", [textInputPart, legacyInputTextPart, fileInputPart, uploadedFileInputPart]);
 const turnInputPartsSchema = z.array(inputPart).superRefine((input, ctx) => {
-  const attachments = input.filter((part): part is z.infer<typeof fileInputPart> => part.type === "file");
-  const message = getAttachmentValidationMessage(attachments);
+  const attachments = input.filter((part): part is z.infer<typeof fileInputPart> | z.infer<typeof uploadedFileInputPart> => (
+    part.type === "file" || part.type === "uploadedFile"
+  ));
+  const countMessage = getAttachmentCountValidationMessage(attachments.length);
+  if (countMessage) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: countMessage,
+    });
+    return;
+  }
+  const inlineAttachments = attachments.filter((part): part is z.infer<typeof fileInputPart> => part.type === "file");
+  const message = getAttachmentValidationMessage(inlineAttachments);
   if (!message) {
     return;
   }

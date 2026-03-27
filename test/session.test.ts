@@ -3577,6 +3577,31 @@ describe("AgentSession", () => {
       await expect(fs.readFile(path.join(uploadsDir, "photo_2.png"), "utf8")).resolves.toBe("two");
     });
 
+    test("reuses uploaded attachment paths without rewriting the file", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const uploadsDir = path.join(dir, "uploads");
+      const uploadedPath = path.join(uploadsDir, "large.bin");
+      await fs.mkdir(uploadsDir, { recursive: true });
+      await fs.writeFile(uploadedPath, "existing-large-file");
+      const { session } = makeSession({
+        config: makeConfig(dir),
+      });
+
+      await session.sendUserMessage("", "msg-uploaded-path", undefined, [{
+        filename: "large.bin",
+        path: uploadedPath,
+        mimeType: "application/octet-stream",
+      }]);
+
+      await expect(fs.readFile(uploadedPath, "utf8")).resolves.toBe("existing-large-file");
+      await expect(fs.readdir(uploadsDir)).resolves.toEqual(["large.bin"]);
+      const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(call.messages.at(-1)?.content).toContainEqual({
+        type: "text",
+        text: `[System: The user uploaded a file which has been saved to ${uploadedPath}]`,
+      });
+    });
+
     test("rejects oversized attachment payloads before emitting a user_message event", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
       const { session, events } = makeSession({
@@ -3592,7 +3617,7 @@ describe("AgentSession", () => {
       const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
       expect(errorEvt).toMatchObject({
         code: "validation_failed",
-        message: "File too large (max ~7.5MB)",
+        message: "File too large to send inline (max 25MB)",
       });
       expect(events.some((e) => e.type === "user_message")).toBe(false);
     });

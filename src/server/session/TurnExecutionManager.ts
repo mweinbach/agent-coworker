@@ -10,6 +10,7 @@ import {
 import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
 import {
   formatAttachmentDisplayText,
+  getAttachmentCountValidationMessage,
   getAttachmentTotalBase64Size,
   getAttachmentValidationMessage,
   MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
@@ -92,6 +93,22 @@ function makeStructuredSessionError(
   message: string,
 ): Error & { code: ServerErrorCode; source: ServerErrorSource } {
   return Object.assign(new Error(message), { code, source: "session" as const });
+}
+
+function isInlineFileAttachment(attachment: FileAttachment): attachment is Extract<FileAttachment, { contentBase64: string }> {
+  return "contentBase64" in attachment;
+}
+
+function getInlineAttachments(attachments?: readonly FileAttachment[]): Array<Extract<FileAttachment, { contentBase64: string }>> {
+  return (attachments ?? []).filter(isInlineFileAttachment);
+}
+
+function getTurnAttachmentValidationMessage(attachments?: readonly FileAttachment[]): string | null {
+  const countMessage = getAttachmentCountValidationMessage(attachments?.length);
+  if (countMessage) {
+    return countMessage;
+  }
+  return getAttachmentValidationMessage(getInlineAttachments(attachments));
 }
 
 function resolveUserInputDisplayText(
@@ -342,16 +359,16 @@ export class TurnExecutionManager {
       this.context.emitError("validation_failed", "session", "Steer input must be non-empty.");
       return;
     }
-    const attachmentValidationMessage = getAttachmentValidationMessage(attachments);
+    const attachmentValidationMessage = getTurnAttachmentValidationMessage(attachments);
     if (attachmentValidationMessage) {
       this.context.emitError("validation_failed", "session", attachmentValidationMessage);
       return;
     }
     const nextPendingSteerAttachmentBase64Size =
       this.context.state.pendingSteers.reduce(
-        (total, steer) => total + getAttachmentTotalBase64Size(steer.attachments),
+        (total, steer) => total + getAttachmentTotalBase64Size(getInlineAttachments(steer.attachments)),
         0,
-      ) + getAttachmentTotalBase64Size(attachments);
+      ) + getAttachmentTotalBase64Size(getInlineAttachments(attachments));
     if (nextPendingSteerAttachmentBase64Size > MAX_PENDING_STEER_ATTACHMENT_TOTAL_BASE64_SIZE) {
       this.context.emitError(
         "validation_failed",
@@ -428,7 +445,7 @@ export class TurnExecutionManager {
       );
       return;
     }
-    const attachmentValidationMessage = getAttachmentValidationMessage(attachments);
+    const attachmentValidationMessage = getTurnAttachmentValidationMessage(attachments);
     if (attachmentValidationMessage) {
       this.context.emitError("validation_failed", "session", attachmentValidationMessage);
       return;
@@ -866,50 +883,70 @@ export class TurnExecutionManager {
       contentParts.push({ type: "text", text });
     }
 
+    const resolvedUploadsDir = path.resolve(uploadsDir);
     const usedNames = new Set<string>();
     for (const attachment of attachments) {
       const safeName = path.basename(attachment.filename);
       if (!safeName || safeName === "." || safeName === "..") continue;
 
-      let finalName = safeName;
-      if (usedNames.has(finalName)) {
-        const ext = path.extname(safeName);
-        const base = safeName.slice(0, safeName.length - ext.length);
-        let counter = 1;
-        while (usedNames.has(finalName)) {
-          finalName = `${base}_${counter}${ext}`;
-          counter++;
+      const inlineAttachment = isInlineFileAttachment(attachment) ? attachment : null;
+      let diskPath: string;
+
+      if (inlineAttachment) {
+        let finalName = safeName;
+        if (usedNames.has(finalName)) {
+          const ext = path.extname(safeName);
+          const base = safeName.slice(0, safeName.length - ext.length);
+          let counter = 1;
+          while (usedNames.has(finalName)) {
+            finalName = `${base}_${counter}${ext}`;
+            counter++;
+          }
+        }
+
+        const filePath = path.resolve(resolvedUploadsDir, finalName);
+        if (!filePath.startsWith(resolvedUploadsDir)) continue;
+
+        diskPath = filePath;
+        try {
+          await fs.access(diskPath);
+          const ext = path.extname(finalName);
+          const base = finalName.slice(0, finalName.length - ext.length);
+          let counter = 1;
+          while (true) {
+            diskPath = path.resolve(resolvedUploadsDir, `${base}_${counter}${ext}`);
+            try {
+              await fs.access(diskPath);
+              counter++;
+            } catch {
+              break;
+            }
+          }
+          finalName = path.basename(diskPath);
+        } catch {
+          // File doesn't exist, use as-is.
+        }
+        usedNames.add(finalName);
+
+        const attachmentValidationMessage = getAttachmentValidationMessage([inlineAttachment]);
+        if (attachmentValidationMessage) {
+          throw makeStructuredSessionError("validation_failed", attachmentValidationMessage);
+        }
+
+        const decoded = Buffer.from(inlineAttachment.contentBase64, "base64");
+        await fs.writeFile(diskPath, decoded);
+      } else {
+        const uploadedAttachment = attachment as Extract<FileAttachment, { path: string }>;
+        diskPath = path.resolve(uploadedAttachment.path);
+        if (!diskPath.startsWith(resolvedUploadsDir)) {
+          throw makeStructuredSessionError("validation_failed", "Uploaded file path is outside the uploads directory.");
+        }
+        try {
+          await fs.access(diskPath);
+        } catch {
+          throw makeStructuredSessionError("validation_failed", `Uploaded file does not exist: ${diskPath}`);
         }
       }
-
-      const filePath = path.resolve(uploadsDir, finalName);
-      if (!filePath.startsWith(path.resolve(uploadsDir))) continue;
-
-      // Also check for existing file on disk to avoid overwriting prior uploads
-      let diskPath = filePath;
-      try {
-        await fs.access(diskPath);
-        // File exists - find a unique name
-        const ext = path.extname(finalName);
-        const base = finalName.slice(0, finalName.length - ext.length);
-        let counter = 1;
-        while (true) {
-          diskPath = path.resolve(uploadsDir, `${base}_${counter}${ext}`);
-          try { await fs.access(diskPath); counter++; } catch { break; }
-        }
-        finalName = path.basename(diskPath);
-      } catch {
-        // File doesn't exist, use as-is
-      }
-      usedNames.add(finalName);
-
-      const attachmentValidationMessage = getAttachmentValidationMessage([attachment]);
-      if (attachmentValidationMessage) {
-        throw makeStructuredSessionError("validation_failed", attachmentValidationMessage);
-      }
-
-      const decoded = Buffer.from(attachment.contentBase64, "base64");
-      await fs.writeFile(diskPath, decoded);
 
       contentParts.push({
         type: "text",
@@ -923,16 +960,16 @@ export class TurnExecutionManager {
         mime.startsWith("video/") ||
         mime === "application/pdf";
 
-      if (isImage && modelSupportsImages) {
+      if (inlineAttachment && isImage && modelSupportsImages) {
         contentParts.push({
           type: "image",
-          data: attachment.contentBase64,
+          data: inlineAttachment.contentBase64,
           mimeType: attachment.mimeType,
         });
-      } else if (isGeminiMultimodal && isGoogleProvider) {
+      } else if (inlineAttachment && isGeminiMultimodal && isGoogleProvider) {
         contentParts.push({
           type: "image",
-          data: attachment.contentBase64,
+          data: inlineAttachment.contentBase64,
           mimeType: attachment.mimeType,
         });
       }

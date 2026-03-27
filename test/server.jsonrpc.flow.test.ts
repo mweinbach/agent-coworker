@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+
 import { describe, expect, test } from "bun:test";
 
+import { jsonRpcThreadTurnRequestSchemas } from "../src/server/jsonrpc/schema.threadTurn";
 import { startAgentServer } from "../src/server/startServer";
 import {
   MAX_ATTACHMENT_BASE64_SIZE,
@@ -304,72 +307,97 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("turn/start rejects oversized attachment payloads at the request layer", async () => {
+  test("turn/start request schema rejects oversized inline attachment payloads", () => {
+    const parsed = jsonRpcThreadTurnRequestSchemas["turn/start"].safeParse({
+      threadId: "thread-1",
+      input: [{
+        type: "file",
+        filename: "large.bin",
+        contentBase64: "a".repeat(MAX_ATTACHMENT_BASE64_SIZE + 1),
+        mimeType: "application/octet-stream",
+      }],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  test("turn/start request schema rejects aggregate inline attachment payloads", () => {
+    const chunk = Math.floor(MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE / 3);
+    const totalOverflow = MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE - (chunk * 2) + 1;
+    const parsed = jsonRpcThreadTurnRequestSchemas["turn/start"].safeParse({
+      threadId: "thread-1",
+      input: [
+        {
+          type: "file",
+          filename: "first.bin",
+          contentBase64: "a".repeat(chunk),
+          mimeType: "application/octet-stream",
+        },
+        {
+          type: "file",
+          filename: "second.bin",
+          contentBase64: "b".repeat(chunk),
+          mimeType: "application/octet-stream",
+        },
+        {
+          type: "file",
+          filename: "overflow.bin",
+          contentBase64: "c".repeat(totalOverflow),
+          mimeType: "application/octet-stream",
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues[0]?.message).toContain("Inline attachments too large in total");
+    }
+  });
+
+  test("turn/start accepts uploaded file path parts after workspace upload", async () => {
     const tmpDir = await makeTmpProject();
-    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    let lastMessages: any[] = [];
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async (params: any) => {
+        lastMessages = params.messages;
+        return {
+          text: "done",
+          responseMessages: [],
+        };
+      }) as any,
+    }));
 
     try {
       const rpc = await connectJsonRpc(url);
       const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
       await rpc.waitFor((message) => message.method === "thread/started");
+
+      const uploadResponse = await rpc.sendRequest("cowork/session/file/upload", {
+        cwd: tmpDir,
+        filename: "large.bin",
+        contentBase64: Buffer.from("uploaded over control route").toString("base64"),
+      });
+      const uploadedPath = uploadResponse.result.event.path as string;
+
+      await expect(fs.readFile(uploadedPath, "utf8")).resolves.toBe("uploaded over control route");
 
       const turnResponse = await rpc.sendRequest("turn/start", {
         threadId: started.result.thread.id,
         input: [{
-          type: "file",
+          type: "uploadedFile",
           filename: "large.bin",
-          contentBase64: "a".repeat(MAX_ATTACHMENT_BASE64_SIZE + 1),
+          path: uploadedPath,
           mimeType: "application/octet-stream",
         }],
       });
 
-      expect(turnResponse.error?.code).toBe(-32602);
-      expect(turnResponse.error?.message).toContain("turn/start:");
-      expect(turnResponse.result).toBeUndefined();
-      rpc.close();
-    } finally {
-      await stopTestServer(server);
-    }
-  });
-
-  test("turn/start rejects aggregate attachment payloads at the request layer", async () => {
-    const tmpDir = await makeTmpProject();
-    const { server, url } = await startAgentServer(serverOpts(tmpDir));
-
-    try {
-      const rpc = await connectJsonRpc(url);
-      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
-      await rpc.waitFor((message) => message.method === "thread/started");
-
-      const chunk = Math.floor(MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE / 3);
-      const totalOverflow = MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE - (chunk * 2) + 1;
-      const turnResponse = await rpc.sendRequest("turn/start", {
-        threadId: started.result.thread.id,
-        input: [
-          {
-            type: "file",
-            filename: "first.bin",
-            contentBase64: "a".repeat(chunk),
-            mimeType: "application/octet-stream",
-          },
-          {
-            type: "file",
-            filename: "second.bin",
-            contentBase64: "b".repeat(chunk),
-            mimeType: "application/octet-stream",
-          },
-          {
-            type: "file",
-            filename: "overflow.bin",
-            contentBase64: "c".repeat(totalOverflow),
-            mimeType: "application/octet-stream",
-          },
-        ],
+      expect(turnResponse.result.turn.threadId).toBe(started.result.thread.id);
+      await rpc.waitFor((message) => message.method === "turn/started");
+      await rpc.waitFor((message) => message.method === "turn/completed");
+      expect(lastMessages.at(-1)?.content).toContainEqual({
+        type: "text",
+        text: `[System: The user uploaded a file which has been saved to ${uploadedPath}]`,
       });
-
-      expect(turnResponse.error?.code).toBe(-32602);
-      expect(turnResponse.error?.message).toContain("Attachments too large in total");
-      expect(turnResponse.result).toBeUndefined();
       rpc.close();
     } finally {
       await stopTestServer(server);

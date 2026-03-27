@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+
 import { describe, expect, test } from "bun:test";
 
 import { MemoryStore } from "../src/memoryStore";
@@ -486,6 +488,27 @@ describe("server JSON-RPC control methods", () => {
         stopAtUsd: null,
       });
       expect(usageUpdated.result.event.type).toBe("session_usage");
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("workspace file upload returns the saved path in a legacy event envelope", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request("cowork/session/file/upload", {
+        cwd: tmpDir,
+        filename: "upload.txt",
+        contentBase64: Buffer.from("hello upload").toString("base64"),
+      });
+
+      expect(response.result.event.type).toBe("file_uploaded");
+      expect(response.result.event.filename).toBe("upload.txt");
+      await expect(fs.readFile(response.result.event.path, "utf8")).resolves.toBe("hello upload");
       rpc.close();
     } finally {
       await stopTestServer(server);

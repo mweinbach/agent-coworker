@@ -1,9 +1,18 @@
-export const MAX_ATTACHMENT_BASE64_SIZE = 10 * 1024 * 1024;
 export const MAX_TURN_ATTACHMENT_COUNT = 8;
-export const MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE = 15 * 1024 * 1024;
+export const MAX_ATTACHMENT_INLINE_BYTE_SIZE = 25 * 1024 * 1024;
+export const MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE = 25 * 1024 * 1024;
+export const MAX_ATTACHMENT_BASE64_SIZE = getBase64SizeFromByteLength(MAX_ATTACHMENT_INLINE_BYTE_SIZE);
+export const MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE = getBase64SizeFromByteLength(MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE);
 
 export function getBase64SizeFromByteLength(byteLength: number): number {
   return Math.ceil(Math.max(0, byteLength) / 3) * 4;
+}
+
+export function getAttachmentCountValidationMessage(count?: number): string | null {
+  if ((count ?? 0) > MAX_TURN_ATTACHMENT_COUNT) {
+    return `Too many file attachments (max ${MAX_TURN_ATTACHMENT_COUNT})`;
+  }
+  return null;
 }
 
 export function getAttachmentValidationMessageForBase64Sizes(
@@ -12,24 +21,24 @@ export function getAttachmentValidationMessageForBase64Sizes(
   if (!base64Sizes || base64Sizes.length === 0) {
     return null;
   }
-  if (base64Sizes.length > MAX_TURN_ATTACHMENT_COUNT) {
-    return `Too many file attachments (max ${MAX_TURN_ATTACHMENT_COUNT})`;
+  const attachmentCountMessage = getAttachmentCountValidationMessage(base64Sizes.length);
+  if (attachmentCountMessage) {
+    return attachmentCountMessage;
   }
 
   let totalBase64Size = 0;
   for (const base64Size of base64Sizes) {
     if (base64Size > MAX_ATTACHMENT_BASE64_SIZE) {
-      return "File too large (max ~7.5MB)";
+      return "File too large to send inline (max 25MB)";
     }
     totalBase64Size += base64Size;
     if (totalBase64Size > MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE) {
-      return "Attachments too large in total (max ~15MB combined)";
+      return "Inline attachments too large in total (max 25MB combined)";
     }
   }
 
   return null;
 }
-
 export function getAttachmentByteLengthValidationMessage(
   byteLengths?: readonly number[],
 ): string | null {

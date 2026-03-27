@@ -111,14 +111,19 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 
 #### File attachments in `turn/start` and `turn/steer`
 
-The `input` array accepts two part types:
+The `input` array accepts three part types:
 
 - `{ "type": "text", "text": "..." }` — a text message part
-- `{ "type": "file", "filename": "image.png", "contentBase64": "iVBORw0KGgo...", "mimeType": "image/png" }` — a file attachment
+- `{ "type": "file", "filename": "image.png", "contentBase64": "iVBORw0KGgo...", "mimeType": "image/png" }` — an inline file attachment
+- `{ "type": "uploadedFile", "filename": "large-video.mov", "path": "/workspace/User Uploads/large-video.mov", "mimeType": "video/quicktime" }` — a previously uploaded file reference
 
-All uploaded files are saved to a `User Uploads/` directory in the workspace. The model receives a hidden system note with the file path. For models that support multimodal input (`supportsImageInput: true`), image files are also sent inline as base64 content. For Google/Gemini models, audio, video, and PDF files are additionally sent inline.
+Inline `file` parts are capped at about `25MB` of decoded file content each, with a combined inline budget of about `25MB` per turn. All file attachments are surfaced to the model as hidden system notes containing the saved path in the workspace uploads directory.
 
-Example request with a file attachment:
+For inline `file` parts, models that support multimodal input (`supportsImageInput: true`) also receive image bytes directly. Google/Gemini sessions additionally receive inline audio, video, and PDF bytes when those parts are sent as inline `file` attachments. `uploadedFile` parts are path-only references and are not inlined into the provider payload.
+
+Use `cowork/session/file/upload` first when a file is too large for inline transport or when the client wants to avoid sending multimodal bytes inline.
+
+Example request with an inline file attachment:
 
 ```json
 {
@@ -130,6 +135,28 @@ Example request with a file attachment:
     "input": [
       { "type": "text", "text": "What's in this image?" },
       { "type": "file", "filename": "photo.jpg", "contentBase64": "...", "mimeType": "image/jpeg" }
+    ]
+  }
+}
+```
+
+Example request with a previously uploaded file path:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 6,
+  "method": "turn/start",
+  "params": {
+    "threadId": "abc-123",
+    "input": [
+      { "type": "text", "text": "Analyze this large capture." },
+      {
+        "type": "uploadedFile",
+        "filename": "capture.mov",
+        "path": "/workspace/User Uploads/capture.mov",
+        "mimeType": "video/quicktime"
+      }
     ]
   }
 }
@@ -148,6 +175,7 @@ Currently implemented `cowork/*` methods include:
   - `cowork/session/usageBudget/set`
   - `cowork/session/config/set`
   - `cowork/session/defaults/apply`
+  - `cowork/session/file/upload`
   - `cowork/session/delete`
 - provider controls
   - `cowork/provider/catalog/read`
@@ -211,6 +239,8 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 `cowork/session/state/read` returns the current workspace control session state as a bundle of legacy-compatible `config_updated`, `session_settings`, and `session_config` events so JSON-RPC clients can hydrate provider/model defaults before diffing local settings.
 
 `cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session.
+
+`cowork/session/file/upload` writes a file into the workspace uploads directory and returns a legacy-compatible `file_uploaded` event envelope. JSON-RPC clients can then reference that saved file from `turn/start` or `turn/steer` with an `uploadedFile` input part when the file is too large to send inline.
 
 ### Core JSON-RPC notifications currently available
 
@@ -2671,10 +2701,10 @@ Upload a file to the session's uploads directory.
 | `type` | `"upload_file"` | Yes | — |
 | `sessionId` | `string` | Yes | Non-empty session ID |
 | `filename` | `string` | Yes | Non-empty filename (basename only, no path separators) |
-| `contentBase64` | `string` | Yes | Base64-encoded file content (max ~10MB encoded / ~7.5MB decoded) |
+| `contentBase64` | `string` | Yes | Base64-encoded file content |
 
 **Response:** `file_uploaded`
-**Error:** `busy` if a turn is running. `validation_failed` if filename is invalid or file too large.
+**Error:** `validation_failed` if filename is invalid.
 
 ---
 
@@ -4444,7 +4474,7 @@ Current memory entries for workspace/user scopes.
 
 ### file_uploaded
 
-File upload confirmation response to `upload_file`.
+File upload confirmation response to `upload_file` or `cowork/session/file/upload`.
 
 ```json
 { "type": "file_uploaded", "sessionId": "...", "filename": "image.png", "path": "/path/to/uploads/image.png" }

@@ -51,11 +51,19 @@ export function extractJsonRpcTextInput(input: unknown): string {
     .trim();
 }
 
-export type FileAttachment = {
+export type InlineFileAttachment = {
   filename: string;
   contentBase64: string;
   mimeType: string;
 };
+
+export type UploadedFileAttachment = {
+  filename: string;
+  mimeType: string;
+  path: string;
+};
+
+export type FileAttachment = InlineFileAttachment | UploadedFileAttachment;
 
 export type ExtractedInput = {
   text: string;
@@ -79,6 +87,17 @@ export function extractJsonRpcInput(input: unknown): ExtractedInput {
         attachments.push({
           filename: record.filename,
           contentBase64: record.contentBase64,
+          mimeType: record.mimeType,
+        });
+      } else if (
+        record.type === "uploadedFile" &&
+        typeof record.filename === "string" &&
+        typeof record.path === "string" &&
+        typeof record.mimeType === "string"
+      ) {
+        attachments.push({
+          filename: record.filename,
+          path: record.path,
           mimeType: record.mimeType,
         });
       }

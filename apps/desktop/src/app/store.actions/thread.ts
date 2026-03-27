@@ -808,6 +808,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         threads: [thread, ...s.threads],
         selectedThreadId: threadId,
         view: "chat",
+        composerText: "",
       }));
       ensureThreadRuntime(get, set, threadId);
       set((s) => ({

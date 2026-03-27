@@ -38,13 +38,13 @@ import {
   persistNow,
   providerAuthMethodsFor,
   pushNotification,
-  prependPendingThreadMessage,
   requestJsonRpcControlEvent,
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,
   truncateTitle,
   waitForControlSession,
+  shiftPendingThreadAttachments,
   shiftPendingThreadMessage,
 } from "../store.helpers";
 import { requestJsonRpc } from "../store.helpers/jsonRpcSocket";
@@ -359,14 +359,20 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       return false;
     }
 
-    const next = shiftPendingThreadMessage(threadId)?.trim();
-    if (!next) {
+    const next = shiftPendingThreadMessage(threadId);
+    if (next === undefined) {
       return false;
     }
+    const queuedAttachments = shiftPendingThreadAttachments(threadId);
 
-    const accepted = sendUserMessageToThread(get, set, threadId, next);
+    const accepted = sendUserMessageToThread(get, set, threadId, next, undefined, queuedAttachments);
     if (!accepted) {
-      prependPendingThreadMessage(threadId, next);
+      const msgs = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
+      msgs.unshift(next);
+      RUNTIME.pendingThreadMessages.set(threadId, msgs);
+      const atts = RUNTIME.pendingThreadAttachments.get(threadId) ?? [];
+      atts.unshift(queuedAttachments);
+      RUNTIME.pendingThreadAttachments.set(threadId, atts);
     }
     return accepted;
   };

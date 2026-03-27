@@ -23,6 +23,23 @@
   - `~/.bun/bin/bun test test/jsonrpc.codegen.test.ts`
   - `~/.bun/bin/bun test --max-concurrency 1` on 2026-03-26 (`2740 pass`, `3 skip`, `0 fail`)
 
+## Preserve Queued Attachments During Workspace-Default Flush
+
+- [x] Confirm the remaining unresolved workspace-default review thread is still real against current HEAD.
+- [x] Make the workspace-default queued-message flush path replay attachment payloads atomically with their queued text.
+- [x] Add a desktop regression covering attachment-only queued sends after defaults apply, then rerun focused verification plus repo-wide checks.
+
+## Preserve Queued Attachments During Workspace-Default Flush Review
+
+- `apps/desktop/src/app/store.actions/workspaceDefaults.ts` was still draining only `pendingThreadMessages` and replaying text-only sends after defaults applied. That dropped queued attachments entirely, and attachment-only queued sends were discarded because the empty string was trimmed before replay.
+- The workspace-default flush path now mirrors the shared thread reducer behavior: it shifts queued attachments alongside queued text, replays them together through `sendUserMessageToThread(...)`, and requeues both FIFOs atomically if the send cannot proceed yet.
+- `apps/desktop/src/app/store.helpers.ts` now re-exports `shiftPendingThreadAttachments`, which the workspace-default action needs for the shared runtime helper contract.
+- `apps/desktop/test/workspace-settings-sync.test.ts` now clears `RUNTIME.pendingThreadAttachments` in test setup and covers the attachment-only queued-send regression so the workspace-default replay path stays aligned with the normal reducer path.
+- Verification passed with:
+  - `~/.bun/bin/bun test apps/desktop/test/workspace-settings-sync.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test --max-concurrency 1` on 2026-03-26 (`2741 pass`, `3 skip`, `0 fail`)
+
 ## Stabilize JSON-RPC Replay Test Timeouts
 
 - [x] Inspect the failing GitHub Actions `Docs + Tests` job and confirm whether the failures are timeout-budget related.

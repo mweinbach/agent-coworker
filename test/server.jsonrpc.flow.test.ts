@@ -205,7 +205,7 @@ describe("server JSON-RPC flows", () => {
 
       rpc.close();
     } finally {
-      await liveServer.server.stop();
+      await stopTestServer(liveServer.server);
     }
 
     const persistedServer = await startAgentServer(serverOpts(tmpDir));
@@ -219,7 +219,7 @@ describe("server JSON-RPC flows", () => {
       expect(persistedThread.lastEventSeq).toBeGreaterThan(0);
       rpc.close();
     } finally {
-      await persistedServer.server.stop();
+      await stopTestServer(persistedServer.server);
     }
   });
 

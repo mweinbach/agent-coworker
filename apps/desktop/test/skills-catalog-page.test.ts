@@ -80,6 +80,7 @@ mock.module("../src/ui/skills/InstallationCardGrid", () => ({
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
 const { SkillsCatalogPage } = await import("../src/ui/skills/SkillsCatalogPage");
+mock.restore();
 
 describe("skills catalog page", () => {
   test("shows a loading state while the catalog is loading", async () => {

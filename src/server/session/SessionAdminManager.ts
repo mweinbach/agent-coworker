@@ -493,6 +493,14 @@ export class SessionAdminManager {
       await fs.writeFile(filePath, decoded);
       this.context.emit({ type: "file_uploaded", sessionId: this.context.id, filename: safeName, path: filePath });
     } catch (err) {
+      if (
+        typeof err === "object"
+        && err !== null
+        && (err as { code?: unknown }).code === "validation_failed"
+      ) {
+        this.context.emitError("validation_failed", "session", err instanceof Error ? err.message : String(err));
+        return;
+      }
       this.context.emitError("internal_error", "session", `Failed to upload file: ${String(err)}`);
     }
   }

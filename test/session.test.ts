@@ -2917,7 +2917,7 @@ describe("AgentSession", () => {
         content: [
           {
             type: "text",
-            text: expect.stringContaining("diagram.png"),
+            text: expect.stringContaining("/User Uploads/"),
           },
           {
             type: "image",

@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
 import { startAgentServer } from "../src/server/startServer";
-import { MAX_ATTACHMENT_BASE64_SIZE } from "../src/shared/attachments";
+import {
+  MAX_ATTACHMENT_BASE64_SIZE,
+  MAX_TURN_ATTACHMENT_COUNT,
+  MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
+} from "../src/shared/attachments";
 import { makeTmpProject, serverOpts } from "./helpers/wsHarness";
 
 type JsonRpcConnection = {
@@ -293,6 +297,50 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("turn/start rejects aggregate attachment payloads at the request layer", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      const chunk = Math.floor(MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE / 3);
+      const totalOverflow = MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE - (chunk * 2) + 1;
+      const turnResponse = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [
+          {
+            type: "file",
+            filename: "first.bin",
+            contentBase64: "a".repeat(chunk),
+            mimeType: "application/octet-stream",
+          },
+          {
+            type: "file",
+            filename: "second.bin",
+            contentBase64: "b".repeat(chunk),
+            mimeType: "application/octet-stream",
+          },
+          {
+            type: "file",
+            filename: "overflow.bin",
+            contentBase64: "c".repeat(totalOverflow),
+            mimeType: "application/octet-stream",
+          },
+        ],
+      });
+
+      expect(turnResponse.error?.code).toBe(-32602);
+      expect(turnResponse.error?.message).toContain("Attachments too large in total");
+      expect(turnResponse.result).toBeUndefined();
+      rpc.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
   test("turn/start streams reasoning notifications before assistant output", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir, {
@@ -479,6 +527,52 @@ describe("server JSON-RPC flows", () => {
         input: [{ type: "text", text: "wrong turn" }],
       });
       expect(steerResponse.error?.message).toBe("Active turn mismatch.");
+      expect(steerResponse.result).toBeUndefined();
+
+      releaseTurn.resolve();
+      await rpc.waitFor((message) => message.method === "turn/completed");
+      rpc.close();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("turn/steer rejects too many attachment parts at the request layer", async () => {
+    const tmpDir = await makeTmpProject();
+    const releaseTurn = Promise.withResolvers<void>();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => {
+        await releaseTurn.promise;
+        return {
+          text: "done",
+          responseMessages: [],
+        };
+      }) as any,
+    }));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      const turnStart = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "start turn" }],
+      });
+      const turnId = turnStart.result.turn.id;
+
+      const steerResponse = await rpc.sendRequest("turn/steer", {
+        threadId: started.result.thread.id,
+        turnId,
+        input: Array.from({ length: MAX_TURN_ATTACHMENT_COUNT + 1 }, (_, index) => ({
+          type: "file" as const,
+          filename: `file-${index}.txt`,
+          contentBase64: "YQ==",
+          mimeType: "text/plain",
+        })),
+      });
+      expect(steerResponse.error?.code).toBe(-32602);
+      expect(steerResponse.error?.message).toContain(`Too many file attachments (max ${MAX_TURN_ATTACHMENT_COUNT})`);
       expect(steerResponse.result).toBeUndefined();
 
       releaseTurn.resolve();

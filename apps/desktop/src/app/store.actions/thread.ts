@@ -750,7 +750,8 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         set({ selectedWorkspaceId: workspaceId });
       }
 
-      const createSessionImmediately = opts?.mode === "session" || Boolean(opts?.firstMessage?.trim());
+      const hasQueuedAttachments = opts?.attachments && opts.attachments.length > 0;
+      const createSessionImmediately = opts?.mode === "session" || Boolean(opts?.firstMessage?.trim()) || hasQueuedAttachments;
       if (!createSessionImmediately) {
         const existingDraft = get().threads.find((thread) => thread.workspaceId === workspaceId && thread.draft === true);
         if (existingDraft) {
@@ -825,10 +826,11 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         return false;
       }
 
-      if (opts?.attachments && opts.attachments.length > 0) {
-        RUNTIME.pendingThreadAttachments.set(threadId, [opts.attachments]);
+      const hasFirstMessage = Boolean(opts?.firstMessage?.trim());
+      if (hasFirstMessage || hasQueuedAttachments) {
+        queuePendingThreadMessage(threadId, opts?.firstMessage ?? "", opts?.attachments);
       }
-      ensureThreadSocket(get, set, threadId, url, opts?.firstMessage, false);
+      ensureThreadSocket(get, set, threadId, url, opts?.firstMessage, hasFirstMessage);
       return true;
     },
   

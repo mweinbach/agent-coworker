@@ -8,7 +8,7 @@ import {
   reasoningModeForProvider,
 } from "../modelStream";
 import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
-import { MAX_ATTACHMENT_BASE64_SIZE, formatAttachmentDisplayText } from "../../shared/attachments";
+import { formatAttachmentDisplayText, getAttachmentValidationMessage } from "../../shared/attachments";
 import { supportsProviderManagedContinuationProvider } from "../../shared/providerContinuation";
 import type { AgentExecutionState } from "../../shared/agents";
 import type { TurnUsage } from "../../session/costTracker";
@@ -85,20 +85,6 @@ function makeStructuredSessionError(
   message: string,
 ): Error & { code: ServerErrorCode; source: ServerErrorSource } {
   return Object.assign(new Error(message), { code, source: "session" as const });
-}
-
-function getAttachmentValidationMessage(
-  attachments?: readonly Pick<FileAttachment, "contentBase64">[],
-): string | null {
-  if (!attachments || attachments.length === 0) {
-    return null;
-  }
-  for (const attachment of attachments) {
-    if (attachment.contentBase64.length > MAX_ATTACHMENT_BASE64_SIZE) {
-      return "File too large (max ~7.5MB)";
-    }
-  }
-  return null;
 }
 
 function resolveUserInputDisplayText(

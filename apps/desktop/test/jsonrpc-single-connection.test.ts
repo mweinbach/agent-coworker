@@ -539,6 +539,71 @@ describe("desktop JSON-RPC single connection path", () => {
     });
   });
 
+  test("attachment-only transcript sends create a live session immediately", async () => {
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-jsonrpc",
+      selectedThreadId: "transcript-thread",
+      workspaces: [
+        {
+          id: "ws-jsonrpc",
+          name: "JSON-RPC Workspace",
+          path: "/tmp/jsonrpc-workspace",
+          createdAt: "2026-03-21T00:00:00.000Z",
+          lastOpenedAt: "2026-03-21T00:00:00.000Z",
+          wsProtocol: "jsonrpc",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "transcript-thread",
+          workspaceId: "ws-jsonrpc",
+          title: "Recovered transcript",
+          createdAt: "2026-03-21T00:00:00.000Z",
+          lastMessageAt: "2026-03-21T00:00:00.000Z",
+          status: "active",
+          sessionId: null,
+          messageCount: 0,
+          lastEventSeq: 0,
+        },
+      ],
+      workspaceRuntimeById: {
+        "ws-jsonrpc": {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://jsonrpc-workspace",
+        },
+      },
+      threadRuntimeById: {
+        "transcript-thread": {
+          ...defaultThreadRuntime(),
+          transcriptOnly: true,
+          feed: [],
+        },
+      },
+      composerText: "",
+    } as any);
+
+    const attachment = {
+      filename: "transcript.png",
+      contentBase64: "aGVsbG8=",
+      mimeType: "image/png",
+    };
+
+    const accepted = await useAppStore.getState().sendMessage("", "reject", [attachment]);
+    await flushAsyncWork();
+
+    expect(accepted).toBe(true);
+    expect(jsonRpcRequests.map((entry) => entry.method)).toContain("thread/start");
+    expect(jsonRpcRequests.map((entry) => entry.method)).toContain("turn/start");
+    expect(jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+      threadId: "jsonrpc-thread-1",
+      input: [{ type: "file", ...attachment }],
+      clientMessageId: expect.any(String),
+    });
+  });
+
   test("clears pending steer state when turn/steer rejects", async () => {
     seedActiveThreadState();
     useAppStore.setState({

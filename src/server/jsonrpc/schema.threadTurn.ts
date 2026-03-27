@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import { MAX_ATTACHMENT_BASE64_SIZE } from "../../shared/attachments";
+import {
+  getAttachmentValidationMessage,
+  MAX_ATTACHMENT_BASE64_SIZE,
+} from "../../shared/attachments";
 import { projectedItemSchema } from "../../shared/projectedItems";
 import { sessionSnapshotSchema } from "../../shared/sessionSnapshot";
 import { nonEmptyTrimmedStringSchema } from "./schema.shared";
@@ -34,6 +37,17 @@ const fileInputPart = z.object({
 }).strict();
 
 const inputPart = z.discriminatedUnion("type", [textInputPart, fileInputPart]);
+const turnInputSchema = z.array(inputPart).superRefine((input, ctx) => {
+  const attachments = input.filter((part): part is z.infer<typeof fileInputPart> => part.type === "file");
+  const message = getAttachmentValidationMessage(attachments);
+  if (!message) {
+    return;
+  }
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message,
+  });
+});
 
 export const jsonRpcThreadTurnRequestSchemas = {
   "thread/start": z.object({
@@ -58,13 +72,13 @@ export const jsonRpcThreadTurnRequestSchemas = {
   "turn/start": z.object({
     threadId: nonEmptyTrimmedStringSchema,
     clientMessageId: nonEmptyTrimmedStringSchema.optional(),
-    input: z.array(inputPart),
+    input: turnInputSchema,
   }).strict(),
   "turn/steer": z.object({
     threadId: nonEmptyTrimmedStringSchema,
     turnId: nonEmptyTrimmedStringSchema,
     clientMessageId: nonEmptyTrimmedStringSchema.optional(),
-    input: z.array(inputPart),
+    input: turnInputSchema,
   }).strict(),
   "turn/interrupt": z.object({
     threadId: nonEmptyTrimmedStringSchema,

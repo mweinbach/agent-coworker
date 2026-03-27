@@ -40,6 +40,25 @@
   - `~/.bun/bin/bun run typecheck`
   - `~/.bun/bin/bun test --max-concurrency 1` on 2026-03-26 (`2741 pass`, `3 skip`, `0 fail`)
 
+## Finish Attachment Turn Limits
+
+- [x] Confirm the remaining transcript-only attachment send and aggregate turn-size review threads are still real.
+- [x] Ensure attachment-only transcript sends start a live session immediately instead of returning success on a draft-only path.
+- [x] Add shared aggregate/count attachment limits for JSON-RPC turn requests and session runtime validation, regenerate JSON-RPC artifacts, and rerun verification.
+
+## Finish Attachment Turn Limits Review
+
+- `apps/desktop/src/app/store.actions/thread.ts` was still treating `newThread({ attachments, firstMessage: "" })` as a draft path unless `mode === "session"` or the text was non-empty. That meant transcript-only attachment sends returned success, cleared the composer, and never started a live session.
+- `newThread(...)` now treats attachments as real first-turn input, mirrors `reconnectThread(...)` by queueing the initial text/attachment pair through `queuePendingThreadMessage(...)`, and lets the shared thread reducer flush attachment-only first turns once the JSON-RPC thread is live.
+- `src/shared/attachments.ts` now defines shared per-turn attachment limits: max file count, max per-file base64 size, and a combined base64 budget. `src/server/jsonrpc/schema.threadTurn.ts` enforces those limits at request validation time, and `src/server/session/TurnExecutionManager.ts` reuses the same helper for runtime validation.
+- Added regressions for attachment-only transcript sends in `apps/desktop/test/jsonrpc-single-connection.test.ts`, request-layer aggregate/count failures in `test/server.jsonrpc.flow.test.ts`, and runtime count validation in `test/session.test.ts`.
+- Regenerated `docs/generated/websocket-jsonrpc.schema.json` and `docs/generated/websocket-jsonrpc.d.ts` after the turn-schema change.
+- Verification passed with:
+  - `~/.bun/bin/bun test apps/desktop/test/jsonrpc-single-connection.test.ts test/server.jsonrpc.flow.test.ts test/session.test.ts`
+  - `~/.bun/bin/bun run docs:generate-jsonrpc`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test --max-concurrency 1` on 2026-03-27 (`2745 pass`, `3 skip`, `0 fail`)
+
 ## Stabilize JSON-RPC Replay Test Timeouts
 
 - [x] Inspect the failing GitHub Actions `Docs + Tests` job and confirm whether the failures are timeout-budget related.

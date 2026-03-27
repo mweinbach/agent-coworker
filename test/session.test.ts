@@ -16,7 +16,7 @@ import type {
   SessionBackupPublicState,
 } from "../src/server/sessionBackup";
 import type { SessionInfoState } from "../src/server/session/SessionContext";
-import { MAX_ATTACHMENT_BASE64_SIZE } from "../src/shared/attachments";
+import { MAX_ATTACHMENT_BASE64_SIZE, MAX_TURN_ATTACHMENT_COUNT } from "../src/shared/attachments";
 import * as REAL_AGENT from "../src/agent";
 
 // ---------------------------------------------------------------------------
@@ -3518,6 +3518,26 @@ describe("AgentSession", () => {
       expect(errorEvt).toMatchObject({
         code: "validation_failed",
         message: "File too large (max ~7.5MB)",
+      });
+      expect(events.some((e) => e.type === "user_message")).toBe(false);
+    });
+
+    test("rejects too many attachments before emitting a user_message event", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const { session, events } = makeSession({
+        config: makeConfig(dir),
+      });
+
+      await session.sendUserMessage("", "msg-too-many-files", undefined, Array.from({ length: MAX_TURN_ATTACHMENT_COUNT + 1 }, (_, index) => ({
+        filename: `file-${index}.txt`,
+        contentBase64: "YQ==",
+        mimeType: "text/plain",
+      })));
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toMatchObject({
+        code: "validation_failed",
+        message: `Too many file attachments (max ${MAX_TURN_ATTACHMENT_COUNT})`,
       });
       expect(events.some((e) => e.type === "user_message")).toBe(false);
     });

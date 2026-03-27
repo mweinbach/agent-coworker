@@ -10,12 +10,12 @@ Make the repository's unit-test/CI experience reliable:
 This session uses the real Bun test workload and CI-adjacent validation, not a synthetic proxy benchmark.
 
 ## Metrics
-- **Primary**: `ci_failure_score` (failures, lower is better) — number of failed CI-like unit suite reruns in `./autoresearch.sh`.
+- **Primary**: `resume_replay_failures` (failures, lower is better) — number of failures across repeated CI-like reruns of the specific PR-failing JSON-RPC resume test in `./autoresearch.sh`.
 - **Secondary**:
-  - `unit_runs` — number of unit-suite reruns executed by the benchmark script.
+  - `repro_runs` — number of targeted reproducer runs executed by the benchmark script.
   - `elapsed_s` — wall-clock runtime for the benchmark script.
 
-A score of `0` means the unit suite passed on both reruns in the same workspace, which is the minimum standard for a candidate keep. Any passing benchmark is additionally validated by `./autoresearch.checks.sh` before it can be kept.
+A score of `0` means the known PR-failing test survived all targeted reruns. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
 
 ## How to Run
 - Benchmark: `./autoresearch.sh`
@@ -27,6 +27,7 @@ Both scripts print diagnostics on failure; the benchmark also prints structured 
 - `.github/workflows/ci.yml` — CI job definition and test invocation.
 - `package.json` — test/typecheck/docs scripts.
 - `scripts/run_tests_stable.ts` — sequential/batched test runner useful for flake detection.
+- `test/ci.workflow.test.ts` — workflow regression coverage for CI guardrails.
 - `test/**/*.test.ts` — unit tests and helpers.
 - `test/shared/**` — shared test utilities/diagnostics.
 - `src/**` — production code implicated by failing or flaky tests.
@@ -46,6 +47,6 @@ Both scripts print diagnostics on failure; the benchmark also prints structured 
 - No benchmark cheating.
 
 ## What's Been Tried
-- Initial setup uses a benchmark that runs `bun test --max-concurrency 1` twice to detect immediate flakes without changing semantics.
-- Passing benchmark runs are gated by docs/typecheck plus `bun run test:stable -- --max-concurrency 1` to catch file-order/global-state issues.
-- Next step: establish the baseline and triage the first concrete failures.
+- Initial local baseline was green: `bun test --max-concurrency 1` succeeded twice, and docs/typecheck plus `bun run test:stable -- --max-concurrency 1` also passed.
+- GitHub PR #61 revealed the real failing signal to optimize against: workflow `CI` / job `Docs + Tests` timed out in `server JSON-RPC flows > thread/resume replays a journal cursor once before reattaching the live thread sink`.
+- Current focus: reproduce that exact timeout under CI-like env settings, then fix it without weakening coverage. Full keeps must also pass docs, typecheck, `CI=true bun test --max-concurrency 1`, and `bun run test:stable -- --max-concurrency 1`.

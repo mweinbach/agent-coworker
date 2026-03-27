@@ -1,0 +1,1 @@
+- Add a workflow regression test for `.github/workflows/ci.yml` and consider hardening the main CI job with `bun run typecheck` plus `bun run test:stable -- --max-concurrency 1` once the JSON-RPC resume flake is resolved and runtime impact is measured.

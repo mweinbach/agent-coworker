@@ -10,12 +10,12 @@ Make the repository's unit-test/CI experience reliable:
 This session uses the real Bun test workload and CI-adjacent validation, not a synthetic proxy benchmark.
 
 ## Metrics
-- **Primary**: `full_ci_failures` (failures, lower is better) — number of failed repeated `CI=true bun test --max-concurrency 1` runs in `./autoresearch.sh`.
+- **Primary**: `stable_failures` (failures, lower is better) — number of failed repeated `bun run test:stable -- --max-concurrency 1` runs in `./autoresearch.sh`.
 - **Secondary**:
-  - `ci_runs` — number of repeated full-suite CI-style runs executed by the benchmark script.
+  - `stable_runs` — number of repeated stable-runner passes executed by the benchmark script.
   - `elapsed_s` — wall-clock runtime for the benchmark script.
 
-A score of `0` means the full CI-style unit suite survived all repeated benchmark runs. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
+A score of `0` means the per-file stable runner survived all repeated benchmark runs. Any passing benchmark is additionally validated by `./autoresearch.checks.sh`, which runs docs, typecheck, the exact CI unit-suite invocation, and the per-file stable runner before a result can be kept.
 
 ## How to Run
 - Benchmark: `./autoresearch.sh`
@@ -59,4 +59,5 @@ Both scripts print diagnostics on failure; the benchmark also prints structured 
 - Kept follow-up: `test/server.toolstream.test.ts` now also uses `stopTestServer`, removing its 2 plain-stop teardown callsites.
 - Kept follow-up: the remaining 48 plain-stop teardown callsites across `test/server.jsonrpc.control.test.ts`, `test/server.jsonrpc.test.ts`, `test/harness.ws.e2e.test.ts`, `test/desktop.controlSocket.threadList.test.ts`, and `test/server.test.ts` have been replaced with `stopTestServer()`.
 - Kept follow-up: the final 2 plain-stop teardown callsites in the persisted/live handoff test inside `test/server.jsonrpc.flow.test.ts` have also been removed.
-- Current focus: validate the overall result against repeated full CI-style suite runs so we do not overfit to teardown-count proxies.
+- Kept follow-up: 5 repeated `CI=true bun test --max-concurrency 1` full-suite runs passed after the teardown and workflow hardening.
+- Current focus: probe the stricter per-file stable runner repeatedly so we catch any remaining order/global-state flake that a monolithic Bun invocation might hide.

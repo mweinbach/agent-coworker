@@ -8,7 +8,7 @@ cleanup() {
 trap cleanup EXIT
 
 failures=0
-runs=5
+runs=3
 started_at="$(date +%s)"
 
 run_suite() {
@@ -29,13 +29,13 @@ run_suite() {
 }
 
 for i in $(seq 1 "$runs"); do
-  run_suite "ci-suite-${i}" env CI=true bun test --max-concurrency 1
+  run_suite "stable-${i}" bun run test:stable -- --max-concurrency 1
 done
 
 elapsed_s="$(( $(date +%s) - started_at ))"
 
-echo "METRIC full_ci_failures=${failures}"
-echo "METRIC ci_runs=${runs}"
+echo "METRIC stable_failures=${failures}"
+echo "METRIC stable_runs=${runs}"
 echo "METRIC elapsed_s=${elapsed_s}"
 
 if [ "$failures" -ne 0 ]; then

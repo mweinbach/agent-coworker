@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import type { AgentConfig } from "../src/types";
 import {
@@ -55,11 +55,17 @@ describe("observability runtime", () => {
         otelEndpoint: "https://cloud.langfuse.com/api/public/otel/v1/traces",
       },
     });
+    const realWarn = console.warn;
+    console.warn = mock(() => {}) as typeof console.warn;
 
-    const runtime = await ensureObservabilityRuntime(cfg);
-    expect(runtime.ready).toBe(false);
-    expect(runtime.health.status).toBe("degraded");
-    expect(runtime.health.reason).toBe("missing_credentials");
+    try {
+      const runtime = await ensureObservabilityRuntime(cfg);
+      expect(runtime.ready).toBe(false);
+      expect(runtime.health.status).toBe("degraded");
+      expect(runtime.health.reason).toBe("missing_credentials");
+    } finally {
+      console.warn = realWarn;
+    }
   });
 
   test("runtime initializes when enabled and fully configured", async () => {
@@ -103,13 +109,19 @@ describe("observability runtime", () => {
     const cfg = makeConfig();
     const before = getObservabilityHealth(cfg);
     expect(before.status).toBe("ready");
+    const realWarn = console.warn;
+    console.warn = mock(() => {}) as typeof console.warn;
 
-    const failed = noteObservabilityFailure("runtime_flush_failed", "timeout");
-    expect(failed.health.status).toBe("degraded");
-    expect(failed.health.reason).toBe("runtime_flush_failed");
+    try {
+      const failed = noteObservabilityFailure("runtime_flush_failed", "timeout");
+      expect(failed.health.status).toBe("degraded");
+      expect(failed.health.reason).toBe("runtime_flush_failed");
 
-    const recovered = noteObservabilitySuccess(cfg, "runtime_recovered");
-    expect(recovered.health.status).toBe("ready");
-    expect(recovered.health.reason).toBe("runtime_recovered");
+      const recovered = noteObservabilitySuccess(cfg, "runtime_recovered");
+      expect(recovered.health.status).toBe("ready");
+      expect(recovered.health.reason).toBe("runtime_recovered");
+    } finally {
+      console.warn = realWarn;
+    }
   });
 });

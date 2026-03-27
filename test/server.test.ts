@@ -41,17 +41,23 @@ async function makeTmpProject(): Promise<string> {
 
 /** Common options for starting a test server on an ephemeral port. */
 function serverOpts(tmpDir: string, overrides?: Partial<StartAgentServerOptions>): StartAgentServerOptions {
+  const baseEnv = {
+    AGENT_WORKING_DIR: tmpDir,
+    AGENT_PROVIDER: "google",
+    AGENT_OBSERVABILITY_ENABLED: "false",
+    COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+  };
+
   return {
     cwd: tmpDir,
     hostname: "127.0.0.1",
     port: 0,
     homedir: tmpDir,
-    env: {
-      AGENT_WORKING_DIR: tmpDir,
-      AGENT_PROVIDER: "google",
-      COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
-    },
     ...overrides,
+    env: {
+      ...baseEnv,
+      ...(overrides?.env ?? {}),
+    },
   };
 }
 

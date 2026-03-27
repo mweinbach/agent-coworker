@@ -11,6 +11,9 @@ type JsonRpcConnection = {
   close: () => void;
 };
 
+const JSONRPC_REPLAY_TEST_TIMEOUT_MS = 45_000;
+const JSONRPC_REPLAY_WAIT_TIMEOUT_MS = 30_000;
+
 async function connectJsonRpc(
   url: string,
   opts?: {
@@ -772,7 +775,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("thread/read can include journal-projected turns and thread/resume can replay from a journal cursor", { timeout: 20_000 }, async () => {
+  test("thread/read can include journal-projected turns and thread/resume can replay from a journal cursor", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir, {
       runTurnImpl: (async (params: any) => {
@@ -839,7 +844,7 @@ describe("server JSON-RPC flows", () => {
     } finally {
       await server.stop();
     }
-  }, 15_000);
+  });
 
   test("thread/resume honors notification opt-outs while replaying journal events", async () => {
     const tmpDir = await makeTmpProject();
@@ -890,7 +895,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("thread/resume replays a journal cursor once before reattaching the live thread sink", { timeout: 20_000 }, async () => {
+  test("thread/resume replays a journal cursor once before reattaching the live thread sink", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     let releaseSecondChunk: (() => void) | undefined;
     const runTurnImpl = async (params: any) => {
@@ -1017,7 +1024,9 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
-  test("thread/read and thread/resume replay journals beyond 1000 events", { timeout: 20_000 }, async () => {
+  test("thread/read and thread/resume replay journals beyond 1000 events", {
+    timeout: JSONRPC_REPLAY_TEST_TIMEOUT_MS,
+  }, async () => {
     const tmpDir = await makeTmpProject();
     const deltaCount = 1_005;
     const finalText = Array.from({ length: deltaCount }, (_, index) => `chunk-${index}`).join("");
@@ -1046,7 +1055,7 @@ describe("server JSON-RPC flows", () => {
         threadId: started.result.thread.id,
         input: [{ type: "text", text: "flood the journal" }],
       });
-      await rpc.waitFor((message) => message.method === "turn/completed", 15_000);
+      await rpc.waitFor((message) => message.method === "turn/completed", JSONRPC_REPLAY_WAIT_TIMEOUT_MS);
 
       const read = await rpc.sendRequest("thread/read", {
         threadId: started.result.thread.id,
@@ -1064,7 +1073,7 @@ describe("server JSON-RPC flows", () => {
       await replayRpc.waitFor((message) => message.method === "thread/started");
       const replayedLastDelta = await replayRpc.waitFor(
         (message) => message.method === "item/agentMessage/delta" && message.params.delta === "chunk-1004",
-        15_000,
+        JSONRPC_REPLAY_WAIT_TIMEOUT_MS,
       );
       const resumed = await resumeResponse;
 

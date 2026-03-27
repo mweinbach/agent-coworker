@@ -1,5 +1,24 @@
 # Task Plan
 
+## Stabilize JSON-RPC Replay Test Timeouts
+
+- [x] Inspect the failing GitHub Actions `Docs + Tests` job and confirm whether the failures are timeout-budget related.
+- [x] Compare the failing replay-heavy JSON-RPC tests locally to determine whether they are functionally broken or just exceeding the CI budget intermittently.
+- [x] Widen only the replay-heavy test budgets that are hitting the 20s cap, rerun focused verification, and capture the evidence below.
+
+## Stabilize JSON-RPC Replay Test Timeouts Review
+
+- GitHub Actions runs on PR #61 showed multiple replay-heavy `test/server.jsonrpc.flow.test.ts` cases timing out exactly at the 20 second test budget on `ubuntu-latest`, including `thread/read can include journal-projected turns and thread/resume can replay from a journal cursor` (run `23628476285`) and, on an earlier commit in the same branch, `thread/read and thread/resume replay journals beyond 1000 events` (run `23628376698`).
+- Local focused reruns did not reproduce a logic failure: the affected tests completed in roughly 70-130 ms in isolation, and repeated reruns stayed green. That points to CI-only replay/teardown slowness rather than a deterministic contract regression in the JSON-RPC replay flow.
+- `test/server.jsonrpc.flow.test.ts` now uses explicit replay-test timeout constants so only the replay-heavy cases get a wider budget, and the mixed timeout declaration on the journal-projection test was normalized to a single Bun timeout style.
+- Verification passed with:
+  - `~/.bun/bin/bun test test/server.jsonrpc.flow.test.ts --max-concurrency 1 --test-name-pattern "thread/read can include journal-projected turns and thread/resume can replay from a journal cursor" --rerun-each 50`
+  - `~/.bun/bin/bun test test/server.jsonrpc.flow.test.ts --max-concurrency 1 --test-name-pattern "thread/resume replays a journal cursor once before reattaching the live thread sink" --rerun-each 50`
+  - `~/.bun/bin/bun test test/server.jsonrpc.flow.test.ts --max-concurrency 1 --test-name-pattern "thread/read and thread/resume replay journals beyond 1000 events" --rerun-each 20`
+  - `~/.bun/bin/bun test test/server.jsonrpc.flow.test.ts --max-concurrency 1 --rerun-each 10`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test --max-concurrency 1` on 2026-03-26 (`2734 pass`, `3 skip`, `0 fail`)
+
 ## Keep thread/read Citation Enrichment Off the Response Path
 
 - [x] Confirm `thread/read` is awaiting network-backed citation enrichment before responding.

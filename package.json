@@ -7,7 +7,7 @@
     "cowork": "./src/index.ts"
   },
   "scripts": {
-    "postinstall": "bun install --cwd apps/desktop",
+    "postinstall": "bun install --cwd apps/desktop && bun install --cwd apps/mobile",
     "start": "cd apps/desktop && bun run dev",
     "cli": "bun src/index.ts",
     "dev": "bun --watch src/index.ts",

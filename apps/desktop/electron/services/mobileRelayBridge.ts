@@ -659,12 +659,19 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     }
 
     if (kind === "secureReady") {
-      if (this.pendingPhoneHandshake) {
-        void this.persistTrustedPhoneFromHandshake(this.pendingPhoneHandshake).catch((error) => {
-          this.updateStatus("error", error instanceof Error ? error.message : String(error));
-        });
-      }
+      const handshake = this.pendingPhoneHandshake;
       this.pendingPhoneHandshake = null;
+      if (handshake) {
+        void (async () => {
+          try {
+            await this.persistTrustedPhoneFromHandshake(handshake);
+            this.updateStatus("connected");
+          } catch (error) {
+            this.updateStatus("error", error instanceof Error ? error.message : String(error));
+          }
+        })();
+        return true;
+      }
       this.updateStatus("connected");
       return true;
     }

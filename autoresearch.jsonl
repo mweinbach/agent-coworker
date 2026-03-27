@@ -1,0 +1,1 @@
+{"type":"config","name":"CI test reliability","metricName":"ci_failure_score","metricUnit":"","bestDirection":"lower"}

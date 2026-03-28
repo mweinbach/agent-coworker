@@ -23,7 +23,7 @@
 		6B4E9EEF60E02E038AD02740 /* Pods-CoworkMobile.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-CoworkMobile.release.xcconfig"; path = "Target Support Files/Pods-CoworkMobile/Pods-CoworkMobile.release.xcconfig"; sourceTree = "<group>"; };
 		7CDBA3CBD24FE6647F68C1EB /* libPods-CoworkMobile.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-CoworkMobile.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		7D818722E4616C650963D1D4 /* ExpoModulesProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExpoModulesProvider.swift; path = "Pods/Target Support Files/Pods-CoworkMobile/ExpoModulesProvider.swift"; sourceTree = "<group>"; };
-		85756083B48B51EA9A500970 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = CoworkMobile/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		85756083B48B51EA9A500970 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xml; name = PrivacyInfo.xcprivacy; path = CoworkMobile/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = CoworkMobile/SplashScreen.storyboard; sourceTree = "<group>"; };
 		B2B4886854D44D543EA61FDC /* Pods-CoworkMobile.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-CoworkMobile.debug.xcconfig"; path = "Target Support Files/Pods-CoworkMobile/Pods-CoworkMobile.debug.xcconfig"; sourceTree = "<group>"; };
 		BB2F792C24A3F905000567C9 /* Expo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Expo.plist; sourceTree = "<group>"; };
@@ -81,7 +81,6 @@
 				B2B4886854D44D543EA61FDC /* Pods-CoworkMobile.debug.xcconfig */,
 				6B4E9EEF60E02E038AD02740 /* Pods-CoworkMobile.release.xcconfig */,
 			);
-			name = Pods;
 			path = Pods;
 			sourceTree = "<group>";
 		};
@@ -343,6 +342,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = CoworkMobile/CoworkMobile.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6UHAW5UAT4;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
 					"$(inherited)",
@@ -379,6 +379,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = CoworkMobile/CoworkMobile.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6UHAW5UAT4;
 				INFOPLIST_FILE = CoworkMobile/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
 				LD_RUNPATH_SEARCH_PATHS = (

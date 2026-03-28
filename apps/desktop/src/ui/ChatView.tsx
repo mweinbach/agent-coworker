@@ -1135,6 +1135,11 @@ export function ChatView() {
                   aria-label="Message input"
                 />
               </PromptInputBody>
+              {composerSubmitState.status === "streaming" || composerSubmitState.mode !== "send" ? (
+                <div className="px-1 pb-1 text-[11px] text-muted-foreground">
+                  {composerHint}
+                </div>
+              ) : null}
               <PromptInputFooter>
                 <PromptInputTools>
                   <input
@@ -1188,12 +1193,6 @@ export function ChatView() {
                     disabled={composerSubmitState.disabled || preparingAttachments}
                     onStop={selectedThreadId ? handleStop : undefined}
                   />
-                </div>
-                <div
-                  aria-live={busy ? "polite" : undefined}
-                  className="basis-full px-0.5 text-[11px] leading-4 text-muted-foreground"
-                >
-                  {composerHint}
                 </div>
               </PromptInputFooter>
             </PromptInputForm>

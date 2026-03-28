@@ -936,23 +936,25 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
           this.rejectRelayApplicationMessage("Remote access relay identity is unavailable.");
           return true;
         }
-        // Check if pairing session has expired
-        if (this.state.pairingPayload?.expiresAt && Date.now() > this.state.pairingPayload.expiresAt) {
-          this.rejectRelayApplicationMessage("Pairing session has expired. Please restart remote access to generate a new QR code.");
-          return true;
-        }
         const trustedPhone = this.getTrustedPhone();
-        if (
-          trustedPhone
-          && (
-            trustedPhone.phoneDeviceId !== message.phoneDeviceId
-            || trustedPhone.phoneIdentityPublicKey !== message.phoneIdentityPublicKey
-          )
-        ) {
-          this.rejectRelayApplicationMessage(
-            "This desktop is already paired with a different phone. Forget the trusted phone before pairing a new one.",
-          );
-          return true;
+        // Check if connecting from already-trusted phone (allow reconnects regardless of expiry)
+        const isTrustedReconnect = trustedPhone
+          && trustedPhone.phoneDeviceId === message.phoneDeviceId
+          && trustedPhone.phoneIdentityPublicKey === message.phoneIdentityPublicKey;
+        if (!isTrustedReconnect) {
+          // Not a trusted reconnect - either new pairing or different phone
+          if (trustedPhone) {
+            // Different phone trying to connect while already paired
+            this.rejectRelayApplicationMessage(
+              "This desktop is already paired with a different phone. Forget the trusted phone before pairing a new one.",
+            );
+            return true;
+          }
+          // First-time pairing: check expiry
+          if (this.state.pairingPayload?.expiresAt && Date.now() > this.state.pairingPayload.expiresAt) {
+            this.rejectRelayApplicationMessage("Pairing session has expired. Please restart remote access to generate a new QR code.");
+            return true;
+          }
         }
         this.pendingPhoneHandshake = {
           trustedPhoneDeviceId: message.phoneDeviceId,

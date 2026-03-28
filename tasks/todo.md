@@ -1,5 +1,22 @@
 # Task Plan
 
+## Fix Mobile Relay Pairing Trust and Workspace Cache
+
+- [x] Confirm the three mobile-relay review findings are still real against current `HEAD`.
+- [x] Require QR-derived pairing proof plus encrypted handshake proof before either side persists a newly trusted phone/desktop or marks the secure relay connected.
+- [x] Invalidate the mobile relay workspace cache when the desktop save-state path updates persisted workspaces.
+- [x] Re-run the focused relay/mobile pairing tests and `bun run typecheck`.
+
+## Fix Mobile Relay Pairing Trust and Workspace Cache Review
+
+- `src/shared/mobileRelaySecurity.ts` now carries the hardened pairing contract: QR payloads include a per-session `pairingSecret`, first contact can include a deterministic `pairingProof`, and both peers can recognize a dedicated encrypted `relay/handshakeProof` payload before trusting the other side.
+- `apps/desktop/electron/services/mobileRelayBridge.ts` no longer persists a new trusted phone or marks the bridge connected from plaintext relay control traffic. First-time pairing now requires a valid QR-derived proof on `clientHello`, plaintext `secureReady` is rejected, and trust/connected state advance only after the phone proves it can decrypt the shared-key envelope.
+- `apps/mobile/modules/remodex-secure-transport/src/index.ts` no longer saves a trusted desktop from plaintext `relayMacRegistration`, rejects plaintext `secureReady`, and only persists the desktop plus flips to `connected` after receiving the encrypted desktop handshake proof.
+- `apps/desktop/electron/ipc/mobileRelay.ts` now exposes workspace-cache invalidation, and `apps/desktop/electron/ipc/workspace.ts` fires that hook immediately after `saveState(...)`, so mobile relay `workspace/list` and `workspace/switch` reload fresh persisted workspaces after edits instead of serving stale entries for the TTL window.
+- Focused verification passed with:
+  - `~/.bun/bin/bun test apps/desktop/test/mobile-relay-bridge.test.ts apps/desktop/test/mobile-relay-ipc.test.ts test/mobile.pairing-qrcode.test.ts test/mobile.pairing-scan-handler.test.ts test/mobile.transport-integration.test.ts apps/desktop/test/desktop-schemas.test.ts apps/desktop/test/remodex-state.test.ts apps/desktop/test/remote-access-page.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+
 ## Cap Attachment Picker and Pending Steer Queues
 
 - [x] Confirm the three new unresolved review threads are still real against current HEAD.

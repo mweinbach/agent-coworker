@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 
 const getAllWindowsMock = mock(() => []);
-
 mock.module("electron", () => ({
   app: {
     getPath: () => process.cwd(),
@@ -23,7 +21,7 @@ mock.module("electron", () => ({
   },
 }));
 
-const { registerMobileRelayIpc } = await import("../electron/ipc/mobileRelay");
+const { invalidateMobileRelayWorkspaceCache, registerMobileRelayIpc } = await import("../electron/ipc/mobileRelay");
 
 function flushMicrotasks() {
   return new Promise<void>((resolve) => queueMicrotask(resolve));
@@ -139,5 +137,68 @@ describe("mobile relay IPC", () => {
       workspacePath: "/approved/workspace",
       yolo: false,
     });
+  });
+
+  test("invalidates the mobile relay workspace cache after the save-state hook fires", async () => {
+    let workspaceListProvider: (() => Promise<Array<{ id: string; name: string; path: string; yolo: boolean }>>) | null = null;
+    let currentWorkspaces = [{
+      id: "ws-1",
+      name: "Workspace One",
+      path: "/tmp/workspace-one",
+      yolo: false,
+    }];
+    const loadState = mock(async () => ({
+      version: 2,
+      workspaces: currentWorkspaces,
+      threads: [],
+    }));
+
+    registerMobileRelayIpc({
+      deps: {
+        persistence: { loadState } as never,
+        mobileRelayBridge: {
+          setWorkspaceListProvider(provider: () => Promise<Array<{ id: string; name: string; path: string; yolo: boolean }>>) {
+            workspaceListProvider = provider;
+          },
+          on() {},
+          start: async () => ({}),
+          stop: async () => ({}),
+          getSnapshot: () => ({}),
+          rotateSession: async () => ({}),
+          forgetTrustedPhone: async () => ({}),
+        } as never,
+      } as never,
+      workspaceRoots: {} as never,
+      handleDesktopInvoke() {},
+      parseWithSchema(_schema: unknown, value: unknown) {
+        return value as never;
+      },
+    });
+
+    await flushMicrotasks();
+
+    expect(await workspaceListProvider?.()).toEqual([{
+      id: "ws-1",
+      name: "Workspace One",
+      path: "/tmp/workspace-one",
+      yolo: false,
+    }]);
+    expect(loadState).toHaveBeenCalledTimes(1);
+
+    currentWorkspaces = [{
+      id: "ws-2",
+      name: "Workspace Two",
+      path: "/tmp/workspace-two",
+      yolo: true,
+    }];
+    invalidateMobileRelayWorkspaceCache();
+
+    expect(await workspaceListProvider?.()).toEqual([{
+      id: "ws-2",
+      name: "Workspace Two",
+      path: "/tmp/workspace-two",
+      yolo: true,
+    }]);
+    expect(loadState).toHaveBeenCalledTimes(2);
   });
 });

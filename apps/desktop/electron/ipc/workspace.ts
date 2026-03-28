@@ -19,6 +19,7 @@ import {
   stopWorkspaceServerInputSchema,
   transcriptBatchInputSchema,
 } from "../../src/lib/desktopSchemas";
+import { invalidateMobileRelayWorkspaceCache } from "./mobileRelay";
 import type { DesktopIpcModuleContext } from "./types";
 
 export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
@@ -60,6 +61,7 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
       workspaces,
     };
     await deps.persistence.saveState(nextState);
+    invalidateMobileRelayWorkspaceCache();
     workspaceRoots.setApprovedWorkspaceRoots(workspaces.map((workspace) => workspace.path));
   });
 

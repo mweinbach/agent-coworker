@@ -11,6 +11,12 @@ import {
 } from "../../src/lib/desktopSchemas";
 import type { DesktopIpcModuleContext } from "./types";
 
+let invalidateWorkspaceCacheHook: (() => void) | null = null;
+
+export function invalidateMobileRelayWorkspaceCache(): void {
+  invalidateWorkspaceCacheHook?.();
+}
+
 function emitStateToAllWindows(windows: BrowserWindow[], payload: unknown) {
   for (const window of windows) {
     if (window.isDestroyed()) {
@@ -46,6 +52,13 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
   let refreshPromise: Promise<void> | null = null;
   let lastWorkspaceCacheError: string | null = null;
   const CACHE_TTL_MS = 2_000;
+
+  const invalidateWorkspaceCache = () => {
+    cachedWorkspaces = [];
+    cacheTimestamp = 0;
+    lastWorkspaceCacheError = null;
+  };
+  invalidateWorkspaceCacheHook = invalidateWorkspaceCache;
 
   const refreshWorkspaceCache = (reason: string) => {
     if (refreshPromise) {

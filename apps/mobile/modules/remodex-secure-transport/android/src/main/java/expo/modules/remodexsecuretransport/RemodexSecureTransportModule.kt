@@ -31,7 +31,15 @@ class RemodexSecureTransportModule : Module() {
     }
 
     AsyncFunction("forgetTrustedMac") { _: String ->
-      mapOf("ok" to true)
+      mapOf(
+        "status" to "idle",
+        "transportMode" to "unsupported",
+        "connectedMacDeviceId" to null,
+        "relay" to null,
+        "sessionId" to null,
+        "lastError" to null,
+        "trustedMacs" to emptyList<Map<String, Any?>>()
+      )
     }
 
     AsyncFunction("connectFromQr") { payload: Map<String, Any?> ->

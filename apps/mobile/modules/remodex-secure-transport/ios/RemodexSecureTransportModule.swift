@@ -22,8 +22,16 @@ public class RemodexSecureTransportModule: Module {
       return []
     }
 
-    AsyncFunction("forgetTrustedMac") { (_ macDeviceId: String) in
-      return
+    AsyncFunction("forgetTrustedMac") { (_ macDeviceId: String) -> [String: Any?] in
+      return [
+        "status": "idle",
+        "transportMode": "unsupported",
+        "connectedMacDeviceId": nil,
+        "relay": nil,
+        "sessionId": nil,
+        "trustedMacs": [],
+        "lastError": nil
+      ]
     }
 
     AsyncFunction("connectFromQr") { (_ payload: [String: Any]) -> [String: Any?] in

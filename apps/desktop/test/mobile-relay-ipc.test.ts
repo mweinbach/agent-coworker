@@ -33,7 +33,7 @@ describe("mobile relay IPC", () => {
   });
 
   test("logs workspace cache refresh failures instead of swallowing them", async () => {
-    let workspaceListProvider: (() => unknown[]) | null = null;
+    let workspaceListProvider: (() => Promise<unknown[]>) | null = null;
     const loadState = mock(async () => {
       throw new Error("disk offline");
     });
@@ -46,7 +46,7 @@ describe("mobile relay IPC", () => {
         deps: {
           persistence: { loadState } as never,
           mobileRelayBridge: {
-            setWorkspaceListProvider(provider: () => unknown[]) {
+            setWorkspaceListProvider(provider: () => Promise<unknown[]>) {
               workspaceListProvider = provider;
             },
             on() {},
@@ -66,11 +66,13 @@ describe("mobile relay IPC", () => {
 
       await flushMicrotasks();
 
+      const result = await workspaceListProvider?.();
+
       expect(loadState).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(
         "[desktop] Failed to refresh mobile relay workspace cache during initial load: disk offline",
       );
-      expect(workspaceListProvider?.()).toEqual([]);
+      expect(result).toEqual([]);
     } finally {
       console.warn = originalWarn;
     }

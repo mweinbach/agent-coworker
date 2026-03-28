@@ -71,11 +71,11 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
     return refreshPromise;
   };
 
-  deps.mobileRelayBridge.setWorkspaceListProvider(() => {
+  deps.mobileRelayBridge.setWorkspaceListProvider(async () => {
     const now = Date.now();
-    if (now - cacheTimestamp > CACHE_TTL_MS) {
-      // Refresh cache async; return stale data for this call, fresh data for next.
-      void refreshWorkspaceCache("workspace list request");
+    // If cache is empty or stale, wait for refresh to complete before returning
+    if (cachedWorkspaces.length === 0 || now - cacheTimestamp > CACHE_TTL_MS) {
+      await refreshWorkspaceCache("workspace list request");
     }
     return toBridgeWorkspaceRecords(cachedWorkspaces);
   });

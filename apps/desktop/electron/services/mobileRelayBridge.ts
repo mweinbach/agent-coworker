@@ -48,7 +48,7 @@ type MobileRelayBridgeOptions = {
   userDataPath?: string;
   remodexStateDir?: string;
   getAppName?: () => string;
-  getWorkspaceList?: () => MobileRelayWorkspaceRecord[];
+  getWorkspaceList?: () => Promise<MobileRelayWorkspaceRecord[]> | MobileRelayWorkspaceRecord[];
   createSidecarSocket?: (url: string) => BridgeSocket;
   createRelaySocket?: (url: string, headers: Record<string, string>) => BridgeSocket;
   getReconnectDelayMs?: (attempt: number) => number;
@@ -112,7 +112,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private readonly remodexStateDir?: string;
   private readonly relayUrlOverride: string;
   private readonly getAppName: () => string;
-  private getWorkspaceList: () => MobileRelayWorkspaceRecord[];
+  private getWorkspaceList: () => Promise<MobileRelayWorkspaceRecord[]> | MobileRelayWorkspaceRecord[];
   private readonly createSidecarSocket: (url: string) => BridgeSocket;
   private readonly createRelaySocket: (url: string, headers: Record<string, string>) => BridgeSocket;
   private readonly getReconnectDelayMs: (attempt: number) => number;
@@ -254,7 +254,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     return { ...this.state };
   }
 
-  setWorkspaceListProvider(provider: () => MobileRelayWorkspaceRecord[]): void {
+  setWorkspaceListProvider(provider: () => Promise<MobileRelayWorkspaceRecord[]> | MobileRelayWorkspaceRecord[]): void {
     this.getWorkspaceList = provider;
   }
 
@@ -767,25 +767,29 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     if (!method || id === undefined) return false;
 
     if (method === "workspace/list") {
-      const workspaces = this.getWorkspaceList();
-      const response = JSON.stringify({
-        id,
-        result: {
-          workspaces: workspaces.map((w) => ({
-            id: w.id,
-            name: w.name,
-            path: w.path,
-            createdAt: w.createdAt,
-            lastOpenedAt: w.lastOpenedAt,
-            defaultProvider: w.defaultProvider,
-            defaultModel: w.defaultModel,
-            defaultEnableMcp: w.defaultEnableMcp,
-            yolo: w.yolo,
-          })),
-          activeWorkspaceId: this.state.workspaceId,
-        },
+      void (async () => {
+        const workspaces = await this.getWorkspaceList();
+        const response = JSON.stringify({
+          id,
+          result: {
+            workspaces: workspaces.map((w) => ({
+              id: w.id,
+              name: w.name,
+              path: w.path,
+              createdAt: w.createdAt,
+              lastOpenedAt: w.lastOpenedAt,
+              defaultProvider: w.defaultProvider,
+              defaultModel: w.defaultModel,
+              defaultEnableMcp: w.defaultEnableMcp,
+              yolo: w.yolo,
+            })),
+            activeWorkspaceId: this.state.workspaceId,
+          },
+        });
+        this.sendApplicationMessageToPhone(response);
+      })().catch((error) => {
+        this.sendBridgeError(id, -32000, error instanceof Error ? error.message : String(error));
       });
-      this.sendApplicationMessageToPhone(response);
       return true;
     }
 
@@ -806,7 +810,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }
 
   private async handleWorkspaceSwitch(requestId: unknown, workspaceId: string): Promise<void> {
-    const workspaces = this.getWorkspaceList();
+    const workspaces = await this.getWorkspaceList();
     const target = workspaces.find((w) => w.id === workspaceId);
     if (!target) {
       this.sendBridgeError(requestId, -32602, `Workspace "${workspaceId}" not found.`);
@@ -930,6 +934,11 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       case "clientHello": {
         if (!this.identityState) {
           this.rejectRelayApplicationMessage("Remote access relay identity is unavailable.");
+          return true;
+        }
+        // Check if pairing session has expired
+        if (this.state.pairingPayload?.expiresAt && Date.now() > this.state.pairingPayload.expiresAt) {
+          this.rejectRelayApplicationMessage("Pairing session has expired. Please restart remote access to generate a new QR code.");
           return true;
         }
         const trustedPhone = this.getTrustedPhone();

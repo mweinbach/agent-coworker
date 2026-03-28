@@ -34,11 +34,12 @@ class RemodexSecureTransportModule : Module() {
       mapOf("ok" to true)
     }
 
-    AsyncFunction("connectFromQr") { _: String ->
+    AsyncFunction("connectFromQr") { payload: Map<String, Any?> ->
+      val macDeviceId = payload["macDeviceId"] as? String
       mapOf(
         "status" to "error",
         "transportMode" to "unsupported",
-        "connectedMacDeviceId" to null,
+        "connectedMacDeviceId" to macDeviceId,
         "relay" to null,
         "sessionId" to null,
         "lastError" to "Native secure transport is not implemented yet.",

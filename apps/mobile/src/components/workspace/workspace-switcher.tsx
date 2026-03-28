@@ -57,6 +57,9 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
     if (client) {
       try {
         await client.initialize();
+        // Wait for the initialized notification roundtrip to complete before requesting threads.
+        // This prevents a race where thread/list arrives before the server processes initialized.
+        await new Promise((resolve) => setTimeout(resolve, 100));
         const list = await client.requestThreadList();
         const threadStore = useThreadStore.getState();
         // Clear existing threads and hydrate with new workspace's threads

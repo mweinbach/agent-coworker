@@ -111,11 +111,12 @@ describe("desktop shutdown handler", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(calls).toContain("preventDefault");
+    expect(calls).toContain("relay:stop");
     expect(calls).toContain("stop:start");
     expect(calls).toContain("error:boom");
-    expect(calls).toContain("relay:stop");
     expect(calls).toContain("quit");
-    expect(calls.indexOf("error:boom")).toBeLessThan(calls.indexOf("relay:stop"));
+    expect(calls.indexOf("relay:stop")).toBeLessThan(calls.indexOf("stop:start"));
+    expect(calls.indexOf("stop:start")).toBeLessThan(calls.indexOf("error:boom"));
     expect(calls.indexOf("relay:stop")).toBeLessThan(calls.indexOf("quit"));
   });
 });

@@ -29,18 +29,20 @@ export function createBeforeQuitHandler(deps: ShutdownDeps): (event: QuitEvent) 
     event.preventDefault();
 
     void (async () => {
-      try {
-        await deps.stopAllServers();
-      } catch (error) {
-        deps.onError?.(error);
-      }
-
+      // Stop mobile relay bridge first to set stopping=true before killing servers
+      // This prevents spurious reconnect attempts during shutdown
       if (deps.stopMobileRelayBridge) {
         try {
           await deps.stopMobileRelayBridge();
         } catch (error) {
           deps.onError?.(error);
         }
+      }
+
+      try {
+        await deps.stopAllServers();
+      } catch (error) {
+        deps.onError?.(error);
       }
 
       // Keep IPC handlers live until process exit. The renderer may still make

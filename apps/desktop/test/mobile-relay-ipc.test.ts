@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
+import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
+
 const getAllWindowsMock = mock(() => []);
 
 mock.module("electron", () => ({
@@ -76,5 +78,66 @@ describe("mobile relay IPC", () => {
     } finally {
       console.warn = originalWarn;
     }
+  });
+
+  test("validates the mobile relay workspace path against approved roots", async () => {
+    const assertApprovedWorkspacePath = mock(async () => "/approved/workspace");
+    const start = mock(async () => ({
+      status: "pairing",
+      workspaceId: "ws_1",
+      workspacePath: "/approved/workspace",
+      relaySource: "managed",
+      relaySourceMessage: "managed",
+      relayServiceStatus: "running",
+      relayServiceMessage: "running",
+      relayServiceUpdatedAt: null,
+      relayUrl: "wss://relay.example.test/relay",
+      sessionId: "session-1",
+      pairingPayload: null,
+      trustedPhoneDeviceId: null,
+      trustedPhoneFingerprint: null,
+      lastError: null,
+    }));
+    const handlers = new Map<string, (_event: unknown, args?: unknown) => Promise<unknown>>();
+
+    registerMobileRelayIpc({
+      deps: {
+        persistence: { loadState: async () => ({ workspaces: [] }) } as never,
+        mobileRelayBridge: {
+          setWorkspaceListProvider() {},
+          on() {},
+          start,
+          stop: async () => ({}),
+          getSnapshot: () => ({}),
+          rotateSession: async () => ({}),
+          forgetTrustedPhone: async () => ({}),
+        } as never,
+      } as never,
+      workspaceRoots: {
+        assertApprovedWorkspacePath,
+      } as never,
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as (_event: unknown, args?: unknown) => Promise<unknown>);
+      },
+      parseWithSchema(_schema, value) {
+        return value as never;
+      },
+    });
+
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.mobileRelayStart);
+    expect(handler).toBeTruthy();
+
+    await handler?.(null, {
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/unapproved",
+      yolo: false,
+    });
+
+    expect(assertApprovedWorkspacePath).toHaveBeenCalledWith("/tmp/unapproved");
+    expect(start).toHaveBeenCalledWith({
+      workspaceId: "ws_1",
+      workspacePath: "/approved/workspace",
+      yolo: false,
+    });
   });
 });

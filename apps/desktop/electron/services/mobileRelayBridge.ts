@@ -377,12 +377,14 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     }
   }
 
-  private resetSecureRelayState(opts: { clearQueue: boolean }): void {
+  private resetSecureRelayState(opts: { clearQueue: boolean; resetCounters?: boolean }): void {
     this.pendingPhoneHandshake = null;
     this.secureSharedKey = null;
     this.secureChannelReady = false;
-    this.secureOutboundCounter = 0;
-    this.secureLastInboundCounter = 0;
+    if (opts.resetCounters ?? true) {
+      this.secureOutboundCounter = 0;
+      this.secureLastInboundCounter = 0;
+    }
     if (opts.clearQueue) {
       this.queuedOutboundApplicationMessages = [];
     }
@@ -537,6 +539,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       throw new Error("Remote access relay URL is unavailable.");
     }
     const relaySessionUrl = `${this.state.relayUrl}/${sessionId}`;
+    const preserveReplayCounters = this.state.status === "reconnecting" && this.state.sessionId === sessionId;
     await new Promise<void>((resolve, reject) => {
       const socket = this.createRelaySocket(relaySessionUrl, {
         "x-role": "mac",
@@ -544,7 +547,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         ...this.buildMacRegistrationHeaders(),
       });
       let opened = false;
-      this.resetSecureRelayState({ clearQueue: false });
+      this.resetSecureRelayState({ clearQueue: false, resetCounters: !preserveReplayCounters });
 
       socket.once("open", () => {
         opened = true;
@@ -571,7 +574,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         if (this.relaySocket !== socket) return;
         this.relaySocket = null;
         if (this.stopping) return;
-        this.resetSecureRelayState({ clearQueue: false });
+        this.resetSecureRelayState({ clearQueue: false, resetCounters: false });
         this.updateStatus("reconnecting");
         this.scheduleRelayReconnect();
       });
@@ -933,8 +936,6 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
             message.phoneIdentityPublicKey,
           );
           this.secureChannelReady = false;
-          this.secureOutboundCounter = 0;
-          this.secureLastInboundCounter = 0;
         } catch (error) {
           this.rejectRelayApplicationMessage(error instanceof Error ? error.message : String(error));
         }

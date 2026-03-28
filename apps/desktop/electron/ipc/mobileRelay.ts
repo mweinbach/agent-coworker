@@ -37,7 +37,7 @@ function toBridgeWorkspaceRecords(
 }
 
 export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
-  const { deps, handleDesktopInvoke, parseWithSchema } = context;
+  const { deps, handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
 
   // Provide workspace list to the bridge for workspace/list and workspace/switch.
   // Uses persistence service to read the latest workspace records on demand.
@@ -89,7 +89,11 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayStart, async (_event, args: MobileRelayStartInput) => {
     const input = parseWithSchema(mobileRelayStartInputSchema, args, "mobileRelay.start options");
-    return mobileRelayBridgeStateSchema.parse(await deps.mobileRelayBridge.start(input));
+    const workspacePath = await workspaceRoots.assertApprovedWorkspacePath(input.workspacePath);
+    return mobileRelayBridgeStateSchema.parse(await deps.mobileRelayBridge.start({
+      ...input,
+      workspacePath,
+    }));
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayStop, async () => {

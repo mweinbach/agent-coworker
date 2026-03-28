@@ -1068,11 +1068,13 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
     this.reconnectTimer = null;
   }
 
-  private resetSecureChannel(opts: { clearQueue: boolean }): void {
+  private resetSecureChannel(opts: { clearQueue: boolean; resetCounters?: boolean }): void {
     this.sharedKey = null;
     this.secureChannelReady = false;
-    this.outboundCounter = 0;
-    this.lastInboundCounter = 0;
+    if (opts.resetCounters ?? true) {
+      this.outboundCounter = 0;
+      this.lastInboundCounter = 0;
+    }
     if (opts.clearQueue) {
       this.queuedOutboundMessages = [];
     }
@@ -1201,8 +1203,6 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
           return { handled: true, connected: false };
         }
         this.secureChannelReady = false;
-        this.outboundCounter = 0;
-        this.lastInboundCounter = 0;
         this.sendControlMessage({
           kind: "clientHello",
           phoneDeviceId: phoneIdentity.phoneDeviceId,
@@ -1249,9 +1249,12 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
 
   private async openSocket(target: PersistedTrustedMacRecord, sessionId: string): Promise<RemodexSecureTransportState> {
     const phoneIdentity = await this.ensurePhoneIdentity();
+    const preserveReplayCounters = this.state.status === "reconnecting"
+      && this.currentTarget?.macDeviceId === target.macDeviceId
+      && this.currentTarget?.lastSessionId === sessionId;
     this.disconnecting = true;
     this.clearReconnectTimer();
-    this.resetSecureChannel({ clearQueue: false });
+    this.resetSecureChannel({ clearQueue: false, resetCounters: !preserveReplayCounters });
     const previousSocket = this.socket;
     this.socket = null;
     previousSocket?.close();
@@ -1367,7 +1370,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
           return;
         }
         this.socket = null;
-        this.resetSecureChannel({ clearQueue: false });
+        this.resetSecureChannel({ clearQueue: false, resetCounters: false });
         this.emitSocketClosed(event.reason ?? null, event.code);
         if (this.disconnecting) {
           if (!settled) {

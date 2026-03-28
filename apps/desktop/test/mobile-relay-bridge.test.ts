@@ -790,6 +790,80 @@ describe("mobile relay bridge", () => {
     expect(sidecarSocket.sentMessages).toHaveLength(0);
   });
 
+  test("preserves anti-replay counters across relay reconnects", async () => {
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      getReconnectDelayMs: () => 1,
+      getWorkspaceList: () => [{
+        id: "ws_1",
+        name: "Workspace One",
+        path: "/tmp/workspace",
+        yolo: false,
+      }],
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+
+    const firstRelaySocket = relaySockets.at(-1)!;
+    const phoneKeyPair = managedFixture.phone1KeyPair;
+    emitPhoneHandshake(firstRelaySocket, "phone-1", phoneKeyPair);
+    await waitForRelaySnapshot(bridge, (snapshot) => snapshot.status === "connected");
+
+    const sharedKey = createRelaySharedKey(
+      phoneKeyPair.privateKeyBase64,
+      managedFixture.macKeyPair.publicKeyBase64,
+    );
+    const replayEnvelope = JSON.stringify(encodeRelaySecureEnvelope({
+      sharedKey,
+      sender: "phone",
+      counter: 1,
+      plaintext: JSON.stringify({
+        id: 7,
+        method: "workspace/list",
+        params: {},
+      }),
+    }));
+
+    firstRelaySocket.emitMessage(replayEnvelope);
+    await waitForCondition(() => firstRelaySocket.sentMessages.length > 0);
+
+    firstRelaySocket.close();
+    await waitForCondition(() => relaySockets.length >= 2);
+
+    const reconnectedRelaySocket = relaySockets.at(-1)!;
+    emitPhoneHandshake(reconnectedRelaySocket, "phone-1", phoneKeyPair);
+    await waitForRelaySnapshot(bridge, (snapshot) => snapshot.status === "connected");
+
+    reconnectedRelaySocket.emitMessage(replayEnvelope);
+    await waitForRelaySnapshot(
+      bridge,
+      (snapshot) => snapshot.status === "error" && Boolean(snapshot.lastError?.includes("replayed")),
+    );
+
+    expect(sidecarSocket.sentMessages).toHaveLength(0);
+  });
+
   test("reconnects the relay socket with backoff attempts", async () => {
     const reconnectAttempts: number[] = [];
     const bridge = new MobileRelayBridge({

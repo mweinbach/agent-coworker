@@ -1,9 +1,10 @@
 import { z } from "zod";
 
+import { RELAY_PAIRING_QR_VERSION } from "../../../../../src/shared/mobileRelaySecurity";
 import type { PairingQrPayload } from "./pairingTypes";
 
 const pairingQrPayloadSchema = z.object({
-  v: z.literal(2),
+  v: z.literal(RELAY_PAIRING_QR_VERSION),
   relay: z.string().trim().min(1),
   sessionId: z.string().trim().min(1),
   macDeviceId: z.string().trim().min(1),

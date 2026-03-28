@@ -1,5 +1,6 @@
 import type { EventSubscription } from "expo-modules-core";
 
+import { buildRelayKeyFingerprint } from "../../../../../src/shared/mobileRelaySecurity";
 import {
   addRemodexListener,
   connectFromQr,
@@ -39,7 +40,7 @@ function mapStatus(state: RemodexSecureTransportState["status"]): RelayConnectio
 }
 
 function fingerprintFromPublicKey(publicKey: string): string {
-  return publicKey.slice(0, 16);
+  return buildRelayKeyFingerprint(publicKey);
 }
 
 function mapTransportMode(mode: RemodexSecureTransportState["transportMode"]): RelayTransportMode {

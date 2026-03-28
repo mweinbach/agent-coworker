@@ -515,6 +515,26 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("workspace file upload rejects malformed base64 payloads", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request("cowork/session/file/upload", {
+        cwd: tmpDir,
+        filename: "upload.txt",
+        contentBase64: "!not-base64!",
+      });
+
+      expect(response.error.message).toBe("Invalid base64 file contents");
+      await expect(fs.readdir(`${tmpDir}/User Uploads`)).rejects.toThrow();
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("session model set returns the current config when the selected model is unchanged", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

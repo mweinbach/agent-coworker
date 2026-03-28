@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { decodeBase64Strict } from "../../shared/attachments";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 import { sameWorkspacePath } from "../../utils/workspacePath";
@@ -492,7 +493,11 @@ export class SessionAdminManager {
         this.context.emitError("validation_failed", "session", "File too large (max 100MB)");
         return;
       }
-      const decoded = Buffer.from(contentBase64, "base64");
+      const decoded = decodeBase64Strict(contentBase64);
+      if (!decoded) {
+        this.context.emitError("validation_failed", "session", "Invalid base64 file contents");
+        return;
+      }
       await fs.mkdir(resolvedUploadsDir, { recursive: true });
       await fs.writeFile(filePath, decoded);
       this.context.emit({ type: "file_uploaded", sessionId: this.context.id, filename: path.basename(filePath), path: filePath });

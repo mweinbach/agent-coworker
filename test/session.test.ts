@@ -3602,6 +3602,34 @@ describe("AgentSession", () => {
       });
     });
 
+    test("preserves multimodal content for uploaded image attachments", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const uploadsDir = path.join(dir, "uploads");
+      const uploadedPath = path.join(uploadsDir, "photo.png");
+      await fs.mkdir(uploadsDir, { recursive: true });
+      await fs.writeFile(uploadedPath, "uploaded-image-bytes");
+      const { session } = makeSession({
+        config: makeConfig(dir),
+      });
+
+      await session.sendUserMessage("", "msg-uploaded-image", undefined, [{
+        filename: "photo.png",
+        path: uploadedPath,
+        mimeType: "image/png",
+      }]);
+
+      const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(call.messages.at(-1)?.content).toContainEqual({
+        type: "text",
+        text: `[System: The user uploaded a file which has been saved to ${uploadedPath}]`,
+      });
+      expect(call.messages.at(-1)?.content).toContainEqual({
+        type: "image",
+        data: Buffer.from("uploaded-image-bytes").toString("base64"),
+        mimeType: "image/png",
+      });
+    });
+
     test("rejects oversized attachment payloads before emitting a user_message event", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
       const { session, events } = makeSession({

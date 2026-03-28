@@ -3,9 +3,37 @@ export const MAX_ATTACHMENT_INLINE_BYTE_SIZE = 25 * 1024 * 1024;
 export const MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE = 25 * 1024 * 1024;
 export const MAX_ATTACHMENT_BASE64_SIZE = getBase64SizeFromByteLength(MAX_ATTACHMENT_INLINE_BYTE_SIZE);
 export const MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE = getBase64SizeFromByteLength(MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE);
+const BASE64_BODY_PATTERN = /^[A-Za-z0-9+/]*$/;
 
 export function getBase64SizeFromByteLength(byteLength: number): number {
   return Math.ceil(Math.max(0, byteLength) / 3) * 4;
+}
+
+export function decodeBase64Strict(value: string): Buffer | null {
+  if (value.length === 0 || value.includes("=") && !/=+$/.test(value)) {
+    return null;
+  }
+
+  const unpadded = value.replace(/=+$/, "");
+  if (!BASE64_BODY_PATTERN.test(unpadded) || unpadded.length % 4 === 1) {
+    return null;
+  }
+
+  const normalized = unpadded.padEnd(unpadded.length + ((4 - (unpadded.length % 4)) % 4), "=");
+  if (!decodedBase64RoundTrips(normalized)) {
+    return null;
+  }
+
+  return Buffer.from(normalized, "base64");
+}
+
+function decodedBase64RoundTrips(value: string): boolean {
+  try {
+    const decoded = Buffer.from(value, "base64");
+    return decoded.toString("base64").replace(/=+$/, "") === value.replace(/=+$/, "");
+  } catch {
+    return false;
+  }
 }
 
 export function getAttachmentCountValidationMessage(count?: number): string | null {

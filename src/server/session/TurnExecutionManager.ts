@@ -9,6 +9,7 @@ import {
 } from "../modelStream";
 import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
 import {
+  decodeBase64Strict,
   formatAttachmentDisplayText,
   getAttachmentCountValidationMessage,
   getAttachmentTotalBase64Size,
@@ -918,6 +919,7 @@ export class TurnExecutionManager {
 
       const inlineAttachment = isInlineFileAttachment(attachment) ? attachment : null;
       let diskPath: string;
+      let multimodalData: string | null = null;
 
       if (inlineAttachment) {
         let finalName = safeName;
@@ -960,8 +962,12 @@ export class TurnExecutionManager {
           throw makeStructuredSessionError("validation_failed", attachmentValidationMessage);
         }
 
-        const decoded = Buffer.from(inlineAttachment.contentBase64, "base64");
+        const decoded = decodeBase64Strict(inlineAttachment.contentBase64);
+        if (!decoded) {
+          throw makeStructuredSessionError("validation_failed", `Invalid base64 attachment: ${safeName}`);
+        }
         await fs.writeFile(diskPath, decoded);
+        multimodalData = decoded.toString("base64");
       } else {
         const uploadedAttachment = attachment as Extract<FileAttachment, { path: string }>;
         diskPath = path.resolve(uploadedAttachment.path);
@@ -987,16 +993,20 @@ export class TurnExecutionManager {
         mime.startsWith("video/") ||
         mime === "application/pdf";
 
-      if (inlineAttachment && isImage && modelSupportsImages) {
+      if (!multimodalData && ((isImage && modelSupportsImages) || (isGeminiMultimodal && isGoogleProvider))) {
+        multimodalData = (await fs.readFile(diskPath)).toString("base64");
+      }
+
+      if (multimodalData && isImage && modelSupportsImages) {
         contentParts.push({
           type: "image",
-          data: inlineAttachment.contentBase64,
+          data: multimodalData,
           mimeType: attachment.mimeType,
         });
-      } else if (inlineAttachment && isGeminiMultimodal && isGoogleProvider) {
+      } else if (multimodalData && isGeminiMultimodal && isGoogleProvider) {
         contentParts.push({
           type: "image",
-          data: inlineAttachment.contentBase64,
+          data: multimodalData,
           mimeType: attachment.mimeType,
         });
       }

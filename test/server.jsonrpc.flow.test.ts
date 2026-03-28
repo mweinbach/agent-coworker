@@ -404,6 +404,43 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("turn/start rejects uploaded file paths outside the uploads directory before starting the turn", async () => {
+    const tmpDir = await makeTmpProject();
+    let runTurnCalled = false;
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => {
+        runTurnCalled = true;
+        return {
+          text: "done",
+          responseMessages: [],
+        };
+      }) as any,
+    }));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      const turnResponse = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{
+          type: "uploadedFile",
+          filename: "outside.txt",
+          path: `${tmpDir}/outside.txt`,
+          mimeType: "text/plain",
+        }],
+      });
+
+      expect(turnResponse.error?.message).toBe("Uploaded file path is outside the uploads directory.");
+      expect(turnResponse.result).toBeUndefined();
+      expect(runTurnCalled).toBe(false);
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("turn/start streams reasoning notifications before assistant output", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir, {
@@ -680,6 +717,53 @@ describe("server JSON-RPC flows", () => {
       });
       expect(steerResponse.error?.code).toBe(-32602);
       expect(steerResponse.error?.message).toContain(`Too many file attachments (max ${MAX_TURN_ATTACHMENT_COUNT})`);
+      expect(steerResponse.result).toBeUndefined();
+
+      releaseTurn.resolve();
+      await rpc.waitFor((message) => message.method === "turn/completed");
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("turn/steer rejects invalid uploaded file paths without aborting the active turn", async () => {
+    const tmpDir = await makeTmpProject();
+    const releaseTurn = Promise.withResolvers<void>();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => {
+        await releaseTurn.promise;
+        return {
+          text: "done",
+          responseMessages: [],
+        };
+      }) as any,
+    }));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      const turnStart = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "start turn" }],
+      });
+      const turnId = turnStart.result.turn.id;
+
+      const steerResponse = await rpc.sendRequest("turn/steer", {
+        threadId: started.result.thread.id,
+        turnId,
+        input: [{
+          type: "uploadedFile",
+          filename: "outside.txt",
+          path: `${tmpDir}/outside.txt`,
+          mimeType: "text/plain",
+        }],
+        clientMessageId: "steer-invalid-upload",
+      });
+
+      expect(steerResponse.error?.message).toBe("Uploaded file path is outside the uploads directory.");
       expect(steerResponse.result).toBeUndefined();
 
       releaseTurn.resolve();

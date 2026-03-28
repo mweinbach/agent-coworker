@@ -111,6 +111,10 @@ function getTurnAttachmentValidationMessage(attachments?: readonly FileAttachmen
   return getAttachmentValidationMessage(getInlineAttachments(attachments));
 }
 
+function isUploadedFileAttachment(attachment: FileAttachment): attachment is Extract<FileAttachment, { path: string }> {
+  return "path" in attachment;
+}
+
 function resolveUserInputDisplayText(
   text: string,
   attachments?: readonly Pick<FileAttachment, "filename">[],
@@ -364,6 +368,13 @@ export class TurnExecutionManager {
       this.context.emitError("validation_failed", "session", attachmentValidationMessage);
       return;
     }
+    try {
+      await this.validateUploadedFileAttachments(attachments);
+    } catch (error) {
+      const classified = this.classifyTurnError(error);
+      this.context.emitError(classified.code, classified.source, this.context.formatError(error));
+      return;
+    }
     const nextPendingSteerAttachmentBase64Size =
       this.context.state.pendingSteers.reduce(
         (total, steer) => total + getAttachmentTotalBase64Size(getInlineAttachments(steer.attachments)),
@@ -395,10 +406,6 @@ export class TurnExecutionManager {
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
       acceptedAt: new Date().toISOString(),
     });
-    // TODO(P2): Validate uploaded file attachment paths BEFORE emitting steer_accepted. Currently
-    // buildUserMessageContent validates at line ~950 (path traversal + file existence) in commitPendingSteers,
-    // which runs AFTER steer is acknowledged. This can cause an accepted steer to fail during commit,
-    // unexpectedly aborting the active turn. Fix: Add pre-validation for uploaded file paths here.
     this.context.emit({
       type: "steer_accepted",
       sessionId: this.context.id,
@@ -461,6 +468,13 @@ export class TurnExecutionManager {
     const attachmentValidationMessage = getTurnAttachmentValidationMessage(attachments);
     if (attachmentValidationMessage) {
       this.context.emitError("validation_failed", "session", attachmentValidationMessage);
+      return;
+    }
+    try {
+      await this.validateUploadedFileAttachments(attachments);
+    } catch (error) {
+      const classified = this.classifyTurnError(error);
+      this.context.emitError(classified.code, classified.source, this.context.formatError(error));
       return;
     }
     const visibleText = displayText ?? resolveUserInputDisplayText(text, attachments);
@@ -683,10 +697,6 @@ export class TurnExecutionManager {
     try {
       this.context.emit({ type: "user_message", sessionId: this.context.id, text: visibleText, clientMessageId });
       this.context.emit({ type: "session_busy", sessionId: this.context.id, busy: true, turnId, cause });
-      // TODO(P2): Validate uploaded file paths BEFORE emitting session_busy. Currently buildUserMessageContent
-      // validates at line ~938 (path traversal + file existence) AFTER session_busy is emitted. This means
-      // clients get a JSON-RPC success response and clear composer state, only to receive an async error later.
-      // Fix: Extract path validation into a reusable helper and call it before setting session state.
       this.context.emitTelemetry("agent.turn.started", "ok", {
         sessionId: this.context.id,
         provider: this.context.state.config.provider,
@@ -887,7 +897,7 @@ export class TurnExecutionManager {
     }
 
     const config = this.context.state.config;
-    const uploadsDir = config.uploadsDirectory ?? path.resolve(config.workingDirectory, "User Uploads");
+    const uploadsDir = this.getUploadsDirectory();
     await fs.mkdir(uploadsDir, { recursive: true });
 
     const provider = config.provider;
@@ -993,6 +1003,31 @@ export class TurnExecutionManager {
     }
 
     return contentParts;
+  }
+
+  private getUploadsDirectory(): string {
+    const config = this.context.state.config;
+    return config.uploadsDirectory ?? path.resolve(config.workingDirectory, "User Uploads");
+  }
+
+  private async validateUploadedFileAttachments(attachments?: readonly FileAttachment[]): Promise<void> {
+    const uploadedAttachments = (attachments ?? []).filter(isUploadedFileAttachment);
+    if (uploadedAttachments.length === 0) {
+      return;
+    }
+
+    const resolvedUploadsDir = path.resolve(this.getUploadsDirectory());
+    for (const attachment of uploadedAttachments) {
+      const diskPath = path.resolve(attachment.path);
+      if (!diskPath.startsWith(resolvedUploadsDir + path.sep)) {
+        throw makeStructuredSessionError("validation_failed", "Uploaded file path is outside the uploads directory.");
+      }
+      try {
+        await fs.access(diskPath);
+      } catch {
+        throw makeStructuredSessionError("validation_failed", `Uploaded file does not exist: ${diskPath}`);
+      }
+    }
   }
 
   private classifyTurnError(err: unknown): ClassifiedTurnError {

@@ -78,11 +78,11 @@ class FakeSocket extends EventEmitter {
   }
 }
 
-function emitPhoneHandshake(socket: FakeSocket, phone: { deviceId: string; keyPair: RelayKeyPair }) {
+function emitPhoneHandshake(socket: FakeSocket, phoneDeviceId: string, phoneKeys: RelayKeyPair) {
   socket.emitMessage(JSON.stringify({
     kind: "clientHello",
-    phoneDeviceId: phone.deviceId,
-    phoneIdentityPublicKey: phone.keyPair.publicKeyBase64,
+    phoneDeviceId,
+    phoneIdentityPublicKey: phoneKeys.publicKeyBase64,
   }));
   socket.emitMessage(JSON.stringify({ kind: "secureReady" }));
 }
@@ -278,6 +278,108 @@ describe("mobile relay bridge", () => {
     expect(rotated.pairingPayload?.sessionId).toBe(rotated.sessionId);
   });
 
+  test("restart reuses the trusted session id for one-tap reconnects", async () => {
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    const first = await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+    emitPhoneHandshake(relaySockets.at(-1)!, "phone-1", remodexFixture.phone1KeyPair);
+    await waitForRelaySnapshot(
+      bridge,
+      (snapshot) => snapshot.status === "connected" && snapshot.trustedPhoneDeviceId === "phone-1",
+    );
+
+    await bridge.stop();
+    const restarted = await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+
+    expect(restarted.sessionId).toBe(first.sessionId);
+    expect(restarted.pairingPayload?.sessionId).toBe(first.sessionId);
+  });
+
+  test("rotateSession redirects trusted reconnects from the stale session id", async () => {
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: (url) => {
+        const socket = new FakeSocket() as FakeSocket & { relayUrl?: string };
+        socket.relayUrl = url;
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    const first = await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+    const firstRelaySocket = relaySockets.at(-1)! as FakeSocket & { relayUrl?: string };
+
+    emitPhoneHandshake(firstRelaySocket, "phone-1", remodexFixture.phone1KeyPair);
+    await waitForRelaySnapshot(
+      bridge,
+      (snapshot) => snapshot.status === "connected" && snapshot.trustedPhoneDeviceId === "phone-1",
+    );
+
+    const rotated = await bridge.rotateSession();
+    const staleSessionSocket = relaySockets.find((socket) => (
+      (socket as FakeSocket & { relayUrl?: string }).relayUrl?.endsWith(`/${first.sessionId}`)
+      && socket !== firstRelaySocket
+    )) as (FakeSocket & { relayUrl?: string }) | undefined;
+
+    expect(rotated.sessionId).not.toBe(first.sessionId);
+    expect(staleSessionSocket).toBeTruthy();
+
+    emitPhoneHandshake(staleSessionSocket!, "phone-1", remodexFixture.phone1KeyPair);
+
+    const redirectedRegistration = findControlMessages(staleSessionSocket!, "relayMacRegistration").at(-1) as
+      | { registration?: { sessionId?: string | null } }
+      | undefined;
+    expect(redirectedRegistration?.registration?.sessionId).toBe(rotated.sessionId);
+    const redirectError = findControlMessages(staleSessionSocket!, "secureError").at(-1) as
+      | { message?: string }
+      | undefined;
+    expect(redirectError?.message).toContain("Reconnecting to the latest desktop session");
+    expect(staleSessionSocket?.closeCalls).toBeGreaterThan(0);
+  });
+
   test("secure-ready handshake persists the trusted phone summary", async () => {
     const bridge = new MobileRelayBridge({
       serverManager: new FakeServerManager() as never,
@@ -308,10 +410,7 @@ describe("mobile relay bridge", () => {
     const relaySocket = relaySockets.at(-1);
 
     const phoneKeyPair = remodexFixture.phone1KeyPair;
-    emitPhoneHandshake(relaySocket!, {
-      deviceId: "phone-1",
-      keyPair: phoneKeyPair,
-    });
+    emitPhoneHandshake(relaySocket!, "phone-1", phoneKeyPair);
     await waitForRelaySnapshot(
       bridge,
       (s) => s.status === "connected" && s.trustedPhoneDeviceId === "phone-1",
@@ -370,10 +469,7 @@ describe("mobile relay bridge", () => {
     expect(snapshot.pairingPayload?.macDeviceId).toBeTruthy();
 
     const managedPhoneKeyPair = generateRelayKeyPair();
-    emitPhoneHandshake(relaySocket!, {
-      deviceId: "phone-managed",
-      keyPair: managedPhoneKeyPair,
-    });
+    emitPhoneHandshake(relaySocket!, "phone-managed", managedPhoneKeyPair);
     await waitForRelaySnapshot(
       bridge,
       (s) => s.status === "connected" && s.trustedPhoneDeviceId === "phone-managed",
@@ -502,10 +598,7 @@ describe("mobile relay bridge", () => {
     });
     const relaySocket = relaySockets.at(-1)!;
     const phoneKeyPair = remodexFixture.phone1KeyPair;
-    emitPhoneHandshake(relaySocket, {
-      deviceId: "phone-1",
-      keyPair: phoneKeyPair,
-    });
+    emitPhoneHandshake(relaySocket, "phone-1", phoneKeyPair);
     await waitForRelaySnapshot(
       bridge,
       (snapshot) => snapshot.status === "connected",

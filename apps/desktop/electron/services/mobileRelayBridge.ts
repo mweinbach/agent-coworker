@@ -37,6 +37,7 @@ import {
 } from "./remodexState";
 
 const MANAGED_RELAY_URL = "wss://api.phodex.app/relay";
+const MAX_LEGACY_RELAY_SESSION_COUNT = 4;
 
 type BridgeSocket = Pick<WebSocket, "readyState" | "send" | "close" | "on" | "once">;
 
@@ -119,9 +120,11 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private identityState: MobileRelayIdentityState | null = null;
   private sidecarSocket: BridgeSocket | null = null;
   private relaySocket: BridgeSocket | null = null;
+  private readonly legacyRelaySockets = new Map<string, BridgeSocket>();
   private sidecarUrl: string | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private notificationSecret: string | null = null;
+  private reusableSessionId: string | null = null;
   private stopping = false;
   private pendingPhoneHandshake: PendingPhoneHandshake | null = null;
   private secureSharedKey: Uint8Array | null = null;
@@ -317,11 +320,15 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     if (!this.state.workspaceId || !this.state.workspacePath) {
       throw new Error("Remote access is not running.");
     }
+    const previousSessionId = this.state.sessionId;
     const relaySocket = this.relaySocket;
     this.relaySocket = null;
     this.resetSecureRelayState({ clearQueue: true });
     closeSocket(relaySocket);
-    await this.startRelaySession();
+    await this.startRelaySession({ forceNewSession: true });
+    if (previousSessionId && this.getTrustedPhone()) {
+      await this.connectLegacyRelaySocket(previousSessionId);
+    }
     return this.getSnapshot();
   }
 
@@ -332,6 +339,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.relaySocket = null;
     this.notificationSecret = null;
     this.resetSecureRelayState({ clearQueue: true });
+    this.closeLegacyRelaySockets();
     closeSocket(sidecarSocket);
     closeSocket(relaySocket);
   }
@@ -357,6 +365,8 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       });
       this.refreshRelayConfiguration();
     }
+    this.reusableSessionId = null;
+    this.closeLegacyRelaySockets();
     this.syncTrustedPhoneSummary();
     if (this.relaySocket?.readyState === WebSocket.OPEN) {
       this.sendRelayRegistrationUpdate();
@@ -371,6 +381,25 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.reconnectTimer = null;
   }
 
+  private closeLegacyRelaySockets(): void {
+    for (const socket of this.legacyRelaySockets.values()) {
+      closeSocket(socket);
+    }
+    this.legacyRelaySockets.clear();
+  }
+
+  private trimLegacyRelaySockets(): void {
+    while (this.legacyRelaySockets.size > MAX_LEGACY_RELAY_SESSION_COUNT) {
+      const oldestSessionId = this.legacyRelaySockets.keys().next().value;
+      if (!oldestSessionId) {
+        return;
+      }
+      const socket = this.legacyRelaySockets.get(oldestSessionId) ?? null;
+      this.legacyRelaySockets.delete(oldestSessionId);
+      closeSocket(socket);
+    }
+  }
+
   private resetSecureRelayState(opts: { clearQueue: boolean }): void {
     this.pendingPhoneHandshake = null;
     this.secureSharedKey = null;
@@ -382,19 +411,19 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     }
   }
 
-  private sendRelayControlMessage(message: Record<string, unknown>): boolean {
-    if (!this.relaySocket || this.relaySocket.readyState !== WebSocket.OPEN) {
+  private sendRelayControlMessage(message: Record<string, unknown>, socket: BridgeSocket | null = this.relaySocket): boolean {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
       return false;
     }
-    this.relaySocket.send(JSON.stringify(message));
+    socket.send(JSON.stringify(message));
     return true;
   }
 
-  private sendSecureRelayError(message: string): void {
+  private sendSecureRelayError(message: string, socket: BridgeSocket | null = this.relaySocket): void {
     this.sendRelayControlMessage({
       kind: "secureError",
       message,
-    });
+    }, socket);
   }
 
   private sendApplicationMessageToPhone(text: string): void {
@@ -477,11 +506,14 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     });
   }
 
-  private async startRelaySession(): Promise<void> {
+  private async startRelaySession(opts: { forceNewSession?: boolean } = {}): Promise<void> {
     this.resetSecureRelayState({ clearQueue: true });
     this.relayReconnectAttempts = 0;
     this.notificationSecret = randomUUID();
-    const sessionId = randomUUID();
+    const sessionId = !opts.forceNewSession && this.getTrustedPhone() && this.reusableSessionId
+      ? this.reusableSessionId
+      : randomUUID();
+    this.reusableSessionId = sessionId;
     const pairingPayload: MobileRelayPairingPayload = {
       v: RELAY_PAIRING_QR_VERSION,
       relay: this.state.relayUrl ?? "",
@@ -517,7 +549,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       this.resetSecureRelayState({ clearQueue: false });
 
       socket.once("open", () => {
-        this.sendRelayRegistrationUpdate();
+        this.sendRelayRegistrationUpdate(socket, sessionId);
         resolve();
       });
 
@@ -545,6 +577,48 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       socket.once("error", (error) => {
         if (this.relaySocket === socket) {
           this.relaySocket = null;
+        }
+        closeSocket(socket);
+        reject(error);
+      });
+    });
+  }
+
+  private async connectLegacyRelaySocket(sessionId: string): Promise<void> {
+    if (!this.state.relayUrl || !this.identityState || !this.getTrustedPhone()) {
+      return;
+    }
+    if (this.legacyRelaySockets.has(sessionId)) {
+      return;
+    }
+
+    const relaySessionUrl = `${this.state.relayUrl}/${sessionId}`;
+    await new Promise<void>((resolve, reject) => {
+      const socket = this.createRelaySocket(relaySessionUrl, {
+        "x-role": "mac",
+        "x-notification-secret": this.notificationSecret ?? "",
+        ...this.buildMacRegistrationHeaders(),
+      });
+      this.legacyRelaySockets.set(sessionId, socket);
+      this.trimLegacyRelaySockets();
+
+      socket.once("open", () => {
+        resolve();
+      });
+
+      socket.on("message", (raw: unknown) => {
+        if (this.legacyRelaySockets.get(sessionId) !== socket) return;
+        this.handleLegacyRelayMessage(sessionId, socket, decodeSocketMessage(raw));
+      });
+
+      socket.on("close", () => {
+        if (this.legacyRelaySockets.get(sessionId) !== socket) return;
+        this.legacyRelaySockets.delete(sessionId);
+      });
+
+      socket.once("error", (error) => {
+        if (this.legacyRelaySockets.get(sessionId) === socket) {
+          this.legacyRelaySockets.delete(sessionId);
         }
         closeSocket(socket);
         reject(error);
@@ -591,7 +665,10 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     return headers;
   }
 
-  private sendRelayRegistrationUpdate(): void {
+  private sendRelayRegistrationUpdate(
+    socket: BridgeSocket | null = this.relaySocket,
+    sessionId: string | null = this.state.sessionId,
+  ): void {
     if (!this.identityState) {
       return;
     }
@@ -599,14 +676,14 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.sendRelayControlMessage({
       kind: "relayMacRegistration",
       registration: {
-        sessionId: this.state.sessionId,
+        sessionId,
         macDeviceId: this.identityState.macDeviceId,
         macIdentityPublicKey: this.identityState.macIdentityPublicKey,
         displayName: this.getAppName(),
         trustedPhoneDeviceId: trustedPhone?.phoneDeviceId ?? null,
         trustedPhonePublicKey: trustedPhone?.phoneIdentityPublicKey ?? null,
       },
-    });
+    }, socket);
   }
 
   /**
@@ -739,6 +816,39 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     }
     this.rejectRelayApplicationMessage("Local sidecar is unavailable.");
     return true;
+  }
+
+  private handleLegacyRelayMessage(sessionId: string, socket: BridgeSocket, rawText: string): void {
+    const message = parseRelayControlMessage(rawText);
+    if (!message || message.kind !== "clientHello") {
+      this.sendSecureRelayError("This relay session is no longer active. Reconnect from the latest desktop session.", socket);
+      closeSocket(socket);
+      return;
+    }
+
+    const trustedPhone = this.getTrustedPhone();
+    if (
+      !trustedPhone
+      || trustedPhone.phoneDeviceId !== message.phoneDeviceId
+      || trustedPhone.phoneIdentityPublicKey !== message.phoneIdentityPublicKey
+    ) {
+      this.sendSecureRelayError(
+        "This desktop is already paired with a different phone. Scan the latest QR or forget the trusted phone first.",
+        socket,
+      );
+      closeSocket(socket);
+      return;
+    }
+
+    if (!this.state.sessionId || this.state.sessionId === sessionId) {
+      this.sendSecureRelayError("This relay session is no longer active. Reconnect from the latest desktop session.", socket);
+      closeSocket(socket);
+      return;
+    }
+
+    this.sendRelayRegistrationUpdate(socket, this.state.sessionId);
+    this.sendSecureRelayError("Relay session rotated. Reconnecting to the latest desktop session.", socket);
+    closeSocket(socket);
   }
 
   private handleRelayControlMessage(rawText: string): boolean {

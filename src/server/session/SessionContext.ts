@@ -93,6 +93,7 @@ export type PendingSteer = {
   clientMessageId?: string;
   acceptedAt: string;
   attachments?: import("../jsonrpc/routes/shared").FileAttachment[];
+  inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[];
 };
 
 export type SessionRuntimeState = {

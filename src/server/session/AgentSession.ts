@@ -1386,14 +1386,26 @@ export class AgentSession {
     await this.backupController.reloadSessionBackupStateFromDisk();
   }
 
-  async sendUserMessage(text: string, clientMessageId?: string, displayText?: string, attachments?: import("../jsonrpc/routes/shared").FileAttachment[]) {
+  async sendUserMessage(
+    text: string,
+    clientMessageId?: string,
+    displayText?: string,
+    attachments?: import("../jsonrpc/routes/shared").FileAttachment[],
+    inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
+  ) {
     await this.pendingConfigMutation.catch(() => {});
-    await this.turnExecutionManager.sendUserMessage(text, clientMessageId, displayText, attachments);
+    await this.turnExecutionManager.sendUserMessage(text, clientMessageId, displayText, attachments, inputParts);
   }
 
-  async sendSteerMessage(text: string, expectedTurnId: string, clientMessageId?: string, attachments?: import("../jsonrpc/routes/shared").FileAttachment[]) {
+  async sendSteerMessage(
+    text: string,
+    expectedTurnId: string,
+    clientMessageId?: string,
+    attachments?: import("../jsonrpc/routes/shared").FileAttachment[],
+    inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
+  ) {
     await this.pendingConfigMutation.catch(() => {});
-    await this.turnExecutionManager.sendSteerMessage(text, expectedTurnId, clientMessageId, attachments);
+    await this.turnExecutionManager.sendSteerMessage(text, expectedTurnId, clientMessageId, attachments, inputParts);
   }
 
   getSessionUsage() {

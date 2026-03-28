@@ -28,7 +28,7 @@ import {
   type ServerErrorSource,
 } from "../../types";
 import { supportsImageInput } from "../../models/registry";
-import type { FileAttachment } from "../jsonrpc/routes/shared";
+import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared";
 import type { HistoryManager } from "./HistoryManager";
 import type { InteractionManager } from "./InteractionManager";
 import type { SessionBackupController } from "./SessionBackupController";
@@ -142,6 +142,10 @@ function getInlineAttachments(attachments?: readonly FileAttachment[]): Array<Ex
 }
 
 function getTurnAttachmentValidationMessage(attachments?: readonly FileAttachment[]): string | null {
+  const filenameMessage = getAttachmentFilenameValidationMessage(attachments);
+  if (filenameMessage) {
+    return filenameMessage;
+  }
   const countMessage = getAttachmentCountValidationMessage(attachments?.length);
   if (countMessage) {
     return countMessage;
@@ -169,6 +173,21 @@ function resolveUserInputDisplayText(
       .map((attachment) => path.basename(attachment.filename))
       .filter((fileName) => fileName && fileName !== "." && fileName !== ".."),
   );
+}
+
+function getAttachmentFilenameValidationMessage(
+  attachments?: readonly Pick<FileAttachment, "filename">[],
+): string | null {
+  if (!attachments || attachments.length === 0) {
+    return null;
+  }
+  for (const attachment of attachments) {
+    const safeName = path.basename(attachment.filename);
+    if (!safeName || safeName === "." || safeName === "..") {
+      return `Invalid attachment filename: ${attachment.filename}`;
+    }
+  }
+  return null;
 }
 
 function extractAssistantTextFromMessageContent(content: unknown): string {
@@ -375,7 +394,13 @@ export class TurnExecutionManager {
     return this.context.state.currentTurnOutcome === "error" ? "errored" : "completed";
   }
 
-  async sendSteerMessage(text: string, expectedTurnId: string, clientMessageId?: string, attachments?: FileAttachment[]) {
+  async sendSteerMessage(
+    text: string,
+    expectedTurnId: string,
+    clientMessageId?: string,
+    attachments?: FileAttachment[],
+    inputParts?: OrderedInputPart[],
+  ) {
     if (!this.context.state.running) {
       this.context.emitError("validation_failed", "session", "No active turn to steer.");
       return;
@@ -442,6 +467,7 @@ export class TurnExecutionManager {
       ...(displayText ? { displayText } : {}),
       ...(clientMessageId ? { clientMessageId } : {}),
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      ...(inputParts && inputParts.length > 0 ? { inputParts } : {}),
       acceptedAt: new Date().toISOString(),
     });
     this.context.emit({
@@ -459,7 +485,7 @@ export class TurnExecutionManager {
 
     const steerMessages: ModelMessage[] = [];
     for (const steer of drained) {
-      const content = await this.buildUserMessageContent(steer.text, steer.attachments);
+      const content = await this.buildUserMessageContent(steer.text, steer.attachments, steer.inputParts);
       steerMessages.push({ role: "user", content });
     }
     this.deps.historyManager.appendMessagesToHistory(steerMessages);
@@ -489,7 +515,13 @@ export class TurnExecutionManager {
     this.context.emitError("validation_failed", "session", message);
   }
 
-  async sendUserMessage(text: string, clientMessageId?: string, displayText?: string, attachments?: import("../jsonrpc/routes/shared").FileAttachment[]) {
+  async sendUserMessage(
+    text: string,
+    clientMessageId?: string,
+    displayText?: string,
+    attachments?: FileAttachment[],
+    inputParts?: OrderedInputPart[],
+  ) {
     if (this.context.state.running) {
       this.context.emitError("busy", "session", "Agent is busy");
       return;
@@ -741,7 +773,7 @@ export class TurnExecutionManager {
         model: this.context.state.config.model,
       });
 
-      const userMessageContent = await this.buildUserMessageContent(text, attachments);
+      const userMessageContent = await this.buildUserMessageContent(text, attachments, inputParts);
       this.deps.historyManager.appendMessagesToHistory([{ role: "user", content: userMessageContent }]);
       this.deps.metadataManager.maybeGenerateTitleFromQuery(text || visibleText);
       this.context.queuePersistSessionSnapshot("session.user_message");
@@ -929,6 +961,7 @@ export class TurnExecutionManager {
   private async buildUserMessageContent(
     text: string,
     attachments?: FileAttachment[],
+    inputParts?: OrderedInputPart[],
   ): Promise<string | Array<Record<string, unknown>>> {
     if (!attachments || attachments.length === 0) {
       return text;
@@ -943,16 +976,15 @@ export class TurnExecutionManager {
     const modelSupportsImages = supportsImageInput(provider, model);
     const isGoogleProvider = provider === "google";
 
-    const contentParts: Array<Record<string, unknown>> = [];
-    if (text) {
-      contentParts.push({ type: "text", text });
-    }
-
     const resolvedUploadsDir = path.resolve(uploadsDir);
     const usedNames = new Set<string>();
-    for (const attachment of attachments) {
+    const contentParts: Array<Record<string, unknown>> = [];
+
+    const appendAttachment = async (attachment: FileAttachment) => {
       const safeName = path.basename(attachment.filename);
-      if (!safeName || safeName === "." || safeName === "..") continue;
+      if (!safeName || safeName === "." || safeName === "..") {
+        throw makeStructuredSessionError("validation_failed", `Invalid attachment filename: ${attachment.filename}`);
+      }
 
       const inlineAttachment = isInlineFileAttachment(attachment) ? attachment : null;
       let diskPath: string;
@@ -971,7 +1003,7 @@ export class TurnExecutionManager {
         }
 
         const filePath = path.resolve(resolvedUploadsDir, finalName);
-        if (!filePath.startsWith(resolvedUploadsDir)) continue;
+        if (!filePath.startsWith(resolvedUploadsDir)) return;
 
         diskPath = filePath;
         try {
@@ -1013,7 +1045,14 @@ export class TurnExecutionManager {
         }
         try {
           await fs.access(diskPath);
-        } catch {
+          const stat = await fs.stat(diskPath);
+          if (!stat.isFile()) {
+            throw makeStructuredSessionError("validation_failed", `Uploaded attachment is not a file: ${diskPath}`);
+          }
+        } catch (error) {
+          if (classifyStructuredTurnError(error)) {
+            throw error;
+          }
           throw makeStructuredSessionError("validation_failed", `Uploaded file does not exist: ${diskPath}`);
         }
       }
@@ -1039,6 +1078,25 @@ export class TurnExecutionManager {
           mimeType: attachment.mimeType,
         });
       }
+    };
+
+    if (inputParts && inputParts.length > 0) {
+      for (const part of inputParts) {
+        if (part.type === "text") {
+          contentParts.push({ type: "text", text: part.text });
+          continue;
+        }
+        await appendAttachment(part);
+      }
+      return contentParts;
+    }
+
+    if (text) {
+      contentParts.push({ type: "text", text });
+    }
+
+    for (const attachment of attachments) {
+      await appendAttachment(attachment);
     }
 
     return contentParts;
@@ -1067,15 +1125,21 @@ export class TurnExecutionManager {
       }
       try {
         await fs.access(diskPath);
+        const stat = await fs.stat(diskPath);
+        if (!stat.isFile()) {
+          throw makeStructuredSessionError("validation_failed", `Uploaded attachment is not a file: ${diskPath}`);
+        }
         const contentPartType = getAttachmentContentPartType(attachment.mimeType, {
           modelSupportsImages,
           isGoogleProvider,
         });
         if (contentPartType) {
-          const stat = await fs.stat(diskPath);
           multimodalUploadedByteLengths.push(stat.size);
         }
-      } catch {
+      } catch (error) {
+        if (classifyStructuredTurnError(error)) {
+          throw error;
+        }
         throw makeStructuredSessionError("validation_failed", `Uploaded file does not exist: ${diskPath}`);
       }
     }

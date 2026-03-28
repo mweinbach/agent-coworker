@@ -29,7 +29,7 @@ export function createTurnRouteHandlers(
       }
 
       const { threadId, input, clientMessageId } = parsed.data;
-      const { text, attachments } = context.utils.extractInput(input);
+      const { text, attachments, orderedParts } = context.utils.extractInput(input);
       const hasInput = text || attachments.length > 0;
       if (!threadId || !hasInput) {
         context.jsonrpc.sendError(ws, message.id, {
@@ -49,7 +49,14 @@ export function createTurnRouteHandlers(
       const outcome = await captureBindingOutcome(
         context,
         binding,
-        () => binding.session!.sendUserMessage(text, clientMessageId, undefined, attachments.length > 0 ? attachments : undefined),
+        () =>
+          binding.session!.sendUserMessage(
+            text,
+            clientMessageId,
+            undefined,
+            attachments.length > 0 ? attachments : undefined,
+            orderedParts,
+          ),
         (event): event is JsonRpcTurnStartOutcome => (
           (event.type === "session_busy"
             && event.sessionId === binding.session!.id
@@ -85,7 +92,7 @@ export function createTurnRouteHandlers(
       }
 
       const { threadId, turnId, input, clientMessageId } = parsed.data;
-      const { text, attachments } = context.utils.extractInput(input);
+      const { text, attachments, orderedParts } = context.utils.extractInput(input);
       const expectedTurnId = turnId || (context.threads.getLive(threadId)?.session?.activeTurnId ?? "");
       const session = context.threads.getLive(threadId)?.session;
       const hasSteerInput = text || attachments.length > 0;
@@ -107,7 +114,14 @@ export function createTurnRouteHandlers(
       const outcome = await captureBindingOutcome(
         context,
         binding,
-        () => session.sendSteerMessage(text, expectedTurnId, clientMessageId, attachments.length > 0 ? attachments : undefined),
+        () =>
+          session.sendSteerMessage(
+            text,
+            expectedTurnId,
+            clientMessageId,
+            attachments.length > 0 ? attachments : undefined,
+            orderedParts,
+          ),
         (event): event is JsonRpcTurnSteerOutcome => (
           (event.type === "steer_accepted"
             && event.sessionId === session.id

@@ -3603,6 +3603,50 @@ describe("AgentSession", () => {
       });
     });
 
+    test("rejects dot-path attachment filenames before acknowledging attachment-only input", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const { session, events } = makeSession({
+        config: makeConfig(dir),
+      });
+
+      await session.sendUserMessage("", "msg-invalid-filename", undefined, [{
+        filename: "..",
+        contentBase64: "aGVsbG8=",
+        mimeType: "image/png",
+      }]);
+
+      const errorEvt = events.findLast((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toMatchObject({
+        code: "validation_failed",
+        message: "Invalid attachment filename: ..",
+      });
+      expect(events.some((e) => e.type === "session_busy")).toBe(false);
+      await expect(fs.readdir(path.join(dir, "User Uploads"))).rejects.toThrow();
+    });
+
+    test("rejects uploaded attachment directories as invalid files", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const uploadsDir = path.join(dir, "uploads");
+      const nestedDir = path.join(uploadsDir, "folder");
+      await fs.mkdir(nestedDir, { recursive: true });
+      const { session, events } = makeSession({
+        config: makeConfig(dir),
+      });
+
+      await session.sendUserMessage("", "msg-uploaded-dir", undefined, [{
+        filename: "folder",
+        path: nestedDir,
+        mimeType: "image/png",
+      }]);
+
+      const errorEvt = events.findLast((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toMatchObject({
+        code: "validation_failed",
+        message: `Uploaded attachment is not a file: ${nestedDir}`,
+      });
+      expect(events.some((e) => e.type === "session_busy")).toBe(false);
+    });
+
     test("preserves multimodal content for uploaded image attachments", async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
       const uploadsDir = path.join(dir, "uploads");

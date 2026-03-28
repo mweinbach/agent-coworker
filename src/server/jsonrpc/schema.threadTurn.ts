@@ -101,7 +101,7 @@ export const jsonRpcThreadTurnRequestSchemas = {
   }).strict(),
   "turn/steer": z.object({
     threadId: nonEmptyTrimmedStringSchema,
-    turnId: nonEmptyTrimmedStringSchema,
+    turnId: nonEmptyTrimmedStringSchema.optional(),
     clientMessageId: nonEmptyTrimmedStringSchema.optional(),
     input: turnInputSchema,
   }).strict(),

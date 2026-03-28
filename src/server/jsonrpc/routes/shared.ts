@@ -65,19 +65,46 @@ export type UploadedFileAttachment = {
 
 export type FileAttachment = InlineFileAttachment | UploadedFileAttachment;
 
+export type OrderedTextInputPart = {
+  type: "text";
+  text: string;
+};
+
+export type OrderedFileInputPart =
+  | ({
+      type: "file";
+    } & InlineFileAttachment)
+  | ({
+      type: "uploadedFile";
+    } & UploadedFileAttachment);
+
+export type OrderedInputPart = OrderedTextInputPart | OrderedFileInputPart;
+
 export type ExtractedInput = {
   text: string;
   attachments: FileAttachment[];
+  orderedParts?: OrderedInputPart[];
 };
 
 export function extractJsonRpcInput(input: unknown): ExtractedInput {
   const text = extractJsonRpcTextInput(input);
   const attachments: FileAttachment[] = [];
+  const orderedParts: OrderedInputPart[] = [];
 
   if (Array.isArray(input)) {
     for (const entry of input) {
       if (!entry || typeof entry !== "object") continue;
       const record = entry as Record<string, unknown>;
+      if (
+        (record.type === "text" || record.type === "inputText")
+        && typeof record.text === "string"
+      ) {
+        orderedParts.push({
+          type: "text",
+          text: record.text,
+        });
+        continue;
+      }
       if (
         record.type === "file" &&
         typeof record.filename === "string" &&
@@ -85,6 +112,12 @@ export function extractJsonRpcInput(input: unknown): ExtractedInput {
         typeof record.mimeType === "string"
       ) {
         attachments.push({
+          filename: record.filename,
+          contentBase64: record.contentBase64,
+          mimeType: record.mimeType,
+        });
+        orderedParts.push({
+          type: "file",
           filename: record.filename,
           contentBase64: record.contentBase64,
           mimeType: record.mimeType,
@@ -100,11 +133,22 @@ export function extractJsonRpcInput(input: unknown): ExtractedInput {
           path: record.path,
           mimeType: record.mimeType,
         });
+        orderedParts.push({
+          type: "uploadedFile",
+          filename: record.filename,
+          path: record.path,
+          mimeType: record.mimeType,
+        });
       }
     }
+  } else if (typeof input === "string" && input.length > 0) {
+    orderedParts.push({
+      type: "text",
+      text: input,
+    });
   }
 
-  return { text, attachments };
+  return { text, attachments, ...(orderedParts.length > 0 ? { orderedParts } : {}) };
 }
 
 export function buildJsonRpcThreadFromSession(session: AgentSession): JsonRpcThread {

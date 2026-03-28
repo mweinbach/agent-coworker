@@ -374,7 +374,6 @@
           },
           "required": [
             "threadId",
-            "turnId",
             "input"
           ],
           "additionalProperties": false

@@ -77,6 +77,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
     try {
       const result = await client.call<WorkspaceSwitchResult>("workspace/switch", { workspaceId });
       const parsed = workspaceSwitchResultSchema.parse(result);
+      client.resetTransportSession("Workspace switched.");
       set({
         activeWorkspaceId: parsed.workspaceId,
         activeWorkspaceName: parsed.name,

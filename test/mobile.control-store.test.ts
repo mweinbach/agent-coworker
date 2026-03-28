@@ -12,9 +12,11 @@ function createFakeClient(resolver: (method: string, params: unknown) => unknown
     calls.push({ method, params });
     return resolver(method, params);
   });
+  const resetTransportSession = mock(() => {});
   return {
-    client: { call } as any,
+    client: { call, resetTransportSession } as any,
     calls,
+    resetTransportSession,
   };
 }
 
@@ -116,6 +118,53 @@ describe("mobile control stores", () => {
         backupsEnabled: false,
       },
     });
+  });
+
+  test("workspace store resets the JSON-RPC session after switching workspaces", async () => {
+    const { client, calls, resetTransportSession } = createFakeClient((method) => {
+      if (method === "workspace/switch") {
+        return {
+          workspaceId: "ws_2",
+          name: "Workspace Two",
+          path: "/tmp/workspace-two",
+        };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    setActiveCoworkJsonRpcClient(client);
+    useWorkspaceStore.setState({
+      workspaces: [
+        {
+          id: "ws_1",
+          name: "Workspace One",
+          path: workspaceCwd,
+          createdAt: new Date(0).toISOString(),
+          lastOpenedAt: new Date(0).toISOString(),
+          yolo: false,
+        },
+        {
+          id: "ws_2",
+          name: "Workspace Two",
+          path: "/tmp/workspace-two",
+          createdAt: new Date(0).toISOString(),
+          lastOpenedAt: new Date(0).toISOString(),
+          yolo: false,
+        },
+      ],
+      activeWorkspaceId: "ws_1",
+      activeWorkspaceName: "Workspace One",
+      activeWorkspaceCwd: workspaceCwd,
+    });
+
+    await useWorkspaceStore.getState().switchWorkspace("ws_2");
+
+    expect(calls).toEqual([{
+      method: "workspace/switch",
+      params: { workspaceId: "ws_2" },
+    }]);
+    expect(resetTransportSession).toHaveBeenCalledWith("Workspace switched.");
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe("ws_2");
+    expect(useWorkspaceStore.getState().activeWorkspaceCwd).toBe("/tmp/workspace-two");
   });
 
   test("provider store uses status refresh and API key auth methods", async () => {

@@ -20,6 +20,22 @@ function emitStateToAllWindows(windows: BrowserWindow[], payload: unknown) {
   }
 }
 
+function toBridgeWorkspaceRecords(
+  workspaces: Awaited<ReturnType<DesktopIpcModuleContext["deps"]["persistence"]["loadState"]>>["workspaces"],
+) {
+  return workspaces.map((w) => ({
+    id: w.id,
+    name: w.name,
+    path: w.path,
+    createdAt: w.createdAt,
+    lastOpenedAt: w.lastOpenedAt,
+    defaultProvider: w.defaultProvider,
+    defaultModel: w.defaultModel,
+    defaultEnableMcp: w.defaultEnableMcp,
+    yolo: w.yolo,
+  }));
+}
+
 export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
   const { deps, handleDesktopInvoke, parseWithSchema } = context;
 
@@ -27,35 +43,45 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
   // Uses persistence service to read the latest workspace records on demand.
   let cachedWorkspaces: Awaited<ReturnType<typeof deps.persistence.loadState>>["workspaces"] = [];
   let cacheTimestamp = 0;
+  let refreshPromise: Promise<void> | null = null;
+  let lastWorkspaceCacheError: string | null = null;
   const CACHE_TTL_MS = 2_000;
+
+  const refreshWorkspaceCache = (reason: string) => {
+    if (refreshPromise) {
+      return refreshPromise;
+    }
+    refreshPromise = deps.persistence.loadState()
+      .then((state) => {
+        cachedWorkspaces = state.workspaces;
+        cacheTimestamp = Date.now();
+        lastWorkspaceCacheError = null;
+      })
+      .catch((error) => {
+        cacheTimestamp = Date.now();
+        const message = error instanceof Error ? error.message : String(error);
+        if (message !== lastWorkspaceCacheError) {
+          console.warn(`[desktop] Failed to refresh mobile relay workspace cache during ${reason}: ${message}`);
+          lastWorkspaceCacheError = message;
+        }
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+    return refreshPromise;
+  };
 
   deps.mobileRelayBridge.setWorkspaceListProvider(() => {
     const now = Date.now();
     if (now - cacheTimestamp > CACHE_TTL_MS) {
       // Refresh cache async; return stale data for this call, fresh data for next.
-      void deps.persistence.loadState().then((state) => {
-        cachedWorkspaces = state.workspaces;
-        cacheTimestamp = Date.now();
-      }).catch(() => {});
+      void refreshWorkspaceCache("workspace list request");
     }
-    return cachedWorkspaces.map((w) => ({
-      id: w.id,
-      name: w.name,
-      path: w.path,
-      createdAt: w.createdAt,
-      lastOpenedAt: w.lastOpenedAt,
-      defaultProvider: w.defaultProvider,
-      defaultModel: w.defaultModel,
-      defaultEnableMcp: w.defaultEnableMcp,
-      yolo: w.yolo,
-    }));
+    return toBridgeWorkspaceRecords(cachedWorkspaces);
   });
 
   // Eagerly populate workspace cache.
-  void deps.persistence.loadState().then((state) => {
-    cachedWorkspaces = state.workspaces;
-    cacheTimestamp = Date.now();
-  }).catch(() => {});
+  void refreshWorkspaceCache("initial load");
 
   deps.mobileRelayBridge.on("stateChanged", (state) => {
     emitStateToAllWindows(BrowserWindow.getAllWindows(), state);

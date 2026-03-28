@@ -39,6 +39,7 @@ export default function PairingScanScreen() {
       await connectWithQr(parsed.data);
       router.replace("/(app)/(tabs)/threads");
     } catch (error) {
+      setScannedPayload(null);
       Alert.alert(
         "Pairing failed",
         error instanceof Error ? error.message : "Could not start the secure transport session.",

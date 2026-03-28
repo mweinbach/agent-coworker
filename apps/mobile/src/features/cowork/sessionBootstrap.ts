@@ -1,9 +1,8 @@
+import type { SecureTransportSnapshot } from "../relay/secureTransportClient";
+
 export const SESSION_RETRY_DELAY_MS = 1_000;
 
-type TransportSnapshot = {
-  status: string;
-  transportMode: string;
-};
+type TransportSnapshot = Pick<SecureTransportSnapshot, "status" | "transportMode">;
 
 type BootstrapClient = {
   initialize: () => Promise<void>;

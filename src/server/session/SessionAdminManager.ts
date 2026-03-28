@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { decodeBase64Strict } from "../../shared/attachments";
+import { decodeBase64Strict, MAX_ATTACHMENT_UPLOAD_BASE64_SIZE } from "../../shared/attachments";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 import { sameWorkspacePath } from "../../utils/workspacePath";
@@ -488,8 +488,7 @@ export class SessionAdminManager {
           break;
         }
       }
-      const MAX_UPLOAD_BASE64_SIZE = 100 * 1024 * 1024 * 4 / 3; // ~100MB decoded ≈ 133MB base64
-      if (contentBase64.length > MAX_UPLOAD_BASE64_SIZE) {
+      if (contentBase64.length > MAX_ATTACHMENT_UPLOAD_BASE64_SIZE) {
         this.context.emitError("validation_failed", "session", "File too large (max 100MB)");
         return;
       }

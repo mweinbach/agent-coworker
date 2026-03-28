@@ -1,6 +1,7 @@
 import {
   formatAttachmentDisplayText,
   getAttachmentCountValidationMessage,
+  getAttachmentUploadByteLengthValidationMessage,
 } from "../../../../src/shared/attachments";
 
 import type { FileAttachmentInput } from "./store.helpers/jsonRpcSocket";
@@ -9,6 +10,16 @@ const BASE64_BINARY_CHUNK_SIZE = 0x8000;
 const FNV1A_OFFSET_BASIS = 0x811c9dc5;
 const FNV1A_PRIME = 0x01000193;
 type AttachmentCountLike = { length: number };
+type AttachmentSizeLike = { size: number };
+type AttachmentValidationInput = AttachmentCountLike | readonly AttachmentSizeLike[];
+
+function getAttachmentLength(input?: AttachmentValidationInput): number {
+  return Array.isArray(input) ? input.length : input?.length ?? 0;
+}
+
+function getAttachmentByteLengths(input?: AttachmentValidationInput): number[] {
+  return Array.isArray(input) ? input.map((attachment) => attachment.size) : [];
+}
 
 export function encodeArrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -30,14 +41,22 @@ export function buildAttachmentDisplayText(
 }
 
 export function getAttachmentPickerValidationMessage(
-  existingAttachments?: AttachmentCountLike,
-  selectedFiles?: AttachmentCountLike,
+  existingAttachments?: AttachmentValidationInput,
+  selectedFiles?: AttachmentValidationInput,
 ): string | null {
-  const totalCount = (existingAttachments?.length ?? 0) + (selectedFiles?.length ?? 0);
+  const totalCount = getAttachmentLength(existingAttachments) + getAttachmentLength(selectedFiles);
   if (totalCount === 0) {
     return null;
   }
-  return getAttachmentCountValidationMessage(totalCount);
+  return getAttachmentCountValidationMessage(totalCount)
+    ?? getAttachmentUploadByteLengthValidationMessage([
+      ...getAttachmentByteLengths(existingAttachments),
+      ...getAttachmentByteLengths(selectedFiles),
+    ]);
+}
+
+export function getAttachmentUploadValidationMessage(byteLength: number): string | null {
+  return getAttachmentUploadByteLengthValidationMessage([byteLength]);
 }
 
 function hashString(value: string): string {

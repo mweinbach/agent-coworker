@@ -8,6 +8,7 @@ import {
   buildAttachmentSignature,
   encodeArrayBufferToBase64,
   getAttachmentPickerValidationMessage,
+  getAttachmentUploadValidationMessage,
 } from "../app/attachmentInputs";
 import { useAppStore } from "../app/store";
 import { uploadJsonRpcWorkspaceFile } from "../app/store.helpers/jsonRpcSocket";
@@ -880,6 +881,10 @@ export function ChatView() {
       const resolvedAttachments: FileAttachmentInput[] = [];
 
       for (const attachment of attachments) {
+        const uploadValidationMessage = getAttachmentUploadValidationMessage(attachment.size);
+        if (uploadValidationMessage) {
+          throw new Error(`${attachment.filename}: ${uploadValidationMessage}`);
+        }
         const buffer = await attachment.file.arrayBuffer();
         const base64 = encodeArrayBufferToBase64(buffer);
         const canInline = (

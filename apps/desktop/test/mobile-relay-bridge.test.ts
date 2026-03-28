@@ -218,6 +218,7 @@ describe("mobile relay bridge", () => {
       },
     });
 
+    bridge.initialize();
     const snapshot = bridge.getSnapshot();
     expect(snapshot.status).toBe("idle");
     expect(snapshot.relaySource).toBe("managed");
@@ -242,6 +243,7 @@ describe("mobile relay bridge", () => {
       },
     });
 
+    bridge.initialize();
     const snapshot = bridge.getSnapshot();
     expect(snapshot.relaySource).toBe("override");
     expect(snapshot.relayUrl).toBe("wss://override.example.test/relay");
@@ -264,6 +266,7 @@ describe("mobile relay bridge", () => {
       },
     });
 
+    bridge.initialize();
     const snapshot = bridge.getSnapshot();
     expect(snapshot.status).toBe("idle");
     expect(snapshot.relaySource).toBe("managed");
@@ -275,6 +278,30 @@ describe("mobile relay bridge", () => {
       await fs.readFile(path.join(userDataDir, "mobile-relay", "device-state.json"), "utf8"),
     );
     expect(managedState.macDeviceId).toBeTruthy();
+  });
+
+  test("constructor defers managed state disk I/O until initialization", async () => {
+    await fs.rm(path.join(userDataDir, "mobile-relay"), { recursive: true, force: true });
+
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      getAppName: () => "Cowork Test",
+      createSidecarSocket: () => sidecarSocket,
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        return socket;
+      },
+    });
+
+    await expect(fs.access(path.join(userDataDir, "mobile-relay", "device-state.json"))).rejects.toThrow();
+
+    bridge.initialize();
+
+    await expect(fs.readFile(path.join(userDataDir, "mobile-relay", "device-state.json"), "utf8")).resolves.toContain(
+      "\"macDeviceId\"",
+    );
   });
 
   test("start creates a pairing snapshot for the workspace using Cowork-managed state", async () => {

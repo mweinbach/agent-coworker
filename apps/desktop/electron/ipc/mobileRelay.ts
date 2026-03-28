@@ -114,6 +114,7 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayGetState, async () => {
+    deps.mobileRelayBridge.initialize();
     return mobileRelayBridgeStateSchema.parse(deps.mobileRelayBridge.getSnapshot());
   });
 

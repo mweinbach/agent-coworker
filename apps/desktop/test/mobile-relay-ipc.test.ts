@@ -139,6 +139,58 @@ describe("mobile relay IPC", () => {
     });
   });
 
+  test("loads relay configuration before returning mobile relay state", async () => {
+    const initialize = mock(() => {});
+    const getSnapshot = mock(() => ({
+      status: "idle",
+      workspaceId: null,
+      workspacePath: null,
+      relaySource: "managed",
+      relaySourceMessage: "loaded",
+      relayServiceStatus: "running",
+      relayServiceMessage: "running",
+      relayServiceUpdatedAt: null,
+      relayUrl: "wss://relay.example.test/relay",
+      sessionId: null,
+      pairingPayload: null,
+      trustedPhoneDeviceId: null,
+      trustedPhoneFingerprint: null,
+      lastError: null,
+    }));
+    const handlers = new Map<string, (_event: unknown, args?: unknown) => Promise<unknown>>();
+
+    registerMobileRelayIpc({
+      deps: {
+        persistence: { loadState: async () => ({ workspaces: [] }) } as never,
+        mobileRelayBridge: {
+          setWorkspaceListProvider() {},
+          on() {},
+          initialize,
+          start: async () => ({}),
+          stop: async () => ({}),
+          getSnapshot,
+          rotateSession: async () => ({}),
+          forgetTrustedPhone: async () => ({}),
+        } as never,
+      } as never,
+      workspaceRoots: {} as never,
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as (_event: unknown, args?: unknown) => Promise<unknown>);
+      },
+      parseWithSchema(_schema, value) {
+        return value as never;
+      },
+    });
+
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.mobileRelayGetState);
+    expect(handler).toBeTruthy();
+
+    await handler?.(null);
+
+    expect(initialize).toHaveBeenCalledTimes(1);
+    expect(getSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   test("invalidates the mobile relay workspace cache after the save-state hook fires", async () => {
     let workspaceListProvider: (() => Promise<Array<{ id: string; name: string; path: string; yolo: boolean }>>) | null = null;
     let currentWorkspaces = [{

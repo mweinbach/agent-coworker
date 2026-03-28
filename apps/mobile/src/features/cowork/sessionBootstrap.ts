@@ -26,6 +26,7 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
   let sessionReady = false;
   let sessionBootstrapInFlight = false;
   let sessionRetryTimeout: ReturnType<typeof setTimeout> | null = null;
+  let sessionBootstrapGeneration = 0;
 
   const clearSessionRetry = () => {
     if (sessionRetryTimeout) {
@@ -51,6 +52,7 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
   };
 
   const resetClientSession = () => {
+    sessionBootstrapGeneration += 1;
     sessionReady = false;
     sessionBootstrapInFlight = false;
     clearSessionRetry();
@@ -63,18 +65,30 @@ export function createSessionBootstrapController(options: SessionBootstrapContro
     if (sessionReady || sessionBootstrapInFlight) {
       return;
     }
+    const bootstrapGeneration = sessionBootstrapGeneration;
     sessionBootstrapInFlight = true;
     try {
       await options.client.initialize();
+      if (bootstrapGeneration !== sessionBootstrapGeneration) {
+        return;
+      }
       await options.hydrateRemoteThreads();
+      if (bootstrapGeneration !== sessionBootstrapGeneration) {
+        return;
+      }
       sessionReady = true;
       clearSessionRetry();
       void options.hydrateWorkspaceContext();
     } catch {
+      if (bootstrapGeneration !== sessionBootstrapGeneration) {
+        return;
+      }
       sessionReady = false;
       scheduleSessionRetry();
     } finally {
-      sessionBootstrapInFlight = false;
+      if (bootstrapGeneration === sessionBootstrapGeneration) {
+        sessionBootstrapInFlight = false;
+      }
     }
   };
 

@@ -1,8 +1,10 @@
 export const MAX_TURN_ATTACHMENT_COUNT = 8;
 export const MAX_ATTACHMENT_INLINE_BYTE_SIZE = 25 * 1024 * 1024;
 export const MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE = 25 * 1024 * 1024;
+export const MAX_ATTACHMENT_UPLOAD_BYTE_SIZE = 100 * 1024 * 1024;
 export const MAX_ATTACHMENT_BASE64_SIZE = getBase64SizeFromByteLength(MAX_ATTACHMENT_INLINE_BYTE_SIZE);
 export const MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE = getBase64SizeFromByteLength(MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE);
+export const MAX_ATTACHMENT_UPLOAD_BASE64_SIZE = getBase64SizeFromByteLength(MAX_ATTACHMENT_UPLOAD_BYTE_SIZE);
 const BASE64_BODY_PATTERN = /^[A-Za-z0-9+/]*$/;
 
 export function getBase64SizeFromByteLength(byteLength: number): number {
@@ -86,6 +88,22 @@ export function getAttachmentByteLengthValidationMessage(
     totalByteLength += byteLength;
     if (totalByteLength > MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE) {
       return "Inline attachments too large in total (max 25MB combined)";
+    }
+  }
+
+  return null;
+}
+
+export function getAttachmentUploadByteLengthValidationMessage(
+  byteLengths?: readonly number[],
+): string | null {
+  if (!byteLengths || byteLengths.length === 0) {
+    return null;
+  }
+
+  for (const byteLength of byteLengths) {
+    if (byteLength > MAX_ATTACHMENT_UPLOAD_BYTE_SIZE) {
+      return "File too large to upload (max 100MB)";
     }
   }
 

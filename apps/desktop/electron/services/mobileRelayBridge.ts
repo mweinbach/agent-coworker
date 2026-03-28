@@ -126,6 +126,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private sidecarReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private notificationSecret: string | null = null;
   private reusableSessionId: string | null = null;
+  private relayConfigurationLoaded = false;
   private stopping = false;
   private pendingPhoneHandshake: PendingPhoneHandshake | null = null;
   private secureSharedKey: Uint8Array | null = null;
@@ -147,6 +148,12 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.createSidecarSocket = options.createSidecarSocket ?? ((url: string) => new WebSocket(url, "cowork.jsonrpc.v1"));
     this.createRelaySocket = options.createRelaySocket ?? ((url, headers) => new WebSocket(url, { headers }));
     this.getReconnectDelayMs = options.getReconnectDelayMs ?? ((attempt) => computeRelayReconnectDelayMs(attempt));
+  }
+
+  initialize(): void {
+    if (this.relayConfigurationLoaded) {
+      return;
+    }
     this.refreshRelayConfiguration();
   }
 
@@ -201,6 +208,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         this.relayUrlOverride,
         "Cowork Desktop manages the relay session directly.",
       );
+      this.relayConfigurationLoaded = true;
       return;
     }
     this.loadCoworkManagedRelayConfiguration(
@@ -209,6 +217,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       MANAGED_RELAY_URL,
       "Cowork Desktop manages the relay session directly.",
     );
+    this.relayConfigurationLoaded = true;
   }
 
   getSnapshot(): MobileRelaySnapshot {
@@ -267,7 +276,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.clearSidecarReconnectTimer();
     this.closeConnections();
     this.sidecarUrl = null;
-    this.refreshRelayConfiguration();
+    if (this.relayConfigurationLoaded) {
+      this.refreshRelayConfiguration();
+    }
     this.state = {
       ...buildInitialState(),
       relaySource: this.state.relaySource,
@@ -314,6 +325,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }
 
   async forgetTrustedPhone(): Promise<MobileRelaySnapshot> {
+    this.initialize();
     const trustedPhone = this.getTrustedPhone();
     if (!trustedPhone) {
       return this.getSnapshot();

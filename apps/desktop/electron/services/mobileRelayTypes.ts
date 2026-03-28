@@ -92,8 +92,8 @@ export type MobileRelayWireMessage = MobileRelayWireControlMessage & {
   keyEpoch?: number;
   sender?: string;
   counter?: number;
+  nonce?: string;
   ciphertext?: string;
-  tag?: string;
 };
 
 export type MobileRelaySecureTransportApi = {

@@ -1,9 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import { app } from "electron";
 
+import {
+  buildRelayKeyFingerprint,
+  generateRelayKeyPair,
+  isValidRelayKeyPair,
+  isValidRelayPublicKey,
+} from "../../../../src/shared/mobileRelaySecurity";
 import type {
   MobileRelayStoreState,
   MobileRelayTrustedPhoneRecord,
@@ -13,13 +19,8 @@ function normalizeNonEmptyString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function fromBase64Url(value: string): string {
-  const padded = `${value}${"=".repeat((4 - (value.length % 4 || 4)) % 4)}`;
-  return padded.replace(/-/g, "+").replace(/_/g, "/");
-}
-
 export function buildTrustedPhoneFingerprint(publicKeyBase64: string): string {
-  return createHash("sha256").update(Buffer.from(publicKeyBase64, "base64")).digest("hex").slice(0, 16);
+  return buildRelayKeyFingerprint(publicKeyBase64);
 }
 
 function normalizeTrustedPhoneRecord(raw: unknown): MobileRelayTrustedPhoneRecord | null {
@@ -29,7 +30,7 @@ function normalizeTrustedPhoneRecord(raw: unknown): MobileRelayTrustedPhoneRecor
   const record = raw as Record<string, unknown>;
   const phoneDeviceId = normalizeNonEmptyString(record.phoneDeviceId);
   const phoneIdentityPublicKey = normalizeNonEmptyString(record.phoneIdentityPublicKey);
-  if (!phoneDeviceId || !phoneIdentityPublicKey) {
+  if (!phoneDeviceId || !phoneIdentityPublicKey || !isValidRelayPublicKey(phoneIdentityPublicKey)) {
     return null;
   }
   return {
@@ -48,29 +49,41 @@ function normalizeStoreState(raw: unknown): MobileRelayStoreState {
   }
   const record = raw as Record<string, unknown>;
   const macDeviceId = normalizeNonEmptyString(record.macDeviceId);
+  if (!macDeviceId) {
+    throw new Error("device state is incomplete");
+  }
   const macIdentityPublicKey = normalizeNonEmptyString(record.macIdentityPublicKey);
   const macIdentityPrivateKey = normalizeNonEmptyString(record.macIdentityPrivateKey);
-  if (!macDeviceId || !macIdentityPublicKey || !macIdentityPrivateKey) {
-    throw new Error("device state is incomplete");
+  const trustedPhone = normalizeTrustedPhoneRecord(record.trustedPhone);
+  if (!isValidRelayKeyPair({
+    publicKeyBase64: macIdentityPublicKey,
+    privateKeyBase64: macIdentityPrivateKey,
+  })) {
+    const keyPair = generateRelayKeyPair();
+    return {
+      version: 1,
+      macDeviceId,
+      macIdentityPublicKey: keyPair.publicKeyBase64,
+      macIdentityPrivateKey: keyPair.privateKeyBase64,
+      trustedPhone: null,
+    };
   }
   return {
     version: 1,
     macDeviceId,
     macIdentityPublicKey,
     macIdentityPrivateKey,
-    trustedPhone: normalizeTrustedPhoneRecord(record.trustedPhone),
+    trustedPhone,
   };
 }
 
 function createStoreState(): MobileRelayStoreState {
-  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const publicJwk = publicKey.export({ format: "jwk" }) as { x: string };
-  const privateJwk = privateKey.export({ format: "jwk" }) as { d: string };
+  const keyPair = generateRelayKeyPair();
   return {
     version: 1,
     macDeviceId: randomUUID(),
-    macIdentityPublicKey: fromBase64Url(publicJwk.x),
-    macIdentityPrivateKey: fromBase64Url(privateJwk.d),
+    macIdentityPublicKey: keyPair.publicKeyBase64,
+    macIdentityPrivateKey: keyPair.privateKeyBase64,
     trustedPhone: null,
   };
 }
@@ -86,8 +99,17 @@ function getStoreFile(userDataPath = app.getPath("userData")): string {
 export function loadOrCreateMobileRelayStoreState(userDataPath = app.getPath("userData")): MobileRelayStoreState {
   const storeFile = getStoreFile(userDataPath);
   if (fs.existsSync(storeFile)) {
-    const raw = fs.readFileSync(storeFile, "utf8");
-    return normalizeStoreState(JSON.parse(raw));
+    try {
+      const raw = fs.readFileSync(storeFile, "utf8");
+      const normalized = normalizeStoreState(JSON.parse(raw));
+      fs.writeFileSync(storeFile, JSON.stringify(normalized, null, 2), { encoding: "utf8", mode: 0o600 });
+      return normalized;
+    } catch {
+      const created = createStoreState();
+      fs.mkdirSync(getStoreDir(userDataPath), { recursive: true });
+      fs.writeFileSync(storeFile, JSON.stringify(created, null, 2), { encoding: "utf8", mode: 0o600 });
+      return created;
+    }
   }
   const created = createStoreState();
   fs.mkdirSync(getStoreDir(userDataPath), { recursive: true });

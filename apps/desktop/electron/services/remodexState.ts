@@ -1,8 +1,12 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import {
+  buildRelayKeyFingerprint,
+  isValidRelayKeyPair,
+  isValidRelayPublicKey,
+} from "../../../../src/shared/mobileRelaySecurity";
 import type {
   MobileRelayIdentityState,
   MobileRelayPairingPayload,
@@ -255,6 +259,12 @@ function parseIdentityState(
   if (!macDeviceId || !macIdentityPublicKey || !macIdentityPrivateKey) {
     throw new Error("Remodex device state is incomplete.");
   }
+  if (!isValidRelayKeyPair({
+    publicKeyBase64: macIdentityPublicKey,
+    privateKeyBase64: macIdentityPrivateKey,
+  })) {
+    throw new Error("Remodex device state contains invalid secure transport keys.");
+  }
 
   return {
     macDeviceId,
@@ -311,7 +321,7 @@ function parseTrustedPhones(value: unknown): Record<string, string> {
   for (const [phoneDeviceId, phoneIdentityPublicKey] of Object.entries(value as JsonRecord)) {
     const normalizedDeviceId = normalizeNonEmptyString(phoneDeviceId);
     const normalizedPublicKey = normalizeNonEmptyString(phoneIdentityPublicKey);
-    if (!normalizedDeviceId || !normalizedPublicKey) {
+    if (!normalizedDeviceId || !normalizedPublicKey || !isValidRelayPublicKey(normalizedPublicKey)) {
       continue;
     }
     trustedPhones[normalizedDeviceId] = normalizedPublicKey;
@@ -394,5 +404,5 @@ function normalizeNonEmptyString(value: unknown): string {
 }
 
 function buildTrustedPhoneFingerprint(publicKeyBase64: string): string {
-  return createHash("sha256").update(Buffer.from(publicKeyBase64, "base64")).digest("hex").slice(0, 16);
+  return buildRelayKeyFingerprint(publicKeyBase64);
 }

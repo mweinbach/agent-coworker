@@ -11,6 +11,7 @@ import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
 import {
   decodeBase64Strict,
   formatAttachmentDisplayText,
+  getAttachmentByteLengthValidationMessage,
   getAttachmentCountValidationMessage,
   getAttachmentTotalBase64Size,
   getAttachmentValidationMessage,
@@ -81,6 +82,42 @@ function classifyStructuredTurnError(err: unknown): ClassifiedTurnError | null {
     code,
     source: defaultSourceByErrorCode[code] ?? "session",
   };
+}
+
+type AttachmentContentPartType = "image" | "audio" | "video" | "document";
+
+function getAttachmentContentPartType(
+  mimeType: string,
+  opts: { modelSupportsImages: boolean; isGoogleProvider: boolean },
+): AttachmentContentPartType | null {
+  const mime = mimeType.toLowerCase();
+  if (mime.startsWith("image/")) {
+    return opts.modelSupportsImages ? "image" : null;
+  }
+  if (!opts.isGoogleProvider) {
+    return null;
+  }
+  if (mime.startsWith("audio/")) {
+    return "audio";
+  }
+  if (mime.startsWith("video/")) {
+    return "video";
+  }
+  if (mime === "application/pdf") {
+    return "document";
+  }
+  return null;
+}
+
+function getUploadedMultimodalAttachmentValidationMessage(byteLengths: readonly number[]): string | null {
+  const message = getAttachmentByteLengthValidationMessage(byteLengths);
+  if (message === "File too large to send inline (max 25MB)") {
+    return "Uploaded multimodal file too large to send to the model (max 25MB)";
+  }
+  if (message === "Inline attachments too large in total (max 25MB combined)") {
+    return "Uploaded multimodal attachments too large to send to the model (max 25MB combined)";
+  }
+  return message;
 }
 
 function makeId(): string {
@@ -986,26 +1023,18 @@ export class TurnExecutionManager {
         text: `[System: The user uploaded a file which has been saved to ${diskPath}]`,
       });
 
-      const mime = attachment.mimeType.toLowerCase();
-      const isImage = mime.startsWith("image/");
-      const isGeminiMultimodal =
-        mime.startsWith("audio/") ||
-        mime.startsWith("video/") ||
-        mime === "application/pdf";
+      const contentPartType = getAttachmentContentPartType(attachment.mimeType, {
+        modelSupportsImages,
+        isGoogleProvider,
+      });
 
-      if (!multimodalData && ((isImage && modelSupportsImages) || (isGeminiMultimodal && isGoogleProvider))) {
+      if (!multimodalData && contentPartType) {
         multimodalData = (await fs.readFile(diskPath)).toString("base64");
       }
 
-      if (multimodalData && isImage && modelSupportsImages) {
+      if (multimodalData && contentPartType) {
         contentParts.push({
-          type: "image",
-          data: multimodalData,
-          mimeType: attachment.mimeType,
-        });
-      } else if (multimodalData && isGeminiMultimodal && isGoogleProvider) {
-        contentParts.push({
-          type: "image",
+          type: contentPartType,
           data: multimodalData,
           mimeType: attachment.mimeType,
         });
@@ -1027,6 +1056,10 @@ export class TurnExecutionManager {
     }
 
     const resolvedUploadsDir = path.resolve(this.getUploadsDirectory());
+    const config = this.context.state.config;
+    const multimodalUploadedByteLengths: number[] = [];
+    const modelSupportsImages = supportsImageInput(config.provider, config.model);
+    const isGoogleProvider = config.provider === "google";
     for (const attachment of uploadedAttachments) {
       const diskPath = path.resolve(attachment.path);
       if (!diskPath.startsWith(resolvedUploadsDir + path.sep)) {
@@ -1034,9 +1067,22 @@ export class TurnExecutionManager {
       }
       try {
         await fs.access(diskPath);
+        const contentPartType = getAttachmentContentPartType(attachment.mimeType, {
+          modelSupportsImages,
+          isGoogleProvider,
+        });
+        if (contentPartType) {
+          const stat = await fs.stat(diskPath);
+          multimodalUploadedByteLengths.push(stat.size);
+        }
       } catch {
         throw makeStructuredSessionError("validation_failed", `Uploaded file does not exist: ${diskPath}`);
       }
+    }
+
+    const validationMessage = getUploadedMultimodalAttachmentValidationMessage(multimodalUploadedByteLengths);
+    if (validationMessage) {
+      throw makeStructuredSessionError("validation_failed", validationMessage);
     }
   }
 

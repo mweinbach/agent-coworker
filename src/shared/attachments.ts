@@ -73,9 +73,23 @@ export function getAttachmentByteLengthValidationMessage(
   if (!byteLengths || byteLengths.length === 0) {
     return null;
   }
-  return getAttachmentValidationMessageForBase64Sizes(
-    byteLengths.map((byteLength) => getBase64SizeFromByteLength(byteLength)),
-  );
+  const attachmentCountMessage = getAttachmentCountValidationMessage(byteLengths.length);
+  if (attachmentCountMessage) {
+    return attachmentCountMessage;
+  }
+
+  let totalByteLength = 0;
+  for (const byteLength of byteLengths) {
+    if (byteLength > MAX_ATTACHMENT_INLINE_BYTE_SIZE) {
+      return "File too large to send inline (max 25MB)";
+    }
+    totalByteLength += byteLength;
+    if (totalByteLength > MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE) {
+      return "Inline attachments too large in total (max 25MB combined)";
+    }
+  }
+
+  return null;
 }
 
 export function getAttachmentTotalBase64Size(

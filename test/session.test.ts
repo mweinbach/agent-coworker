@@ -17,6 +17,7 @@ import type {
 } from "../src/server/sessionBackup";
 import type { SessionInfoState } from "../src/server/session/SessionContext";
 import {
+  MAX_ATTACHMENT_INLINE_BYTE_SIZE,
   MAX_ATTACHMENT_BASE64_SIZE,
   MAX_TURN_ATTACHMENT_COUNT,
   MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE,
@@ -3628,6 +3629,81 @@ describe("AgentSession", () => {
         data: Buffer.from("uploaded-image-bytes").toString("base64"),
         mimeType: "image/png",
       });
+    });
+
+    test("preserves correct multimodal part types for uploaded Google attachments", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const uploadsDir = path.join(dir, "uploads");
+      const pdfPath = path.join(uploadsDir, "notes.pdf");
+      const audioPath = path.join(uploadsDir, "voice.mp3");
+      const videoPath = path.join(uploadsDir, "clip.mp4");
+      await fs.mkdir(uploadsDir, { recursive: true });
+      await fs.writeFile(pdfPath, "pdf-bytes");
+      await fs.writeFile(audioPath, "audio-bytes");
+      await fs.writeFile(videoPath, "video-bytes");
+      const { session } = makeSession({
+        config: makeConfig(dir),
+      });
+
+      await session.sendUserMessage("", "msg-uploaded-google-multimodal", undefined, [
+        {
+          filename: "notes.pdf",
+          path: pdfPath,
+          mimeType: "application/pdf",
+        },
+        {
+          filename: "voice.mp3",
+          path: audioPath,
+          mimeType: "audio/mp3",
+        },
+        {
+          filename: "clip.mp4",
+          path: videoPath,
+          mimeType: "video/mp4",
+        },
+      ]);
+
+      const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(call.messages.at(-1)?.content).toContainEqual({
+        type: "document",
+        data: Buffer.from("pdf-bytes").toString("base64"),
+        mimeType: "application/pdf",
+      });
+      expect(call.messages.at(-1)?.content).toContainEqual({
+        type: "audio",
+        data: Buffer.from("audio-bytes").toString("base64"),
+        mimeType: "audio/mp3",
+      });
+      expect(call.messages.at(-1)?.content).toContainEqual({
+        type: "video",
+        data: Buffer.from("video-bytes").toString("base64"),
+        mimeType: "video/mp4",
+      });
+    });
+
+    test("rejects oversized uploaded multimodal attachments before emitting a user_message event", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-attachments-"));
+      const uploadsDir = path.join(dir, "uploads");
+      const uploadedPath = path.join(uploadsDir, "oversized.pdf");
+      await fs.mkdir(uploadsDir, { recursive: true });
+      await fs.writeFile(uploadedPath, "");
+      await fs.truncate(uploadedPath, MAX_ATTACHMENT_INLINE_BYTE_SIZE + 1);
+      const { session, events } = makeSession({
+        config: makeConfig(dir),
+      });
+
+      await session.sendUserMessage("", "msg-uploaded-too-large", undefined, [{
+        filename: "oversized.pdf",
+        path: uploadedPath,
+        mimeType: "application/pdf",
+      }]);
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toMatchObject({
+        code: "validation_failed",
+        message: "Uploaded multimodal file too large to send to the model (max 25MB)",
+      });
+      expect(events.some((e) => e.type === "user_message")).toBe(false);
     });
 
     test("rejects oversized attachment payloads before emitting a user_message event", async () => {

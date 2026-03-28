@@ -155,11 +155,18 @@ function buildTextContent(text: unknown): Record<string, unknown> | null {
 }
 
 function buildImageContent(record: Record<string, unknown>): Record<string, unknown> | null {
+  return buildBinaryContent(record, "image");
+}
+
+function buildBinaryContent(
+  record: Record<string, unknown>,
+  type: "image" | "audio" | "video" | "document",
+): Record<string, unknown> | null {
   const data = asNonEmptyString(record.data);
   const mimeType = asNonEmptyString(record.mimeType) ?? asNonEmptyString(record.mime_type);
   if (!data || !mimeType) return null;
   return {
-    type: "image",
+    type,
     data,
     mime_type: mimeType,
   };
@@ -189,6 +196,12 @@ function convertRichContentParts(parts: unknown): Array<Record<string, unknown>>
     if (partType === "image" || partType === "input_image") {
       const imagePart = buildImageContent(record);
       if (imagePart) content.push(imagePart);
+      continue;
+    }
+
+    if (partType === "audio" || partType === "video" || partType === "document") {
+      const binaryPart = buildBinaryContent(record, partType);
+      if (binaryPart) content.push(binaryPart);
     }
   }
 

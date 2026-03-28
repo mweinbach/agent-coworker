@@ -2,9 +2,10 @@ import React from "react";
 import { Modal, Pressable, View, Text, ScrollView, PlatformColor } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { SlideInRight, SlideOutRight, FadeIn, FadeOut } from "react-native-reanimated";
-import { Image } from "expo-image";
 
 import { useAppTheme } from "@/theme/use-app-theme";
+
+import { SFSymbol } from "./ui/sf-symbol";
 
 type Props = {
   visible: boolean;
@@ -59,7 +60,7 @@ export function FileExplorerDrawer({ visible, onClose, workspaceName = "Cowork" 
               FILES / {workspaceName}
             </Text>
             <Pressable onPress={onClose} hitSlop={10}>
-              <Image source="sf:xmark" style={{ width: 16, height: 16, tintColor: theme.textSecondary }} />
+              <SFSymbol name="xmark" size={16} color={theme.textSecondary} />
             </Pressable>
           </View>
           
@@ -70,25 +71,25 @@ export function FileExplorerDrawer({ visible, onClose, workspaceName = "Cowork" 
             {/* Placeholder File Tree */}
             <View style={{ gap: 12 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <Image source="sf:chevron.right" style={{ width: 12, height: 12, tintColor: theme.textTertiary }} />
-                <Image source="sf:folder" style={{ width: 18, height: 18, tintColor: theme.primary }} />
+                <SFSymbol name="chevron.right" size={12} color={theme.textTertiary} />
+                <SFSymbol name="folder" size={18} color={theme.primary} />
                 <Text style={{ color: theme.text, fontSize: 16 }}>src</Text>
               </View>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <Image source="sf:chevron.down" style={{ width: 12, height: 12, tintColor: theme.textTertiary }} />
-                <Image source="sf:folder" style={{ width: 18, height: 18, tintColor: theme.primary }} />
+                <SFSymbol name="chevron.down" size={12} color={theme.textTertiary} />
+                <SFSymbol name="folder" size={18} color={theme.primary} />
                 <Text style={{ color: theme.text, fontSize: 16 }}>components</Text>
               </View>
               <View style={{ paddingLeft: 20, gap: 12 }}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                  <Image source="sf:doc.text" style={{ width: 16, height: 16, tintColor: theme.textSecondary }} />
+                  <SFSymbol name="doc.text" size={16} color={theme.textSecondary} />
                   <View>
                     <Text style={{ color: theme.text, fontSize: 15 }}>Button.tsx</Text>
                     <Text style={{ color: theme.textTertiary, fontSize: 12 }}>2 KB · Today</Text>
                   </View>
                 </View>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                  <Image source="sf:doc.text" style={{ width: 16, height: 16, tintColor: theme.textSecondary }} />
+                  <SFSymbol name="doc.text" size={16} color={theme.textSecondary} />
                   <View>
                     <Text style={{ color: theme.text, fontSize: 15 }}>Modal.tsx</Text>
                     <Text style={{ color: theme.textTertiary, fontSize: 12 }}>4 KB · Yesterday</Text>
@@ -96,7 +97,7 @@ export function FileExplorerDrawer({ visible, onClose, workspaceName = "Cowork" 
                 </View>
               </View>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <Image source="sf:doc.text" style={{ width: 16, height: 16, tintColor: theme.textSecondary }} />
+                <SFSymbol name="doc.text" size={16} color={theme.textSecondary} />
                 <View>
                   <Text style={{ color: theme.text, fontSize: 15 }}>package.json</Text>
                   <Text style={{ color: theme.textTertiary, fontSize: 12 }}>1.2 KB · Mar 20</Text>

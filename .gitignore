@@ -39,3 +39,4 @@ __pycache__/
 tasks/todo.md
 # heroui-agents-md
 .heroui-docs/
+/apps/mobile/dist-export

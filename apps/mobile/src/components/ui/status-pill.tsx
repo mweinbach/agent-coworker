@@ -40,18 +40,18 @@ export function StatusPill({ label, tone = "neutral" }: StatusPillProps) {
         borderRadius: 999,
         borderCurve: "continuous",
         backgroundColor: palette.backgroundColor,
-        paddingHorizontal: 10,
-        paddingVertical: 5,
+        paddingHorizontal: 11,
+        paddingVertical: 6,
       }}
     >
       <Text
         selectable
         style={{
           color: palette.color,
-          fontSize: 11,
+          fontSize: 10,
           fontWeight: "700",
           textTransform: "uppercase",
-          letterSpacing: 0.5,
+          letterSpacing: 0.7,
         }}
       >
         {label}

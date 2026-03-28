@@ -1,5 +1,7 @@
 # Lessons
 
+- When the user mentions merge errors in this repo, immediately scan for conflict markers and `UU` paths before continuing implementation; resolve the active merge state first so new edits do not stack on unresolved files.
+- When redesigning native mobile screens in this repo, do not treat a large-title header as disposable chrome; if the user expects a collapsable top header, preserve the native scroll-collapse behavior and improve the content composition underneath it instead.
 - For desktop remote-access fallback in this repo, when Remodex is absent, keep using the Remodex relay and only fall back on Cowork-managed local state; missing local Remodex files are not a reason to switch relays.
 - For Google native citation UX in this repo, do not assume the stored annotation title is the best source label; opaque grounding redirects can often be resolved in the harness to the final article URL and page title, which is better than piling more logic into the desktop renderer.
 - For JSON-RPC CLI migrations in this repo, move the whole client contract together: read thread ids from the `{ thread }` envelope, hydrate local CLI state from control-event result payloads, fetch provider auth methods before `/connect`, send API keys through `setApiKey`, clear budgets through `usageBudget/set`, and match streamed `delta`/`toolCall` payload names exactly.

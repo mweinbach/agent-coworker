@@ -19,7 +19,7 @@ export function SectionCard({ title, description, action, children }: SectionCar
         borderRadius: 24,
         borderCurve: "continuous",
         borderWidth: 1,
-        borderColor: theme.border,
+        borderColor: theme.borderMuted,
         backgroundColor: theme.surface,
         padding: 18,
         boxShadow: theme.shadow,
@@ -38,8 +38,9 @@ export function SectionCard({ title, description, action, children }: SectionCar
             selectable
             style={{
               color: theme.text,
-              fontSize: 16,
+              fontSize: 17,
               fontWeight: "700",
+              letterSpacing: -0.2,
             }}
           >
             {title}
@@ -49,8 +50,8 @@ export function SectionCard({ title, description, action, children }: SectionCar
               selectable
               style={{
                 color: theme.textSecondary,
-                fontSize: 13,
-                lineHeight: 18,
+                fontSize: 14,
+                lineHeight: 20,
               }}
             >
               {description}

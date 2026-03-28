@@ -12,14 +12,15 @@ type ScreenProps = PropsWithChildren<{
 export function Screen({ children, scroll = false, contentStyle }: ScreenProps) {
   const insets = useSafeAreaInsets();
   const theme = useAppTheme();
+
   const inner = (
     <View
       style={[
         {
-          flex: 1,
+          flex: scroll ? undefined : 1,
           gap: 18,
-          paddingHorizontal: 20,
-          paddingTop: 18,
+          paddingHorizontal: 18,
+          paddingTop: 10,
           paddingBottom: Math.max(insets.bottom + 24, 32),
         },
         contentStyle,
@@ -43,6 +44,7 @@ export function Screen({ children, scroll = false, contentStyle }: ScreenProps) 
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{ flexGrow: 1 }}
       keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
     >
       {inner}
     </ScrollView>

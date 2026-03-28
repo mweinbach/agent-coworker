@@ -5,5 +5,5 @@ import { usePairingStore } from "@/features/pairing/pairingStore";
 
 export default function IndexScreen() {
   const isConnected = usePairingStore((state) => isWorkspaceConnectionReady(state.connectionState));
-  return <Redirect href={isConnected ? "/(app)/(tabs)/(threads)" : "/(pairing)"} />;
+  return <Redirect href={isConnected ? "/(app)/(tabs)/threads" : "/(pairing)"} />;
 }

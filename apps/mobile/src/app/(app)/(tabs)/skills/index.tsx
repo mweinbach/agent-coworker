@@ -54,6 +54,15 @@ export default function SkillsScreen() {
 
   return (
     <Screen scroll contentStyle={{ gap: 18 }}>
+      <SectionCard
+        title="Workspace skills"
+        description="Install from skills.sh, GitHub, or local paths, then inspect what is actually effective in the active workspace."
+      >
+        <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
+          This is the same managed skill surface the desktop control session exposes, now reachable directly from a top-level mobile page.
+        </Text>
+      </SectionCard>
+
       {loading && skills.length === 0 ? (
         <View style={{ padding: 40, alignItems: "center" }}>
           <ActivityIndicator size="large" color={theme.primary} />

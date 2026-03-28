@@ -1,26 +1,30 @@
 import { Stack } from "expo-router/stack";
-import { PlatformColor } from "react-native";
+
+import { useAppTheme } from "@/theme/use-app-theme";
 
 export default function AppLayout() {
+  const theme = useAppTheme();
+
   return (
     <Stack
       screenOptions={{
-        headerLargeTitle: true,
         headerTransparent: true,
         headerShadowVisible: false,
+        headerLargeTitle: true,
         headerLargeTitleShadowVisible: false,
-        headerLargeStyle: { backgroundColor: "transparent" },
-        headerTitleStyle: { color: PlatformColor("label") as any },
         headerBlurEffect: "none",
+        headerLargeStyle: { backgroundColor: "transparent" },
+        headerTitleStyle: { color: theme.text, fontWeight: "700" },
+        headerLargeTitleStyle: { color: theme.text, fontWeight: "800" },
+        headerTintColor: theme.text,
         headerBackButtonDisplayMode: "minimal",
+        contentStyle: { backgroundColor: theme.background },
       }}
     >
       <Stack.Screen
-        name="index"
+        name="(tabs)"
         options={{
-          title: "Threads",
-          // The title should actually probably be the workspace name according to design, 
-          // or we can set it dynamically in the screen itself using Stack.Screen.
+          headerShown: false,
         }}
       />
       <Stack.Screen
@@ -32,10 +36,6 @@ export default function AppLayout() {
       />
       
       {/* Settings Modal or Pushed Group */}
-      <Stack.Screen
-        name="settings/index"
-        options={{ title: "Settings" }}
-      />
       <Stack.Screen
         name="settings/providers"
         options={{ title: "Providers", headerLargeTitle: false }}
@@ -49,17 +49,6 @@ export default function AppLayout() {
         options={{ title: "Usage", headerLargeTitle: false }}
       />
       
-      {/* Skills Screen */}
-      <Stack.Screen
-        name="skills/index"
-        options={{ title: "Skills" }}
-      />
-
-      {/* Workspace Settings */}
-      <Stack.Screen
-        name="workspace/index"
-        options={{ title: "Workspace" }}
-      />
       <Stack.Screen
         name="workspace/general"
         options={{ title: "General", headerLargeTitle: false }}
@@ -73,16 +62,6 @@ export default function AppLayout() {
         options={{ title: "Backups", headerLargeTitle: false }}
       />
 
-      {/* Modals and Sheets */}
-      <Stack.Screen
-        name="workspace-switcher"
-        options={{
-          presentation: "formSheet",
-          sheetGrabberVisible: true,
-          sheetAllowedDetents: [0.5, 1.0],
-          contentStyle: { backgroundColor: "transparent" },
-        }}
-      />
     </Stack>
   );
 }

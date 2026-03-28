@@ -9,18 +9,22 @@ export default function PairingLayout() {
     <Stack
       screenOptions={{
         headerLargeTitle: true,
-        headerShadowVisible: false,
         headerTransparent: true,
-        headerTintColor: theme.text,
-        headerStyle: {
-          backgroundColor: theme.background,
+        headerShadowVisible: false,
+        headerLargeTitleShadowVisible: false,
+        headerBlurEffect: "none",
+        headerLargeStyle: {
+          backgroundColor: "transparent",
         },
+        headerTintColor: theme.text,
         headerLargeTitleStyle: {
           color: theme.text,
+          fontWeight: "700",
         },
         headerTitleStyle: {
           color: theme.text,
         },
+        headerBackButtonDisplayMode: "minimal",
       }}
     >
       <Stack.Screen
@@ -35,7 +39,7 @@ export default function PairingLayout() {
           title: "Scan Desktop",
           headerLargeTitle: false,
           headerBackButtonDisplayMode: "minimal",
-          presentation: "card",
+          presentation: "modal",
         }}
       />
     </Stack>

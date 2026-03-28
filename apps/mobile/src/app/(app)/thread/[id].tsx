@@ -1,13 +1,13 @@
 import { Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { KeyboardAvoidingView, Pressable, FlatList, Text, View } from "react-native";
-import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ComposerBar } from "@/components/ComposerBar";
 import { PendingRequestCard } from "@/components/thread/pending-request-card";
 import { ThreadFeedItem } from "@/components/thread/thread-feed-item";
 import { Screen } from "@/components/ui/screen";
+import { SFSymbol } from "@/components/ui/sf-symbol";
 import { StatusPill } from "@/components/ui/status-pill";
 import { FileExplorerDrawer } from "@/components/FileExplorerDrawer";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
@@ -75,10 +75,10 @@ export default function ThreadDetailScreen() {
           headerRight: () => (
             <View style={{ flexDirection: "row", gap: 16 }}>
               <Pressable onPress={() => setDrawerVisible(true)}>
-                <Image source="sf:folder" style={{ width: 24, height: 24, tintColor: theme.text }} />
+                <SFSymbol name="folder" size={24} color={theme.text} />
               </Pressable>
               <Pressable onPress={() => {/* open overflow */}}>
-                <Image source="sf:ellipsis" style={{ width: 24, height: 24, tintColor: theme.text }} />
+                <SFSymbol name="ellipsis" size={24} color={theme.text} />
               </Pressable>
               {pendingRequest ? (
                 <Pressable onPress={() => { void interruptCurrentThread(); }}>

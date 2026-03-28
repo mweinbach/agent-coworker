@@ -1,31 +1,293 @@
-import { Link, useRouter } from "expo-router";
+import { Link, Stack, useRouter } from "expo-router";
+import { useEffect } from "react";
 import { Pressable, Text, View } from "react-native";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  FadeInUp,
+  FadeInDown,
+} from "react-native-reanimated";
 
+import { HeaderGlassButton } from "@/components/ui/header-glass-button";
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
+import { SFSymbol } from "@/components/ui/sf-symbol";
 import { StatusPill } from "@/components/ui/status-pill";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import {
   describeTransportMode,
   describeTransportStatus,
   isWorkspaceConnectionReady,
-  toneForTransportState,
 } from "@/features/relay/connectionState";
 import type { RelayConnectionStatus, RelayTransportMode } from "@/features/relay/relayTypes";
 import { useAppTheme } from "@/theme/use-app-theme";
 
+type FeatureItemProps = {
+  icon: string;
+  title: string;
+  description: string;
+  index: number;
+};
+
+function FeatureItem({ icon, title, description, index }: FeatureItemProps) {
+  const theme = useAppTheme();
+
+  return (
+    <Animated.View
+      entering={FadeInUp.delay(index * 80).duration(400)}
+    >
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 14,
+          borderRadius: 22,
+          borderCurve: "continuous",
+          borderWidth: 1,
+          borderColor: theme.borderMuted,
+          backgroundColor: theme.surfaceMuted,
+          padding: 14,
+        }}
+      >
+        <View
+          style={{
+            width: 38,
+            height: 38,
+            borderRadius: 12,
+            borderCurve: "continuous",
+            backgroundColor: theme.surfaceElevated,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <SFSymbol name={icon} size={19} color={theme.primary} />
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text selectable style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>
+            {title}
+          </Text>
+          <Text
+            selectable
+            style={{
+              color: theme.textSecondary,
+              fontSize: 13,
+              lineHeight: 18,
+            }}
+          >
+            {description}
+          </Text>
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
 type DetailRowProps = {
   label: string;
   value: string;
+  icon?: string;
   emphasize?: boolean;
   mono?: boolean;
 };
 
+function DetailRow({ label, value, icon, emphasize = false, mono = false }: DetailRowProps) {
+  const theme = useAppTheme();
+
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+        borderRadius: 16,
+        borderCurve: "continuous",
+        backgroundColor: theme.surfaceElevated,
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+      }}
+    >
+      {icon && (
+        <View
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            borderCurve: "continuous",
+            backgroundColor: theme.backgroundMuted,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <SFSymbol name={icon} size={16} color={theme.textSecondary} />
+        </View>
+      )}
+      <View style={{ flex: 1, gap: 3 }}>
+        <Text selectable style={{ color: theme.textSecondary, fontSize: 12, fontWeight: "500" }}>
+          {label}
+        </Text>
+        <Text
+          selectable
+          style={{
+            color: theme.text,
+            fontSize: emphasize ? 15 : 14,
+            fontWeight: emphasize ? "700" : "500",
+            fontVariant: mono ? ["tabular-nums"] : undefined,
+          }}
+        >
+          {value}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 type StepRowProps = {
-  step: string;
+  step: number;
   title: string;
   description: string;
+  icon: string;
+  delay?: number;
 };
+
+function StepRow({ step, title, description, icon, delay = 0 }: StepRowProps) {
+  const theme = useAppTheme();
+
+  return (
+    <Animated.View
+      entering={FadeInUp.delay(delay).duration(500)}
+      style={{
+        flexDirection: "row",
+        alignItems: "flex-start",
+        gap: 14,
+      }}
+    >
+      <View
+        style={{
+          height: 36,
+          width: 36,
+          alignItems: "center",
+          justifyContent: "center",
+          borderRadius: 12,
+          borderCurve: "continuous",
+          backgroundColor: theme.primaryMuted,
+        }}
+      >
+        <SFSymbol name={icon} size={18} color={theme.primary} />
+      </View>
+      <View style={{ flex: 1, gap: 4, paddingTop: 2 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <View
+            style={{
+              width: 18,
+              height: 18,
+              borderRadius: 9,
+              borderCurve: "continuous",
+              backgroundColor: theme.backgroundMuted,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Text
+              selectable
+              style={{
+                color: theme.textSecondary,
+                fontSize: 10,
+                fontWeight: "800",
+                fontVariant: ["tabular-nums"],
+              }}
+            >
+              {step}
+            </Text>
+          </View>
+          <Text selectable style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>
+            {title}
+          </Text>
+        </View>
+        <Text
+          selectable
+          style={{
+            color: theme.textSecondary,
+            fontSize: 14,
+            lineHeight: 20,
+          }}
+        >
+          {description}
+        </Text>
+      </View>
+    </Animated.View>
+  );
+}
+
+function PrimaryButton({
+  children,
+  onPress,
+  icon,
+}: {
+  children: React.ReactNode;
+  onPress?: () => void;
+  icon?: string;
+}) {
+  const theme = useAppTheme();
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => ({
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+        borderRadius: 16,
+        borderCurve: "continuous",
+        backgroundColor: pressed ? theme.primaryMuted : theme.primary,
+        paddingHorizontal: 18,
+        paddingVertical: 14,
+        boxShadow: "0 10px 24px rgba(4, 17, 16, 0.18)",
+      })}
+    >
+      {icon && <SFSymbol name={icon} size={18} color={theme.primaryText} />}
+      <Text selectable style={{ color: theme.primaryText, fontSize: 16, fontWeight: "700" }}>
+        {children}
+      </Text>
+    </Pressable>
+  );
+}
+
+function SecondaryButton({
+  children,
+  onPress,
+  icon,
+}: {
+  children: React.ReactNode;
+  onPress?: () => void;
+  icon?: string;
+}) {
+  const theme = useAppTheme();
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => ({
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+        borderRadius: 16,
+        borderCurve: "continuous",
+        borderWidth: 1,
+        borderColor: theme.border,
+        backgroundColor: pressed ? theme.surfaceMuted : theme.surfaceElevated,
+        paddingHorizontal: 18,
+        paddingVertical: 14,
+      })}
+    >
+      {icon && <SFSymbol name={icon} size={18} color={theme.text} />}
+      <Text selectable style={{ color: theme.text, fontSize: 16, fontWeight: "700" }}>
+        {children}
+      </Text>
+    </Pressable>
+  );
+}
 
 function describeHero(
   status: RelayConnectionStatus,
@@ -35,13 +297,13 @@ function describeHero(
 ): { title: string; body: string } {
   if (transportMode === "fallback" && status === "connected") {
     return {
-      title: "Fallback demo transport is active",
-      body: "This build is using the JavaScript fallback transport. It can demo thread flows locally, but it is not a live desktop workspace connection.",
+      title: "Demo mode active",
+      body: "This build uses JavaScript fallback transport for testing. It's not a live desktop connection.",
     };
   }
   if (transportMode === "unsupported") {
     return {
-      title: "Native transport is unavailable",
+      title: "Native transport unavailable",
       body: hasTrustedDesktop
         ? "This mobile build cannot open a real Remodex secure session yet. Re-scan a QR once native transport support lands."
         : "This mobile build cannot open a real Remodex secure session yet. Scan a QR again once native transport support lands.",
@@ -119,91 +381,6 @@ function describeRelay(connectionState: {
   }
 }
 
-function StepRow({ step, title, description }: StepRowProps) {
-  const theme = useAppTheme();
-
-  return (
-    <View
-      style={{
-        flexDirection: "row",
-        alignItems: "flex-start",
-        gap: 12,
-      }}
-    >
-      <View
-        style={{
-          height: 28,
-          width: 28,
-          alignItems: "center",
-          justifyContent: "center",
-          borderRadius: 999,
-          borderCurve: "continuous",
-          backgroundColor: theme.primaryMuted,
-        }}
-      >
-        <Text
-          selectable
-          style={{
-            color: theme.primary,
-            fontSize: 13,
-            fontWeight: "800",
-            fontVariant: ["tabular-nums"],
-          }}
-        >
-          {step}
-        </Text>
-      </View>
-      <View style={{ flex: 1, gap: 4 }}>
-        <Text selectable style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>
-          {title}
-        </Text>
-        <Text
-          selectable
-          style={{
-            color: theme.textSecondary,
-            fontSize: 14,
-            lineHeight: 20,
-          }}
-        >
-          {description}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
-function DetailRow({ label, value, emphasize = false, mono = false }: DetailRowProps) {
-  const theme = useAppTheme();
-
-  return (
-    <View
-      style={{
-        gap: 4,
-        borderRadius: 18,
-        borderCurve: "continuous",
-        backgroundColor: theme.surfaceElevated,
-        paddingHorizontal: 14,
-        paddingVertical: 12,
-      }}
-    >
-      <Text selectable style={{ color: theme.textSecondary, fontSize: 13 }}>
-        {label}
-      </Text>
-      <Text
-        selectable
-        style={{
-          color: theme.text,
-          fontSize: emphasize ? 16 : 14,
-          fontWeight: emphasize ? "700" : "500",
-          fontVariant: mono ? ["tabular-nums"] : undefined,
-        }}
-      >
-        {value}
-      </Text>
-    </View>
-  );
-}
-
 export default function PairingIndexRoute() {
   const router = useRouter();
   const theme = useAppTheme();
@@ -212,7 +389,6 @@ export default function PairingIndexRoute() {
   const reconnectTrusted = usePairingStore((state) => state.reconnectTrusted);
   const primaryTrustedDesktop = trustedDesktops[0] ?? null;
   const isConnected = isWorkspaceConnectionReady(connectionState);
-  const statusTone = toneForTransportState(connectionState);
   const statusLabel = describeTransportStatus(connectionState);
   const hero = describeHero(
     connectionState.status,
@@ -221,275 +397,356 @@ export default function PairingIndexRoute() {
     trustedDesktops.length > 0,
   );
 
+  const heroScale = useSharedValue(0.95);
+  const heroOpacity = useSharedValue(0);
+
+  useEffect(() => {
+    heroOpacity.value = withTiming(1, { duration: 400 });
+    heroScale.value = withSpring(1, { damping: 15, stiffness: 120 });
+  }, []);
+
+  const heroAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: heroScale.value }],
+    opacity: heroOpacity.value,
+  }));
+
   return (
-    <Screen scroll>
-      <View
-        style={{
-          gap: 18,
-          borderRadius: 32,
-          borderCurve: "continuous",
-          borderWidth: 1,
-          borderColor: theme.border,
-          backgroundColor: theme.surface,
-          padding: 22,
-          boxShadow: theme.shadow,
+    <>
+      <Stack.Screen
+        options={{
+          headerRight: () => (
+            <HeaderGlassButton
+              icon="ellipsis.circle"
+              onPress={() => router.push("/(app)/(tabs)/settings")}
+            />
+          ),
         }}
+      />
+      <Screen scroll contentStyle={{ gap: 16 }}>
+      <Animated.View
+        entering={FadeInDown.duration(500)}
+        style={heroAnimatedStyle}
       >
-        <View style={{ gap: 12 }}>
-          <StatusPill label={statusLabel} tone={statusTone} />
-          <View style={{ gap: 10 }}>
-            <Text
-              selectable
-              style={{
-                color: theme.text,
-                fontSize: 32,
-                lineHeight: 36,
-                fontWeight: "800",
-                letterSpacing: -0.6,
-              }}
-            >
-              {hero.title}
-            </Text>
-            <Text
-              selectable
-              style={{
-                color: theme.textSecondary,
-                fontSize: 15,
-                lineHeight: 22,
-              }}
-            >
-              {hero.body}
-            </Text>
-          </View>
-        </View>
-
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-          <Link href="/(pairing)/scan" asChild>
-            <Pressable
-              style={({ pressed }) => ({
-                borderRadius: 999,
-                borderCurve: "continuous",
-                backgroundColor: pressed ? theme.accent : theme.primary,
-                paddingHorizontal: 18,
-                paddingVertical: 12,
-              })}
-            >
-              <Text selectable style={{ color: theme.primaryText, fontSize: 15, fontWeight: "700" }}>
-                Scan desktop QR
-              </Text>
-            </Pressable>
-          </Link>
-
-          {isConnected ? (
-            <Pressable
-              onPress={() => {
-                router.replace("/(app)/(tabs)/(threads)");
-              }}
-              style={({ pressed }) => ({
-                borderRadius: 999,
-                borderCurve: "continuous",
-                borderWidth: 1,
-                borderColor: theme.border,
-                backgroundColor: pressed ? theme.surfaceMuted : "transparent",
-                paddingHorizontal: 18,
-                paddingVertical: 12,
-              })}
-            >
-              <Text selectable style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>
-                Open threads
-              </Text>
-            </Pressable>
-          ) : primaryTrustedDesktop ? (
-            <Pressable
-              onPress={() => {
-                void reconnectTrusted(primaryTrustedDesktop.macDeviceId);
-              }}
-              style={({ pressed }) => ({
-                borderRadius: 999,
-                borderCurve: "continuous",
-                borderWidth: 1,
-                borderColor: theme.border,
-                backgroundColor: pressed ? theme.surfaceMuted : "transparent",
-                paddingHorizontal: 18,
-                paddingVertical: 12,
-              })}
-            >
-              <Text selectable style={{ color: theme.text, fontSize: 15, fontWeight: "700" }}>
-                Reconnect saved desktop
-              </Text>
-            </Pressable>
-          ) : null}
-        </View>
-
         <View
           style={{
-            gap: 10,
-            borderRadius: 24,
+            gap: 18,
+            overflow: "hidden",
+            borderRadius: 32,
             borderCurve: "continuous",
             backgroundColor: theme.surfaceElevated,
-            padding: 16,
+            borderWidth: 1,
+            borderColor: theme.borderMuted,
+            padding: 22,
+            boxShadow: theme.shadow,
           }}
         >
-          <Text selectable style={{ color: theme.text, fontSize: 14, fontWeight: "700" }}>
-            What unlocks after pairing
-          </Text>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-            {[
-              "Live thread updates",
-              "Server prompt replies",
-              "Trusted one-tap reconnects",
-            ].map((item) => (
-              <View
-                key={item}
-                style={{
-                  borderRadius: 999,
-                  borderCurve: "continuous",
-                  backgroundColor: theme.backgroundMuted,
-                  paddingHorizontal: 12,
-                  paddingVertical: 8,
-                }}
-              >
-                <Text selectable style={{ color: theme.textSecondary, fontSize: 13, fontWeight: "600" }}>
-                  {item}
-                </Text>
-              </View>
-            ))}
-          </View>
-        </View>
-      </View>
-
-      <SectionCard
-        title="Start on your computer"
-        description="Cowork Mobile only becomes useful after Cowork Desktop shares its pairing code."
-      >
-        <StepRow
-          step="1"
-          title="Open Cowork Desktop"
-          description="Use the desktop app where your threads are already running."
-        />
-        <StepRow
-          step="2"
-          title="Show the pairing QR"
-          description="In Cowork Desktop, open Settings and the remote access screen to reveal the QR code."
-        />
-        <StepRow
-          step="3"
-          title="Scan it with this phone"
-          description="Cowork Mobile creates a secure relay session and saves the computer for quick reconnect later."
-        />
-      </SectionCard>
-
-      <SectionCard
-        title="Remote access status"
-        description={isConnected
-          ? "This phone is ready to browse threads and answer prompts."
-          : connectionState.transportMode === "fallback" && connectionState.status === "connected"
-            ? "Fallback demo transport is connected, but workspace controls stay disabled."
-            : "The technical details show up here after a desktop has been paired."}
-      >
-        <DetailRow label="State" value={statusLabel} emphasize />
-        <DetailRow label="Transport mode" value={describeTransportMode(connectionState.transportMode)} />
-        <DetailRow
-          label="Computer"
-          value={connectionState.connectedMacDeviceId ?? "No computer connected"}
-          emphasize={Boolean(connectionState.connectedMacDeviceId)}
-        />
-        <DetailRow label="Relay" value={describeRelay(connectionState)} />
-        {connectionState.sessionId ? (
-          <DetailRow label="Session" value={connectionState.sessionId} mono />
-        ) : null}
-        {connectionState.lastError ? (
-          <Text
-            selectable
-            style={{
-              color: theme.danger,
-              fontSize: 14,
-              lineHeight: 21,
-            }}
-          >
-            {connectionState.lastError}
-          </Text>
-        ) : null}
-      </SectionCard>
-
-      <SectionCard
-        title="Trusted desktops"
-        description={trustedDesktops.length === 0
-          ? "Saved desktops appear here after your first successful connection."
-          : `${trustedDesktops.length} saved ${trustedDesktops.length === 1 ? "desktop" : "desktops"}`}
-      >
-        {trustedDesktops.length === 0 ? (
-          <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
-            Nothing trusted yet. Scan the QR shown in Cowork Desktop to add your first computer.
-          </Text>
-        ) : (
-          trustedDesktops.map((trustedDesktop) => (
-            <View
-              key={trustedDesktop.macDeviceId}
-              style={{
-                gap: 10,
-                borderRadius: 20,
-                borderCurve: "continuous",
-                borderWidth: 1,
-                borderColor: theme.borderMuted,
-                backgroundColor: theme.surfaceElevated,
-                padding: 14,
-              }}
-            >
+          <View style={{ gap: 14 }}>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
               <View
                 style={{
                   flexDirection: "row",
-                  alignItems: "flex-start",
-                  justifyContent: "space-between",
-                  gap: 12,
+                  alignItems: "center",
+                  gap: 8,
+                  borderRadius: 999,
+                  borderCurve: "continuous",
+                  backgroundColor: theme.surfaceMuted,
+                  borderWidth: 1,
+                  borderColor: theme.borderMuted,
+                  paddingHorizontal: 12,
+                  paddingVertical: 7,
                 }}
               >
-                <View style={{ flex: 1, gap: 4 }}>
-                  <Text selectable style={{ color: theme.text, fontSize: 16, fontWeight: "700" }}>
-                    {trustedDesktop.displayName}
-                  </Text>
+                <SFSymbol
+                  name={isConnected ? "checkmark.shield.fill" : "questionmark"}
+                  size={16}
+                  color={theme.text}
+                />
+                <Text
+                  selectable
+                  style={{
+                    color: theme.text,
+                    fontSize: 11,
+                    fontWeight: "800",
+                    letterSpacing: 0.6,
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {statusLabel}
+                </Text>
+              </View>
+              {trustedDesktops.length > 0 ? (
+                <View
+                  style={{
+                    borderRadius: 999,
+                    borderCurve: "continuous",
+                    backgroundColor: theme.surfaceMuted,
+                    borderWidth: 1,
+                    borderColor: theme.borderMuted,
+                    paddingHorizontal: 12,
+                    paddingVertical: 7,
+                  }}
+                >
                   <Text
                     selectable
                     style={{
                       color: theme.textSecondary,
-                      fontSize: 13,
-                      fontVariant: ["tabular-nums"],
+                      fontSize: 12,
+                      fontWeight: "700",
                     }}
                   >
-                    {trustedDesktop.fingerprint}
+                    {trustedDesktops.length} trusted {trustedDesktops.length === 1 ? "desktop" : "desktops"}
                   </Text>
                 </View>
-                <StatusPill
-                  label={trustedDesktop.lastConnectedAt ? "trusted" : "saved"}
-                  tone="primary"
-                />
-              </View>
-              <Text selectable style={{ color: theme.textTertiary, fontSize: 12 }}>
-                Last connected: {trustedDesktop.lastConnectedAt ?? "Never"}
-              </Text>
-              <Pressable
-                onPress={() => {
-                  void reconnectTrusted(trustedDesktop.macDeviceId);
+              ) : null}
+            </View>
+
+            <View style={{ gap: 10 }}>
+              <Text
+                selectable
+                style={{
+                  color: theme.text,
+                  fontSize: 32,
+                  lineHeight: 36,
+                  fontWeight: "800",
+                  letterSpacing: -0.8,
                 }}
-                style={({ pressed }) => ({
-                  alignSelf: "flex-start",
-                  borderRadius: 999,
+              >
+                {hero.title}
+              </Text>
+              <Text
+                selectable
+                style={{
+                  color: theme.textSecondary,
+                  fontSize: 15,
+                  lineHeight: 22,
+                }}
+              >
+                {hero.body}
+              </Text>
+            </View>
+          </View>
+
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+            <Link href="/(pairing)/scan" asChild>
+              <PrimaryButton icon="qrcode">
+                Scan QR Code
+              </PrimaryButton>
+            </Link>
+
+            {isConnected ? (
+              <SecondaryButton
+                onPress={() => router.replace("/(app)/(tabs)/threads")}
+                icon="bubble.left.and.bubble.right.fill"
+              >
+                Open Threads
+              </SecondaryButton>
+            ) : primaryTrustedDesktop ? (
+              <SecondaryButton
+                onPress={() => void reconnectTrusted(primaryTrustedDesktop.macDeviceId)}
+                icon="arrow.clockwise"
+              >
+                Reconnect
+              </SecondaryButton>
+            ) : null}
+          </View>
+
+          <View style={{ flexDirection: "column", gap: 10 }}>
+            <FeatureItem
+              index={0}
+              icon="bolt.fill"
+              title="Live thread updates"
+              description="See responses and tool calls in real time."
+            />
+            <FeatureItem
+              index={1}
+              icon="bubble.left.and.exclamationmark.bubble.right.fill"
+              title="Answer server prompts"
+              description="Handle asks and approvals without leaving the phone."
+            />
+            <FeatureItem
+              index={2}
+              icon="touchid"
+              title="One-tap reconnects"
+              description="Trusted desktops come back quickly when you return."
+            />
+          </View>
+        </View>
+      </Animated.View>
+
+      {trustedDesktops.length > 0 ? (
+        <Animated.View entering={FadeInUp.delay(180).duration(500)}>
+          <SectionCard
+            title="Trusted desktops"
+            description={`${trustedDesktops.length} saved ${trustedDesktops.length === 1 ? "desktop" : "desktops"}`}
+          >
+            {trustedDesktops.map((trustedDesktop, index) => (
+              <Animated.View
+                key={trustedDesktop.macDeviceId}
+                entering={FadeInUp.delay(240 + index * 100).duration(400)}
+                style={{
+                  gap: 12,
+                  borderRadius: 18,
                   borderCurve: "continuous",
                   borderWidth: 1,
-                  borderColor: theme.border,
-                  backgroundColor: pressed ? theme.surfaceMuted : "transparent",
-                  paddingHorizontal: 14,
-                  paddingVertical: 9,
-                })}
+                  borderColor: theme.borderMuted,
+                  backgroundColor: theme.surfaceElevated,
+                  padding: 16,
+                }}
               >
-                <Text selectable style={{ color: theme.text, fontWeight: "700" }}>
-                  Reconnect
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "flex-start",
+                    justifyContent: "space-between",
+                    gap: 12,
+                  }}
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 12, flex: 1 }}>
+                    <View
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: 12,
+                        borderCurve: "continuous",
+                        backgroundColor: theme.primaryMuted,
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <SFSymbol name="desktopcomputer" size={22} color={theme.primary} />
+                    </View>
+                    <View style={{ flex: 1, gap: 3 }}>
+                      <Text selectable style={{ color: theme.text, fontSize: 16, fontWeight: "700" }}>
+                        {trustedDesktop.displayName}
+                      </Text>
+                      <Text
+                        selectable
+                        style={{
+                          color: theme.textSecondary,
+                          fontSize: 12,
+                          fontVariant: ["tabular-nums"],
+                        }}
+                      >
+                        {trustedDesktop.fingerprint}
+                      </Text>
+                    </View>
+                  </View>
+                  <StatusPill
+                    label={trustedDesktop.lastConnectedAt ? "Trusted" : "Saved"}
+                    tone="primary"
+                  />
+                </View>
+
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  <SFSymbol name="clock" size={12} color={theme.textTertiary} />
+                  <Text selectable style={{ color: theme.textTertiary, fontSize: 12 }}>
+                    {trustedDesktop.lastConnectedAt
+                      ? `Last connected: ${trustedDesktop.lastConnectedAt}`
+                      : "Never connected"}
+                  </Text>
+                </View>
+
+                <Pressable
+                  onPress={() => void reconnectTrusted(trustedDesktop.macDeviceId)}
+                  style={({ pressed }) => ({
+                    flexDirection: "row",
+                    alignSelf: "flex-start",
+                    alignItems: "center",
+                    gap: 6,
+                    borderRadius: 10,
+                    borderCurve: "continuous",
+                    borderWidth: 1,
+                    borderColor: theme.border,
+                    backgroundColor: pressed ? theme.surfaceMuted : "transparent",
+                    paddingHorizontal: 14,
+                    paddingVertical: 10,
+                  })}
+                >
+                  <SFSymbol name="arrow.clockwise" size={14} color={theme.text} />
+                  <Text selectable style={{ color: theme.text, fontWeight: "700", fontSize: 14 }}>
+                    Reconnect
+                  </Text>
+                </Pressable>
+              </Animated.View>
+            ))}
+          </SectionCard>
+        </Animated.View>
+      ) : null}
+
+      {(isConnected || connectionState.lastError || connectionState.sessionId) ? (
+        <Animated.View entering={FadeInUp.delay(260).duration(500)}>
+          <SectionCard
+            title="Connection details"
+            description={isConnected
+              ? "Your phone is ready to browse threads and answer prompts."
+              : "Current relay details for the active connection."}
+          >
+            <DetailRow
+              label="Status"
+              value={statusLabel}
+              icon="wifi"
+              emphasize
+            />
+            <DetailRow
+              label="Transport"
+              value={describeTransportMode(connectionState.transportMode)}
+              icon="arrow.left.arrow.right"
+            />
+            <DetailRow
+              label="Computer"
+              value={connectionState.connectedMacDeviceId ?? "Not connected"}
+              icon="desktopcomputer"
+              emphasize={Boolean(connectionState.connectedMacDeviceId)}
+            />
+            <DetailRow
+              label="Relay"
+              value={describeRelay(connectionState)}
+              icon="network"
+            />
+            {connectionState.sessionId ? (
+              <DetailRow
+                label="Session"
+                value={connectionState.sessionId}
+                icon="key.fill"
+                mono
+              />
+            ) : null}
+            {connectionState.lastError ? (
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "flex-start",
+                  gap: 8,
+                  padding: 12,
+                  borderRadius: 12,
+                  borderCurve: "continuous",
+                  backgroundColor: theme.dangerMuted,
+                }}
+              >
+                <SFSymbol name="exclamationmark.triangle.fill" size={16} color={theme.danger} />
+                <Text
+                  selectable
+                  style={{
+                    flex: 1,
+                    color: theme.danger,
+                    fontSize: 14,
+                    lineHeight: 20,
+                  }}
+                >
+                  {connectionState.lastError}
                 </Text>
-              </Pressable>
-            </View>
-          ))
-        )}
-      </SectionCard>
+              </View>
+            ) : null}
+          </SectionCard>
+        </Animated.View>
+      ) : null}
     </Screen>
+    </>
   );
 }

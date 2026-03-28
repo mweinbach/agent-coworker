@@ -29,12 +29,8 @@ import {
   loadOrCreateMobileRelayStoreState,
   persistMobileRelayStoreState,
   rememberTrustedPhoneRecord,
+  resolveMobileRelayStoreDir,
 } from "./mobileRelayStore";
-import {
-  forgetRemodexTrustedPhoneRecord,
-  readRemodexStateResult,
-  rememberRemodexTrustedPhoneRecord,
-} from "./remodexState";
 
 const MANAGED_RELAY_URL = "wss://api.phodex.app/relay";
 const MAX_LEGACY_RELAY_SESSION_COUNT = 4;
@@ -92,10 +88,10 @@ function buildInitialState(): MobileRelayBridgeState {
     status: "idle",
     workspaceId: null,
     workspacePath: null,
-    relaySource: "unavailable",
-    relaySourceMessage: "Remote access relay configuration has not been loaded yet.",
-    relayServiceStatus: "unknown",
-    relayServiceMessage: null,
+    relaySource: "managed",
+    relaySourceMessage: "Cowork-managed remote access state has not been loaded yet.",
+    relayServiceStatus: "running",
+    relayServiceMessage: "Cowork Desktop manages the relay session directly.",
     relayServiceUpdatedAt: null,
     relayUrl: null,
     sessionId: null,
@@ -185,7 +181,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       ...this.state,
       relaySource,
       relaySourceMessage,
-      relayServiceStatus: "unknown",
+      relayServiceStatus: "running",
       relayServiceMessage,
       relayServiceUpdatedAt: null,
       relayUrl,
@@ -193,61 +189,23 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.syncTrustedPhoneSummary();
   }
 
-  private usesCoworkManagedStore(): boolean {
-    return this.state.relaySource === "managed" || this.state.relaySource === "override";
-  }
-
   private refreshRelayConfiguration(): void {
+    const storeDir = resolveMobileRelayStoreDir(this.userDataPath);
     if (this.relayUrlOverride) {
       this.loadCoworkManagedRelayConfiguration(
         "override",
-        "Using the explicit COWORK_MOBILE_RELAY_URL override.",
+        `Using Cowork-managed relay state at ${storeDir} with the explicit COWORK_MOBILE_RELAY_URL override.`,
         this.relayUrlOverride,
-        "Override mode bypasses Remodex daemon health checks.",
+        "Cowork Desktop manages the relay session directly.",
       );
       return;
     }
-
-    const resolved = readRemodexStateResult({
-      stateDir: this.remodexStateDir,
-    });
-    if (resolved.status === "resolved") {
-      this.identityState = resolved.state.identityState;
-      this.state = {
-        ...this.state,
-        relaySource: "remodex",
-        relaySourceMessage: `Using Remodex state from ${resolved.state.stateDir}.`,
-        relayServiceStatus: resolved.state.serviceStatus,
-        relayServiceMessage: resolved.state.serviceMessage,
-        relayServiceUpdatedAt: resolved.state.serviceUpdatedAt,
-        relayUrl: resolved.state.relayUrl,
-      };
-      this.syncTrustedPhoneSummary();
-      return;
-    }
-
-    if (resolved.status === "missing") {
-      this.loadCoworkManagedRelayConfiguration(
-        "managed",
-        `Remodex was not found at ${resolved.stateDir}; using Cowork-managed relay state.`,
-        MANAGED_RELAY_URL,
-        "Cowork-managed mode does not use Remodex daemon health checks.",
-      );
-      return;
-    }
-
-    this.identityState = null;
-    this.state = {
-      ...this.state,
-      relaySource: "remodex",
-      relaySourceMessage: resolved.errorMessage,
-      relayServiceStatus: "unavailable",
-      relayServiceMessage: null,
-      relayServiceUpdatedAt: null,
-      relayUrl: null,
-      trustedPhoneDeviceId: null,
-      trustedPhoneFingerprint: null,
-    };
+    this.loadCoworkManagedRelayConfiguration(
+      "managed",
+      `Using Cowork-managed relay state at ${storeDir}.`,
+      MANAGED_RELAY_URL,
+      "Cowork Desktop manages the relay session directly.",
+    );
   }
 
   getSnapshot(): MobileRelaySnapshot {
@@ -357,22 +315,15 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     if (!trustedPhone) {
       return this.getSnapshot();
     }
-    if (this.usesCoworkManagedStore()) {
-      const storeState = loadOrCreateMobileRelayStoreState(this.userDataPath);
-      const nextStoreState = forgetTrustedPhoneRecord(storeState);
-      const persistedState = await persistMobileRelayStoreState(nextStoreState, this.userDataPath);
-      this.identityState = {
-        macDeviceId: persistedState.macDeviceId,
-        macIdentityPublicKey: persistedState.macIdentityPublicKey,
-        macIdentityPrivateKey: persistedState.macIdentityPrivateKey,
-        trustedPhone: persistedState.trustedPhone,
-      };
-    } else {
-      this.identityState = await forgetRemodexTrustedPhoneRecord(trustedPhone.phoneDeviceId, {
-        stateDir: this.remodexStateDir,
-      });
-      this.refreshRelayConfiguration();
-    }
+    const storeState = loadOrCreateMobileRelayStoreState(this.userDataPath);
+    const nextStoreState = forgetTrustedPhoneRecord(storeState);
+    const persistedState = await persistMobileRelayStoreState(nextStoreState, this.userDataPath);
+    this.identityState = {
+      macDeviceId: persistedState.macDeviceId,
+      macIdentityPublicKey: persistedState.macIdentityPublicKey,
+      macIdentityPrivateKey: persistedState.macIdentityPrivateKey,
+      trustedPhone: persistedState.trustedPhone,
+    };
     this.reusableSessionId = null;
     this.clearReconnectTimer();
     const relaySocket = this.relaySocket;
@@ -1035,29 +986,19 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     ) {
       throw new Error("This desktop is already paired with a different phone.");
     }
-    if (this.usesCoworkManagedStore()) {
-      const storeState = loadOrCreateMobileRelayStoreState(this.userDataPath);
-      const nextStoreState = rememberTrustedPhoneRecord(storeState, {
-        phoneDeviceId: handshake.trustedPhoneDeviceId,
-        phoneIdentityPublicKey: handshake.trustedPhonePublicKey,
-        lastConnectedAt: new Date().toISOString(),
-      });
-      const persistedState = await persistMobileRelayStoreState(nextStoreState, this.userDataPath);
-      this.identityState = {
-        macDeviceId: persistedState.macDeviceId,
-        macIdentityPublicKey: persistedState.macIdentityPublicKey,
-        macIdentityPrivateKey: persistedState.macIdentityPrivateKey,
-        trustedPhone: persistedState.trustedPhone,
-      };
-    } else {
-      this.identityState = await rememberRemodexTrustedPhoneRecord({
-        phoneDeviceId: handshake.trustedPhoneDeviceId,
-        phoneIdentityPublicKey: handshake.trustedPhonePublicKey,
-      }, {
-        stateDir: this.remodexStateDir,
-      });
-      this.refreshRelayConfiguration();
-    }
+    const storeState = loadOrCreateMobileRelayStoreState(this.userDataPath);
+    const nextStoreState = rememberTrustedPhoneRecord(storeState, {
+      phoneDeviceId: handshake.trustedPhoneDeviceId,
+      phoneIdentityPublicKey: handshake.trustedPhonePublicKey,
+      lastConnectedAt: new Date().toISOString(),
+    });
+    const persistedState = await persistMobileRelayStoreState(nextStoreState, this.userDataPath);
+    this.identityState = {
+      macDeviceId: persistedState.macDeviceId,
+      macIdentityPublicKey: persistedState.macIdentityPublicKey,
+      macIdentityPrivateKey: persistedState.macIdentityPrivateKey,
+      trustedPhone: persistedState.trustedPhone,
+    };
     this.syncTrustedPhoneSummary();
     this.emitStateChanged();
   }

@@ -1,8 +1,7 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-
-import { app } from "electron";
 
 import {
   buildRelayKeyFingerprint,
@@ -14,6 +13,9 @@ import type {
   MobileRelayStoreState,
   MobileRelayTrustedPhoneRecord,
 } from "./mobileRelayTypes";
+
+const COWORK_HOME_DIRNAME = ".cowork";
+const MOBILE_RELAY_DIRNAME = "mobile-relay";
 
 function normalizeNonEmptyString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -88,16 +90,20 @@ function createStoreState(): MobileRelayStoreState {
   };
 }
 
-function getStoreDir(userDataPath = app.getPath("userData")): string {
-  return path.join(userDataPath, "mobile-relay");
+function resolveDefaultStoreRoot(): string {
+  return path.join(os.homedir(), COWORK_HOME_DIRNAME);
 }
 
-function getStoreFile(userDataPath = app.getPath("userData")): string {
-  return path.join(getStoreDir(userDataPath), "device-state.json");
+export function resolveMobileRelayStoreDir(storeRootPath = resolveDefaultStoreRoot()): string {
+  return path.join(storeRootPath, MOBILE_RELAY_DIRNAME);
 }
 
-export function loadOrCreateMobileRelayStoreState(userDataPath = app.getPath("userData")): MobileRelayStoreState {
-  const storeFile = getStoreFile(userDataPath);
+export function resolveMobileRelayStoreFile(storeRootPath = resolveDefaultStoreRoot()): string {
+  return path.join(resolveMobileRelayStoreDir(storeRootPath), "device-state.json");
+}
+
+export function loadOrCreateMobileRelayStoreState(storeRootPath = resolveDefaultStoreRoot()): MobileRelayStoreState {
+  const storeFile = resolveMobileRelayStoreFile(storeRootPath);
   if (fs.existsSync(storeFile)) {
     try {
       const raw = fs.readFileSync(storeFile, "utf8");
@@ -106,24 +112,28 @@ export function loadOrCreateMobileRelayStoreState(userDataPath = app.getPath("us
       return normalized;
     } catch {
       const created = createStoreState();
-      fs.mkdirSync(getStoreDir(userDataPath), { recursive: true });
+      fs.mkdirSync(resolveMobileRelayStoreDir(storeRootPath), { recursive: true });
       fs.writeFileSync(storeFile, JSON.stringify(created, null, 2), { encoding: "utf8", mode: 0o600 });
       return created;
     }
   }
   const created = createStoreState();
-  fs.mkdirSync(getStoreDir(userDataPath), { recursive: true });
+  fs.mkdirSync(resolveMobileRelayStoreDir(storeRootPath), { recursive: true });
   fs.writeFileSync(storeFile, JSON.stringify(created, null, 2), { encoding: "utf8", mode: 0o600 });
   return created;
 }
 
 export async function persistMobileRelayStoreState(
   state: MobileRelayStoreState,
-  userDataPath = app.getPath("userData"),
+  storeRootPath = resolveDefaultStoreRoot(),
 ): Promise<MobileRelayStoreState> {
   const normalized = normalizeStoreState(state);
-  await fs.promises.mkdir(getStoreDir(userDataPath), { recursive: true });
-  await fs.promises.writeFile(getStoreFile(userDataPath), JSON.stringify(normalized, null, 2), { encoding: "utf8", mode: 0o600 });
+  await fs.promises.mkdir(resolveMobileRelayStoreDir(storeRootPath), { recursive: true });
+  await fs.promises.writeFile(
+    resolveMobileRelayStoreFile(storeRootPath),
+    JSON.stringify(normalized, null, 2),
+    { encoding: "utf8", mode: 0o600 },
+  );
   return normalized;
 }
 

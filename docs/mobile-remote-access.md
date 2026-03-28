@@ -24,7 +24,7 @@ From there you can:
 - rotate the active relay session
 - forget the currently trusted phone
 
-The desktop bridge keeps its trust state and private identity material in Electron main-process storage under the app `userData` directory, not in renderer-persisted workspace state.
+The desktop bridge keeps its trust state and private identity material in Cowork-owned storage under `~/.cowork/mobile-relay`, not in renderer-persisted workspace state or `~/.remodex`.
 
 ### Mobile app
 
@@ -94,7 +94,7 @@ bun run app:mobile:typecheck
 4. Enable remote access.
 5. Scan the QR from the mobile app pairing flow.
 
-At this stage, the QR payload and trusted-device state flow are scaffolded and typed end-to-end. The Expo fallback path can demo the secure-transport-facing JSON-RPC client and approval/input UX locally on Linux, while the final native secure relay transport parity still needs to be completed.
+At this stage, the QR payload and trusted-device state flow are scaffolded and typed end-to-end. Cowork Desktop now owns the relay identity/trust state directly under `~/.cowork/mobile-relay`, while the Expo fallback path can demo the secure-transport-facing JSON-RPC client and approval/input UX locally on Linux.
 
 ## Local mobile fallback demo
 
@@ -118,7 +118,7 @@ Current implementation status:
 - native secure-transport module surface: scaffolded
 - mobile JSON-RPC client + fallback transport integration: implemented
 - mobile transcript/thread UI shell: implemented for fallback/demo path
-- final secure transport handshake parity with Remodex references: pending
+- final secure transport handshake parity for the app-owned mobile transport: pending
 - raw Cowork JSON-RPC over encrypted mobile transport: pending
 
 ## Validation run

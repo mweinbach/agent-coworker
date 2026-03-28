@@ -230,7 +230,7 @@ export function RemoteAccessPage() {
           <CardHeader>
             <CardTitle>Trusted phone</CardTitle>
             <CardDescription>
-              The desktop main process keeps trust state and relay secrets out of the renderer.
+              Cowork Desktop keeps trust state and relay secrets in `~/.cowork/mobile-relay`, outside the renderer.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">

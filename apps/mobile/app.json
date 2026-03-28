@@ -7,6 +7,7 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "icon": "./assets/icon.png",
     "splash": {
       "resizeMode": "contain",
       "backgroundColor": "#0a0f1a"
@@ -25,6 +26,10 @@
       "package": "co.weinbach.cowork.mobile",
       "edgeToEdgeEnabled": true,
       "softwareKeyboardLayoutMode": "resize",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0a0f1a"
+      },
       "permissions": [
         "android.permission.CAMERA"
       ]

@@ -25,6 +25,7 @@ export type MobileRelayPairingPayload = {
   sessionId: string;
   macDeviceId: string;
   macIdentityPublicKey: string;
+  pairingSecret: string;
   expiresAt: number;
 };
 

@@ -372,11 +372,12 @@ function parsePairingSession(value: JsonRecord | null): RemodexPairingSessionSna
   const sessionId = normalizeNonEmptyString(pairingPayloadRecord.sessionId);
   const macDeviceId = normalizeNonEmptyString(pairingPayloadRecord.macDeviceId);
   const macIdentityPublicKey = normalizeNonEmptyString(pairingPayloadRecord.macIdentityPublicKey);
+  const pairingSecret = normalizeNonEmptyString(pairingPayloadRecord.pairingSecret);
   const expiresAt = Number.isFinite(pairingPayloadRecord.expiresAt)
     ? Number(pairingPayloadRecord.expiresAt)
     : null;
 
-  if (!relay || !sessionId || !macDeviceId || !macIdentityPublicKey || expiresAt == null) {
+  if (!relay || !sessionId || !macDeviceId || !macIdentityPublicKey || !pairingSecret || expiresAt == null) {
     return {
       createdAt: normalizeNonEmptyString(value.createdAt) || null,
       pairingPayload: null,
@@ -391,6 +392,7 @@ function parsePairingSession(value: JsonRecord | null): RemodexPairingSessionSna
       sessionId,
       macDeviceId,
       macIdentityPublicKey,
+      pairingSecret,
       expiresAt,
     },
   };

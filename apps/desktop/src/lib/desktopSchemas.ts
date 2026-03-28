@@ -334,6 +334,7 @@ const mobileRelayPairingPayloadSchema = z.object({
   sessionId: nonEmptyStringSchema,
   macDeviceId: nonEmptyStringSchema,
   macIdentityPublicKey: nonEmptyStringSchema,
+  pairingSecret: nonEmptyStringSchema,
   expiresAt: z.number().int().nonnegative(),
 });
 

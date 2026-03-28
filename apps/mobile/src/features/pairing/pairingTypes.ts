@@ -4,6 +4,7 @@ export type PairingQrPayload = {
   sessionId: string;
   macDeviceId: string;
   macIdentityPublicKey: string;
+  pairingSecret: string;
   expiresAt: number;
 };
 

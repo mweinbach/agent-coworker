@@ -12,6 +12,7 @@ function buildPayload(overrides?: Partial<{
   sessionId: string;
   macDeviceId: string;
   macIdentityPublicKey: string;
+  pairingSecret: string;
 }>) {
   return {
     v: RELAY_PAIRING_QR_VERSION,
@@ -19,6 +20,7 @@ function buildPayload(overrides?: Partial<{
     sessionId: overrides?.sessionId ?? "session-1",
     macDeviceId: overrides?.macDeviceId ?? "mac-1",
     macIdentityPublicKey: overrides?.macIdentityPublicKey ?? "ZmFrZS1rZXk=",
+    pairingSecret: overrides?.pairingSecret ?? "pairing-secret-1",
     expiresAt: overrides?.expiresAt ?? Date.now() + 60_000,
   };
 }

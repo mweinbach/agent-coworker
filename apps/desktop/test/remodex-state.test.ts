@@ -191,6 +191,7 @@ async function writeRemodexState(
       sessionId: "remodex-session",
       macDeviceId: "mac-1",
       macIdentityPublicKey: macKeyPair.publicKeyBase64,
+      pairingSecret: "pairing-secret-1",
       expiresAt: 1_700_000_000_000,
     },
   }, null, 2));

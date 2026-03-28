@@ -6,13 +6,16 @@ import { WebSocket } from "ws";
 
 import {
   buildRelayKeyFingerprint,
+  buildRelayHandshakeProofPayload,
   computeRelayReconnectDelayMs,
   createRelaySharedKey,
   decodeRelaySecureEnvelope,
   encodeRelaySecureEnvelope,
+  isRelayHandshakeProofPayload,
   isCoworkJsonRpcPayload,
   parseRelayControlMessage,
   RELAY_PAIRING_QR_VERSION,
+  verifyRelayPairingProof,
 } from "../../../../src/shared/mobileRelaySecurity";
 import type { ServerManager } from "./serverManager";
 import type {
@@ -426,6 +429,17 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       this.queueOutboundApplicationMessage(text);
       return;
     }
+    this.sendSecureRelayEnvelope(text);
+  }
+
+  private sendSecureRelayEnvelope(text: string): boolean {
+    if (
+      !this.relaySocket
+      || this.relaySocket.readyState !== WebSocket.OPEN
+      || !this.secureSharedKey
+    ) {
+      return false;
+    }
     const envelope = encodeRelaySecureEnvelope({
       sharedKey: this.secureSharedKey,
       sender: "mac",
@@ -433,6 +447,11 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       plaintext: text,
     });
     this.relaySocket.send(JSON.stringify(envelope));
+    return true;
+  }
+
+  private sendSecureHandshakeProofToPhone(): boolean {
+    return this.sendSecureRelayEnvelope(buildRelayHandshakeProofPayload());
   }
 
   private flushQueuedApplicationMessages(): void {
@@ -520,6 +539,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       sessionId,
       macDeviceId: this.identityState?.macDeviceId ?? "",
       macIdentityPublicKey: this.identityState?.macIdentityPublicKey ?? "",
+      pairingSecret: randomUUID(),
       expiresAt: Date.now() + 5 * 60_000,
     };
 
@@ -836,10 +856,6 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     if (!this.secureSharedKey) {
       return false;
     }
-    if (!this.secureChannelReady) {
-      this.rejectRelayApplicationMessage("Secure relay handshake is incomplete.");
-      return true;
-    }
     const result = decodeRelaySecureEnvelope({
       sharedKey: this.secureSharedKey,
       rawMessage: rawText,
@@ -851,6 +867,29 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       return true;
     }
     this.secureLastInboundCounter = result.envelope.counter;
+    if (!this.secureChannelReady) {
+      const handshake = this.pendingPhoneHandshake;
+      if (!handshake || !isRelayHandshakeProofPayload(result.plaintext)) {
+        this.rejectRelayApplicationMessage("Secure relay handshake is incomplete.");
+        return true;
+      }
+      this.pendingPhoneHandshake = null;
+      void (async () => {
+        try {
+          await this.persistTrustedPhoneFromHandshake(handshake);
+          this.secureChannelReady = true;
+          this.relayReconnectAttempts = 0;
+          this.flushQueuedApplicationMessages();
+          this.updateStatus("connected");
+        } catch (error) {
+          this.updateStatus("error", error instanceof Error ? error.message : String(error));
+        }
+      })();
+      return true;
+    }
+    if (isRelayHandshakeProofPayload(result.plaintext)) {
+      return true;
+    }
     if (this.handleBridgeLevelMessage(result.plaintext)) {
       return true;
     }
@@ -925,6 +964,22 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
             this.rejectRelayApplicationMessage("Pairing session has expired. Please restart remote access to generate a new QR code.");
             return true;
           }
+          const pairingPayload = this.state.pairingPayload;
+          if (
+            !pairingPayload?.pairingSecret
+            || !message.pairingProof
+            || !verifyRelayPairingProof({
+              pairingSecret: pairingPayload.pairingSecret,
+              sessionId: pairingPayload.sessionId,
+              macDeviceId: pairingPayload.macDeviceId,
+              phoneDeviceId: message.phoneDeviceId,
+              phoneIdentityPublicKey: message.phoneIdentityPublicKey,
+              pairingProof: message.pairingProof,
+            })
+          ) {
+            this.rejectRelayApplicationMessage("Pairing proof is invalid. Scan the latest QR code and try again.");
+            return true;
+          }
         }
         this.pendingPhoneHandshake = {
           trustedPhoneDeviceId: message.phoneDeviceId,
@@ -938,28 +993,15 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
           this.secureChannelReady = false;
         } catch (error) {
           this.rejectRelayApplicationMessage(error instanceof Error ? error.message : String(error));
+          return true;
+        }
+        if (!this.sendSecureHandshakeProofToPhone()) {
+          this.rejectRelayApplicationMessage("Could not send secure relay handshake proof.");
         }
         return true;
       }
       case "secureReady": {
-        const handshake = this.pendingPhoneHandshake;
-        if (!handshake || !this.secureSharedKey) {
-          this.rejectRelayApplicationMessage("Secure relay handshake is incomplete.");
-          return true;
-        }
-        this.pendingPhoneHandshake = null;
-        void (async () => {
-          try {
-            await this.persistTrustedPhoneFromHandshake(handshake);
-            this.secureChannelReady = true;
-            this.relayReconnectAttempts = 0;
-            this.sendRelayControlMessage({ kind: "secureReady" });
-            this.flushQueuedApplicationMessages();
-            this.updateStatus("connected");
-          } catch (error) {
-            this.updateStatus("error", error instanceof Error ? error.message : String(error));
-          }
-        })();
+        this.rejectRelayApplicationMessage("Plaintext secure-ready is no longer accepted.");
         return true;
       }
       case "secureError":

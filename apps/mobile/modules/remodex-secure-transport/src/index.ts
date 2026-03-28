@@ -1,12 +1,15 @@
 import { EventEmitter, requireOptionalNativeModule } from "expo-modules-core";
 
 import {
+  buildRelayHandshakeProofPayload,
   buildRelayKeyFingerprint,
+  buildRelayPairingProof,
   computeRelayReconnectDelayMs,
   createRelaySharedKey,
   decodeRelaySecureEnvelope,
   encodeRelaySecureEnvelope,
   generateRelayKeyPair,
+  isRelayHandshakeProofPayload,
   isValidRelayKeyPair,
   isValidRelayPublicKey,
   parseRelayControlMessage,
@@ -18,6 +21,7 @@ export type RemodexQrPairingPayload = {
   sessionId: string;
   macDeviceId: string;
   macIdentityPublicKey: string;
+  pairingSecret: string;
   expiresAt: number;
 };
 
@@ -956,6 +960,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   private socket: RuntimeWebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private currentTarget: PersistedTrustedMacRecord | null = null;
+  private currentPairingSecret: string | null = null;
   private disconnecting = false;
   private sharedKey: Uint8Array | null = null;
   private secureChannelReady = false;
@@ -1093,6 +1098,13 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
       this.queuedOutboundMessages.push(text);
       return;
     }
+    this.sendSecureEnvelope(text);
+  }
+
+  private sendSecureEnvelope(text: string): boolean {
+    if (!this.socket || this.socket.readyState !== 1 || !this.sharedKey) {
+      return false;
+    }
     const envelope = encodeRelaySecureEnvelope({
       sharedKey: this.sharedKey,
       sender: "phone",
@@ -1100,6 +1112,11 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
       plaintext: text,
     });
     this.socket.send(JSON.stringify(envelope));
+    return true;
+  }
+
+  private sendHandshakeProofToDesktop(): boolean {
+    return this.sendSecureEnvelope(buildRelayHandshakeProofPayload());
   }
 
   private flushQueuedOutboundMessages(): void {
@@ -1184,11 +1201,9 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
           lastResolvedAt: nowIso(),
           lastSessionId: message.registration.sessionId ?? this.state.sessionId,
         };
-        const trustedMacs = await this.upsertTrustedMacRecord(updatedRecord);
         this.currentTarget = updatedRecord;
         this.setState({
           connectedMacDeviceId: updatedRecord.macDeviceId,
-          trustedMacs,
         });
         if (this.secureChannelReady) {
           return { handled: true, connected: false };
@@ -1203,31 +1218,33 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
           return { handled: true, connected: false };
         }
         this.secureChannelReady = false;
-        this.sendControlMessage({
+        const clientHello = {
           kind: "clientHello",
           phoneDeviceId: phoneIdentity.phoneDeviceId,
           phoneIdentityPublicKey: phoneIdentity.phoneIdentityPublicKey,
-        });
-        this.sendControlMessage({ kind: "secureReady" });
+          pairingProof: this.currentPairingSecret
+            ? buildRelayPairingProof({
+              pairingSecret: this.currentPairingSecret,
+              sessionId: updatedRecord.lastSessionId ?? this.state.sessionId ?? "",
+              macDeviceId: updatedRecord.macDeviceId,
+              phoneDeviceId: phoneIdentity.phoneDeviceId,
+              phoneIdentityPublicKey: phoneIdentity.phoneIdentityPublicKey,
+            })
+            : undefined,
+        };
+        if (!this.sendControlMessage(clientHello)) {
+          this.emitProtocolError("Could not send secure relay client hello.");
+          return { handled: true, connected: false };
+        }
+        if (!this.sendHandshakeProofToDesktop()) {
+          this.emitProtocolError("Could not send secure relay handshake proof.");
+          return { handled: true, connected: false };
+        }
         return { handled: true, connected: false };
       }
       case "secureReady":
-        if (!this.sharedKey || !this.currentTarget) {
-          this.emitProtocolError("Secure relay handshake is incomplete.");
-          return { handled: true, connected: false };
-        }
-        this.secureChannelReady = true;
-        this.reconnectAttempts = 0;
-        this.flushQueuedOutboundMessages();
-        this.setState({
-          status: "connected",
-          transportMode: "native",
-          connectedMacDeviceId: this.currentTarget.macDeviceId,
-          relay: this.currentTarget.relay,
-          sessionId: this.currentTarget.lastSessionId ?? this.state.sessionId,
-          lastError: null,
-        });
-        return { handled: true, connected: true };
+        this.emitProtocolError("Plaintext secure-ready is no longer accepted.");
+        return { handled: true, connected: false };
       case "secureError":
         this.setState(
           {
@@ -1247,6 +1264,26 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
     }
   }
 
+  private async finalizeSecureConnection(): Promise<RemodexSecureTransportState> {
+    if (!this.currentTarget) {
+      throw new Error("Secure relay handshake is incomplete.");
+    }
+    const trustedMacs = await this.upsertTrustedMacRecord(this.currentTarget);
+    this.currentPairingSecret = null;
+    this.secureChannelReady = true;
+    this.reconnectAttempts = 0;
+    this.flushQueuedOutboundMessages();
+    return this.setState({
+      status: "connected",
+      transportMode: "native",
+      connectedMacDeviceId: this.currentTarget.macDeviceId,
+      relay: this.currentTarget.relay,
+      sessionId: this.currentTarget.lastSessionId ?? this.state.sessionId,
+      trustedMacs,
+      lastError: null,
+    });
+  }
+
   private async openSocket(target: PersistedTrustedMacRecord, sessionId: string): Promise<RemodexSecureTransportState> {
     const phoneIdentity = await this.ensurePhoneIdentity();
     const preserveReplayCounters = this.state.status === "reconnecting"
@@ -1264,7 +1301,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
       ...target,
       lastSessionId: sessionId,
     };
-    const trustedMacs = await this.upsertTrustedMacRecord(this.currentTarget);
+    const trustedMacs = await this.listTrustedMacRecords();
     this.setState({
       status: "connecting",
       transportMode: "native",
@@ -1334,6 +1371,29 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
             return;
           }
           this.lastInboundCounter = decoded.envelope.counter;
+          if (!this.secureChannelReady) {
+            if (!isRelayHandshakeProofPayload(decoded.plaintext)) {
+              this.emitProtocolError("Rejected relay payload before the secure channel was established.");
+              if (!settled) {
+                settle(this.state);
+              }
+              return;
+            }
+            void this.finalizeSecureConnection().then((connectedState) => {
+              if (!settled) {
+                settle(connectedState);
+              }
+            }).catch((error) => {
+              this.emitProtocolError(error instanceof Error ? error.message : String(error));
+              if (!settled) {
+                settle(this.state);
+              }
+            });
+            return;
+          }
+          if (isRelayHandshakeProofPayload(decoded.plaintext)) {
+            return;
+          }
           this.emitPlaintext(decoded.plaintext);
         }).catch((error) => {
           this.emitProtocolError(error instanceof Error ? error.message : String(error));
@@ -1425,7 +1485,8 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
     const sessionId = normalizeNonEmptyString(payload.sessionId);
     const macDeviceId = normalizeNonEmptyString(payload.macDeviceId);
     const macIdentityPublicKey = normalizeNonEmptyString(payload.macIdentityPublicKey);
-    if (!relay || !sessionId || !macDeviceId || !macIdentityPublicKey || !isValidRelayPublicKey(macIdentityPublicKey)) {
+    const pairingSecret = normalizeNonEmptyString(payload.pairingSecret);
+    if (!relay || !sessionId || !macDeviceId || !macIdentityPublicKey || !pairingSecret || !isValidRelayPublicKey(macIdentityPublicKey)) {
       return this.setState(
         {
           status: "error",
@@ -1438,6 +1499,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
         { emitSecureError: "The pairing QR is missing relay connection details." },
       );
     }
+    this.currentPairingSecret = pairingSecret;
     return await this.openSocket({
       macDeviceId,
       macIdentityPublicKey,
@@ -1461,6 +1523,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
         { emitSecureError: "This saved desktop needs a fresh pairing QR before it can reconnect." },
       );
     }
+    this.currentPairingSecret = null;
     return await this.openSocket(trustedMac, trustedMac.lastSessionId);
   }
 
@@ -1471,6 +1534,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
     const socket = this.socket;
     this.socket = null;
     this.currentTarget = null;
+    this.currentPairingSecret = null;
     socket?.close(1000, "Disconnected");
     this.disconnecting = false;
     return this.setState({

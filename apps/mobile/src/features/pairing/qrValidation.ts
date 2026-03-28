@@ -9,6 +9,7 @@ const pairingQrPayloadSchema = z.object({
   sessionId: z.string().trim().min(1),
   macDeviceId: z.string().trim().min(1),
   macIdentityPublicKey: z.string().trim().min(1),
+  pairingSecret: z.string().trim().min(1),
   expiresAt: z.number().int().positive(),
 }).strict();
 

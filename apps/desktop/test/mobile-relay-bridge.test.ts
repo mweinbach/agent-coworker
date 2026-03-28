@@ -26,10 +26,13 @@ mock.module("electron", () => ({
 }));
 
 const {
+  buildRelayHandshakeProofPayload,
+  buildRelayPairingProof,
   createRelaySharedKey,
   decodeRelaySecureEnvelope,
   encodeRelaySecureEnvelope,
   generateRelayKeyPair,
+  isRelayHandshakeProofPayload,
   parseRelayControlMessage,
   RELAY_PAIRING_QR_VERSION,
 } = await import("../../../src/shared/mobileRelaySecurity");
@@ -99,13 +102,42 @@ class FakeSocket extends EventEmitter {
   }
 }
 
-function emitPhoneHandshake(socket: FakeSocket, phoneDeviceId: string, phoneKeys: RelayKeyPair) {
-  socket.emitMessage(JSON.stringify({
+function emitPhoneHandshake(
+  socket: FakeSocket,
+  phoneDeviceId: string,
+  phoneKeys: RelayKeyPair,
+  opts: {
+    macIdentityPublicKey: string;
+    counter?: number;
+    pairingPayload?: {
+      pairingSecret: string;
+      sessionId: string;
+      macDeviceId: string;
+    } | null;
+  },
+) {
+  const clientHello: Record<string, unknown> = {
     kind: "clientHello",
     phoneDeviceId,
     phoneIdentityPublicKey: phoneKeys.publicKeyBase64,
-  }));
-  socket.emitMessage(JSON.stringify({ kind: "secureReady" }));
+  };
+  if (opts.pairingPayload?.pairingSecret) {
+    clientHello.pairingProof = buildRelayPairingProof({
+      pairingSecret: opts.pairingPayload.pairingSecret,
+      sessionId: opts.pairingPayload.sessionId,
+      macDeviceId: opts.pairingPayload.macDeviceId,
+      phoneDeviceId,
+      phoneIdentityPublicKey: phoneKeys.publicKeyBase64,
+    });
+  }
+  socket.emitMessage(JSON.stringify(clientHello));
+  const sharedKey = createRelaySharedKey(phoneKeys.privateKeyBase64, opts.macIdentityPublicKey);
+  socket.emitMessage(JSON.stringify(encodeRelaySecureEnvelope({
+    sharedKey,
+    sender: "phone",
+    counter: opts.counter ?? 1,
+    plaintext: buildRelayHandshakeProofPayload(),
+  })));
 }
 
 function findControlMessages(socket: FakeSocket, kind: string): Array<Record<string, unknown>> {
@@ -128,6 +160,27 @@ function decodeLastSecureEnvelope(socket: FakeSocket, sharedKey: Uint8Array, las
     }
   }
   return null;
+}
+
+function countHandshakeProofMessages(socket: FakeSocket, sharedKey: Uint8Array): number {
+  let lastAcceptedCounter = 0;
+  let count = 0;
+  for (const rawMessage of socket.sentMessages) {
+    const decoded = decodeRelaySecureEnvelope({
+      sharedKey,
+      rawMessage,
+      expectedSender: "mac",
+      lastAcceptedCounter,
+    });
+    if (!decoded.ok) {
+      continue;
+    }
+    lastAcceptedCounter = decoded.envelope.counter;
+    if (isRelayHandshakeProofPayload(decoded.plaintext)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 describe("mobile relay bridge", () => {
@@ -262,6 +315,7 @@ describe("mobile relay bridge", () => {
     expect(snapshot.pairingPayload?.macDeviceId).toBe("mac-1");
     expect(snapshot.pairingPayload?.v).toBe(RELAY_PAIRING_QR_VERSION);
     expect(snapshot.pairingPayload?.macIdentityPublicKey).toBe(managedFixture.macKeyPair.publicKeyBase64);
+    expect(snapshot.pairingPayload?.pairingSecret).toBeTruthy();
     expect(findControlMessages(relaySocket!, "relayMacRegistration")).toHaveLength(1);
   });
 
@@ -325,7 +379,10 @@ describe("mobile relay bridge", () => {
       workspacePath: "/tmp/workspace",
       yolo: false,
     });
-    emitPhoneHandshake(relaySockets.at(-1)!, "phone-1", managedFixture.phone1KeyPair);
+    emitPhoneHandshake(relaySockets.at(-1)!, "phone-1", managedFixture.phone1KeyPair, {
+      macIdentityPublicKey: managedFixture.macKeyPair.publicKeyBase64,
+      pairingPayload: first.pairingPayload,
+    });
     await waitForRelaySnapshot(
       bridge,
       (snapshot) => snapshot.status === "connected" && snapshot.trustedPhoneDeviceId === "phone-1",
@@ -372,7 +429,10 @@ describe("mobile relay bridge", () => {
     });
     const firstRelaySocket = relaySockets.at(-1)! as FakeSocket & { relayUrl?: string };
 
-    emitPhoneHandshake(firstRelaySocket, "phone-1", managedFixture.phone1KeyPair);
+    emitPhoneHandshake(firstRelaySocket, "phone-1", managedFixture.phone1KeyPair, {
+      macIdentityPublicKey: managedFixture.macKeyPair.publicKeyBase64,
+      pairingPayload: first.pairingPayload,
+    });
     await waitForRelaySnapshot(
       bridge,
       (snapshot) => snapshot.status === "connected" && snapshot.trustedPhoneDeviceId === "phone-1",
@@ -387,7 +447,10 @@ describe("mobile relay bridge", () => {
     expect(rotated.sessionId).not.toBe(first.sessionId);
     expect(staleSessionSocket).toBeTruthy();
 
-    emitPhoneHandshake(staleSessionSocket!, "phone-1", managedFixture.phone1KeyPair);
+    emitPhoneHandshake(staleSessionSocket!, "phone-1", managedFixture.phone1KeyPair, {
+      macIdentityPublicKey: managedFixture.macKeyPair.publicKeyBase64,
+      pairingPayload: rotated.pairingPayload,
+    });
 
     const redirectedRegistration = findControlMessages(staleSessionSocket!, "relayMacRegistration").at(-1) as
       | { registration?: { sessionId?: string | null } }
@@ -430,7 +493,10 @@ describe("mobile relay bridge", () => {
     const relaySocket = relaySockets.at(-1)!;
 
     const phoneKeyPair = managedFixture.phone1KeyPair;
-    emitPhoneHandshake(relaySocket, "phone-1", phoneKeyPair);
+    emitPhoneHandshake(relaySocket, "phone-1", phoneKeyPair, {
+      macIdentityPublicKey: managedFixture.macKeyPair.publicKeyBase64,
+      pairingPayload: bridge.getSnapshot().pairingPayload,
+    });
     await waitForRelaySnapshot(
       bridge,
       (s) => s.status === "connected" && s.trustedPhoneDeviceId === "phone-1",
@@ -448,12 +514,11 @@ describe("mobile relay bridge", () => {
       phoneDeviceId: "phone-1",
       phoneIdentityPublicKey: phoneKeyPair.publicKeyBase64,
     }));
-    expect(findControlMessages(relaySocket, "secureReady")).toHaveLength(1);
-
     const sharedKey = createRelaySharedKey(
       phoneKeyPair.privateKeyBase64,
       managedFixture.macKeyPair.publicKeyBase64,
     );
+    expect(countHandshakeProofMessages(relaySocket, sharedKey)).toBe(1);
 
     const forgotten = await bridge.forgetTrustedPhone();
     expect(forgotten.trustedPhoneDeviceId).toBeNull();
@@ -558,7 +623,10 @@ describe("mobile relay bridge", () => {
     expect(snapshot.pairingPayload?.macDeviceId).toBeTruthy();
 
     const managedPhoneKeyPair = generateRelayKeyPair();
-    emitPhoneHandshake(relaySocket!, "phone-managed", managedPhoneKeyPair);
+    emitPhoneHandshake(relaySocket!, "phone-managed", managedPhoneKeyPair, {
+      macIdentityPublicKey: snapshot.pairingPayload!.macIdentityPublicKey,
+      pairingPayload: snapshot.pairingPayload,
+    });
     await waitForRelaySnapshot(
       bridge,
       (s) => s.status === "connected" && s.trustedPhoneDeviceId === "phone-managed",
@@ -608,8 +676,52 @@ describe("mobile relay bridge", () => {
     relaySockets.at(-1)?.emitMessage(JSON.stringify({ kind: "secureReady" }));
     await waitForRelaySnapshot(
       bridge,
-      (snapshot) => snapshot.status === "error" && Boolean(snapshot.lastError?.includes("handshake is incomplete")),
+      (snapshot) => snapshot.status === "error" && Boolean(snapshot.lastError?.includes("Plaintext secure-ready")),
     );
+  });
+
+  test("rejects first-time pairing without a valid QR pairing proof", async () => {
+    await fs.rm(path.join(userDataDir, "mobile-relay"), { recursive: true, force: true });
+
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+
+    const unexpectedPhoneKeyPair = generateRelayKeyPair();
+    relaySockets.at(-1)?.emitMessage(JSON.stringify({
+      kind: "clientHello",
+      phoneDeviceId: "phone-rogue",
+      phoneIdentityPublicKey: unexpectedPhoneKeyPair.publicKeyBase64,
+    }));
+
+    await waitForRelaySnapshot(
+      bridge,
+      (snapshot) => snapshot.status === "error" && Boolean(snapshot.lastError?.includes("Pairing proof is invalid")),
+    );
+    expect(bridge.getSnapshot().trustedPhoneDeviceId).toBeNull();
   });
 
   test("rejects a different phone when one is already trusted", async () => {
@@ -687,7 +799,10 @@ describe("mobile relay bridge", () => {
     });
     const relaySocket = relaySockets.at(-1)!;
     const phoneKeyPair = managedFixture.phone1KeyPair;
-    emitPhoneHandshake(relaySocket, "phone-1", phoneKeyPair);
+    emitPhoneHandshake(relaySocket, "phone-1", phoneKeyPair, {
+      macIdentityPublicKey: managedFixture.macKeyPair.publicKeyBase64,
+      pairingPayload: bridge.getSnapshot().pairingPayload,
+    });
     await waitForRelaySnapshot(
       bridge,
       (snapshot) => snapshot.status === "connected",
@@ -700,7 +815,7 @@ describe("mobile relay bridge", () => {
     relaySocket.emitMessage(JSON.stringify(encodeRelaySecureEnvelope({
       sharedKey,
       sender: "phone",
-      counter: 1,
+      counter: 2,
       plaintext: JSON.stringify({
         id: 7,
         method: "workspace/list",
@@ -725,7 +840,7 @@ describe("mobile relay bridge", () => {
     });
   });
 
-  test("rejects encrypted application payloads before secure-ready completes", async () => {
+  test("rejects encrypted application payloads before handshake proof completes", async () => {
     const bridge = new MobileRelayBridge({
       serverManager: new FakeServerManager() as never,
       userDataPath: userDataDir,
@@ -753,7 +868,7 @@ describe("mobile relay bridge", () => {
       },
     });
 
-    await bridge.start({
+    const snapshot = await bridge.start({
       workspaceId: "ws_1",
       workspacePath: "/tmp/workspace",
       yolo: false,
@@ -765,6 +880,13 @@ describe("mobile relay bridge", () => {
       kind: "clientHello",
       phoneDeviceId: "phone-1",
       phoneIdentityPublicKey: phoneKeyPair.publicKeyBase64,
+      pairingProof: buildRelayPairingProof({
+        pairingSecret: snapshot.pairingPayload!.pairingSecret,
+        sessionId: snapshot.pairingPayload!.sessionId,
+        macDeviceId: snapshot.pairingPayload!.macDeviceId,
+        phoneDeviceId: "phone-1",
+        phoneIdentityPublicKey: phoneKeyPair.publicKeyBase64,
+      }),
     }));
 
     const sharedKey = createRelaySharedKey(
@@ -827,7 +949,10 @@ describe("mobile relay bridge", () => {
 
     const firstRelaySocket = relaySockets.at(-1)!;
     const phoneKeyPair = managedFixture.phone1KeyPair;
-    emitPhoneHandshake(firstRelaySocket, "phone-1", phoneKeyPair);
+    emitPhoneHandshake(firstRelaySocket, "phone-1", phoneKeyPair, {
+      macIdentityPublicKey: managedFixture.macKeyPair.publicKeyBase64,
+      pairingPayload: bridge.getSnapshot().pairingPayload,
+    });
     await waitForRelaySnapshot(bridge, (snapshot) => snapshot.status === "connected");
 
     const sharedKey = createRelaySharedKey(
@@ -837,7 +962,7 @@ describe("mobile relay bridge", () => {
     const replayEnvelope = JSON.stringify(encodeRelaySecureEnvelope({
       sharedKey,
       sender: "phone",
-      counter: 1,
+      counter: 2,
       plaintext: JSON.stringify({
         id: 7,
         method: "workspace/list",
@@ -852,7 +977,11 @@ describe("mobile relay bridge", () => {
     await waitForCondition(() => relaySockets.length >= 2);
 
     const reconnectedRelaySocket = relaySockets.at(-1)!;
-    emitPhoneHandshake(reconnectedRelaySocket, "phone-1", phoneKeyPair);
+    emitPhoneHandshake(reconnectedRelaySocket, "phone-1", phoneKeyPair, {
+      macIdentityPublicKey: managedFixture.macKeyPair.publicKeyBase64,
+      counter: 3,
+      pairingPayload: bridge.getSnapshot().pairingPayload,
+    });
     await waitForRelaySnapshot(bridge, (snapshot) => snapshot.status === "connected");
 
     reconnectedRelaySocket.emitMessage(replayEnvelope);

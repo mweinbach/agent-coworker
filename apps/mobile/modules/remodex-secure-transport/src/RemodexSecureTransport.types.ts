@@ -12,6 +12,7 @@ export type RemodexPairingPayload = {
   sessionId: string;
   macDeviceId: string;
   macIdentityPublicKey: string;
+  pairingSecret: string;
   expiresAt: number;
 };
 

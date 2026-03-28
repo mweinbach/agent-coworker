@@ -162,6 +162,7 @@ describe("desktop persisted-state schema defaults", () => {
         sessionId: "relay-session",
         macDeviceId: "mac-1",
         macIdentityPublicKey: "ZmFrZQ==",
+        pairingSecret: "pairing-secret-1",
         expiresAt: 1_700_000_000_000,
       },
       trustedPhoneDeviceId: null,

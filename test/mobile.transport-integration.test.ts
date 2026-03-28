@@ -38,6 +38,7 @@ function createPayload(): RemodexQrPairingPayload {
     sessionId: "session-demo",
     macDeviceId: "mac-demo",
     macIdentityPublicKey: "bWFjLXB1YmxpYy1rZXk=",
+    pairingSecret: "pairing-secret-demo",
     expiresAt: Date.now() + 60_000,
   };
 }

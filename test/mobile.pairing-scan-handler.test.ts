@@ -11,6 +11,7 @@ function buildPayload(): PairingQrPayload {
     sessionId: "session-1",
     macDeviceId: "mac-1",
     macIdentityPublicKey: "ZmFrZS1rZXk=",
+    pairingSecret: "pairing-secret-1",
     expiresAt: Date.now() + 60_000,
   };
 }

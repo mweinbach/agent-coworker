@@ -35,6 +35,7 @@ export type MobileRelayBridgeState = {
     sessionId: string;
     macDeviceId: string;
     macIdentityPublicKey: string;
+    pairingSecret: string;
     expiresAt: number;
   } | null;
   trustedPhoneDeviceId: string | null;

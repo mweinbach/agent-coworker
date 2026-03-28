@@ -1,8 +1,9 @@
 import nacl from "tweetnacl";
 import { z } from "zod";
 
-export const RELAY_PAIRING_QR_VERSION = 3 as const;
+export const RELAY_PAIRING_QR_VERSION = 4 as const;
 export const RELAY_SECURE_ENVELOPE_VERSION = 1 as const;
+export const RELAY_HANDSHAKE_PROOF_METHOD = "relay/handshakeProof" as const;
 
 export type RelayParticipantRole = "mac" | "phone";
 
@@ -22,6 +23,7 @@ export type RelayClientHello = {
   kind: "clientHello";
   phoneDeviceId: string;
   phoneIdentityPublicKey: string;
+  pairingProof: string | null;
 };
 
 export type RelaySecureReady = {
@@ -115,6 +117,7 @@ const relayClientHelloSchema = z.object({
   kind: z.literal("clientHello"),
   phoneDeviceId: nonEmptyStringSchema,
   phoneIdentityPublicKey: nonEmptyStringSchema,
+  pairingProof: z.string().trim().min(1).optional(),
 }).strict();
 
 const relaySecureReadySchema = z.object({
@@ -244,6 +247,73 @@ export function buildRelayKeyFingerprint(publicKeyBase64: string): string {
   return bytesToHex(nacl.hash(publicKeyBytes)).slice(0, 16);
 }
 
+function encodeRelayPairingProofInput(opts: {
+  pairingSecret: string;
+  sessionId: string;
+  macDeviceId: string;
+  phoneDeviceId: string;
+  phoneIdentityPublicKey: string;
+}): Uint8Array {
+  const payload = [
+    "relay-pairing-proof-v1",
+    opts.pairingSecret.trim(),
+    opts.sessionId.trim(),
+    opts.macDeviceId.trim(),
+    opts.phoneDeviceId.trim(),
+    opts.phoneIdentityPublicKey.trim(),
+  ].join("\n");
+  return new TextEncoder().encode(payload);
+}
+
+export function buildRelayPairingProof(opts: {
+  pairingSecret: string;
+  sessionId: string;
+  macDeviceId: string;
+  phoneDeviceId: string;
+  phoneIdentityPublicKey: string;
+}): string {
+  return bytesToBase64(nacl.hash(encodeRelayPairingProofInput(opts)));
+}
+
+export function verifyRelayPairingProof(opts: {
+  pairingSecret: string;
+  sessionId: string;
+  macDeviceId: string;
+  phoneDeviceId: string;
+  phoneIdentityPublicKey: string;
+  pairingProof: string;
+}): boolean {
+  const provided = base64ToBytes(opts.pairingProof);
+  if (!provided || provided.length === 0) {
+    return false;
+  }
+  const expected = base64ToBytes(buildRelayPairingProof(opts));
+  if (!expected || expected.length !== provided.length) {
+    return false;
+  }
+  return nacl.verify(expected, provided);
+}
+
+export function buildRelayHandshakeProofPayload(): string {
+  return JSON.stringify({
+    method: RELAY_HANDSHAKE_PROOF_METHOD,
+    params: {
+      proof: "v1",
+    },
+  });
+}
+
+export function isRelayHandshakeProofPayload(rawMessage: string): boolean {
+  try {
+    const parsed = JSON.parse(rawMessage) as Record<string, unknown>;
+    return typeof parsed.method === "string"
+      && parsed.method === RELAY_HANDSHAKE_PROOF_METHOD
+      && !("id" in parsed);
+  } catch {
+    return false;
+  }
+}
+
 export function createRelaySharedKey(
   privateKeyBase64: string,
   peerPublicKeyBase64: string,
@@ -369,7 +439,10 @@ export function parseRelayControlMessage(rawMessage: string): RelayControlMessag
   }
   const clientHelloResult = relayClientHelloSchema.safeParse(parsed);
   if (clientHelloResult.success) {
-    return clientHelloResult.data;
+    return {
+      ...clientHelloResult.data,
+      pairingProof: clientHelloResult.data.pairingProof ?? null,
+    };
   }
   const secureReadyResult = relaySecureReadySchema.safeParse(parsed);
   if (secureReadyResult.success) {

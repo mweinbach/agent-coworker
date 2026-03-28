@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { RELAY_PAIRING_QR_VERSION } from "../../../src/shared/mobileRelaySecurity";
 import {
   desktopMenuCommandSchema,
   mobileRelayBridgeStateSchema,
@@ -156,7 +157,7 @@ describe("desktop persisted-state schema defaults", () => {
       relayUrl: "wss://api.phodex.app/relay",
       sessionId: "relay-session",
       pairingPayload: {
-        v: 2,
+        v: RELAY_PAIRING_QR_VERSION,
         relay: "wss://api.phodex.app/relay",
         sessionId: "relay-session",
         macDeviceId: "mac-1",

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+const { generateRelayKeyPair, RELAY_PAIRING_QR_VERSION } = await import("../../../src/shared/mobileRelaySecurity");
 const {
   forgetRemodexTrustedPhoneRecord,
   readRemodexStateResult,
@@ -31,7 +32,7 @@ describe("remodex state reader", () => {
   });
 
   test("reads valid remodex state and extracts the trusted phone", async () => {
-    await writeRemodexState(tmpDir);
+    const fixture = await writeRemodexState(tmpDir);
 
     const result = readRemodexStateResult({ stateDir: tmpDir });
     const state = readResolvedRemodexState({ stateDir: tmpDir });
@@ -41,6 +42,8 @@ describe("remodex state reader", () => {
     expect(state.serviceStatus).toBe("running");
     expect(state.identityState.macDeviceId).toBe("mac-1");
     expect(state.identityState.trustedPhone?.phoneDeviceId).toBe("phone-1");
+    expect(state.identityState.macIdentityPublicKey).toBe(fixture.macKeyPair.publicKeyBase64);
+    expect(state.identityState.trustedPhone?.phoneIdentityPublicKey).toBe(fixture.phone1KeyPair.publicKeyBase64);
     expect(state.pairingSession?.pairingPayload?.sessionId).toBe("remodex-session");
   });
 
@@ -87,11 +90,12 @@ describe("remodex state reader", () => {
   });
 
   test("persists trusted-phone updates back into remodex device state", async () => {
-    await writeRemodexState(tmpDir, {});
+    const fixture = await writeRemodexState(tmpDir, {});
+    const phone2KeyPair = generateRelayKeyPair();
 
     const remembered = await rememberRemodexTrustedPhoneRecord({
       phoneDeviceId: "phone-2",
-      phoneIdentityPublicKey: Buffer.from("phone-2-public-key").toString("base64"),
+      phoneIdentityPublicKey: phone2KeyPair.publicKeyBase64,
     }, {
       stateDir: tmpDir,
       now: () => new Date("2026-03-25T18:00:00.000Z"),
@@ -100,10 +104,11 @@ describe("remodex state reader", () => {
     expect(remembered.trustedPhone?.phoneDeviceId).toBe("phone-2");
 
     const rawDeviceState = JSON.parse(await fs.readFile(path.join(tmpDir, "device-state.json"), "utf8"));
-    expect(rawDeviceState.trustedPhones["phone-2"]).toBe(Buffer.from("phone-2-public-key").toString("base64"));
+    expect(rawDeviceState.trustedPhones["phone-2"]).toBe(phone2KeyPair.publicKeyBase64);
 
     const forgotten = await forgetRemodexTrustedPhoneRecord("phone-2", { stateDir: tmpDir });
     expect(forgotten.trustedPhone?.phoneDeviceId).toBe("phone-1");
+    expect(forgotten.trustedPhone?.phoneIdentityPublicKey).toBe(fixture.phone1KeyPair.publicKeyBase64);
   });
 });
 
@@ -113,6 +118,8 @@ async function writeRemodexState(
     trustedPhones?: Record<string, string>;
   } = {},
 ) {
+  const macKeyPair = generateRelayKeyPair();
+  const phone1KeyPair = generateRelayKeyPair();
   await fs.mkdir(stateDir, { recursive: true });
   await fs.writeFile(path.join(stateDir, "daemon-config.json"), JSON.stringify({
     relayUrl: "wss://api.phodex.app/relay",
@@ -126,21 +133,25 @@ async function writeRemodexState(
   await fs.writeFile(path.join(stateDir, "device-state.json"), JSON.stringify({
     version: 1,
     macDeviceId: "mac-1",
-    macIdentityPublicKey: Buffer.from("mac-public-key").toString("base64"),
-    macIdentityPrivateKey: Buffer.from("mac-private-key").toString("base64"),
+    macIdentityPublicKey: macKeyPair.publicKeyBase64,
+    macIdentityPrivateKey: macKeyPair.privateKeyBase64,
     trustedPhones: overrides.trustedPhones ?? {
-      "phone-1": Buffer.from("phone-1-public-key").toString("base64"),
+      "phone-1": phone1KeyPair.publicKeyBase64,
     },
   }, null, 2));
   await fs.writeFile(path.join(stateDir, "pairing-session.json"), JSON.stringify({
     createdAt: "2026-03-25T17:00:00.000Z",
     pairingPayload: {
-      v: 2,
+      v: RELAY_PAIRING_QR_VERSION,
       relay: "wss://api.phodex.app/relay",
       sessionId: "remodex-session",
       macDeviceId: "mac-1",
-      macIdentityPublicKey: Buffer.from("mac-public-key").toString("base64"),
+      macIdentityPublicKey: macKeyPair.publicKeyBase64,
       expiresAt: 1_700_000_000_000,
     },
   }, null, 2));
+  return {
+    macKeyPair,
+    phone1KeyPair,
+  };
 }

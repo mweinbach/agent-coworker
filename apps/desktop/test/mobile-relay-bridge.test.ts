@@ -13,10 +13,19 @@ mock.module("electron", () => ({
   },
 }));
 
+const {
+  createRelaySharedKey,
+  decodeRelaySecureEnvelope,
+  encodeRelaySecureEnvelope,
+  generateRelayKeyPair,
+  parseRelayControlMessage,
+  RELAY_PAIRING_QR_VERSION,
+} = await import("../../../src/shared/mobileRelaySecurity");
 const { MobileRelayBridge } = await import("../electron/services/mobileRelayBridge");
 const MANAGED_RELAY_URL = "wss://api.phodex.app/relay";
 
 type RelaySnapshot = ReturnType<MobileRelayBridge["getSnapshot"]>;
+type RelayKeyPair = ReturnType<typeof generateRelayKeyPair>;
 
 async function waitForRelaySnapshot(
   bridge: MobileRelayBridge,
@@ -69,8 +78,40 @@ class FakeSocket extends EventEmitter {
   }
 }
 
+function emitPhoneHandshake(socket: FakeSocket, phone: { deviceId: string; keyPair: RelayKeyPair }) {
+  socket.emitMessage(JSON.stringify({
+    kind: "clientHello",
+    phoneDeviceId: phone.deviceId,
+    phoneIdentityPublicKey: phone.keyPair.publicKeyBase64,
+  }));
+  socket.emitMessage(JSON.stringify({ kind: "secureReady" }));
+}
+
+function findControlMessages(socket: FakeSocket, kind: string): Array<Record<string, unknown>> {
+  return socket.sentMessages
+    .map((message) => parseRelayControlMessage(message))
+    .filter((message): message is NonNullable<ReturnType<typeof parseRelayControlMessage>> => Boolean(message && message.kind === kind))
+    .map((message) => message as unknown as Record<string, unknown>);
+}
+
+function decodeLastSecureEnvelope(socket: FakeSocket, sharedKey: Uint8Array, lastAcceptedCounter = 0): string | null {
+  for (const rawMessage of [...socket.sentMessages].reverse()) {
+    const decoded = decodeRelaySecureEnvelope({
+      sharedKey,
+      rawMessage,
+      expectedSender: "mac",
+      lastAcceptedCounter,
+    });
+    if (decoded.ok) {
+      return decoded.plaintext;
+    }
+  }
+  return null;
+}
+
 describe("mobile relay bridge", () => {
   let remodexStateDir = "";
+  let remodexFixture: { macKeyPair: RelayKeyPair; phone1KeyPair: RelayKeyPair };
   let sidecarSocket: FakeSocket;
   let relaySockets: FakeSocket[];
 
@@ -79,7 +120,7 @@ describe("mobile relay bridge", () => {
     remodexStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-remodex-state-"));
     sidecarSocket = new FakeSocket();
     relaySockets = [];
-    await writeRemodexState({
+    remodexFixture = await writeRemodexState({
       stateDir: remodexStateDir,
     });
   });
@@ -199,7 +240,9 @@ describe("mobile relay bridge", () => {
     expect(snapshot.pairingPayload?.sessionId).toBe(snapshot.sessionId);
     expect(snapshot.pairingPayload?.relay).toBe(snapshot.relayUrl);
     expect(snapshot.pairingPayload?.macDeviceId).toBe("mac-1");
-    expect(relaySocket?.sentMessages.some((message) => message.includes("\"relayMacRegistration\""))).toBe(true);
+    expect(snapshot.pairingPayload?.v).toBe(RELAY_PAIRING_QR_VERSION);
+    expect(snapshot.pairingPayload?.macIdentityPublicKey).toBe(remodexFixture.macKeyPair.publicKeyBase64);
+    expect(findControlMessages(relaySocket!, "relayMacRegistration")).toHaveLength(1);
   });
 
   test("rotateSession issues a fresh session id", async () => {
@@ -264,12 +307,11 @@ describe("mobile relay bridge", () => {
     });
     const relaySocket = relaySockets.at(-1);
 
-    relaySocket?.emitMessage(JSON.stringify({
-      kind: "clientHello",
-      phoneDeviceId: "phone-1",
-      phoneIdentityPublicKey: Buffer.from("phone-public-key").toString("base64"),
-    }));
-    relaySocket?.emitMessage(JSON.stringify({ kind: "secureReady" }));
+    const phoneKeyPair = remodexFixture.phone1KeyPair;
+    emitPhoneHandshake(relaySocket!, {
+      deviceId: "phone-1",
+      keyPair: phoneKeyPair,
+    });
     await waitForRelaySnapshot(
       bridge,
       (s) => s.status === "connected" && s.trustedPhoneDeviceId === "phone-1",
@@ -282,8 +324,9 @@ describe("mobile relay bridge", () => {
 
     const remodexDeviceState = JSON.parse(await fs.readFile(path.join(remodexStateDir, "device-state.json"), "utf8"));
     expect(remodexDeviceState.trustedPhones).toEqual(expect.objectContaining({
-      "phone-1": Buffer.from("phone-public-key").toString("base64"),
+      "phone-1": phoneKeyPair.publicKeyBase64,
     }));
+    expect(findControlMessages(relaySocket!, "secureReady")).toHaveLength(1);
 
     const forgotten = await bridge.forgetTrustedPhone();
     expect(forgotten.trustedPhoneDeviceId).toBeNull();
@@ -326,12 +369,11 @@ describe("mobile relay bridge", () => {
     expect(snapshot.pairingPayload?.relay).toBe(MANAGED_RELAY_URL);
     expect(snapshot.pairingPayload?.macDeviceId).toBeTruthy();
 
-    relaySocket?.emitMessage(JSON.stringify({
-      kind: "clientHello",
-      phoneDeviceId: "phone-managed",
-      phoneIdentityPublicKey: Buffer.from("managed-phone-public-key").toString("base64"),
-    }));
-    relaySocket?.emitMessage(JSON.stringify({ kind: "secureReady" }));
+    const managedPhoneKeyPair = generateRelayKeyPair();
+    emitPhoneHandshake(relaySocket!, {
+      deviceId: "phone-managed",
+      keyPair: managedPhoneKeyPair,
+    });
     await waitForRelaySnapshot(
       bridge,
       (s) => s.status === "connected" && s.trustedPhoneDeviceId === "phone-managed",
@@ -346,8 +388,198 @@ describe("mobile relay bridge", () => {
     );
     expect(managedState.trustedPhone).toEqual(expect.objectContaining({
       phoneDeviceId: "phone-managed",
-      phoneIdentityPublicKey: Buffer.from("managed-phone-public-key").toString("base64"),
+      phoneIdentityPublicKey: managedPhoneKeyPair.publicKeyBase64,
     }));
+  });
+
+  test("rejects secure-ready before a client hello", async () => {
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+
+    relaySockets.at(-1)?.emitMessage(JSON.stringify({ kind: "secureReady" }));
+    await waitForRelaySnapshot(
+      bridge,
+      (snapshot) => snapshot.status === "error" && Boolean(snapshot.lastError?.includes("handshake is incomplete")),
+    );
+  });
+
+  test("rejects a different phone when one is already trusted", async () => {
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+
+    const unexpectedPhoneKeyPair = generateRelayKeyPair();
+    relaySockets.at(-1)?.emitMessage(JSON.stringify({
+      kind: "clientHello",
+      phoneDeviceId: "phone-2",
+      phoneIdentityPublicKey: unexpectedPhoneKeyPair.publicKeyBase64,
+    }));
+    await waitForRelaySnapshot(
+      bridge,
+      (snapshot) => snapshot.status === "error" && Boolean(snapshot.lastError?.includes("already paired with a different phone")),
+    );
+  });
+
+  test("handles encrypted bridge-level requests over the secure relay", async () => {
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      getWorkspaceList: () => [{
+        id: "ws_1",
+        name: "Workspace One",
+        path: "/tmp/workspace",
+        yolo: false,
+      }],
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+    const relaySocket = relaySockets.at(-1)!;
+    const phoneKeyPair = remodexFixture.phone1KeyPair;
+    emitPhoneHandshake(relaySocket, {
+      deviceId: "phone-1",
+      keyPair: phoneKeyPair,
+    });
+    await waitForRelaySnapshot(
+      bridge,
+      (snapshot) => snapshot.status === "connected",
+    );
+
+    const sharedKey = createRelaySharedKey(
+      phoneKeyPair.privateKeyBase64,
+      remodexFixture.macKeyPair.publicKeyBase64,
+    );
+    relaySocket.emitMessage(JSON.stringify(encodeRelaySecureEnvelope({
+      sharedKey,
+      sender: "phone",
+      counter: 1,
+      plaintext: JSON.stringify({
+        id: 7,
+        method: "workspace/list",
+        params: {},
+      }),
+    })));
+
+    await waitForRelaySnapshot(bridge, (snapshot) => snapshot.status === "connected");
+    const responseText = decodeLastSecureEnvelope(relaySocket, sharedKey);
+    expect(responseText).toBeTruthy();
+    expect(JSON.parse(responseText ?? "{}")).toEqual({
+      id: 7,
+      result: {
+        workspaces: [{
+          id: "ws_1",
+          name: "Workspace One",
+          path: "/tmp/workspace",
+          yolo: false,
+        }],
+        activeWorkspaceId: "ws_1",
+      },
+    });
+  });
+
+  test("reconnects the relay socket with backoff attempts", async () => {
+    const reconnectAttempts: number[] = [];
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      getReconnectDelayMs: (attempt) => {
+        reconnectAttempts.push(attempt);
+        return 1;
+      },
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+
+    relaySockets[0]?.close();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(reconnectAttempts).toEqual([1]);
+    expect(relaySockets).toHaveLength(2);
   });
 
   test("start closes existing sockets before replacing the bridge session", async () => {
@@ -476,8 +708,10 @@ async function writeRemodexState(options: {
   daemonState?: string;
 }) {
   const relayUrl = options.relayUrl ?? "wss://api.phodex.app/relay";
+  const macKeyPair = generateRelayKeyPair();
+  const phone1KeyPair = generateRelayKeyPair();
   const trustedPhones = options.trustedPhones ?? {
-    "phone-1": Buffer.from("trusted-phone-public-key").toString("base64"),
+    "phone-1": phone1KeyPair.publicKeyBase64,
   };
   await fs.mkdir(options.stateDir, { recursive: true });
   await fs.writeFile(path.join(options.stateDir, "daemon-config.json"), JSON.stringify({
@@ -492,19 +726,23 @@ async function writeRemodexState(options: {
   await fs.writeFile(path.join(options.stateDir, "device-state.json"), JSON.stringify({
     version: 1,
     macDeviceId: "mac-1",
-    macIdentityPublicKey: Buffer.from("mac-public-key").toString("base64"),
-    macIdentityPrivateKey: Buffer.from("mac-private-key").toString("base64"),
+    macIdentityPublicKey: macKeyPair.publicKeyBase64,
+    macIdentityPrivateKey: macKeyPair.privateKeyBase64,
     trustedPhones,
   }, null, 2));
   await fs.writeFile(path.join(options.stateDir, "pairing-session.json"), JSON.stringify({
     createdAt: "2026-03-25T17:00:00.000Z",
     pairingPayload: {
-      v: 2,
+      v: RELAY_PAIRING_QR_VERSION,
       relay: relayUrl,
       sessionId: "remodex-session",
       macDeviceId: "mac-1",
-      macIdentityPublicKey: Buffer.from("mac-public-key").toString("base64"),
+      macIdentityPublicKey: macKeyPair.publicKeyBase64,
       expiresAt: 1_700_000_000_000,
     },
   }, null, 2));
+  return {
+    macKeyPair,
+    phone1KeyPair,
+  };
 }

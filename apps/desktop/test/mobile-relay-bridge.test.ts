@@ -730,6 +730,71 @@ describe("mobile relay bridge", () => {
     });
   });
 
+  test("rejects encrypted application payloads before secure-ready completes", async () => {
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      getWorkspaceList: () => [{
+        id: "ws_1",
+        name: "Workspace One",
+        path: "/tmp/workspace",
+        yolo: false,
+      }],
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+
+    const relaySocket = relaySockets.at(-1)!;
+    const phoneKeyPair = remodexFixture.phone1KeyPair;
+    relaySocket.emitMessage(JSON.stringify({
+      kind: "clientHello",
+      phoneDeviceId: "phone-1",
+      phoneIdentityPublicKey: phoneKeyPair.publicKeyBase64,
+    }));
+
+    const sharedKey = createRelaySharedKey(
+      phoneKeyPair.privateKeyBase64,
+      remodexFixture.macKeyPair.publicKeyBase64,
+    );
+    relaySocket.emitMessage(JSON.stringify(encodeRelaySecureEnvelope({
+      sharedKey,
+      sender: "phone",
+      counter: 1,
+      plaintext: JSON.stringify({
+        id: 7,
+        method: "workspace/list",
+        params: {},
+      }),
+    })));
+
+    await waitForRelaySnapshot(
+      bridge,
+      (snapshot) => snapshot.status === "error" && Boolean(snapshot.lastError?.includes("handshake is incomplete")),
+    );
+
+    expect(sidecarSocket.sentMessages).toHaveLength(0);
+  });
+
   test("reconnects the relay socket with backoff attempts", async () => {
     const reconnectAttempts: number[] = [];
     const bridge = new MobileRelayBridge({

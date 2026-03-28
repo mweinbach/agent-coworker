@@ -225,6 +225,7 @@
 - For collapsed Windows sidebar chrome in this repo, mirror the expanded header layout instead of compressing the buttons into one tight cluster; keep `New Chat` on the left, the sidebar toggle on the right, and use an explicit renderer-to-main drag bridge if drag gestures need to start on those clickable controls.
 - When the user corrects attachment transport limits in this repo, treat upload-path and inline-model budgets as separate contracts; do not carry the inline cap over to uploaded files, and confirm which limit applies to each path before wiring validation.
 - Before pushing or resolving PR review threads in this repo, run the same full validation lane CI runs (`bun test --max-concurrency 1` plus required typechecks/docs) instead of relying only on targeted tests; cross-file Bun module mocks can pass in isolation and still fail in the full suite.
+- When the user asks to fix/push PR review feedback in this repo, treat thread resolution as part of done: after tests and push, resolve the addressed review threads with concrete fix and verification notes instead of stopping at the code change.
 
 ## 2026-03-18 Tool Output Overflow Audit
 

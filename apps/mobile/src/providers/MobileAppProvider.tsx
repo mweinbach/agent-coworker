@@ -11,6 +11,7 @@ import {
   clearWorkspaceBoundStores,
   hydrateWorkspaceBoundStores,
 } from "../features/cowork/workspaceBootstrap";
+import { createSessionBootstrapController } from "../features/cowork/sessionBootstrap";
 import { isWorkspaceConnectionReady } from "../features/relay/connectionState";
 import { defaultSecureTransportClient } from "../features/relay/secureTransportClient";
 
@@ -125,14 +126,6 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
     });
     setActiveCoworkJsonRpcClient(client);
 
-    let sessionReady = false;
-    const resetClientSession = () => {
-      sessionReady = false;
-      client.resetTransportSession();
-      useThreadStore.getState().clearAll();
-      clearWorkspaceBoundStores();
-    };
-
     const hydrateRemoteThreads = async () => {
       const list = await client.requestThreadList();
       const threadStore = useThreadStore.getState();
@@ -150,19 +143,17 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
       }
     };
 
-    const ensureConnectedSession = async () => {
-      if (sessionReady) {
-        return;
-      }
-      sessionReady = true;
-      try {
-        await client.initialize();
-        await hydrateRemoteThreads();
-        void hydrateWorkspaceContext();
-      } catch {
-        sessionReady = false;
-      }
-    };
+    const sessionBootstrap = createSessionBootstrapController({
+      client,
+      clearThreads: () => {
+        useThreadStore.getState().clearAll();
+      },
+      clearWorkspaceBoundStores,
+      hydrateRemoteThreads,
+      hydrateWorkspaceContext,
+      getTransportSnapshot: () => defaultSecureTransportClient.getSnapshot(),
+      isTransportReady: isWorkspaceConnectionReady,
+    });
 
     const unsubscribeTransport = defaultSecureTransportClient.subscribe({
       onPlaintextMessage(text) {
@@ -172,27 +163,28 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
         if (!isWorkspaceConnectionReady(state)) {
           return;
         }
-        void ensureConnectedSession();
+        void sessionBootstrap.ensureConnectedSession();
       },
       onSocketClosed() {
-        resetClientSession();
+        sessionBootstrap.resetClientSession();
       },
       onSecureError() {
-        resetClientSession();
+        sessionBootstrap.resetClientSession();
       },
     });
 
     void defaultSecureTransportClient.getSnapshot()
       .then((snapshot) => {
         if (isWorkspaceConnectionReady(snapshot)) {
-          void ensureConnectedSession();
+          void sessionBootstrap.ensureConnectedSession();
         }
       })
       .catch(() => {});
 
     return () => {
       unsubscribeTransport();
-      resetClientSession();
+      sessionBootstrap.dispose();
+      sessionBootstrap.resetClientSession();
       resetPairingListeners();
       setActiveCoworkJsonRpcClient(null);
     };

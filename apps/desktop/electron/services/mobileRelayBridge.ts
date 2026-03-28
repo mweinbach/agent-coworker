@@ -882,6 +882,10 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     if (!this.secureSharedKey) {
       return false;
     }
+    if (!this.secureChannelReady) {
+      this.rejectRelayApplicationMessage("Secure relay handshake is incomplete.");
+      return true;
+    }
     const result = decodeRelaySecureEnvelope({
       sharedKey: this.secureSharedKey,
       rawMessage: rawText,

@@ -5,6 +5,7 @@ import { anthropicProvider } from "./anthropic";
 import { basetenProvider } from "./baseten";
 import { PROVIDER_MODEL_CATALOG } from "./catalog";
 import { codexCliProvider } from "./codex-cli";
+import { fireworksProvider } from "./fireworks";
 import { googleProvider } from "./google";
 import { lmstudioProvider } from "./lmstudio";
 import { nvidiaProvider } from "./nvidia";
@@ -50,6 +51,7 @@ const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   anthropic: anthropicProvider,
   baseten: basetenProvider,
   together: togetherProvider,
+  fireworks: fireworksProvider,
   nvidia: nvidiaProvider,
   lmstudio: lmstudioProvider,
   "opencode-go": opencodeGoProvider,
@@ -63,6 +65,7 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   anthropic: { ...PROVIDER_RUNTIMES.anthropic, ...PROVIDER_MODEL_CATALOG.anthropic },
   baseten: { ...PROVIDER_RUNTIMES.baseten, ...PROVIDER_MODEL_CATALOG.baseten },
   together: { ...PROVIDER_RUNTIMES.together, ...PROVIDER_MODEL_CATALOG.together },
+  fireworks: { ...PROVIDER_RUNTIMES.fireworks, ...PROVIDER_MODEL_CATALOG.fireworks },
   nvidia: { ...PROVIDER_RUNTIMES.nvidia, ...PROVIDER_MODEL_CATALOG.nvidia },
   lmstudio: { ...PROVIDER_RUNTIMES.lmstudio, ...PROVIDER_MODEL_CATALOG.lmstudio },
   "opencode-go": { ...PROVIDER_RUNTIMES["opencode-go"], ...PROVIDER_MODEL_CATALOG["opencode-go"] },

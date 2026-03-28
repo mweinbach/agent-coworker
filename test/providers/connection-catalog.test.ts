@@ -181,6 +181,43 @@ describe("providers/connectionCatalog", () => {
     });
   });
 
+  test("lists Fireworks AI in the provider catalog with the expected model set", async () => {
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {},
+      }),
+    });
+
+    expect(payload.default.fireworks).toBe("accounts/fireworks/models/glm-5");
+    expect(payload.all).toContainEqual({
+      id: "fireworks",
+      name: "Fireworks AI",
+      models: [
+        {
+          id: "accounts/fireworks/models/glm-5",
+          displayName: "GLM-5",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: false,
+        },
+        {
+          id: "accounts/fireworks/models/kimi-k2p5",
+          displayName: "Kimi K2.5",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: true,
+        },
+        {
+          id: "accounts/fireworks/models/minimax-m2p5",
+          displayName: "MiniMax M2.5",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: false,
+        },
+      ],
+      defaultModel: "accounts/fireworks/models/glm-5",
+    });
+  });
+
   test("lists NVIDIA in the provider catalog with the expected model set", async () => {
     const payload = await getProviderCatalog({
       readStore: async () => ({

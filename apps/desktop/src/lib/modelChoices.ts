@@ -22,6 +22,48 @@ export function modelOptionsForProvider(provider: ProviderName, currentModel?: s
 }
 
 type ProviderCatalogEntry = Extract<ServerEvent, { type: "provider_catalog" }>["all"][number];
+
+/** Select value is `provider:modelId` with a single separator (model ids may contain `:`). */
+export function encodeProviderModelSelection(provider: ProviderName, modelId: string): string {
+  return `${provider}:${modelId}`;
+}
+
+export function decodeProviderModelSelection(raw: string): { provider: ProviderName; modelId: string } | null {
+  const idx = raw.indexOf(":");
+  if (idx <= 0) return null;
+  const providerRaw = raw.slice(0, idx);
+  const modelId = raw.slice(idx + 1);
+  if (!providerRaw || !modelId) return null;
+  if (!(PROVIDER_NAMES as readonly string[]).includes(providerRaw)) return null;
+  return { provider: providerRaw as ProviderName, modelId };
+}
+
+/** Maps `modelId` → catalog displayName per provider (empty when catalog has not loaded). */
+export function modelDisplayNamesFromCatalog(
+  catalog: readonly ProviderCatalogEntry[],
+): Record<ProviderName, Record<string, string>> {
+  const out = {} as Record<ProviderName, Record<string, string>>;
+  for (const entry of catalog) {
+    const byId: Record<string, string> = {};
+    for (const m of entry.models ?? []) {
+      const id = typeof m.id === "string" ? m.id.trim() : "";
+      const name = typeof m.displayName === "string" ? m.displayName.trim() : "";
+      if (id && name) byId[id] = name;
+    }
+    out[entry.id] = byId;
+  }
+  return out;
+}
+
+export function resolveModelDisplayLabel(
+  provider: ProviderName,
+  modelId: string,
+  displayNames: Record<ProviderName, Record<string, string>>,
+): string {
+  const trimmed = modelId.trim();
+  if (!trimmed) return "";
+  return displayNames[provider]?.[trimmed] ?? trimmed;
+}
 export type CatalogVisibilityOptions = {
   hiddenProviders?: readonly ProviderName[];
   hiddenModelsByProvider?: Partial<Record<ProviderName, readonly string[]>>;

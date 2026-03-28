@@ -2,11 +2,52 @@ import { describe, expect, test } from "bun:test";
 
 import {
   availableProvidersFromCatalog,
+  decodeProviderModelSelection,
+  encodeProviderModelSelection,
   MODEL_CHOICES,
   modelChoicesFromCatalog,
+  modelDisplayNamesFromCatalog,
   modelOptionsFromCatalog,
   modelOptionsForProvider,
+  resolveModelDisplayLabel,
 } from "../src/lib/modelChoices";
+import type { ProviderName } from "../src/lib/wsProtocol";
+
+describe("encodeProviderModelSelection / decodeProviderModelSelection", () => {
+  test("round-trips model ids that contain colons (e.g. Fireworks serverless paths)", () => {
+    const provider = "fireworks" as ProviderName;
+    const modelId = "accounts/fireworks/models/glm-5";
+    const encoded = encodeProviderModelSelection(provider, modelId);
+    expect(encoded).toBe("fireworks:accounts/fireworks/models/glm-5");
+    const decoded = decodeProviderModelSelection(encoded);
+    expect(decoded).toEqual({ provider, modelId });
+  });
+
+  test("decode rejects unknown provider prefix", () => {
+    expect(decodeProviderModelSelection("unknown:foo")).toBeNull();
+  });
+});
+
+describe("modelDisplayNamesFromCatalog", () => {
+  test("resolveModelDisplayLabel uses catalog displayName when present", () => {
+    const map = modelDisplayNamesFromCatalog([
+      {
+        id: "fireworks",
+        name: "Fireworks AI",
+        models: [
+          {
+            id: "accounts/fireworks/models/glm-5",
+            displayName: "GLM-5",
+            knowledgeCutoff: "Unknown",
+            supportsImageInput: false,
+          },
+        ],
+        defaultModel: "accounts/fireworks/models/glm-5",
+      },
+    ]);
+    expect(resolveModelDisplayLabel("fireworks", "accounts/fireworks/models/glm-5", map)).toBe("GLM-5");
+  });
+});
 
 describe("modelOptionsForProvider", () => {
   test("includes a custom current model as a selectable option", () => {

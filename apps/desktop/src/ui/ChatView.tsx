@@ -53,7 +53,11 @@ import {
 } from "../../../../src/shared/attachments";
 import {
   availableProvidersFromCatalog,
+  decodeProviderModelSelection,
+  encodeProviderModelSelection,
   modelChoicesFromCatalog,
+  modelDisplayNamesFromCatalog,
+  resolveModelDisplayLabel,
   type CatalogVisibilityOptions,
 } from "../lib/modelChoices";
 import { readFile } from "../lib/desktopCommands";
@@ -483,6 +487,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   anthropic: "Anthropic",
   baseten: "Baseten",
   together: "Together AI",
+  fireworks: "Fireworks AI",
   nvidia: "NVIDIA",
   lmstudio: "LM Studio",
   "opencode-go": "OpenCode Go",
@@ -498,11 +503,13 @@ function DraftThreadModelSelector({
   threadId,
   provider,
   model,
+  modelDisplayNames,
   disabled,
 }: {
   threadId: string;
   provider: ProviderName;
   model: string;
+  modelDisplayNames: Record<ProviderName, Record<string, string>>;
   disabled?: boolean;
 }) {
   const setThreadModel = useAppStore((s) => s.setThreadModel);
@@ -526,58 +533,67 @@ function DraftThreadModelSelector({
     }),
     [providerCatalog, providerConnected, provider, chatCatalogVisibility, choices],
   );
-  const value = `${provider}:${model}`;
+  const value = encodeProviderModelSelection(provider, model);
 
   return (
-    <div className="min-w-0 max-w-full">
-      <Select
-        className="inline-flex min-w-0 max-w-full"
-        value={value}
-        disabled={disabled}
-        onValueChange={(val) => {
-          const [p, ...mParts] = val.split(":");
-          setThreadModel(threadId, p as ProviderName, mParts.join(":"));
-        }}
+    <Select
+      value={value}
+      disabled={disabled}
+      onValueChange={(val) => {
+        const parsed = decodeProviderModelSelection(val);
+        if (!parsed) return;
+        setThreadModel(threadId, parsed.provider, parsed.modelId);
+      }}
+    >
+      <SelectTrigger
+        size="sm"
+        className="h-6 w-auto min-w-0 max-w-[220px] rounded-md border-none bg-transparent px-1.5 text-[11px] text-muted-foreground shadow-none transition-colors hover:bg-muted/40 hover:text-foreground focus:ring-0"
       >
-        <SelectTrigger
-          compact
-          size="sm"
-          className="!h-8 !min-w-0 !w-max !max-w-[min(220px,100%)] !rounded-none !border-0 !bg-transparent !pl-1.5 !pr-1.5 !text-[13px] !font-medium !text-foreground/80 !shadow-none transition-colors hover:!bg-transparent hover:!text-foreground focus:ring-0"
-        >
-          <SelectValue placeholder="Model" />
-        </SelectTrigger>
-        <SelectContent>
-          {providers.map((p) => (
-            <SelectGroup key={p}>
-              <SelectLabel className="px-2 py-1.5 text-xs font-semibold">{PROVIDER_LABELS[p] ?? p}</SelectLabel>
-              {(choices[p] ?? []).map((m) => (
-                <SelectItem key={`${p}:${m}`} value={`${p}:${m}`} className="pl-6 text-xs">
-                  {m}
+        <span className="truncate"><SelectValue placeholder="Model" /></span>
+      </SelectTrigger>
+      <SelectContent>
+        {providers.map((p) => (
+          <SelectGroup key={p}>
+            <SelectLabel className="px-2 py-1.5 text-xs font-semibold">{PROVIDER_LABELS[p] ?? p}</SelectLabel>
+            {(choices[p] ?? []).map((m) => {
+              const sel = encodeProviderModelSelection(p, m);
+              const label = resolveModelDisplayLabel(p, m, modelDisplayNames);
+              return (
+                <SelectItem key={sel} value={sel} className="pl-6 text-xs">
+                  <span title={m}>{label}</span>
                 </SelectItem>
-              ))}
-              {p === provider && model && !(choices[p] ?? []).includes(model) ? (
-                <SelectItem key={`${p}:${model}`} value={`${p}:${model}`} className="pl-6 text-xs">
-                  {model} (custom)
-                </SelectItem>
-              ) : null}
-            </SelectGroup>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
+              );
+            })}
+            {p === provider && model && !(choices[p] ?? []).includes(model) ? (
+              <SelectItem
+                key={encodeProviderModelSelection(p, model)}
+                value={encodeProviderModelSelection(p, model)}
+                className="pl-6 text-xs"
+              >
+                <span title={model}>{resolveModelDisplayLabel(p, model, modelDisplayNames)} (custom)</span>
+              </SelectItem>
+            ) : null}
+          </SelectGroup>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
 function ThreadModelIndicator({
   provider,
   model,
+  modelDisplayNames,
 }: {
   provider: ProviderName;
   model: string;
+  modelDisplayNames: Record<ProviderName, Record<string, string>>;
 }) {
-  const label = model.trim();
-  if (!label) return null;
-  const title = `${PROVIDER_LABELS[provider] ?? provider} / ${label}`;
+  const id = model.trim();
+  if (!id) return null;
+  const friendly = resolveModelDisplayLabel(provider, id, modelDisplayNames);
+  const title =
+    friendly !== id ? `${PROVIDER_LABELS[provider] ?? provider} / ${friendly} (${id})` : `${PROVIDER_LABELS[provider] ?? provider} / ${id}`;
 
   return (
     <Badge
@@ -586,7 +602,7 @@ function ThreadModelIndicator({
       aria-label={`Session model ${title}`}
       className="h-8 max-w-[220px] rounded-none border-0 bg-transparent px-1.5 text-[13px] font-medium text-foreground/80 shadow-none"
     >
-      <span className="truncate">{label}</span>
+      <span className="truncate">{friendly}</span>
     </Badge>
   );
 }
@@ -737,6 +753,8 @@ export function ChatView() {
     if (!th) return null;
     return s.workspaces.find((w) => w.id === th.workspaceId) ?? null;
   });
+  const providerCatalog = useAppStore((s) => s.providerCatalog);
+  const modelDisplayNames = useMemo(() => modelDisplayNamesFromCatalog(providerCatalog), [providerCatalog]);
 
   const threadModelConfig = useMemo(() => {
     if (!selectedThreadId || !thread) return null;
@@ -1142,12 +1160,14 @@ export function ChatView() {
                         threadId={selectedThreadId}
                         provider={threadModelConfig.provider}
                         model={threadModelConfig.model}
+                        modelDisplayNames={modelDisplayNames}
                         disabled={inputDisabled}
                       />
                     ) : (
                       <ThreadModelIndicator
                         provider={threadModelConfig.provider}
                         model={threadModelConfig.model}
+                        modelDisplayNames={modelDisplayNames}
                       />
                     )
                   ) : null}

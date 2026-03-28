@@ -114,6 +114,22 @@ export function createTogetherModelAdapter(modelId: string, savedKey?: string): 
   });
 }
 
+export function createFireworksModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
+  return createModelAdapter(
+    modelId,
+    "fireworks.completions",
+    async () => {
+      const key = firstNonEmpty(savedKey, envKey("FIREWORKS_API_KEY"));
+      const headers: HeaderMap = {};
+      if (key) {
+        headers.authorization = `Bearer ${key}`;
+      }
+      return headers;
+    },
+    "https://api.fireworks.ai/inference/v1",
+  );
+}
+
 export function createNvidiaModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
   return createModelAdapter(modelId, "nvidia.completions", async () => {
     const key = firstNonEmpty(savedKey, envKey("NVIDIA_API_KEY"));

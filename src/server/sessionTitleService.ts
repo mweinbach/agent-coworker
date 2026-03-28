@@ -10,6 +10,7 @@ const TITLE_MODEL_BY_PROVIDER: Partial<Record<AgentConfig["provider"], string>> 
   nvidia: "nvidia/nemotron-3-super-120b-a12b",
   openai: "gpt-5-mini",
   together: "moonshotai/Kimi-K2.5",
+  fireworks: "accounts/fireworks/models/glm-5",
   "opencode-go": "glm-5",
   "opencode-zen": "glm-5",
 };

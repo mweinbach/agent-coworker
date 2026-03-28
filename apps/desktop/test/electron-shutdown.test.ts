@@ -84,13 +84,16 @@ describe("desktop shutdown handler", () => {
     expect(preventCalls).toBe(2);
   });
 
-  test("still quits when stopAllServers fails", async () => {
+  test("still stops the mobile relay bridge when stopAllServers fails", async () => {
     const calls: string[] = [];
 
     const beforeQuit = createBeforeQuitHandler({
       stopAllServers: async () => {
         calls.push("stop:start");
         throw new Error("boom");
+      },
+      stopMobileRelayBridge: async () => {
+        calls.push("relay:stop");
       },
       quit: () => {
         calls.push("quit");
@@ -110,6 +113,9 @@ describe("desktop shutdown handler", () => {
     expect(calls).toContain("preventDefault");
     expect(calls).toContain("stop:start");
     expect(calls).toContain("error:boom");
+    expect(calls).toContain("relay:stop");
     expect(calls).toContain("quit");
+    expect(calls.indexOf("error:boom")).toBeLessThan(calls.indexOf("relay:stop"));
+    expect(calls.indexOf("relay:stop")).toBeLessThan(calls.indexOf("quit"));
   });
 });

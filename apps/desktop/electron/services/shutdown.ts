@@ -28,24 +28,28 @@ export function createBeforeQuitHandler(deps: ShutdownDeps): (event: QuitEvent) 
     shutdownStarted = true;
     event.preventDefault();
 
-    void deps
-      .stopAllServers()
-      .then(async () => {
-        if (deps.stopMobileRelayBridge) {
-          await deps.stopMobileRelayBridge();
-        }
-      })
-      .catch((error) => {
+    void (async () => {
+      try {
+        await deps.stopAllServers();
+      } catch (error) {
         deps.onError?.(error);
-      })
-      .finally(() => {
-        // Keep IPC handlers live until process exit. The renderer may still make
-        // recovery calls while quit is in flight, and Electron clears ipcMain
-        // handlers when the app process exits.
-        deps.unregisterAppearanceListener?.();
-        deps.stopUpdater?.();
-        shutdownFinished = true;
-        deps.quit();
-      });
+      }
+
+      if (deps.stopMobileRelayBridge) {
+        try {
+          await deps.stopMobileRelayBridge();
+        } catch (error) {
+          deps.onError?.(error);
+        }
+      }
+
+      // Keep IPC handlers live until process exit. The renderer may still make
+      // recovery calls while quit is in flight, and Electron clears ipcMain
+      // handlers when the app process exits.
+      deps.unregisterAppearanceListener?.();
+      deps.stopUpdater?.();
+      shutdownFinished = true;
+      deps.quit();
+    })();
   };
 }

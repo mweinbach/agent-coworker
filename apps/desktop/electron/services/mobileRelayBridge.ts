@@ -38,6 +38,7 @@ import {
 
 const MANAGED_RELAY_URL = "wss://api.phodex.app/relay";
 const MAX_LEGACY_RELAY_SESSION_COUNT = 4;
+const MAX_QUEUED_OUTBOUND_APPLICATION_MESSAGES = 256;
 
 type BridgeSocket = Pick<WebSocket, "readyState" | "send" | "close" | "on" | "once">;
 
@@ -123,6 +124,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private readonly legacyRelaySockets = new Map<string, BridgeSocket>();
   private sidecarUrl: string | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private sidecarReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private notificationSecret: string | null = null;
   private reusableSessionId: string | null = null;
   private stopping = false;
@@ -132,6 +134,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private secureOutboundCounter = 0;
   private secureLastInboundCounter = 0;
   private relayReconnectAttempts = 0;
+  private sidecarReconnectAttempts = 0;
   private queuedOutboundApplicationMessages: string[] = [];
 
   constructor(options: MobileRelayBridgeOptions) {
@@ -262,6 +265,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }): Promise<MobileRelaySnapshot> {
     this.stopping = true;
     this.clearReconnectTimer();
+    this.clearSidecarReconnectTimer();
     this.closeConnections();
     this.stopping = false;
     try {
@@ -289,6 +293,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       return this.getSnapshot();
     } catch (error) {
       this.clearReconnectTimer();
+      this.clearSidecarReconnectTimer();
       this.closeConnections();
       this.updateStatus("error", error instanceof Error ? error.message : String(error));
       throw error;
@@ -298,6 +303,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   async stop(): Promise<MobileRelaySnapshot> {
     this.stopping = true;
     this.clearReconnectTimer();
+    this.clearSidecarReconnectTimer();
     this.closeConnections();
     this.sidecarUrl = null;
     this.refreshRelayConfiguration();
@@ -335,6 +341,8 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private closeConnections(): void {
     const sidecarSocket = this.sidecarSocket;
     const relaySocket = this.relaySocket;
+    this.clearReconnectTimer();
+    this.clearSidecarReconnectTimer();
     this.sidecarSocket = null;
     this.relaySocket = null;
     this.notificationSecret = null;
@@ -379,6 +387,12 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     if (!this.reconnectTimer) return;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+  }
+
+  private clearSidecarReconnectTimer(): void {
+    if (!this.sidecarReconnectTimer) return;
+    clearTimeout(this.sidecarReconnectTimer);
+    this.sidecarReconnectTimer = null;
   }
 
   private closeLegacyRelaySockets(): void {
@@ -426,6 +440,13 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     }, socket);
   }
 
+  private queueOutboundApplicationMessage(text: string): void {
+    if (this.queuedOutboundApplicationMessages.length >= MAX_QUEUED_OUTBOUND_APPLICATION_MESSAGES) {
+      this.queuedOutboundApplicationMessages.shift();
+    }
+    this.queuedOutboundApplicationMessages.push(text);
+  }
+
   private sendApplicationMessageToPhone(text: string): void {
     if (!isCoworkJsonRpcPayload(text)) {
       this.updateStatus("error", "Rejected invalid JSON-RPC payload from desktop relay bridge.");
@@ -437,7 +458,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       || !this.secureSharedKey
       || !this.secureChannelReady
     ) {
-      this.queuedOutboundApplicationMessages.push(text);
+      this.queueOutboundApplicationMessage(text);
       return;
     }
     const envelope = encodeRelaySecureEnvelope({
@@ -466,6 +487,20 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     }
   }
 
+  private restoreConnectedStatusIfReady(): void {
+    if (
+      this.state.status === "connected"
+      || !this.sidecarSocket
+      || this.sidecarSocket.readyState !== WebSocket.OPEN
+      || !this.relaySocket
+      || this.relaySocket.readyState !== WebSocket.OPEN
+      || !this.secureChannelReady
+    ) {
+      return;
+    }
+    this.updateStatus("connected");
+  }
+
   private rejectRelayApplicationMessage(message: string): void {
     this.sendSecureRelayError(message);
     this.updateStatus("error", message);
@@ -474,9 +509,13 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private async connectSidecar(url: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const socket = this.createSidecarSocket(url);
-      this.sidecarSocket = socket;
+      let opened = false;
 
       socket.once("open", () => {
+        opened = true;
+        this.sidecarSocket = socket;
+        this.sidecarReconnectAttempts = 0;
+        this.clearSidecarReconnectTimer();
         socket.on("message", (raw: unknown) => {
           if (this.sidecarSocket !== socket) return;
           const text = decodeSocketMessage(raw);
@@ -484,24 +523,20 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         });
         socket.on("close", () => {
           if (this.sidecarSocket !== socket) return;
-          if (this.stopping) return;
           this.sidecarSocket = null;
+          if (this.stopping) return;
           this.updateStatus("reconnecting", "Local sidecar disconnected.");
-          if (this.sidecarUrl) {
-            void this.connectSidecar(this.sidecarUrl).catch((error) => {
-              this.updateStatus("error", error instanceof Error ? error.message : String(error));
-            });
-          }
+          this.scheduleSidecarReconnect();
         });
+        this.restoreConnectedStatusIfReady();
         resolve();
       });
 
       socket.once("error", (error) => {
-        if (this.sidecarSocket === socket) {
-          this.sidecarSocket = null;
-        }
         closeSocket(socket);
-        reject(error);
+        if (!opened) {
+          reject(error);
+        }
       });
     });
   }
@@ -545,10 +580,14 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         "x-notification-secret": this.notificationSecret ?? "",
         ...this.buildMacRegistrationHeaders(),
       });
-      this.relaySocket = socket;
+      let opened = false;
       this.resetSecureRelayState({ clearQueue: false });
 
       socket.once("open", () => {
+        opened = true;
+        this.relaySocket = socket;
+        this.relayReconnectAttempts = 0;
+        this.clearReconnectTimer();
         this.sendRelayRegistrationUpdate(socket, sessionId);
         resolve();
       });
@@ -567,19 +606,18 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
 
       socket.on("close", () => {
         if (this.relaySocket !== socket) return;
-        if (this.stopping) return;
         this.relaySocket = null;
+        if (this.stopping) return;
         this.resetSecureRelayState({ clearQueue: false });
         this.updateStatus("reconnecting");
         this.scheduleRelayReconnect();
       });
 
       socket.once("error", (error) => {
-        if (this.relaySocket === socket) {
-          this.relaySocket = null;
-        }
         closeSocket(socket);
-        reject(error);
+        if (!opened) {
+          reject(error);
+        }
       });
     });
   }
@@ -626,15 +664,41 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     });
   }
 
+  private scheduleSidecarReconnect(): void {
+    this.clearSidecarReconnectTimer();
+    if (!this.sidecarUrl) {
+      return;
+    }
+    const attempt = ++this.sidecarReconnectAttempts;
+    const delayMs = this.getReconnectDelayMs(attempt);
+    this.sidecarReconnectTimer = setTimeout(() => {
+      this.sidecarReconnectTimer = null;
+      if (this.stopping || this.sidecarSocket || !this.sidecarUrl) {
+        return;
+      }
+      void this.connectSidecar(this.sidecarUrl).catch((error) => {
+        if (this.stopping) {
+          return;
+        }
+        this.updateStatus("error", error instanceof Error ? error.message : String(error));
+        this.scheduleSidecarReconnect();
+      });
+    }, delayMs);
+  }
+
   private scheduleRelayReconnect(): void {
     this.clearReconnectTimer();
     const attempt = ++this.relayReconnectAttempts;
     const delayMs = this.getReconnectDelayMs(attempt);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      if (!this.state.sessionId) return;
+      if (this.stopping || !this.state.sessionId) return;
       void this.connectRelaySocket(this.state.sessionId).catch((error) => {
+        if (this.stopping) {
+          return;
+        }
         this.updateStatus("error", error instanceof Error ? error.message : String(error));
+        this.scheduleRelayReconnect();
       });
     }, delayMs);
   }
@@ -756,13 +820,19 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       yolo: target.yolo,
     });
 
-    // Close old sidecar and connect to new one
+    // Keep the current sidecar alive until the replacement is confirmed.
     const oldSidecar = this.sidecarSocket;
-    this.sidecarSocket = null;
-    closeSocket(oldSidecar);
-
+    const previousSidecarUrl = this.sidecarUrl;
     this.sidecarUrl = url;
-    await this.connectSidecar(url);
+    try {
+      await this.connectSidecar(url);
+    } catch (error) {
+      this.sidecarUrl = previousSidecarUrl;
+      throw error;
+    }
+    if (oldSidecar && oldSidecar !== this.sidecarSocket) {
+      closeSocket(oldSidecar);
+    }
 
     // Update state
     this.state = {

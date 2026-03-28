@@ -129,13 +129,16 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
     const resetClientSession = () => {
       sessionReady = false;
       client.resetTransportSession();
+      useThreadStore.getState().clearAll();
       clearWorkspaceBoundStores();
     };
 
     const hydrateRemoteThreads = async () => {
       const list = await client.requestThreadList();
+      const threadStore = useThreadStore.getState();
+      threadStore.clearAll();
       for (const thread of list.threads) {
-        useThreadStore.getState().hydrate(createThreadSnapshot(thread));
+        threadStore.hydrate(createThreadSnapshot(thread));
       }
     };
 

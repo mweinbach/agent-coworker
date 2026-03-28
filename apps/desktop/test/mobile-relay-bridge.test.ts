@@ -52,6 +52,15 @@ async function waitForRelaySnapshot(
   throw new Error("timed out waiting for mobile relay snapshot");
 }
 
+async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("timed out waiting for condition");
+}
+
 class FakeServerManager {
   readonly starts: Array<{ workspaceId: string; workspacePath: string; yolo: boolean }> = [];
 
@@ -685,6 +694,207 @@ describe("mobile relay bridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(reconnectAttempts).toEqual([1]);
     expect(relaySockets).toHaveLength(2);
+  });
+
+  test("keeps retrying relay reconnects after dial errors", async () => {
+    const reconnectAttempts: number[] = [];
+    let relayDialCount = 0;
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      getReconnectDelayMs: (attempt) => {
+        reconnectAttempts.push(attempt);
+        return 1;
+      },
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        relayDialCount += 1;
+        queueMicrotask(() => {
+          if (relayDialCount === 2) {
+            socket.emitError(new Error("relay dial failed"));
+            return;
+          }
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+
+    relaySockets[0]?.close();
+    await waitForCondition(() => relaySockets.length === 3 && (bridge as any).relaySocket === relaySockets[2]);
+
+    expect(reconnectAttempts).toEqual([1, 2]);
+    expect(bridge.getSnapshot().lastError).toBe("relay dial failed");
+  });
+
+  test("keeps retrying sidecar reconnects after dial errors", async () => {
+    const reconnectAttempts: number[] = [];
+    const sidecarSockets: FakeSocket[] = [];
+    let sidecarDialCount = 0;
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      getReconnectDelayMs: (attempt) => {
+        reconnectAttempts.push(attempt);
+        return 1;
+      },
+      createSidecarSocket: () => {
+        const socket = new FakeSocket();
+        sidecarSockets.push(socket);
+        sidecarDialCount += 1;
+        queueMicrotask(() => {
+          if (sidecarDialCount === 2) {
+            socket.emitError(new Error("sidecar dial failed"));
+            return;
+          }
+          socket.open();
+        });
+        return socket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+
+    sidecarSockets[0]?.close();
+    await waitForCondition(() => sidecarSockets.length === 3 && (bridge as any).sidecarSocket === sidecarSockets[2]);
+
+    expect(reconnectAttempts).toEqual([1, 2]);
+    expect(bridge.getSnapshot().lastError).toBe("sidecar dial failed");
+  });
+
+  test("preserves the current sidecar if a workspace switch dial fails", async () => {
+    const sidecarSockets: FakeSocket[] = [];
+    const serverManager = {
+      async startWorkspaceServer(opts: { workspaceId: string }) {
+        return {
+          url: opts.workspaceId === "ws_2"
+            ? "ws://127.0.0.1:7337/ws-two"
+            : "ws://127.0.0.1:7337/ws-one",
+        };
+      },
+    };
+
+    const bridge = new MobileRelayBridge({
+      serverManager: serverManager as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      getWorkspaceList: () => [
+        {
+          id: "ws_1",
+          name: "Workspace One",
+          path: "/tmp/workspace-one",
+          yolo: false,
+        },
+        {
+          id: "ws_2",
+          name: "Workspace Two",
+          path: "/tmp/workspace-two",
+          yolo: false,
+        },
+      ],
+      createSidecarSocket: (url) => {
+        const socket = new FakeSocket();
+        sidecarSockets.push(socket);
+        queueMicrotask(() => {
+          if (url.endsWith("ws-two")) {
+            socket.emitError(new Error("switch dial failed"));
+            return;
+          }
+          socket.open();
+        });
+        return socket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace-one",
+      yolo: false,
+    });
+
+    const originalSidecar = sidecarSockets[0]!;
+    await expect((bridge as any).handleWorkspaceSwitch(7, "ws_2")).rejects.toThrow("switch dial failed");
+
+    expect((bridge as any).sidecarSocket).toBe(originalSidecar);
+    expect((bridge as any).sidecarUrl).toBe("ws://127.0.0.1:7337/ws-one");
+    expect(originalSidecar.closeCalls).toBe(0);
+    expect(bridge.getSnapshot().workspaceId).toBe("ws_1");
+  });
+
+  test("bounds queued relay payloads while the secure channel is down", async () => {
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+
+    for (let index = 0; index < 300; index += 1) {
+      sidecarSocket.emitMessage(JSON.stringify({
+        method: `note/${index}`,
+        params: { index },
+      }));
+    }
+
+    expect((bridge as any).queuedOutboundApplicationMessages).toHaveLength(256);
   });
 
   test("start closes existing sockets before replacing the bridge session", async () => {

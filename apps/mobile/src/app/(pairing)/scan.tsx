@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Alert, Pressable, Text, View } from "react-native";
 import { CameraView, type BarcodeScanningResult, useCameraPermissions } from "expo-camera";
 import { useRouter } from "expo-router";
@@ -10,6 +10,7 @@ import { SFSymbol } from "@/components/ui/sf-symbol";
 import { StatusPill } from "@/components/ui/status-pill";
 import { usePairingStore } from "@/features/pairing/pairingStore";
 import { validatePairingPayload } from "@/features/pairing/qrValidation";
+import { createPairingScanHandler } from "@/features/pairing/scanHandler";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 export default function PairingScanScreen() {
@@ -19,32 +20,32 @@ export default function PairingScanScreen() {
   const [scannedPayload, setScannedPayload] = useState<string | null>(null);
   const connectionState = usePairingStore((state) => state.connectionState);
   const connectWithQr = usePairingStore((state) => state.connectWithQr);
+  const scanHandlerRef = useRef<ReturnType<typeof createPairingScanHandler> | null>(null);
 
   const granted = permission?.granted ?? false;
   const pairingInFlight = scannedPayload !== null && (
     connectionState.status === "pairing" || connectionState.status === "connecting"
   );
 
+  if (!scanHandlerRef.current) {
+    scanHandlerRef.current = createPairingScanHandler({
+      validatePairingPayload,
+      connectWithQr,
+      setScannedPayload,
+      onSuccess: () => {
+        router.replace("/(app)/(tabs)/threads");
+      },
+      onInvalidPayload: (message) => {
+        Alert.alert("Invalid QR", message);
+      },
+      onPairingError: (message) => {
+        Alert.alert("Pairing failed", message);
+      },
+    });
+  }
+
   async function onBarcodeScanned(result: BarcodeScanningResult) {
-    if (scannedPayload) {
-      return;
-    }
-    const parsed = validatePairingPayload(result.data);
-    if (!parsed.success) {
-      Alert.alert("Invalid QR", parsed.error);
-      return;
-    }
-    setScannedPayload(JSON.stringify(parsed.data, null, 2));
-    try {
-      await connectWithQr(parsed.data);
-      router.replace("/(app)/(tabs)/threads");
-    } catch (error) {
-      setScannedPayload(null);
-      Alert.alert(
-        "Pairing failed",
-        error instanceof Error ? error.message : "Could not start the secure transport session.",
-      );
-    }
+    await scanHandlerRef.current?.handleScan(result);
   }
 
   return (
@@ -117,7 +118,7 @@ export default function PairingScanScreen() {
                 barcodeScannerSettings={{
                   barcodeTypes: ["qr"],
                 }}
-                onBarcodeScanned={onBarcodeScanned}
+                onBarcodeScanned={pairingInFlight ? undefined : onBarcodeScanned}
               />
               <View
                 style={{

@@ -1,10 +1,11 @@
-import { Modal, Pressable, Text, View, ActivityIndicator, ScrollView } from "react-native";
+import { Alert, Modal, Pressable, Text, View, ActivityIndicator, ScrollView } from "react-native";
 
 import { StatusPill } from "@/components/ui/status-pill";
 import { refreshWorkspaceBoundStores } from "@/features/cowork/workspaceBootstrap";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
+import { bootstrapWorkspaceSwitchSession } from "@/features/cowork/workspaceSwitchBootstrap";
 import { useAppTheme } from "@/theme/use-app-theme";
 import type { SessionSnapshotLike } from "@/features/cowork/protocolTypes";
 
@@ -53,24 +54,25 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
     try {
       await switchWorkspace(workspaceId);
 
-      // Re-initialize the JSON-RPC session for the new workspace
       const client = getActiveCoworkJsonRpcClient();
       if (client) {
         try {
-          await client.initialize();
-          // Wait for the initialized notification roundtrip to complete before requesting threads.
-          // This prevents a race where thread/list arrives before the server processes initialized.
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          const list = await client.requestThreadList();
           const threadStore = useThreadStore.getState();
-          // Clear existing threads and hydrate with new workspace's threads
-          threadStore.clearAll();
-          for (const thread of list.threads) {
-            threadStore.hydrate(createThreadSnapshot(thread));
-          }
-          await refreshWorkspaceBoundStores();
-        } catch {
-          // Session init failed — workspace switched but threads may be stale
+          await bootstrapWorkspaceSwitchSession({
+            client,
+            clearThreads: () => {
+              threadStore.clearAll();
+            },
+            hydrateThread: (thread) => {
+              threadStore.hydrate(createThreadSnapshot(thread));
+            },
+            refreshWorkspaceBoundStores,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Could not refresh workspace data after switching.";
+          useWorkspaceStore.setState({ error: message, loading: false });
+          Alert.alert("Workspace switch incomplete", message);
+          return;
         }
       }
       onClose();

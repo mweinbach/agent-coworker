@@ -1,0 +1,10 @@
+{
+  "id": "accounts/fireworks/routers/kimi-k2p5-turbo",
+  "provider": "fireworks",
+  "displayName": "Kimi K2.5 Turbo",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

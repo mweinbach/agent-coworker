@@ -17,6 +17,7 @@ import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
 import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
 import fireworksGlm5 from "../../config/models/fireworks/accounts-fireworks-models-glm-5.json";
 import fireworksKimiK2p5 from "../../config/models/fireworks/accounts-fireworks-models-kimi-k2p5.json";
+import fireworksKimiK2p5Turbo from "../../config/models/fireworks/accounts-fireworks-routers-kimi-k2p5-turbo.json";
 import fireworksMinimaxM2p5 from "../../config/models/fireworks/accounts-fireworks-models-minimax-m2p5.json";
 import googleGemini3FlashPreview from "../../config/models/google/gemini-3-flash-preview.json";
 import googleGemini31FlashLitePreview from "../../config/models/google/gemini-3.1-flash-lite-preview.json";
@@ -93,6 +94,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   codexCliGpt54Mini,
   fireworksGlm5,
   fireworksKimiK2p5,
+  fireworksKimiK2p5Turbo,
   fireworksMinimaxM2p5,
   googleGemini3FlashPreview,
   googleGemini31FlashLitePreview,

@@ -1,7 +1,8 @@
 type FireworksModelId =
   | "accounts/fireworks/models/minimax-m2p5"
   | "accounts/fireworks/models/glm-5"
-  | "accounts/fireworks/models/kimi-k2p5";
+  | "accounts/fireworks/models/kimi-k2p5"
+  | "accounts/fireworks/routers/kimi-k2p5-turbo";
 
 type FireworksModelSpec = {
   id: FireworksModelId;
@@ -53,6 +54,19 @@ const FIREWORKS_MODEL_SPECS: Record<FireworksModelId, FireworksModelSpec> = {
   "accounts/fireworks/models/kimi-k2p5": {
     id: "accounts/fireworks/models/kimi-k2p5",
     name: "Kimi K2.5",
+    baseUrl: FIREWORKS_INFERENCE_BASE_URL,
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 262_144,
+    maxTokens: 65_536,
+    pricing: {
+      input: 0.6,
+      output: 3,
+    },
+  },
+  "accounts/fireworks/routers/kimi-k2p5-turbo": {
+    id: "accounts/fireworks/routers/kimi-k2p5-turbo",
+    name: "Kimi K2.5 Turbo",
     baseUrl: FIREWORKS_INFERENCE_BASE_URL,
     reasoning: true,
     input: ["text", "image"],

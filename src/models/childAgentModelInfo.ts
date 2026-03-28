@@ -66,6 +66,7 @@ const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo
 
   [key("together", "moonshotai/Kimi-K2.5")]: kimi25,
   [key("fireworks", "accounts/fireworks/models/kimi-k2p5")]: kimi25,
+  [key("fireworks", "accounts/fireworks/routers/kimi-k2p5-turbo")]: kimi25,
   [key("opencode-go", "kimi-k2.5")]: kimi25,
   [key("opencode-zen", "kimi-k2.5")]: kimi25,
 

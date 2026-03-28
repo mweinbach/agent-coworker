@@ -1,7 +1,7 @@
 {
   "id": "accounts/fireworks/models/glm-5",
   "provider": "fireworks",
-  "displayName": "GLM-5",
+  "displayName": "GLM 5",
   "knowledgeCutoff": "Unknown",
   "supportsImageInput": false,
   "promptTemplate": "system.md",

@@ -197,7 +197,7 @@ describe("providers/connectionCatalog", () => {
       models: [
         {
           id: "accounts/fireworks/models/glm-5",
-          displayName: "GLM-5",
+          displayName: "GLM 5",
           knowledgeCutoff: "Unknown",
           supportsImageInput: false,
         },
@@ -212,6 +212,12 @@ describe("providers/connectionCatalog", () => {
           displayName: "MiniMax M2.5",
           knowledgeCutoff: "Unknown",
           supportsImageInput: false,
+        },
+        {
+          id: "accounts/fireworks/routers/kimi-k2p5-turbo",
+          displayName: "Kimi K2.5 Turbo",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: true,
         },
       ],
       defaultModel: "accounts/fireworks/models/glm-5",

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { RELAY_PAIRING_QR_VERSION } from "../src/shared/mobileRelaySecurity";
 import {
   parsePairingQrPayload,
   validatePairingPayload,
@@ -13,7 +14,7 @@ function buildPayload(overrides?: Partial<{
   macIdentityPublicKey: string;
 }>) {
   return {
-    v: 2,
+    v: RELAY_PAIRING_QR_VERSION,
     relay: overrides?.relay ?? "wss://relay.example.test/relay",
     sessionId: overrides?.sessionId ?? "session-1",
     macDeviceId: overrides?.macDeviceId ?? "mac-1",
@@ -40,8 +41,16 @@ describe("mobile pairing QR validation", () => {
 
   test("rejects malformed payloads", () => {
     const parsed = validatePairingPayload(JSON.stringify({
-      v: 2,
+      v: RELAY_PAIRING_QR_VERSION,
       relay: "",
+    }));
+    expect(parsed.success).toBe(false);
+  });
+
+  test("rejects unsupported pairing payload versions", () => {
+    const parsed = validatePairingPayload(JSON.stringify({
+      ...buildPayload(),
+      v: RELAY_PAIRING_QR_VERSION - 1,
     }));
     expect(parsed.success).toBe(false);
   });

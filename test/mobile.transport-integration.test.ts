@@ -27,12 +27,13 @@ mock.module("expo-modules-core", () => ({
 
 const transportModule = await import("../apps/mobile/modules/remodex-secure-transport/src");
 const { CoworkJsonRpcClient } = await import("../apps/mobile/src/features/cowork/jsonRpcClient");
+const { RELAY_PAIRING_QR_VERSION } = await import("../src/shared/mobileRelaySecurity");
 
 type RemodexQrPairingPayload = transportModule.RemodexQrPairingPayload;
 
 function createPayload(): RemodexQrPairingPayload {
   return {
-    v: 2,
+    v: RELAY_PAIRING_QR_VERSION,
     relay: "wss://relay.example.test/relay",
     sessionId: "session-demo",
     macDeviceId: "mac-demo",

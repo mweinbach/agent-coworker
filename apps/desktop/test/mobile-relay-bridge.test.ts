@@ -482,6 +482,50 @@ describe("mobile relay bridge", () => {
     expect(replacementRegistration?.registration?.trustedPhonePublicKey).toBeNull();
   });
 
+  test("forgetTrustedPhone clears all remodex trusted phones", async () => {
+    const phone2KeyPair = generateRelayKeyPair();
+    remodexFixture = await writeRemodexState({
+      stateDir: remodexStateDir,
+      trustedPhones: {
+        "phone-1": remodexFixture.phone1KeyPair.publicKeyBase64,
+        "phone-2": phone2KeyPair.publicKeyBase64,
+      },
+    });
+
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+
+    const forgotten = await bridge.forgetTrustedPhone();
+    expect(forgotten.trustedPhoneDeviceId).toBeNull();
+
+    const remodexDeviceState = JSON.parse(await fs.readFile(path.join(remodexStateDir, "device-state.json"), "utf8"));
+    expect(remodexDeviceState.trustedPhones).toEqual({});
+  });
+
   test("missing remodex state falls back to managed mode and persists trust in userData", async () => {
     await fs.rm(remodexStateDir, { recursive: true, force: true });
 

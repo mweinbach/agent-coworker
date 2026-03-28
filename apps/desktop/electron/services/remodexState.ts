@@ -201,12 +201,9 @@ export async function forgetRemodexTrustedPhoneRecord(
     return parseIdentityState(deviceState);
   }
 
-  const nextTrustedPhones = { ...trustedPhones };
-  delete nextTrustedPhones[phoneDeviceId];
-
   const nextState = {
     ...deviceState,
-    trustedPhones: nextTrustedPhones,
+    trustedPhones: {},
   };
   await writeJsonFile(deviceStatePath, nextState);
   return parseIdentityState(nextState);

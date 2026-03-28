@@ -107,8 +107,28 @@ describe("remodex state reader", () => {
     expect(rawDeviceState.trustedPhones["phone-2"]).toBe(phone2KeyPair.publicKeyBase64);
 
     const forgotten = await forgetRemodexTrustedPhoneRecord("phone-2", { stateDir: tmpDir });
-    expect(forgotten.trustedPhone?.phoneDeviceId).toBe("phone-1");
-    expect(forgotten.trustedPhone?.phoneIdentityPublicKey).toBe(fixture.phone1KeyPair.publicKeyBase64);
+    expect(forgotten.trustedPhone).toBeNull();
+    expect(fixture.phone1KeyPair.publicKeyBase64).toBeTruthy();
+  });
+
+  test("forgetting a remodex trusted phone clears all trusted phones", async () => {
+    const fixture = await writeRemodexState(tmpDir, {});
+    const phone2KeyPair = generateRelayKeyPair();
+
+    await rememberRemodexTrustedPhoneRecord({
+      phoneDeviceId: "phone-2",
+      phoneIdentityPublicKey: phone2KeyPair.publicKeyBase64,
+    }, {
+      stateDir: tmpDir,
+      now: () => new Date("2026-03-25T18:00:00.000Z"),
+    });
+
+    const forgotten = await forgetRemodexTrustedPhoneRecord("phone-2", { stateDir: tmpDir });
+    expect(forgotten.trustedPhone).toBeNull();
+
+    const rawDeviceState = JSON.parse(await fs.readFile(path.join(tmpDir, "device-state.json"), "utf8"));
+    expect(rawDeviceState.trustedPhones).toEqual({});
+    expect(fixture.phone1KeyPair.publicKeyBase64).toBeTruthy();
   });
 });
 

@@ -50,29 +50,33 @@ export function WorkspaceSwitcher({ visible, onClose }: WorkspaceSwitcherProps) 
       onClose();
       return;
     }
-    await switchWorkspace(workspaceId);
+    try {
+      await switchWorkspace(workspaceId);
 
-    // Re-initialize the JSON-RPC session for the new workspace
-    const client = getActiveCoworkJsonRpcClient();
-    if (client) {
-      try {
-        await client.initialize();
-        // Wait for the initialized notification roundtrip to complete before requesting threads.
-        // This prevents a race where thread/list arrives before the server processes initialized.
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        const list = await client.requestThreadList();
-        const threadStore = useThreadStore.getState();
-        // Clear existing threads and hydrate with new workspace's threads
-        threadStore.clearAll();
-        for (const thread of list.threads) {
-          threadStore.hydrate(createThreadSnapshot(thread));
+      // Re-initialize the JSON-RPC session for the new workspace
+      const client = getActiveCoworkJsonRpcClient();
+      if (client) {
+        try {
+          await client.initialize();
+          // Wait for the initialized notification roundtrip to complete before requesting threads.
+          // This prevents a race where thread/list arrives before the server processes initialized.
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          const list = await client.requestThreadList();
+          const threadStore = useThreadStore.getState();
+          // Clear existing threads and hydrate with new workspace's threads
+          threadStore.clearAll();
+          for (const thread of list.threads) {
+            threadStore.hydrate(createThreadSnapshot(thread));
+          }
+          await refreshWorkspaceBoundStores();
+        } catch {
+          // Session init failed — workspace switched but threads may be stale
         }
-        await refreshWorkspaceBoundStores();
-      } catch {
-        // Session init failed — workspace switched but threads may be stale
       }
+      onClose();
+    } catch {
+      // The store already captured the error for UI display.
     }
-    onClose();
   };
 
   return (

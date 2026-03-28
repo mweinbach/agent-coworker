@@ -167,6 +167,33 @@ describe("mobile control stores", () => {
     expect(useWorkspaceStore.getState().activeWorkspaceCwd).toBe("/tmp/workspace-two");
   });
 
+  test("workspace store rethrows switch failures after recording the error", async () => {
+    const { client, resetTransportSession } = createFakeClient((method) => {
+      if (method === "workspace/switch") {
+        throw new Error("Workspace switch failed");
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    setActiveCoworkJsonRpcClient(client);
+    useWorkspaceStore.setState({
+      workspaces: [{
+        id: "ws_1",
+        name: "Workspace One",
+        path: workspaceCwd,
+        createdAt: new Date(0).toISOString(),
+        lastOpenedAt: new Date(0).toISOString(),
+        yolo: false,
+      }],
+      activeWorkspaceId: "ws_1",
+      activeWorkspaceName: "Workspace One",
+      activeWorkspaceCwd: workspaceCwd,
+    });
+
+    await expect(useWorkspaceStore.getState().switchWorkspace("ws_1")).rejects.toThrow("Workspace switch failed");
+    expect(useWorkspaceStore.getState().error).toBe("Workspace switch failed");
+    expect(resetTransportSession).not.toHaveBeenCalled();
+  });
+
   test("provider store uses status refresh and API key auth methods", async () => {
     const { client, calls } = createFakeClient((method) => {
       switch (method) {

@@ -17,7 +17,7 @@ type WorkspaceStoreState = {
   error: string | null;
 
   fetchWorkspaces(): Promise<void>;
-  switchWorkspace(workspaceId: string): Promise<void>;
+  switchWorkspace(workspaceId: string): Promise<WorkspaceSwitchResult>;
   fetchControlState(): Promise<void>;
   applyWorkspaceDefaults(patch: Omit<JsonRpcControlRequest<"cowork/session/defaults/apply">, "cwd">): Promise<void>;
   setActiveFromCwd(cwd: string): void;
@@ -70,8 +70,9 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
     const { workspaces } = get();
     const target = workspaces.find((w) => w.id === workspaceId);
     if (!target) {
-      set({ error: `Workspace ${workspaceId} not found.` });
-      return;
+      const error = new Error(`Workspace ${workspaceId} not found.`);
+      set({ error: error.message });
+      throw error;
     }
     set({ loading: true, error: null });
     try {
@@ -85,11 +86,14 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
         loading: false,
         controlSnapshot: null,
       });
+      return parsed;
     } catch (error) {
+      const nextError = error instanceof Error ? error : new Error(String(error));
       set({
         loading: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: nextError.message,
       });
+      throw nextError;
     }
   },
 

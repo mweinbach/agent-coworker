@@ -3,8 +3,21 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 const getAllWindowsMock = mock(() => []);
 
 mock.module("electron", () => ({
+  app: {
+    getPath: () => process.cwd(),
+    getAppPath: () => process.cwd(),
+    getName: () => "Cowork Test",
+    isPackaged: false,
+  },
   BrowserWindow: {
     getAllWindows: getAllWindowsMock,
+  },
+  Menu: {
+    buildFromTemplate() {
+      return {
+        popup() {},
+      };
+    },
   },
 }));
 

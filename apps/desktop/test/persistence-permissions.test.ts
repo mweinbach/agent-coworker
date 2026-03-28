@@ -10,6 +10,18 @@ mock.module("electron", () => ({
   app: {
     getPath: (name: string) => (name === "appData" ? appDataDir : userDataDir),
   },
+  BrowserWindow: {
+    getAllWindows: () => [],
+    fromWebContents: () => null,
+    getFocusedWindow: () => null,
+  },
+  Menu: {
+    buildFromTemplate() {
+      return {
+        popup() {},
+      };
+    },
+  },
 }));
 
 const { PersistenceService } = await import("../electron/services/persistence");

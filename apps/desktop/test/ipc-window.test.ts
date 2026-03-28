@@ -19,6 +19,12 @@ type FakeWindow = {
 const windowsBySenderId = new Map<number, FakeWindow>();
 
 mock.module("electron", () => ({
+  app: {
+    getPath: () => process.cwd(),
+    getAppPath: () => process.cwd(),
+    getName: () => "Cowork Test",
+    isPackaged: false,
+  },
   BrowserWindow: {
     fromWebContents(sender: { id: number }) {
       return windowsBySenderId.get(sender.id) ?? null;

@@ -11,6 +11,18 @@ mock.module("electron", () => ({
     getPath: (name: string) => (name === "userData" ? userDataDir : process.cwd()),
     getName: () => "Cowork Test",
   },
+  BrowserWindow: {
+    getAllWindows: () => [],
+    fromWebContents: () => null,
+    getFocusedWindow: () => null,
+  },
+  Menu: {
+    buildFromTemplate() {
+      return {
+        popup() {},
+      };
+    },
+  },
 }));
 
 const {

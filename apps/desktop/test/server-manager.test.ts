@@ -13,6 +13,18 @@ mock.module("electron", () => ({
     getAppPath: () => process.cwd(),
     isPackaged: false,
   },
+  BrowserWindow: {
+    getAllWindows: () => [],
+    fromWebContents: () => null,
+    getFocusedWindow: () => null,
+  },
+  Menu: {
+    buildFromTemplate() {
+      return {
+        popup() {},
+      };
+    },
+  },
 }));
 
 const { ServerManager, __internal } = await import("../electron/services/serverManager");

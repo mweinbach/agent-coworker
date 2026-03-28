@@ -374,10 +374,22 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       this.refreshRelayConfiguration();
     }
     this.reusableSessionId = null;
+    this.clearReconnectTimer();
+    const relaySocket = this.relaySocket;
+    this.relaySocket = null;
+    this.resetSecureRelayState({ clearQueue: true });
     this.closeLegacyRelaySockets();
+    closeSocket(relaySocket);
     this.syncTrustedPhoneSummary();
-    if (this.relaySocket?.readyState === WebSocket.OPEN) {
-      this.sendRelayRegistrationUpdate();
+    const shouldRestartRelaySession = Boolean(
+      this.state.workspaceId
+      && this.state.workspacePath
+      && this.sidecarSocket?.readyState === WebSocket.OPEN
+      && this.state.relayUrl
+      && this.identityState,
+    );
+    if (shouldRestartRelaySession) {
+      await this.startRelaySession({ forceNewSession: true });
     }
     this.emitStateChanged();
     return this.getSnapshot();

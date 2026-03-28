@@ -401,7 +401,7 @@ describe("mobile relay bridge", () => {
     expect(staleSessionSocket?.closeCalls).toBeGreaterThan(0);
   });
 
-  test("secure-ready handshake persists the trusted phone summary", async () => {
+  test("forgetTrustedPhone revokes the active relay session and starts a fresh unpaired one", async () => {
     const bridge = new MobileRelayBridge({
       serverManager: new FakeServerManager() as never,
       userDataPath: userDataDir,
@@ -428,10 +428,10 @@ describe("mobile relay bridge", () => {
       workspacePath: "/tmp/workspace",
       yolo: false,
     });
-    const relaySocket = relaySockets.at(-1);
+    const relaySocket = relaySockets.at(-1)!;
 
     const phoneKeyPair = remodexFixture.phone1KeyPair;
-    emitPhoneHandshake(relaySocket!, "phone-1", phoneKeyPair);
+    emitPhoneHandshake(relaySocket, "phone-1", phoneKeyPair);
     await waitForRelaySnapshot(
       bridge,
       (s) => s.status === "connected" && s.trustedPhoneDeviceId === "phone-1",
@@ -446,11 +446,40 @@ describe("mobile relay bridge", () => {
     expect(remodexDeviceState.trustedPhones).toEqual(expect.objectContaining({
       "phone-1": phoneKeyPair.publicKeyBase64,
     }));
-    expect(findControlMessages(relaySocket!, "secureReady")).toHaveLength(1);
+    expect(findControlMessages(relaySocket, "secureReady")).toHaveLength(1);
+
+    const sharedKey = createRelaySharedKey(
+      phoneKeyPair.privateKeyBase64,
+      remodexFixture.macKeyPair.publicKeyBase64,
+    );
 
     const forgotten = await bridge.forgetTrustedPhone();
     expect(forgotten.trustedPhoneDeviceId).toBeNull();
     expect(forgotten.trustedPhoneFingerprint).toBeNull();
+    expect(forgotten.status).toBe("pairing");
+    expect(relaySocket.closeCalls).toBeGreaterThan(0);
+    expect(relaySockets).toHaveLength(2);
+
+    relaySocket.emitMessage(JSON.stringify(encodeRelaySecureEnvelope({
+      sharedKey,
+      sender: "phone",
+      counter: 1,
+      plaintext: JSON.stringify({
+        id: 9,
+        method: "workspace/list",
+        params: {},
+      }),
+    })));
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(sidecarSocket.sentMessages).toHaveLength(0);
+
+    const replacementRelaySocket = relaySockets.at(-1)!;
+    const replacementRegistration = findControlMessages(replacementRelaySocket, "relayMacRegistration").at(-1) as
+      | { registration?: { trustedPhoneDeviceId?: string | null; trustedPhonePublicKey?: string | null } }
+      | undefined;
+    expect(replacementRegistration?.registration?.trustedPhoneDeviceId).toBeNull();
+    expect(replacementRegistration?.registration?.trustedPhonePublicKey).toBeNull();
   });
 
   test("missing remodex state falls back to managed mode and persists trust in userData", async () => {

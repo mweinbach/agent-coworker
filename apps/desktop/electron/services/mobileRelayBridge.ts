@@ -1003,6 +1003,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       case "resumeState":
         return true;
     }
+    return false;
   }
 
   private async persistTrustedPhoneFromHandshake(handshake: PendingPhoneHandshake): Promise<void> {

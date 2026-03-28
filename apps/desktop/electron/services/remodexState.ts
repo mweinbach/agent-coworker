@@ -4,7 +4,9 @@ import path from "node:path";
 
 import {
   buildRelayKeyFingerprint,
+  deriveRelayPublicKey,
   isValidRelayKeyPair,
+  isValidRelayPrivateKey,
   isValidRelayPublicKey,
 } from "../../../../src/shared/mobileRelaySecurity";
 import type {
@@ -122,12 +124,16 @@ export function readRemodexStateResult(options: ResolveRemodexStateOptions = {})
   }
 
   try {
+    const normalizedDeviceState = normalizeRemodexDeviceState(deviceStateResult.parsed);
+    if (normalizedDeviceState !== deviceStateResult.parsed) {
+      writeJsonFileSync(deviceStatePath, normalizedDeviceState);
+    }
     return {
       status: "resolved",
       state: {
         stateDir,
         relayUrl,
-        identityState: parseIdentityState(deviceStateResult.parsed, pairingSession?.createdAt ?? serviceUpdatedAt),
+        identityState: parseIdentityState(normalizedDeviceState, pairingSession?.createdAt ?? serviceUpdatedAt),
         serviceStatus,
         serviceMessage,
         serviceUpdatedAt,
@@ -271,6 +277,29 @@ function parseIdentityState(
   };
 }
 
+function normalizeRemodexDeviceState(value: JsonRecord): JsonRecord {
+  const macDeviceId = normalizeNonEmptyString(value.macDeviceId);
+  const macIdentityPublicKey = normalizeNonEmptyString(value.macIdentityPublicKey);
+  const macIdentityPrivateKey = normalizeNonEmptyString(value.macIdentityPrivateKey);
+  if (!macDeviceId || !macIdentityPublicKey || !macIdentityPrivateKey) {
+    throw new Error("Remodex device state is incomplete.");
+  }
+  if (isValidRelayKeyPair({
+    publicKeyBase64: macIdentityPublicKey,
+    privateKeyBase64: macIdentityPrivateKey,
+  })) {
+    return value;
+  }
+  if (!isValidRelayPrivateKey(macIdentityPrivateKey)) {
+    throw new Error("Remodex device state contains invalid secure transport keys.");
+  }
+
+  return {
+    ...value,
+    macIdentityPublicKey: deriveRelayPublicKey(macIdentityPrivateKey),
+  };
+}
+
 function selectTrustedPhoneRecord(
   trustedPhonesValue: unknown,
   preferredPhoneDeviceId: string | null,
@@ -394,6 +423,11 @@ function readJsonFile(filePath: string): ReadJsonFileResult {
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
   await fs.promises.writeFile(filePath, JSON.stringify(value, null, 2), { encoding: "utf8", mode: 0o600 });
+}
+
+function writeJsonFileSync(filePath: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), { encoding: "utf8", mode: 0o600 });
 }
 
 function normalizeNonEmptyString(value: unknown): string {

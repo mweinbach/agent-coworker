@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-const { generateRelayKeyPair, RELAY_PAIRING_QR_VERSION } = await import("../../../src/shared/mobileRelaySecurity");
+const {
+  deriveRelayPublicKey,
+  generateRelayKeyPair,
+  RELAY_PAIRING_QR_VERSION,
+} = await import("../../../src/shared/mobileRelaySecurity");
 const {
   forgetRemodexTrustedPhoneRecord,
   readRemodexStateResult,
@@ -87,6 +91,26 @@ describe("remodex state reader", () => {
     await expect(async () => readResolvedRemodexState({ stateDir: tmpDir })).toThrow(
       "Remodex device state is missing or unreadable",
     );
+  });
+
+  test("repairs a mismatched remodex mac public key from the private key", async () => {
+    const fixture = await writeRemodexState(tmpDir);
+    const unexpectedKeyPair = generateRelayKeyPair();
+    await fs.writeFile(path.join(tmpDir, "device-state.json"), JSON.stringify({
+      version: 1,
+      macDeviceId: "mac-1",
+      macIdentityPublicKey: unexpectedKeyPair.publicKeyBase64,
+      macIdentityPrivateKey: fixture.macKeyPair.privateKeyBase64,
+      trustedPhones: {
+        "phone-1": fixture.phone1KeyPair.publicKeyBase64,
+      },
+    }, null, 2));
+
+    const state = readResolvedRemodexState({ stateDir: tmpDir });
+
+    expect(state.identityState.macIdentityPublicKey).toBe(deriveRelayPublicKey(fixture.macKeyPair.privateKeyBase64));
+    const repairedState = JSON.parse(await fs.readFile(path.join(tmpDir, "device-state.json"), "utf8"));
+    expect(repairedState.macIdentityPublicKey).toBe(deriveRelayPublicKey(fixture.macKeyPair.privateKeyBase64));
   });
 
   test("persists trusted-phone updates back into remodex device state", async () => {

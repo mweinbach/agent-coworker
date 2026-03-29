@@ -96,6 +96,10 @@ export const usePairingStore = create<PairingStoreState>((set, get) => ({
       trustedMacs: connectionState.trustedDesktops,
       connectionState,
     });
+
+    if (connectionState.status === "error") {
+      throw new Error(connectionState.lastError || "Failed to pair with desktop.");
+    }
   },
   async reconnectTrusted(macDeviceId) {
     const connectionState = await defaultSecureTransportClient.reconnectTrustedDesktop(macDeviceId);

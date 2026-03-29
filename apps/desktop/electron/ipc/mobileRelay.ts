@@ -11,12 +11,6 @@ import {
 } from "../../src/lib/desktopSchemas";
 import type { DesktopIpcModuleContext } from "./types";
 
-let invalidateWorkspaceCacheHook: (() => void) | null = null;
-
-export function invalidateMobileRelayWorkspaceCache(): void {
-  invalidateWorkspaceCacheHook?.();
-}
-
 function emitStateToAllWindows(windows: BrowserWindow[], payload: unknown) {
   for (const window of windows) {
     if (window.isDestroyed()) {
@@ -58,7 +52,6 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
     cacheTimestamp = 0;
     lastWorkspaceCacheError = null;
   };
-  invalidateWorkspaceCacheHook = invalidateWorkspaceCache;
 
   const refreshWorkspaceCache = (reason: string) => {
     if (refreshPromise) {
@@ -71,7 +64,6 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
         lastWorkspaceCacheError = null;
       })
       .catch((error) => {
-        cacheTimestamp = Date.now();
         const message = error instanceof Error ? error.message : String(error);
         if (message !== lastWorkspaceCacheError) {
           console.warn(`[desktop] Failed to refresh mobile relay workspace cache during ${reason}: ${message}`);
@@ -91,7 +83,7 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
       await refreshWorkspaceCache("workspace list request");
     }
     return toBridgeWorkspaceRecords(cachedWorkspaces);
-  });
+  }, invalidateWorkspaceCache);
 
   // Eagerly populate workspace cache.
   void refreshWorkspaceCache("initial load");

@@ -21,7 +21,7 @@ mock.module("electron", () => ({
   },
 }));
 
-const { invalidateMobileRelayWorkspaceCache, registerMobileRelayIpc } = await import("../electron/ipc/mobileRelay");
+const { registerMobileRelayIpc } = await import("../electron/ipc/mobileRelay");
 
 function flushMicrotasks() {
   return new Promise<void>((resolve) => queueMicrotask(resolve));
@@ -193,6 +193,7 @@ describe("mobile relay IPC", () => {
 
   test("invalidates the mobile relay workspace cache after the save-state hook fires", async () => {
     let workspaceListProvider: (() => Promise<Array<{ id: string; name: string; path: string; yolo: boolean }>>) | null = null;
+    let invalidateWorkspaceCache: (() => void) | null = null;
     let currentWorkspaces = [{
       id: "ws-1",
       name: "Workspace One",
@@ -209,8 +210,12 @@ describe("mobile relay IPC", () => {
       deps: {
         persistence: { loadState } as never,
         mobileRelayBridge: {
-          setWorkspaceListProvider(provider: () => Promise<Array<{ id: string; name: string; path: string; yolo: boolean }>>) {
+          setWorkspaceListProvider(
+            provider: () => Promise<Array<{ id: string; name: string; path: string; yolo: boolean }>>,
+            invalidator?: () => void
+          ) {
             workspaceListProvider = provider;
+            if (invalidator) invalidateWorkspaceCache = invalidator;
           },
           on() {},
           start: async () => ({}),
@@ -243,7 +248,7 @@ describe("mobile relay IPC", () => {
       path: "/tmp/workspace-two",
       yolo: true,
     }];
-    invalidateMobileRelayWorkspaceCache();
+    invalidateWorkspaceCache?.();
 
     expect(await workspaceListProvider?.()).toEqual([{
       id: "ws-2",

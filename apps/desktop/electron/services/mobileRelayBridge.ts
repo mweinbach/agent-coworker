@@ -224,8 +224,18 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     return { ...this.state };
   }
 
-  setWorkspaceListProvider(provider: () => Promise<MobileRelayWorkspaceRecord[]> | MobileRelayWorkspaceRecord[]): void {
+  private workspaceListCacheInvalidator: (() => void) | null = null;
+
+  setWorkspaceListProvider(
+    provider: () => Promise<MobileRelayWorkspaceRecord[]> | MobileRelayWorkspaceRecord[],
+    invalidator?: () => void
+  ): void {
     this.getWorkspaceList = provider;
+    this.workspaceListCacheInvalidator = invalidator ?? null;
+  }
+
+  invalidateWorkspaceListCache(): void {
+    this.workspaceListCacheInvalidator?.();
   }
 
   async start(opts: {
@@ -305,7 +315,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     closeSocket(relaySocket);
     await this.startRelaySession({ forceNewSession: true });
     if (previousSessionId && this.getTrustedPhone()) {
-      await this.connectLegacyRelaySocket(previousSessionId);
+      await this.connectLegacyRelaySocket(previousSessionId).catch(() => {
+        // Ignore errors from legacy redirect dial; session rotation is already complete.
+      });
     }
     return this.getSnapshot();
   }

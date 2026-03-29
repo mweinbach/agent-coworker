@@ -11,10 +11,9 @@ type ActiveWindowDrag = {
   startWindowY: number;
 };
 
-const activeWindowDrags = new Map<number, ActiveWindowDrag>();
-
 export function registerWindowIpc(context: DesktopIpcModuleContext): void {
   const { handleDesktopInvoke, parseWithSchema } = context;
+  const activeWindowDrags = new Map<number, ActiveWindowDrag>();
   const trackedWindowDragSenders = new Set<number>();
 
   const ensureWindowDragCleanup = (sender: WebContents) => {

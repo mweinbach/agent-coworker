@@ -114,4 +114,25 @@ describe("window IPC", () => {
 
     expect(win.setPositionCalls).toEqual([]);
   });
+
+  test("does not reuse drag state across IPC registrations", () => {
+    windowsBySenderId.clear();
+    const sender = new FakeWebContents(11);
+    const win = createFakeWindow();
+    windowsBySenderId.set(sender.id, win);
+
+    const firstRegistrationHandlers = createHandlers();
+    firstRegistrationHandlers.get(DESKTOP_IPC_CHANNELS.windowDragStart)?.(
+      { sender },
+      { screenX: 100, screenY: 100 },
+    );
+
+    const secondRegistrationHandlers = createHandlers();
+    secondRegistrationHandlers.get(DESKTOP_IPC_CHANNELS.windowDragMove)?.(
+      { sender },
+      { screenX: 140, screenY: 150 },
+    );
+
+    expect(win.setPositionCalls).toEqual([]);
+  });
 });

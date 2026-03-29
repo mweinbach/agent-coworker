@@ -60,8 +60,8 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
       workspaces,
     };
     await deps.persistence.saveState(nextState);
-    deps.mobileRelayBridge.invalidateWorkspaceListCache();
     workspaceRoots.setApprovedWorkspaceRoots(workspaces.map((workspace) => workspace.path));
+    deps.mobileRelayBridge.invalidateWorkspaceListCache();
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.readTranscript, async (_event, args: ReadTranscriptInput) => {

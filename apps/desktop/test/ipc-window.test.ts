@@ -42,6 +42,11 @@ mock.module("electron", () => ({
       };
     },
   },
+  dialog: {
+    async showOpenDialog() {
+      return { canceled: true, filePaths: [] };
+    },
+  },
 }));
 
 const { registerWindowIpc } = await import("../electron/ipc/window");

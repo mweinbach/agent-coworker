@@ -247,10 +247,13 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.clearReconnectTimer();
     this.clearSidecarReconnectTimer();
     this.closeConnections();
+    this.sidecarUrl = null;
     this.stopping = false;
     try {
       this.refreshRelayConfiguration();
-      if (!this.state.relayUrl || !this.identityState) {
+      const relayUrl = this.state.relayUrl;
+      const identityState = this.identityState;
+      if (!relayUrl || !identityState) {
         throw new Error(this.state.relaySourceMessage ?? "Remote access relay configuration is unavailable.");
       }
       this.state = {
@@ -258,7 +261,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         status: "starting",
         workspaceId: opts.workspaceId,
         workspacePath: opts.workspacePath,
-        relayUrl: this.state.relayUrl,
+        relayUrl,
+        sessionId: null,
+        pairingPayload: null,
         lastError: null,
       };
       this.emitStateChanged();
@@ -275,7 +280,17 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       this.clearReconnectTimer();
       this.clearSidecarReconnectTimer();
       this.closeConnections();
-      this.updateStatus("error", error instanceof Error ? error.message : String(error));
+      this.sidecarUrl = null;
+      this.state = {
+        ...this.state,
+        status: "error",
+        workspaceId: null,
+        workspacePath: null,
+        sessionId: null,
+        pairingPayload: null,
+        lastError: error instanceof Error ? error.message : String(error),
+      };
+      this.emitStateChanged();
       throw error;
     }
   }
@@ -550,6 +565,11 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   }
 
   private async startRelaySession(opts: { forceNewSession?: boolean } = {}): Promise<void> {
+    const relayUrl = this.state.relayUrl;
+    const identityState = this.identityState;
+    if (!relayUrl || !identityState) {
+      throw new Error(this.state.relaySourceMessage ?? "Remote access relay configuration is unavailable.");
+    }
     this.resetSecureRelayState({ clearQueue: true });
     this.relayReconnectAttempts = 0;
     this.notificationSecret = randomUUID();
@@ -559,10 +579,10 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.reusableSessionId = sessionId;
     const pairingPayload: MobileRelayPairingPayload = {
       v: RELAY_PAIRING_QR_VERSION,
-      relay: this.state.relayUrl ?? "",
+      relay: relayUrl,
       sessionId,
-      macDeviceId: this.identityState?.macDeviceId ?? "",
-      macIdentityPublicKey: this.identityState?.macIdentityPublicKey ?? "",
+      macDeviceId: identityState.macDeviceId,
+      macIdentityPublicKey: identityState.macIdentityPublicKey,
       pairingSecret: randomUUID(),
       expiresAt: Date.now() + 5 * 60_000,
     };

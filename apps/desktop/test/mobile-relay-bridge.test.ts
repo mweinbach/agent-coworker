@@ -1343,12 +1343,19 @@ describe("mobile relay bridge", () => {
       yolo: false,
     })).rejects.toThrow("relay failed");
 
-    expect(bridge.getSnapshot().status).toBe("error");
-    expect(bridge.getSnapshot().lastError).toBe("relay failed");
+    const snapshot = bridge.getSnapshot();
+    expect(snapshot.status).toBe("error");
+    expect(snapshot.lastError).toBe("relay failed");
+    expect(snapshot.workspaceId).toBeNull();
+    expect(snapshot.workspacePath).toBeNull();
+    expect(snapshot.sessionId).toBeNull();
+    expect(snapshot.pairingPayload).toBeNull();
     expect(sidecarSockets[0]?.closeCalls).toBeGreaterThanOrEqual(1);
     expect(relaySockets[0]?.closeCalls).toBeGreaterThanOrEqual(1);
     expect((bridge as any).sidecarSocket).toBeNull();
     expect((bridge as any).relaySocket).toBeNull();
+    expect((bridge as any).sidecarUrl).toBeNull();
+    await expect(bridge.rotateSession()).rejects.toThrow("Remote access is not running.");
   });
 
   test("invalid managed state is regenerated instead of failing startup", async () => {

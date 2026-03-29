@@ -60,6 +60,7 @@ import {
   updaterStateSchema,
   windowDragPointInputSchema,
 } from "../src/lib/desktopSchemas";
+import { resolveDesktopFeatureFlags } from "../src/lib/desktopFeatureFlags";
 
 function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
   const parsed = schema.safeParse(value);
@@ -175,7 +176,13 @@ function assertSystemAppearance(value: unknown): asserts value is SystemAppearan
   parseWithSchema(systemAppearanceSchema, value, "system appearance");
 }
 
+const desktopFeatures = Object.freeze(resolveDesktopFeatureFlags({
+  isPackaged: !import.meta.env.DEV,
+  env: process.env,
+}));
+
 const desktopApi = Object.freeze<DesktopApi>({
+  features: desktopFeatures,
   startWorkspaceServer: (opts: StartWorkspaceServerInput) => {
     assertStartWorkspaceServerInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.startWorkspaceServer, opts);

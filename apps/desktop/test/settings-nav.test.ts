@@ -24,6 +24,7 @@ const MOCK_UPDATE_STATE = {
 const savedStates: any[] = [];
 let startWorkspaceServerCalls = 0;
 let agentSocketConnectCalls = 0;
+let remoteAccessEnabled = true;
 
 mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   appendTranscriptBatch: async () => {},
@@ -62,9 +63,11 @@ mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   getUpdateState: async () => MOCK_UPDATE_STATE,
   checkForUpdates: async () => {},
   quitAndInstallUpdate: async () => {},
+  getDesktopFeatureFlags: () => ({ remoteAccess: remoteAccessEnabled }),
   onSystemAppearanceChanged: () => () => {},
   onMenuCommand: () => () => {},
   onUpdateStateChanged: () => () => {},
+  isRemoteAccessEnabled: () => remoteAccessEnabled,
 }));
 
 mock.module("../src/lib/agentSocket", () => ({
@@ -78,6 +81,7 @@ describe("settings nav (store)", () => {
     savedStates.length = 0;
     startWorkspaceServerCalls = 0;
     agentSocketConnectCalls = 0;
+    remoteAccessEnabled = true;
     useAppStore.setState({
       view: "chat",
       lastNonSettingsView: "chat",
@@ -145,6 +149,13 @@ describe("settings nav (store)", () => {
     useAppStore.getState().openSettings("remoteAccess");
     expect(useAppStore.getState().view).toBe("settings");
     expect(useAppStore.getState().settingsPage).toBe("remoteAccess");
+  });
+
+  test("openSettings falls back when remote access is unavailable", () => {
+    remoteAccessEnabled = false;
+    useAppStore.getState().openSettings("remoteAccess");
+    expect(useAppStore.getState().view).toBe("settings");
+    expect(useAppStore.getState().settingsPage).toBe("providers");
   });
 
   test("setDeveloperMode updates developer mode state", () => {

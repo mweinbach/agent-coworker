@@ -4,6 +4,7 @@ import { ArrowLeftIcon } from "lucide-react";
 
 import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
+import { isRemoteAccessEnabled } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
 import type { SettingsPageId } from "../../app/types";
 import { ProvidersPage } from "./pages/ProvidersPage";
@@ -22,48 +23,58 @@ type SettingsPageDefinition = {
   render: () => ReactNode;
 };
 
-const SETTINGS_GROUPS = [
-  {
-    label: "Models & Tools",
-    pages: [
-      { id: "providers", label: "Providers", render: () => <ProvidersPage /> },
-      { id: "mcp", label: "Integrations", render: () => <McpServersPage /> },
-    ] as SettingsPageDefinition[],
-  },
-  {
-    label: "Workspace",
-    pages: [
-      { id: "workspaces", label: "General", render: () => <WorkspacesPage /> },
-      { id: "memory", label: "Memory", render: () => <MemoryPage /> },
-      { id: "remoteAccess", label: "Remote Access", render: () => <RemoteAccessPage /> },
-    ] as SettingsPageDefinition[],
-  },
-  {
-    label: "Recovery & Data",
-    pages: [
-      { id: "backup", label: "Backup", render: () => <BackupPage /> },
-      { id: "usage", label: "Usage", render: () => <UsagePage /> },
-    ] as SettingsPageDefinition[],
-  },
-  {
-    label: "Advanced",
-    pages: [
-      { id: "developer", label: "Developer", render: () => <DeveloperPage /> },
-      { id: "updates", label: "Updates", render: () => <UpdatesPage /> },
-    ] as SettingsPageDefinition[],
-  },
-];
-
-const SETTINGS_PAGES: SettingsPageDefinition[] = SETTINGS_GROUPS.flatMap(g => g.pages);
+export function getSettingsGroups(remoteAccessAvailable: boolean): Array<{
+  label: string;
+  pages: SettingsPageDefinition[];
+}> {
+  return [
+    {
+      label: "Models & Tools",
+      pages: [
+        { id: "providers", label: "Providers", render: () => <ProvidersPage /> },
+        { id: "mcp", label: "Integrations", render: () => <McpServersPage /> },
+      ],
+    },
+    {
+      label: "Workspace",
+      pages: [
+        { id: "workspaces", label: "General", render: () => <WorkspacesPage /> },
+        { id: "memory", label: "Memory", render: () => <MemoryPage /> },
+        ...(remoteAccessAvailable
+          ? [{ id: "remoteAccess", label: "Remote Access", render: () => <RemoteAccessPage /> } satisfies SettingsPageDefinition]
+          : []),
+      ],
+    },
+    {
+      label: "Recovery & Data",
+      pages: [
+        { id: "backup", label: "Backup", render: () => <BackupPage /> },
+        { id: "usage", label: "Usage", render: () => <UsagePage /> },
+      ],
+    },
+    {
+      label: "Advanced",
+      pages: [
+        { id: "developer", label: "Developer", render: () => <DeveloperPage /> },
+        { id: "updates", label: "Updates", render: () => <UpdatesPage /> },
+      ],
+    },
+  ];
+}
 
 function SettingsNavigation({
   activePage,
   onSelectPage,
   onBack,
+  settingsGroups,
 }: {
   activePage: SettingsPageId;
   onSelectPage: (page: SettingsPageId) => void;
   onBack: () => void;
+  settingsGroups: Array<{
+    label: string;
+    pages: SettingsPageDefinition[];
+  }>;
 }) {
   const currentWorkspace = useAppStore((s) => s.workspaces.find(w => w.id === s.selectedWorkspaceId));
   const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
@@ -88,7 +99,7 @@ function SettingsNavigation({
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-3.5 pb-4 flex flex-col gap-5 max-[960px]:flex-row max-[960px]:flex-wrap">
-        {SETTINGS_GROUPS.map((group) => (
+        {settingsGroups.map((group) => (
           <div key={group.label} className="flex flex-col gap-1">
             <h4 className="mb-1.5 px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/80">
               {group.label}
@@ -119,11 +130,14 @@ function SettingsNavigation({
 }
 
 export function SettingsShell() {
+  const remoteAccessAvailable = isRemoteAccessEnabled();
   const settingsPage = useAppStore((s) => s.settingsPage);
   const setSettingsPage = useAppStore((s) => s.setSettingsPage);
   const closeSettings = useAppStore((s) => s.closeSettings);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
-  const activePage = SETTINGS_PAGES.find((page) => page.id === settingsPage) ?? SETTINGS_PAGES[0];
+  const settingsGroups = getSettingsGroups(remoteAccessAvailable);
+  const settingsPages = settingsGroups.flatMap((group) => group.pages);
+  const activePage = settingsPages.find((page) => page.id === settingsPage) ?? settingsPages[0];
 
   return (
     <div
@@ -135,6 +149,7 @@ export function SettingsShell() {
         activePage={settingsPage}
         onSelectPage={setSettingsPage}
         onBack={closeSettings}
+        settingsGroups={settingsGroups}
       />
 
       <main className="settings-shell__main app-main-content min-h-0 overflow-auto">

@@ -3,18 +3,32 @@ import type {
   ConfirmActionInput,
   DesktopMenuCommand,
   DesktopNotificationInput,
+  DesktopApi,
   ExplorerEntry,
   SetWindowAppearanceInput,
   SystemAppearance,
   UpdaterState,
 } from "./desktopApi";
+import type { DesktopFeatureFlags } from "./desktopFeatureFlags";
 
-function requireDesktopApi() {
-  const api = window.cowork;
+function getDesktopApi(): DesktopApi | undefined {
+  return typeof window === "undefined" ? undefined : window.cowork;
+}
+
+function requireDesktopApi(): DesktopApi {
+  const api = getDesktopApi();
   if (!api) {
     throw new Error("Desktop bridge unavailable. Start the app via Electron.");
   }
   return api;
+}
+
+export function getDesktopFeatureFlags(): DesktopFeatureFlags {
+  return getDesktopApi()?.features ?? { remoteAccess: false };
+}
+
+export function isRemoteAccessEnabled(): boolean {
+  return getDesktopFeatureFlags().remoteAccess;
 }
 
 export async function startWorkspaceServer(opts: {

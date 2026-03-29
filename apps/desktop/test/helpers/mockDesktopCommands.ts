@@ -45,6 +45,8 @@ export function createDesktopCommandsMock(
   overrides: Partial<DesktopCommandsModule> = {},
 ): DesktopCommandsModule {
   return {
+    getDesktopFeatureFlags: () => ({ remoteAccess: true }),
+    isRemoteAccessEnabled: () => true,
     startWorkspaceServer: async () => ({ url: "ws://mock" }),
     stopWorkspaceServer: async () => {},
     loadState: async () => ({ version: 2, workspaces: [], threads: [] }),

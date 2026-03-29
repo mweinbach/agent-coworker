@@ -1,4 +1,4 @@
-import { BrowserWindow } from "electron";
+import { app, BrowserWindow } from "electron";
 
 import {
   DESKTOP_EVENT_CHANNELS,
@@ -9,7 +9,10 @@ import {
   mobileRelayBridgeStateSchema,
   mobileRelayStartInputSchema,
 } from "../../src/lib/desktopSchemas";
+import { resolveDesktopFeatureFlags } from "../../src/lib/desktopFeatureFlags";
 import type { DesktopIpcModuleContext } from "./types";
+
+const REMOTE_ACCESS_DISABLED_MESSAGE = "Remote access is only available in development builds.";
 
 function emitStateToAllWindows(windows: BrowserWindow[], payload: unknown) {
   for (const window of windows) {
@@ -38,6 +41,54 @@ function toBridgeWorkspaceRecords(
 
 export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
   const { deps, handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
+  const remoteAccessEnabled = resolveDesktopFeatureFlags({
+    isPackaged: app.isPackaged,
+    env: process.env,
+  }).remoteAccess;
+
+  const disabledState = () => mobileRelayBridgeStateSchema.parse({
+    status: "idle",
+    workspaceId: null,
+    workspacePath: null,
+    relaySource: "unavailable",
+    relaySourceMessage: REMOTE_ACCESS_DISABLED_MESSAGE,
+    relayServiceStatus: "unavailable",
+    relayServiceMessage: REMOTE_ACCESS_DISABLED_MESSAGE,
+    relayServiceUpdatedAt: null,
+    relayUrl: null,
+    sessionId: null,
+    pairingPayload: null,
+    trustedPhoneDeviceId: null,
+    trustedPhoneFingerprint: null,
+    lastError: REMOTE_ACCESS_DISABLED_MESSAGE,
+  });
+
+  const assertRemoteAccessEnabled = () => {
+    if (!remoteAccessEnabled) {
+      throw new Error(REMOTE_ACCESS_DISABLED_MESSAGE);
+    }
+  };
+
+  if (!remoteAccessEnabled) {
+    handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayStart, async () => {
+      assertRemoteAccessEnabled();
+      return disabledState();
+    });
+
+    handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayStop, async () => disabledState());
+    handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayGetState, async () => disabledState());
+
+    handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayRotateSession, async () => {
+      assertRemoteAccessEnabled();
+      return disabledState();
+    });
+
+    handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayForgetTrustedPhone, async () => {
+      assertRemoteAccessEnabled();
+      return disabledState();
+    });
+    return;
+  }
 
   // Provide workspace list to the bridge for workspace/list and workspace/switch.
   // Uses persistence service to read the latest workspace records on demand.
@@ -96,6 +147,7 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayStart, async (_event, args: MobileRelayStartInput) => {
+    assertRemoteAccessEnabled();
     const input = parseWithSchema(mobileRelayStartInputSchema, args, "mobileRelay.start options");
     const workspacePath = await workspaceRoots.assertApprovedWorkspacePath(input.workspacePath);
     return mobileRelayBridgeStateSchema.parse(await deps.mobileRelayBridge.start({
@@ -114,10 +166,12 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayRotateSession, async () => {
+    assertRemoteAccessEnabled();
     return mobileRelayBridgeStateSchema.parse(await deps.mobileRelayBridge.rotateSession());
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayForgetTrustedPhone, async () => {
+    assertRemoteAccessEnabled();
     return mobileRelayBridgeStateSchema.parse(await deps.mobileRelayBridge.forgetTrustedPhone());
   });
 }

@@ -30,6 +30,7 @@ function flushMicrotasks() {
 describe("mobile relay IPC", () => {
   afterEach(() => {
     getAllWindowsMock.mockClear();
+    delete process.env.COWORK_ENABLE_REMOTE_ACCESS;
   });
 
   test("throws workspace list errors when cache refresh fails", async () => {
@@ -189,6 +190,86 @@ describe("mobile relay IPC", () => {
 
     expect(initialize).toHaveBeenCalledTimes(1);
     expect(getSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  test("returns an unavailable state when remote access is disabled", async () => {
+    process.env.COWORK_ENABLE_REMOTE_ACCESS = "0";
+    const initialize = mock(() => {});
+    const handlers = new Map<string, (_event: unknown, args?: unknown) => Promise<unknown>>();
+
+    registerMobileRelayIpc({
+      deps: {
+        persistence: { loadState: async () => ({ workspaces: [] }) } as never,
+        mobileRelayBridge: {
+          setWorkspaceListProvider() {},
+          on() {},
+          initialize,
+          start: async () => ({}),
+          stop: async () => ({}),
+          getSnapshot: () => ({}),
+          rotateSession: async () => ({}),
+          forgetTrustedPhone: async () => ({}),
+        } as never,
+      } as never,
+      workspaceRoots: {} as never,
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as (_event: unknown, args?: unknown) => Promise<unknown>);
+      },
+      parseWithSchema(_schema, value) {
+        return value as never;
+      },
+    });
+
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.mobileRelayGetState);
+    expect(handler).toBeTruthy();
+
+    await expect(handler?.(null)).resolves.toMatchObject({
+      status: "idle",
+      relaySource: "unavailable",
+      relayServiceStatus: "unavailable",
+      lastError: "Remote access is only available in development builds.",
+    });
+    expect(initialize).not.toHaveBeenCalled();
+  });
+
+  test("rejects remote access start when the feature is disabled", async () => {
+    process.env.COWORK_ENABLE_REMOTE_ACCESS = "0";
+    const start = mock(async () => ({}));
+    const handlers = new Map<string, (_event: unknown, args?: unknown) => Promise<unknown>>();
+
+    registerMobileRelayIpc({
+      deps: {
+        persistence: { loadState: async () => ({ workspaces: [] }) } as never,
+        mobileRelayBridge: {
+          setWorkspaceListProvider() {},
+          on() {},
+          start,
+          stop: async () => ({}),
+          getSnapshot: () => ({}),
+          rotateSession: async () => ({}),
+          forgetTrustedPhone: async () => ({}),
+        } as never,
+      } as never,
+      workspaceRoots: {
+        assertApprovedWorkspacePath: async (workspacePath: string) => workspacePath,
+      } as never,
+      handleDesktopInvoke(channel, handler) {
+        handlers.set(channel, handler as (_event: unknown, args?: unknown) => Promise<unknown>);
+      },
+      parseWithSchema(_schema, value) {
+        return value as never;
+      },
+    });
+
+    const handler = handlers.get(DESKTOP_IPC_CHANNELS.mobileRelayStart);
+    expect(handler).toBeTruthy();
+
+    await expect(handler?.(null, {
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    })).rejects.toThrow("Remote access is only available in development builds.");
+    expect(start).not.toHaveBeenCalled();
   });
 
   test("invalidates the mobile relay workspace cache after the save-state hook fires", async () => {

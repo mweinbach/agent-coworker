@@ -200,6 +200,7 @@ let loadedState: any = {
   perWorkspaceSettings: true,
 };
 let loadStateError: Error | null = null;
+let remoteAccessEnabled = true;
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -259,6 +260,8 @@ mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
   setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
   getUpdateState: async () => MOCK_UPDATE_STATE,
+  getDesktopFeatureFlags: () => ({ remoteAccess: remoteAccessEnabled }),
+  isRemoteAccessEnabled: () => remoteAccessEnabled,
   checkForUpdates: async () => {},
   quitAndInstallUpdate: async () => {},
   onSystemAppearanceChanged: () => () => {},
@@ -359,6 +362,7 @@ describe("desktop bootstrap cache", () => {
   beforeEach(() => {
     installWindowMock();
     loadStateError = null;
+    remoteAccessEnabled = true;
     RUNTIME.sessionSnapshots.clear();
     loadedState = {
       ...loadedState,
@@ -411,6 +415,22 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.contextSidebarWidth).toBe(420);
     expect(seed?.messageBarHeight).toBe(180);
     expect(seed?.threadRuntimeById?.["thread-cached"]?.hydrating).toBeUndefined();
+  });
+
+  test("buildCachedDesktopStateSeed falls back from remote access when the feature is unavailable", () => {
+    remoteAccessEnabled = false;
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      ui: {
+        ...cachedState.ui,
+        view: "settings",
+        settingsPage: "remoteAccess",
+        lastNonSettingsView: "chat",
+      },
+    });
+
+    expect(seed?.view).toBe("settings");
+    expect(seed?.settingsPage).toBe("providers");
   });
 
   test("buildCachedDesktopStateSeed accepts legacy cached payloads", () => {

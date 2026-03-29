@@ -17,6 +17,7 @@ import {
   createDirectory,
   renamePath,
   trashPath,
+  isRemoteAccessEnabled,
 } from "../../lib/desktopCommands";
 import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
 import { safeParseServerEvent, type ProviderName } from "../../lib/wsProtocol";
@@ -103,8 +104,9 @@ const normalizedViewSchema = z.preprocess(
   (value) => (value === "chat" || value === "skills" || value === "settings" ? value : "chat"),
   z.enum(["chat", "skills", "settings"])
 );
-const normalizedSettingsPageSchema = z.preprocess(
-  (value) => (
+
+function normalizeSettingsPageId(value: unknown): SettingsPageId {
+  const normalized =
     value === "providers"
     || value === "usage"
     || value === "workspaces"
@@ -115,8 +117,17 @@ const normalizedSettingsPageSchema = z.preprocess(
     || value === "updates"
     || value === "developer"
       ? value
-      : "providers"
-  ),
+      : "providers";
+
+  if (normalized === "remoteAccess" && !isRemoteAccessEnabled()) {
+    return "providers";
+  }
+
+  return normalized;
+}
+
+const normalizedSettingsPageSchema = z.preprocess(
+  (value) => normalizeSettingsPageId(value),
   z.enum(["providers", "usage", "workspaces", "remoteAccess", "backup", "mcp", "memory", "updates", "developer"])
 );
 const normalizedNullableSelectionSchema = z.preprocess(
@@ -330,7 +341,7 @@ function buildResolvedDesktopUiState(
     selectedWorkspaceId,
     selectedThreadId,
     view: normalizedUi.view ?? "chat",
-    settingsPage: normalizedUi.settingsPage ?? "providers",
+    settingsPage: normalizeSettingsPageId(normalizedUi.settingsPage),
     lastNonSettingsView,
     sidebarCollapsed: normalizedUi.sidebarCollapsed ?? false,
     sidebarWidth: normalizedUi.sidebarWidth ?? 248,
@@ -634,7 +645,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
     openSettings: (page) => {
       set((s) => ({
         view: "settings",
-        settingsPage: page ?? s.settingsPage,
+        settingsPage: normalizeSettingsPageId(page ?? s.settingsPage),
         lastNonSettingsView: s.view === "settings" ? s.lastNonSettingsView : s.view,
       }));
       syncDesktopStateCache(get);
@@ -650,7 +661,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
   
 
     setSettingsPage: (page) => {
-      set({ settingsPage: page });
+      set({ settingsPage: normalizeSettingsPageId(page) });
       syncDesktopStateCache(get);
     },
   

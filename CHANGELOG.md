@@ -2,6 +2,72 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.1.37 - 2026-03-29
+
+### Added
+
+- **Mobile Remote Access** — Complete mobile companion app with secure relay transport (#63). **Developer-only feature** — available only in development builds, not in production releases. Features include:
+  - X25519 encryption with secure envelope encoding for end-to-end encrypted relay
+  - iOS/Android app built with Expo SDK 54 and React Native
+  - Pairing flow with QR code and encrypted proof-of-pairing
+  - Full workspace routing, thread management, and chat UI
+  - Skills, memory, backup, and provider settings management
+  - File upload and multimodal image support on mobile
+  - Trusted device reconnect with persistent replay counters
+- **Multimodal File Attachments** — Full support for file uploads and image attachments across desktop and mobile:
+  - Native multimodal input format for OpenAI Responses runtime
+  - File picker with drag-and-drop support
+  - Attachment queuing and deduplication during steers
+  - Symlink escape protection and upload validation
+  - Per-message attachment queues preserved during reconnects
+- **Fireworks AI Provider** — New provider with support for GLM-5, Kimi K2.5, Kimi K2.5 Turbo router, and MiniMax M2.5 models
+- **HeroUI v3 Migration** — Complete desktop settings UI overhaul:
+  - Reorganized settings into clearer Models & Tools groups
+  - Tabulated workspace settings with improved MCP servers page
+  - Inline accordion layout for better navigation
+  - Save/success/error feedback patterns
+  - Stronger auto-approve warnings
+- **JSON-RPC WebSocket Transport** — New desktop control-plane architecture (#56):
+  - Shared desktop control path for better state consistency
+  - Improved replay ordering and reasoning stream handling
+  - Deduplication of stale and late-streamed content
+  - Proper segmenting of live and follow-up assistant output
+
+### Changed
+
+- Refactored desktop UI chrome and streamlined chat, skills, and sidebar flows (#59)
+- Optimized harness and removed legacy WebSocket/TUI surfaces (#58)
+- Default workspace JSON-RPC now uses current working directory (#61)
+- Improved mobile relay recovery flows with better error handling
+- Mobile app redesigned to match desktop theme with native iOS patterns
+- Settings shell navigation polished with better pane divider layout
+
+### Fixed
+
+- Fixed JSON-RPC replay ordering and activity sequencing issues
+- Fixed reasoning stream positioning to ensure it precedes tool calls
+- Fixed desktop skill detail loading after state hydration
+- Fixed Select popover width constraints and item row layout
+- Fixed chat model selector to properly handle colon-separated model IDs
+- Fixed mobile relay state after forget/reconnect cycles
+- Fixed uploaded attachment handling with MIME type guards
+- Fixed workspace root updates before relay cache invalidation
+- Fixed desktop titlebar drag handling on Windows
+- Stabilized electron mocks in full test suite
+- Fixed keyboard send path for attachment-only steers
+
+## 0.1.26 - 2026-03-18
+
+### Added
+
+- Added GPT-5.4 Mini model support in both OpenAI and Codex CLI model registries
+
+### Fixed
+
+- Fixed steering reconnect/cancel edge cases with improved continuation replay ordering
+- Fixed protocol state drift on reconnect by preserving pending steer intent
+- Fixed desktop thread-state regression paths during steering/onboarding work
+
 ## 0.1.25 - 2026-03-17
 
 ### Added

@@ -136,6 +136,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private relayReconnectAttempts = 0;
   private sidecarReconnectAttempts = 0;
   private queuedOutboundApplicationMessages: string[] = [];
+  private pendingRelayRestartAfterSidecarReconnect = false;
 
   constructor(options: MobileRelayBridgeOptions) {
     super();
@@ -247,6 +248,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.clearReconnectTimer();
     this.clearSidecarReconnectTimer();
     this.closeConnections();
+    this.pendingRelayRestartAfterSidecarReconnect = false;
     this.sidecarUrl = null;
     this.stopping = false;
     try {
@@ -300,6 +302,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.clearReconnectTimer();
     this.clearSidecarReconnectTimer();
     this.closeConnections();
+    this.pendingRelayRestartAfterSidecarReconnect = false;
     this.sidecarUrl = null;
     if (this.relayConfigurationLoaded) {
       this.refreshRelayConfiguration();
@@ -344,6 +347,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.clearSidecarReconnectTimer();
     this.sidecarSocket = null;
     this.relaySocket = null;
+    this.pendingRelayRestartAfterSidecarReconnect = false;
     this.notificationSecret = null;
     this.resetSecureRelayState({ clearQueue: true });
     this.closeLegacyRelaySockets();
@@ -374,12 +378,16 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.closeLegacyRelaySockets();
     closeSocket(relaySocket);
     this.syncTrustedPhoneSummary();
-    const shouldRestartRelaySession = Boolean(
+    this.pendingRelayRestartAfterSidecarReconnect = false;
+    const canRestartRelaySession = Boolean(
       this.state.workspaceId
       && this.state.workspacePath
-      && this.sidecarSocket?.readyState === WebSocket.OPEN
       && this.state.relayUrl
       && this.identityState,
+    );
+    const shouldRestartRelaySession = Boolean(
+      canRestartRelaySession
+      && this.sidecarSocket?.readyState === WebSocket.OPEN
     );
     if (shouldRestartRelaySession) {
       try {
@@ -390,6 +398,8 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         this.scheduleRelayReconnect();
         return this.getSnapshot();
       }
+    } else if (canRestartRelaySession) {
+      this.pendingRelayRestartAfterSidecarReconnect = true;
     }
     this.emitStateChanged();
     return this.getSnapshot();
@@ -578,6 +588,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         });
         this.restorePairingStatusIfReady();
         this.restoreConnectedStatusIfReady();
+        this.maybeRestartRelayAfterSidecarReconnect();
         resolve();
       });
 
@@ -587,6 +598,32 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
           reject(error);
         }
       });
+    });
+  }
+
+  private maybeRestartRelayAfterSidecarReconnect(): void {
+    if (
+      !this.pendingRelayRestartAfterSidecarReconnect
+      || this.stopping
+      || !this.sidecarSocket
+      || this.sidecarSocket.readyState !== WebSocket.OPEN
+      || this.relaySocket
+      || !this.state.workspaceId
+      || !this.state.workspacePath
+      || !this.state.relayUrl
+      || !this.identityState
+    ) {
+      return;
+    }
+    this.pendingRelayRestartAfterSidecarReconnect = false;
+    void this.startRelaySession({ forceNewSession: true }).catch((error) => {
+      if (this.stopping) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.pendingRelayRestartAfterSidecarReconnect = true;
+      this.updateStatus("error", message);
+      this.scheduleRelayReconnect();
     });
   }
 

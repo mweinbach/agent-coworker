@@ -1,4 +1,5 @@
-import { BrowserWindow, dialog } from "electron";
+import { BrowserWindow } from "electron";
+import * as electron from "electron";
 import { z } from "zod";
 
 import type { PersistedState } from "../../src/app/types";
@@ -91,14 +92,18 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.pickWorkspaceDirectory, async (event) => {
+    const dialogApi = electron.dialog;
+    if (!dialogApi) {
+      throw new Error("Electron dialog API is unavailable.");
+    }
     const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? undefined;
     const dialogOptions = {
       title: "Select a workspace directory",
       properties: ["openDirectory"] as Array<"openDirectory">,
     };
     const result = ownerWindow
-      ? await dialog.showOpenDialog(ownerWindow, dialogOptions)
-      : await dialog.showOpenDialog(dialogOptions);
+      ? await dialogApi.showOpenDialog(ownerWindow, dialogOptions)
+      : await dialogApi.showOpenDialog(dialogOptions);
 
     if (result.canceled) {
       return null;

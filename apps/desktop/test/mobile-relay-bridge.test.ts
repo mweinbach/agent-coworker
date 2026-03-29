@@ -644,6 +644,65 @@ describe("mobile relay bridge", () => {
     expect(replacementRegistration?.registration?.trustedPhonePublicKey).toBeNull();
   });
 
+  test("forgetTrustedPhone restarts relay after sidecar reconnect when sidecar is temporarily offline", async () => {
+    const sidecarSockets: FakeSocket[] = [];
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      getReconnectDelayMs: () => 1,
+      createSidecarSocket: () => {
+        const socket = new FakeSocket();
+        sidecarSockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+    const firstRelaySocket = relaySockets[0]!;
+    const phoneKeyPair = managedFixture.phone1KeyPair;
+    emitPhoneHandshake(firstRelaySocket, "phone-1", phoneKeyPair, {
+      macIdentityPublicKey: managedFixture.macKeyPair.publicKeyBase64,
+      pairingPayload: bridge.getSnapshot().pairingPayload,
+    });
+    await waitForRelaySnapshot(
+      bridge,
+      (snapshot) => snapshot.status === "connected" && snapshot.trustedPhoneDeviceId === "phone-1",
+    );
+
+    sidecarSockets[0]?.close();
+    await waitForRelaySnapshot(
+      bridge,
+      (snapshot) => snapshot.status === "reconnecting",
+    );
+
+    const forgotten = await bridge.forgetTrustedPhone();
+    expect(forgotten.trustedPhoneDeviceId).toBeNull();
+
+    await waitForCondition(() => sidecarSockets.length >= 2);
+    await waitForCondition(() => relaySockets.length >= 2);
+    await waitForRelaySnapshot(
+      bridge,
+      (snapshot) => snapshot.status === "pairing" && snapshot.trustedPhoneDeviceId === null,
+    );
+  });
+
   test("forgetTrustedPhone reports restart failures and retries back to pairing", async () => {
     const reconnectAttempts: number[] = [];
     const bridge = new MobileRelayBridge({

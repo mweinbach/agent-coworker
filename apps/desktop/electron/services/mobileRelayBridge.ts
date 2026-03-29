@@ -382,7 +382,14 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       && this.identityState,
     );
     if (shouldRestartRelaySession) {
-      await this.startRelaySession({ forceNewSession: true });
+      try {
+        await this.startRelaySession({ forceNewSession: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.updateStatus("error", message);
+        this.scheduleRelayReconnect();
+        return this.getSnapshot();
+      }
     }
     this.emitStateChanged();
     return this.getSnapshot();
@@ -524,6 +531,24 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.updateStatus("connected");
   }
 
+  private restorePairingStatusIfReady(): void {
+    if (
+      this.state.status === "pairing"
+      || !this.sidecarSocket
+      || this.sidecarSocket.readyState !== WebSocket.OPEN
+      || !this.relaySocket
+      || this.relaySocket.readyState !== WebSocket.OPEN
+      || this.secureChannelReady
+      || Boolean(this.getTrustedPhone())
+      || !this.state.sessionId
+      || !this.state.pairingPayload
+      || this.state.pairingPayload.sessionId !== this.state.sessionId
+    ) {
+      return;
+    }
+    this.updateStatus("pairing");
+  }
+
   private rejectRelayApplicationMessage(message: string): void {
     this.sendSecureRelayError(message);
     this.updateStatus("error", message);
@@ -551,6 +576,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
           this.updateStatus("reconnecting", "Local sidecar disconnected.");
           this.scheduleSidecarReconnect();
         });
+        this.restorePairingStatusIfReady();
         this.restoreConnectedStatusIfReady();
         resolve();
       });
@@ -619,6 +645,8 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         this.relayReconnectAttempts = 0;
         this.clearReconnectTimer();
         this.sendRelayRegistrationUpdate(socket, sessionId);
+        this.restorePairingStatusIfReady();
+        this.restoreConnectedStatusIfReady();
         resolve();
       });
 

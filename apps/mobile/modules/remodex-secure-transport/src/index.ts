@@ -968,6 +968,8 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   private lastInboundCounter = 0;
   private reconnectAttempts = 0;
   private queuedOutboundMessages: string[] = [];
+  private queuedInboundPlaintextMessages: string[] = [];
+  private secureFinalizePromise: Promise<RemodexSecureTransportState> | null = null;
 
   private emitStateChanged(): void {
     (this as unknown as { emit: (eventName: "stateChanged", payload: RemodexSecureTransportState) => void }).emit(
@@ -1076,6 +1078,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   private resetSecureChannel(opts: { clearQueue: boolean; resetCounters?: boolean }): void {
     this.sharedKey = null;
     this.secureChannelReady = false;
+    this.secureFinalizePromise = null;
     if (opts.resetCounters ?? true) {
       this.outboundCounter = 0;
       this.lastInboundCounter = 0;
@@ -1083,6 +1086,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
     if (opts.clearQueue) {
       this.queuedOutboundMessages = [];
     }
+    this.queuedInboundPlaintextMessages = [];
   }
 
   private sendControlMessage(payload: Record<string, unknown>): boolean {
@@ -1133,6 +1137,17 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
     this.queuedOutboundMessages = [];
     for (const message of queuedMessages) {
       this.queueOrSendApplicationMessage(message);
+    }
+  }
+
+  private flushQueuedInboundPlaintextMessages(): void {
+    if (!this.secureChannelReady || this.queuedInboundPlaintextMessages.length === 0) {
+      return;
+    }
+    const queuedMessages = [...this.queuedInboundPlaintextMessages];
+    this.queuedInboundPlaintextMessages = [];
+    for (const message of queuedMessages) {
+      this.emitPlaintext(message);
     }
   }
 
@@ -1271,23 +1286,48 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   }
 
   private async finalizeSecureConnection(): Promise<RemodexSecureTransportState> {
-    if (!this.currentTarget) {
+    if (this.secureFinalizePromise) {
+      return await this.secureFinalizePromise;
+    }
+    const target = this.currentTarget;
+    if (!target) {
       throw new Error("Secure relay handshake is incomplete.");
     }
-    const trustedMacs = await this.upsertTrustedMacRecord(this.currentTarget);
-    this.currentPairingSecret = null;
-    this.secureChannelReady = true;
-    this.reconnectAttempts = 0;
-    this.flushQueuedOutboundMessages();
-    return this.setState({
-      status: "connected",
-      transportMode: "native",
-      connectedMacDeviceId: this.currentTarget.macDeviceId,
-      relay: this.currentTarget.relay,
-      sessionId: this.currentTarget.lastSessionId ?? this.state.sessionId,
-      trustedMacs,
-      lastError: null,
+    const finalizePromise = (async () => {
+      const trustedMacs = await this.upsertTrustedMacRecord(target);
+      if (
+        !this.socket
+        || !this.currentTarget
+        || this.currentTarget.macDeviceId !== target.macDeviceId
+        || this.currentTarget.lastSessionId !== target.lastSessionId
+      ) {
+        return this.state;
+      }
+      this.currentPairingSecret = null;
+      this.secureChannelReady = true;
+      this.reconnectAttempts = 0;
+      const connectedState = this.setState({
+        status: "connected",
+        transportMode: "native",
+        connectedMacDeviceId: target.macDeviceId,
+        relay: target.relay,
+        sessionId: target.lastSessionId ?? this.state.sessionId,
+        trustedMacs,
+        lastError: null,
+      });
+      this.flushQueuedOutboundMessages();
+      this.flushQueuedInboundPlaintextMessages();
+      return connectedState;
+    })().catch((error) => {
+      this.queuedInboundPlaintextMessages = [];
+      throw error;
+    }).finally(() => {
+      if (this.secureFinalizePromise === finalizePromise) {
+        this.secureFinalizePromise = null;
+      }
     });
+    this.secureFinalizePromise = finalizePromise;
+    return await finalizePromise;
   }
 
   private async openSocket(target: PersistedTrustedMacRecord, sessionId: string): Promise<RemodexSecureTransportState> {
@@ -1379,6 +1419,10 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
           this.lastInboundCounter = decoded.envelope.counter;
           if (!this.secureChannelReady) {
             if (!isRelayHandshakeProofPayload(decoded.plaintext)) {
+              if (this.secureFinalizePromise) {
+                this.queuedInboundPlaintextMessages.push(decoded.plaintext);
+                return;
+              }
               this.emitProtocolError("Rejected relay payload before the secure channel was established.");
               if (!settled) {
                 settle(this.state);
@@ -1585,6 +1629,11 @@ const transport = preferDemoTransport
     ? nativeModule
     : relayModule;
 
+function resetRelayTransportTestState(): void {
+  secureStorePromise = null;
+  persistedRelayTransportState = null;
+}
+
 export function addRemodexListener<EventName extends keyof RemodexSecureTransportEvents>(
   eventName: EventName,
   listener: RemodexSecureTransportEvents[EventName],
@@ -1622,4 +1671,6 @@ export async function getTransportState(): Promise<RemodexSecureTransportState> 
 
 export const __internal = {
   buildRelaySocketHeaders,
+  RemodexSecureTransportRelay,
+  resetRelayTransportTestState,
 };

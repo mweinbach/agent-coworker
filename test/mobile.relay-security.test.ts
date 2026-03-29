@@ -20,9 +20,11 @@ describe("mobile relay security helpers", () => {
   test("encrypts and decrypts JSON-RPC payloads", () => {
     const macKeyPair = generateRelayKeyPair();
     const phoneKeyPair = generateRelayKeyPair();
+    const sessionId = "session-1";
     const sharedKey = createRelaySharedKey(
       macKeyPair.privateKeyBase64,
       phoneKeyPair.publicKeyBase64,
+      sessionId,
     );
 
     const envelope = encodeRelaySecureEnvelope({
@@ -40,6 +42,7 @@ describe("mobile relay security helpers", () => {
       sharedKey: createRelaySharedKey(
         phoneKeyPair.privateKeyBase64,
         macKeyPair.publicKeyBase64,
+        sessionId,
       ),
       rawMessage: JSON.stringify(envelope),
       expectedSender: "mac",
@@ -59,9 +62,11 @@ describe("mobile relay security helpers", () => {
   test("rejects replayed encrypted payloads", () => {
     const macKeyPair = generateRelayKeyPair();
     const phoneKeyPair = generateRelayKeyPair();
+    const sessionId = "session-1";
     const sharedKey = createRelaySharedKey(
       macKeyPair.privateKeyBase64,
       phoneKeyPair.publicKeyBase64,
+      sessionId,
     );
 
     const envelope = encodeRelaySecureEnvelope({
@@ -78,6 +83,7 @@ describe("mobile relay security helpers", () => {
       sharedKey: createRelaySharedKey(
         phoneKeyPair.privateKeyBase64,
         macKeyPair.publicKeyBase64,
+        sessionId,
       ),
       rawMessage: JSON.stringify(envelope),
       expectedSender: "phone",
@@ -93,9 +99,11 @@ describe("mobile relay security helpers", () => {
   test("rejects non JSON-RPC secure payloads", () => {
     const macKeyPair = generateRelayKeyPair();
     const phoneKeyPair = generateRelayKeyPair();
+    const sessionId = "session-1";
     const sharedKey = createRelaySharedKey(
       macKeyPair.privateKeyBase64,
       phoneKeyPair.publicKeyBase64,
+      sessionId,
     );
 
     const envelope = encodeRelaySecureEnvelope({
@@ -111,6 +119,7 @@ describe("mobile relay security helpers", () => {
       sharedKey: createRelaySharedKey(
         phoneKeyPair.privateKeyBase64,
         macKeyPair.publicKeyBase64,
+        sessionId,
       ),
       rawMessage: JSON.stringify(envelope),
       expectedSender: "phone",
@@ -119,6 +128,46 @@ describe("mobile relay security helpers", () => {
 
     expect(decoded.ok).toBe(false);
     expect(isCoworkJsonRpcPayload(JSON.stringify({ hello: "world" }))).toBe(false);
+  });
+
+  test("derives distinct secure keys for different relay sessions", () => {
+    const macKeyPair = generateRelayKeyPair();
+    const phoneKeyPair = generateRelayKeyPair();
+    const firstSessionKey = createRelaySharedKey(
+      macKeyPair.privateKeyBase64,
+      phoneKeyPair.publicKeyBase64,
+      "session-1",
+    );
+    const secondSessionKey = createRelaySharedKey(
+      phoneKeyPair.privateKeyBase64,
+      macKeyPair.publicKeyBase64,
+      "session-2",
+    );
+
+    expect(Array.from(firstSessionKey)).not.toEqual(Array.from(secondSessionKey));
+
+    const envelope = encodeRelaySecureEnvelope({
+      sharedKey: firstSessionKey,
+      sender: "mac",
+      counter: 1,
+      plaintext: JSON.stringify({
+        id: 1,
+        method: "thread/list",
+        params: {},
+      }),
+    });
+
+    const decoded = decodeRelaySecureEnvelope({
+      sharedKey: secondSessionKey,
+      rawMessage: JSON.stringify(envelope),
+      expectedSender: "mac",
+      lastAcceptedCounter: 0,
+    });
+
+    expect(decoded.ok).toBe(false);
+    if (!decoded.ok) {
+      expect(decoded.error).toContain("decrypt");
+    }
   });
 
   test("parses relay control messages and computes reconnect delay with jitter", () => {

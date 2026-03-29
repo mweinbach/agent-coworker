@@ -1201,6 +1201,11 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
           lastResolvedAt: nowIso(),
           lastSessionId: message.registration.sessionId ?? this.state.sessionId,
         };
+        const sessionId = updatedRecord.lastSessionId ?? this.state.sessionId;
+        if (!sessionId) {
+          this.emitProtocolError("The desktop relay session id is unavailable.");
+          return { handled: true, connected: false };
+        }
         this.currentTarget = updatedRecord;
         this.setState({
           connectedMacDeviceId: updatedRecord.macDeviceId,
@@ -1212,6 +1217,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
           this.sharedKey = createRelaySharedKey(
             phoneIdentity.phoneIdentityPrivateKey,
             message.registration.macIdentityPublicKey,
+            sessionId,
           );
         } catch (error) {
           this.emitProtocolError(error instanceof Error ? error.message : String(error));
@@ -1225,7 +1231,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
           pairingProof: this.currentPairingSecret
             ? buildRelayPairingProof({
               pairingSecret: this.currentPairingSecret,
-              sessionId: updatedRecord.lastSessionId ?? this.state.sessionId ?? "",
+              sessionId,
               macDeviceId: updatedRecord.macDeviceId,
               phoneDeviceId: phoneIdentity.phoneDeviceId,
               phoneIdentityPublicKey: phoneIdentity.phoneIdentityPublicKey,

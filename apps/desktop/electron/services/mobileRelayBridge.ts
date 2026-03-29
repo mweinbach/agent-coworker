@@ -989,6 +989,11 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
           this.rejectRelayApplicationMessage("Remote access relay identity is unavailable.");
           return true;
         }
+        const sessionId = this.state.sessionId;
+        if (!sessionId) {
+          this.rejectRelayApplicationMessage("Remote access relay session is unavailable.");
+          return true;
+        }
         const trustedPhone = this.getTrustedPhone();
         // Check if connecting from already-trusted phone (allow reconnects regardless of expiry)
         const isTrustedReconnect = trustedPhone
@@ -1033,6 +1038,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
           this.secureSharedKey = createRelaySharedKey(
             this.identityState.macIdentityPrivateKey,
             message.phoneIdentityPublicKey,
+            sessionId,
           );
           this.secureChannelReady = false;
         } catch (error) {

@@ -4,6 +4,7 @@ import { z } from "zod";
 export const RELAY_PAIRING_QR_VERSION = 4 as const;
 export const RELAY_SECURE_ENVELOPE_VERSION = 1 as const;
 export const RELAY_HANDSHAKE_PROOF_METHOD = "relay/handshakeProof" as const;
+const RELAY_SESSION_KEY_CONTEXT = "relay-session-key-v1";
 
 export type RelayParticipantRole = "mac" | "phone";
 
@@ -317,7 +318,12 @@ export function isRelayHandshakeProofPayload(rawMessage: string): boolean {
 export function createRelaySharedKey(
   privateKeyBase64: string,
   peerPublicKeyBase64: string,
+  sessionId: string,
 ): Uint8Array {
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) {
+    throw new Error("Invalid relay session id.");
+  }
   const privateKeyBytes = base64ToBytes(privateKeyBase64);
   if (privateKeyBytes?.length !== nacl.box.secretKeyLength) {
     throw new Error("Invalid relay private key.");
@@ -326,7 +332,13 @@ export function createRelaySharedKey(
   if (peerPublicKeyBytes?.length !== nacl.box.publicKeyLength) {
     throw new Error("Invalid relay peer public key.");
   }
-  return nacl.box.before(peerPublicKeyBytes, privateKeyBytes);
+  const baseSharedKey = nacl.box.before(peerPublicKeyBytes, privateKeyBytes);
+  const sessionContextBytes = new TextEncoder().encode(`${RELAY_SESSION_KEY_CONTEXT}:${normalizedSessionId}`);
+  const keyMaterial = new Uint8Array(sessionContextBytes.length + 1 + baseSharedKey.length);
+  keyMaterial.set(sessionContextBytes, 0);
+  keyMaterial[sessionContextBytes.length] = 0;
+  keyMaterial.set(baseSharedKey, sessionContextBytes.length + 1);
+  return nacl.hash(keyMaterial).subarray(0, nacl.secretbox.keyLength);
 }
 
 export function encodeRelaySecureEnvelope(opts: {

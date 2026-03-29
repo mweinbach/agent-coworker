@@ -109,6 +109,7 @@ function emitPhoneHandshake(
   opts: {
     macIdentityPublicKey: string;
     counter?: number;
+    sessionId?: string | null;
     pairingPayload?: {
       pairingSecret: string;
       sessionId: string;
@@ -131,7 +132,11 @@ function emitPhoneHandshake(
     });
   }
   socket.emitMessage(JSON.stringify(clientHello));
-  const sharedKey = createRelaySharedKey(phoneKeys.privateKeyBase64, opts.macIdentityPublicKey);
+  const sessionId = opts.sessionId ?? opts.pairingPayload?.sessionId;
+  if (!sessionId) {
+    throw new Error("emitPhoneHandshake requires a relay session id");
+  }
+  const sharedKey = createRelaySharedKey(phoneKeys.privateKeyBase64, opts.macIdentityPublicKey, sessionId);
   socket.emitMessage(JSON.stringify(encodeRelaySecureEnvelope({
     sharedKey,
     sender: "phone",
@@ -490,6 +495,68 @@ describe("mobile relay bridge", () => {
     expect(staleSessionSocket?.closeCalls).toBeGreaterThan(0);
   });
 
+  test("rotateSession rejects secure envelopes captured from the previous session", async () => {
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: (url) => {
+        const socket = new FakeSocket() as FakeSocket & { relayUrl?: string };
+        socket.relayUrl = url;
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    const first = await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+    const firstRelaySocket = relaySockets.at(-1)! as FakeSocket & { relayUrl?: string };
+    const phoneKeyPair = managedFixture.phone1KeyPair;
+    const previousSessionHandshakeEnvelope = JSON.stringify(encodeRelaySecureEnvelope({
+      sharedKey: createRelaySharedKey(
+        phoneKeyPair.privateKeyBase64,
+        managedFixture.macKeyPair.publicKeyBase64,
+        first.sessionId!,
+      ),
+      sender: "phone",
+      counter: 1,
+      plaintext: buildRelayHandshakeProofPayload(),
+    }));
+
+    const rotated = await bridge.rotateSession();
+    const currentRelaySocket = relaySockets.find((socket) => (
+      (socket as FakeSocket & { relayUrl?: string }).relayUrl?.endsWith(`/${rotated.sessionId}`)
+      && socket !== firstRelaySocket
+    )) as (FakeSocket & { relayUrl?: string }) | undefined;
+
+    expect(currentRelaySocket).toBeTruthy();
+
+    currentRelaySocket!.emitMessage(JSON.stringify({
+      kind: "clientHello",
+      phoneDeviceId: "phone-1",
+      phoneIdentityPublicKey: phoneKeyPair.publicKeyBase64,
+    }));
+    currentRelaySocket!.emitMessage(previousSessionHandshakeEnvelope);
+
+    await waitForRelaySnapshot(
+      bridge,
+      (snapshot) => snapshot.status === "error" && snapshot.lastError === "Unable to decrypt secure relay message.",
+    );
+  });
+
   test("forgetTrustedPhone revokes the active relay session and starts a fresh unpaired one", async () => {
     const bridge = new MobileRelayBridge({
       serverManager: new FakeServerManager() as never,
@@ -544,6 +611,7 @@ describe("mobile relay bridge", () => {
     const sharedKey = createRelaySharedKey(
       phoneKeyPair.privateKeyBase64,
       managedFixture.macKeyPair.publicKeyBase64,
+      trusted.sessionId!,
     );
     expect(countHandshakeProofMessages(relaySocket, sharedKey)).toBe(1);
 
@@ -838,6 +906,7 @@ describe("mobile relay bridge", () => {
     const sharedKey = createRelaySharedKey(
       phoneKeyPair.privateKeyBase64,
       managedFixture.macKeyPair.publicKeyBase64,
+      bridge.getSnapshot().sessionId!,
     );
     relaySocket.emitMessage(JSON.stringify(encodeRelaySecureEnvelope({
       sharedKey,
@@ -919,6 +988,7 @@ describe("mobile relay bridge", () => {
     const sharedKey = createRelaySharedKey(
       phoneKeyPair.privateKeyBase64,
       managedFixture.macKeyPair.publicKeyBase64,
+      snapshot.sessionId!,
     );
     relaySocket.emitMessage(JSON.stringify(encodeRelaySecureEnvelope({
       sharedKey,
@@ -985,6 +1055,7 @@ describe("mobile relay bridge", () => {
     const sharedKey = createRelaySharedKey(
       phoneKeyPair.privateKeyBase64,
       managedFixture.macKeyPair.publicKeyBase64,
+      bridge.getSnapshot().sessionId!,
     );
     const replayEnvelope = JSON.stringify(encodeRelaySecureEnvelope({
       sharedKey,

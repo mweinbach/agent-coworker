@@ -11,10 +11,12 @@ This repo now includes the first vertical slices for mobile remote access:
 
 ### Desktop
 
-Open the desktop app and navigate to:
+Remote Access is currently a development-only desktop feature. Open a development build of the desktop app and navigate to:
 
 - `Settings`
 - `Remote Access`
+
+If you need to suppress it in development, start the desktop app with `COWORK_ENABLE_REMOTE_ACCESS=0`.
 
 From there you can:
 
@@ -88,7 +90,7 @@ bun run app:mobile:typecheck
 
 ## Pairing flow today
 
-1. Start the desktop app.
+1. Start the desktop app in development mode.
 2. Select a workspace.
 3. Open `Settings -> Remote Access`.
 4. Enable remote access.

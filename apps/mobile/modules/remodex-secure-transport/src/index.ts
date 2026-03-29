@@ -1358,7 +1358,24 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
       lastError: null,
     });
 
-    const socket = this.createSocket(target.relay, sessionId, phoneIdentity);
+    let socket: RuntimeWebSocket;
+    try {
+      socket = this.createSocket(target.relay, sessionId, phoneIdentity);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return this.setState(
+        {
+          status: "error",
+          transportMode: "native",
+          connectedMacDeviceId: target.macDeviceId,
+          relay: target.relay,
+          sessionId,
+          trustedMacs,
+          lastError: message,
+        },
+        { emitSecureError: message },
+      );
+    }
     this.socket = socket;
 
     return await new Promise<RemodexSecureTransportState>((resolve) => {
@@ -1511,7 +1528,16 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
           if (!reconnectTarget?.lastSessionId) {
             return;
           }
-          void this.openSocket(reconnectTarget, reconnectTarget.lastSessionId);
+          void this.openSocket(reconnectTarget, reconnectTarget.lastSessionId).catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            this.setState(
+              {
+                status: "error",
+                lastError: message,
+              },
+              { emitSecureError: message },
+            );
+          });
         }, reconnectDelayMs);
       };
     });

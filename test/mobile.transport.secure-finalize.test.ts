@@ -197,4 +197,34 @@ describe("mobile relay secure finalize", () => {
       },
     }));
   });
+
+  test("maps synchronous WebSocket construction failure to error state", async () => {
+    class ThrowingWebSocket {
+      constructor() {
+        throw new Error("Invalid URL");
+      }
+    }
+    (globalThis as { WebSocket?: unknown }).WebSocket = ThrowingWebSocket as never;
+
+    const macKeyPair = generateRelayKeyPair();
+    const relay = new transportModule.__internal.RemodexSecureTransportRelay() as any;
+    const secureErrors: string[] = [];
+    relay.addListener("secureError", (event: { message: string }) => {
+      secureErrors.push(event.message);
+    });
+
+    const state = await relay.connectFromQr({
+      v: RELAY_PAIRING_QR_VERSION,
+      relay: "wss://relay.example.test/relay",
+      sessionId: "session-ws-throw",
+      macDeviceId: "mac-ws-throw",
+      macIdentityPublicKey: macKeyPair.publicKeyBase64,
+      pairingSecret: "pairing-secret",
+      expiresAt: Date.now() + 60_000,
+    });
+
+    expect(state.status).toBe("error");
+    expect(state.lastError).toBe("Invalid URL");
+    expect(secureErrors).toEqual(["Invalid URL"]);
+  });
 });

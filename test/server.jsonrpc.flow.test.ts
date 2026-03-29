@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
@@ -429,6 +430,54 @@ describe("server JSON-RPC flows", () => {
           filename: "outside.txt",
           path: `${tmpDir}/outside.txt`,
           mimeType: "text/plain",
+        }],
+      });
+
+      expect(turnResponse.error?.message).toBe("Uploaded file path is outside the uploads directory.");
+      expect(turnResponse.result).toBeUndefined();
+      expect(runTurnCalled).toBe(false);
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("turn/start rejects uploaded file paths that escape the uploads directory via symlinks", async () => {
+    const tmpDir = await makeTmpProject();
+    let runTurnCalled = false;
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => {
+        runTurnCalled = true;
+        return {
+          text: "done",
+          responseMessages: [],
+        };
+      }) as any,
+    }));
+
+    try {
+      const uploadsDir = path.join(tmpDir, "User Uploads");
+      const outsideDir = path.join(tmpDir, "outside");
+      const outsideFile = path.join(outsideDir, "secret.pdf");
+      const linkedDir = path.join(uploadsDir, "linked");
+      const escapedPath = path.join(linkedDir, "secret.pdf");
+
+      await fs.mkdir(uploadsDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(outsideFile, "top secret");
+      await fs.symlink(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      const turnResponse = await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{
+          type: "uploadedFile",
+          filename: "secret.pdf",
+          path: escapedPath,
+          mimeType: "application/pdf",
         }],
       });
 

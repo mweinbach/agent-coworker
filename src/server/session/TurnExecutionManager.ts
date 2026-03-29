@@ -28,6 +28,7 @@ import {
   type ServerErrorSource,
 } from "../../types";
 import { supportsImageInput } from "../../models/registry";
+import { isPathInside } from "../../utils/paths";
 import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared";
 import type { HistoryManager } from "./HistoryManager";
 import type { InteractionManager } from "./InteractionManager";
@@ -118,6 +119,31 @@ function getUploadedMultimodalAttachmentValidationMessage(byteLengths: readonly 
     return "Uploaded multimodal attachments too large to send to the model (max 25MB combined)";
   }
   return message;
+}
+
+async function canonicalizeExistingPrefix(targetPath: string): Promise<string> {
+  const resolved = path.resolve(targetPath);
+  const tail: string[] = [];
+  let cursor = resolved;
+
+  while (true) {
+    try {
+      const canonical = await fs.realpath(cursor);
+      return tail.length > 0 ? path.join(canonical, ...tail.reverse()) : canonical;
+    } catch (error) {
+      const parsedCode = errorWithCodeSchema.safeParse(error);
+      const code = parsedCode.success ? parsedCode.data.code : undefined;
+      if (code !== "ENOENT") {
+        throw error;
+      }
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        return resolved;
+      }
+      tail.push(path.basename(cursor));
+      cursor = parent;
+    }
+  }
 }
 
 function makeId(): string {
@@ -988,6 +1014,7 @@ export class TurnExecutionManager {
 
       const inlineAttachment = isInlineFileAttachment(attachment) ? attachment : null;
       let diskPath: string;
+      let contentReadPath: string;
       let multimodalData: string | null = null;
 
       if (inlineAttachment) {
@@ -1036,25 +1063,13 @@ export class TurnExecutionManager {
           throw makeStructuredSessionError("validation_failed", `Invalid base64 attachment: ${safeName}`);
         }
         await fs.writeFile(diskPath, decoded);
+        contentReadPath = diskPath;
         multimodalData = decoded.toString("base64");
       } else {
         const uploadedAttachment = attachment as Extract<FileAttachment, { path: string }>;
+        const uploadedFile = await this.resolveUploadedAttachmentPath(uploadedAttachment.path);
         diskPath = path.resolve(uploadedAttachment.path);
-        if (!diskPath.startsWith(resolvedUploadsDir + path.sep)) {
-          throw makeStructuredSessionError("validation_failed", "Uploaded file path is outside the uploads directory.");
-        }
-        try {
-          await fs.access(diskPath);
-          const stat = await fs.stat(diskPath);
-          if (!stat.isFile()) {
-            throw makeStructuredSessionError("validation_failed", `Uploaded attachment is not a file: ${diskPath}`);
-          }
-        } catch (error) {
-          if (classifyStructuredTurnError(error)) {
-            throw error;
-          }
-          throw makeStructuredSessionError("validation_failed", `Uploaded file does not exist: ${diskPath}`);
-        }
+        contentReadPath = uploadedFile.canonicalPath;
       }
 
       contentParts.push({
@@ -1068,7 +1083,7 @@ export class TurnExecutionManager {
       });
 
       if (!multimodalData && contentPartType) {
-        multimodalData = (await fs.readFile(diskPath)).toString("base64");
+        multimodalData = (await fs.readFile(contentReadPath)).toString("base64");
       }
 
       if (multimodalData && contentPartType) {
@@ -1107,40 +1122,54 @@ export class TurnExecutionManager {
     return config.uploadsDirectory ?? path.resolve(config.workingDirectory, "User Uploads");
   }
 
+  private async resolveUploadedAttachmentPath(
+    uploadedPath: string,
+  ): Promise<{ canonicalPath: string; stat: Awaited<ReturnType<typeof fs.stat>> }> {
+    const resolvedUploadsDir = path.resolve(this.getUploadsDirectory());
+    const diskPath = path.resolve(uploadedPath);
+    if (!isPathInside(resolvedUploadsDir, diskPath)) {
+      throw makeStructuredSessionError("validation_failed", "Uploaded file path is outside the uploads directory.");
+    }
+
+    try {
+      const [canonicalUploadsDir, canonicalPath, stat] = await Promise.all([
+        canonicalizeExistingPrefix(resolvedUploadsDir),
+        fs.realpath(diskPath),
+        fs.stat(diskPath),
+      ]);
+      if (!isPathInside(canonicalUploadsDir, canonicalPath)) {
+        throw makeStructuredSessionError("validation_failed", "Uploaded file path is outside the uploads directory.");
+      }
+      if (!stat.isFile()) {
+        throw makeStructuredSessionError("validation_failed", `Uploaded attachment is not a file: ${diskPath}`);
+      }
+      return { canonicalPath, stat };
+    } catch (error) {
+      if (classifyStructuredTurnError(error)) {
+        throw error;
+      }
+      throw makeStructuredSessionError("validation_failed", `Uploaded file does not exist: ${diskPath}`);
+    }
+  }
+
   private async validateUploadedFileAttachments(attachments?: readonly FileAttachment[]): Promise<void> {
     const uploadedAttachments = (attachments ?? []).filter(isUploadedFileAttachment);
     if (uploadedAttachments.length === 0) {
       return;
     }
 
-    const resolvedUploadsDir = path.resolve(this.getUploadsDirectory());
     const config = this.context.state.config;
     const multimodalUploadedByteLengths: number[] = [];
     const modelSupportsImages = supportsImageInput(config.provider, config.model);
     const isGoogleProvider = config.provider === "google";
     for (const attachment of uploadedAttachments) {
-      const diskPath = path.resolve(attachment.path);
-      if (!diskPath.startsWith(resolvedUploadsDir + path.sep)) {
-        throw makeStructuredSessionError("validation_failed", "Uploaded file path is outside the uploads directory.");
-      }
-      try {
-        await fs.access(diskPath);
-        const stat = await fs.stat(diskPath);
-        if (!stat.isFile()) {
-          throw makeStructuredSessionError("validation_failed", `Uploaded attachment is not a file: ${diskPath}`);
-        }
-        const contentPartType = getAttachmentContentPartType(attachment.mimeType, {
-          modelSupportsImages,
-          isGoogleProvider,
-        });
-        if (contentPartType) {
-          multimodalUploadedByteLengths.push(stat.size);
-        }
-      } catch (error) {
-        if (classifyStructuredTurnError(error)) {
-          throw error;
-        }
-        throw makeStructuredSessionError("validation_failed", `Uploaded file does not exist: ${diskPath}`);
+      const uploadedFile = await this.resolveUploadedAttachmentPath(attachment.path);
+      const contentPartType = getAttachmentContentPartType(attachment.mimeType, {
+        modelSupportsImages,
+        isGoogleProvider,
+      });
+      if (contentPartType) {
+        multimodalUploadedByteLengths.push(Number(uploadedFile.stat.size));
       }
     }
 

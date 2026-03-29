@@ -144,7 +144,7 @@ Useful commands include:
 
 ### Custom clients
 
-The WebSocket protocol is documented in [docs/websocket-protocol.md](docs/websocket-protocol.md). It covers much more than chat:
+The WebSocket protocol is documented in [docs/websocket-protocol.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/websocket-protocol.md). It covers much more than chat:
 
 - provider catalog, auth methods, auth callbacks, logout, and status
 - MCP server CRUD, validation, and auth
@@ -177,7 +177,7 @@ A few architectural boundaries matter:
 - Tools execute on the server in the workspace context.
 - Clients consume `ServerEvent`s and send `ClientMessage`s.
 
-If you want the exact wire contract, use [docs/websocket-protocol.md](docs/websocket-protocol.md). If you want the broader component map, use [docs/architecture.md](docs/architecture.md).
+If you want the exact wire contract, use [docs/websocket-protocol.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/websocket-protocol.md). If you want the broader component map, use [docs/architecture.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/architecture.md).
 
 ## Tools, skills, and MCP
 
@@ -206,7 +206,7 @@ Skills are instruction bundles rooted in `SKILL.md`. They are discovered from la
 3. `~/.agent/skills`
 4. built-in `skills/`
 
-Built-in curated skills currently cover document, PDF, slide, and spreadsheet workflows. See [docs/custom-tools.md](docs/custom-tools.md) if you want to extend the system further.
+Built-in curated skills currently cover document, PDF, slide, and spreadsheet workflows. See [docs/custom-tools.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/custom-tools.md) if you want to extend the system further.
 
 ### MCP
 
@@ -216,7 +216,7 @@ Cowork supports Model Context Protocol servers with layered config and auth:
 2. `~/.cowork/config/mcp-servers.json`
 3. `config/mcp-servers.json`
 
-Supported flows include stdio and HTTP/SSE transports plus API-key and OAuth auth modes. See [docs/mcp-guide.md](docs/mcp-guide.md).
+Supported flows include stdio and HTTP/SSE transports plus API-key and OAuth auth modes. See [docs/mcp-guide.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/mcp-guide.md).
 
 ## Persistence and safety
 
@@ -233,7 +233,7 @@ Safety model:
 - `--yolo` disables command approvals when you explicitly want that behavior
 - sessions can be checkpointed and restored through the protocol
 
-For the full storage model, see [docs/session-storage-architecture.md](docs/session-storage-architecture.md).
+For the full storage model, see [docs/session-storage-architecture.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/session-storage-architecture.md).
 
 ## Development
 
@@ -271,15 +271,15 @@ Notes:
 
 | Document | What it covers |
 | --- | --- |
-| [docs/websocket-protocol.md](docs/websocket-protocol.md) | Canonical WebSocket contract for custom clients |
-| [docs/architecture.md](docs/architecture.md) | Component-level system overview |
-| [docs/mcp-guide.md](docs/mcp-guide.md) | MCP setup, layering, and auth |
-| [docs/session-storage-architecture.md](docs/session-storage-architecture.md) | SQLite session storage and resume behavior |
-| [docs/custom-tools.md](docs/custom-tools.md) | Extending Cowork with custom tools |
-| [docs/harness/index.md](docs/harness/index.md) | Harness docs index |
-| [docs/harness/config.md](docs/harness/config.md) | Harness config precedence, env vars, and runtime flags |
-| [docs/harness/runbook.md](docs/harness/runbook.md) | Running harness scenarios and collecting artifacts |
-| [docs/harness/observability.md](docs/harness/observability.md) | Langfuse and observability wiring |
+| [docs/websocket-protocol.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/websocket-protocol.md) | Canonical WebSocket contract for custom clients |
+| [docs/architecture.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/architecture.md) | Component-level system overview |
+| [docs/mcp-guide.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/mcp-guide.md) | MCP setup, layering, and auth |
+| [docs/session-storage-architecture.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/session-storage-architecture.md) | SQLite session storage and resume behavior |
+| [docs/custom-tools.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/custom-tools.md) | Extending Cowork with custom tools |
+| [docs/harness/index.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/harness/index.md) | Harness docs index |
+| [docs/harness/config.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/harness/config.md) | Harness config precedence, env vars, and runtime flags |
+| [docs/harness/runbook.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/harness/runbook.md) | Running harness scenarios and collecting artifacts |
+| [docs/harness/observability.md](https://github.com/mweinbach/agent-coworker/blob/main/docs/harness/observability.md) | Langfuse and observability wiring |
 
 ## Status
 

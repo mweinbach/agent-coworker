@@ -1,5 +1,3 @@
-import { defaultModelForProvider } from "../config";
-import { createRuntime } from "../runtime";
 import type { AgentConfig } from "../types";
 
 const TITLE_MODEL_BY_PROVIDER: Partial<Record<AgentConfig["provider"], string>> = {
@@ -29,8 +27,8 @@ export type SessionTitleResult = {
 };
 
 type SessionTitleDeps = {
-  createRuntime: typeof createRuntime;
-  defaultModelForProvider: typeof defaultModelForProvider;
+  createRuntime: typeof import("../runtime").createRuntime;
+  defaultModelForProvider: typeof import("../providers/catalog").defaultModelForProvider;
 };
 
 function collapseWhitespace(value: string): string {
@@ -98,7 +96,7 @@ export function heuristicTitleFromQuery(query: string): string {
 function modelCandidatesForProvider(
   provider: AgentConfig["provider"],
   currentModel: string,
-  defaultModelForProviderImpl: typeof defaultModelForProvider
+  defaultModelForProviderImpl: SessionTitleDeps["defaultModelForProvider"]
 ): string[] {
   const candidates = [
     TITLE_MODEL_BY_PROVIDER[provider],
@@ -132,10 +130,27 @@ function buildTitlePrompt(query: string): string {
 }
 
 export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps> = {}) {
-  const deps: SessionTitleDeps = {
-    createRuntime,
-    defaultModelForProvider,
-    ...overrides,
+  let lazyDepsPromise: Promise<SessionTitleDeps> | null = null;
+
+  const getDeps = async (): Promise<SessionTitleDeps> => {
+    if (overrides.createRuntime && overrides.defaultModelForProvider) {
+      return {
+        createRuntime: overrides.createRuntime,
+        defaultModelForProvider: overrides.defaultModelForProvider,
+      };
+    }
+
+    if (!lazyDepsPromise) {
+      lazyDepsPromise = Promise.all([
+        import("../runtime"),
+        import("../providers/catalog"),
+      ]).then(([runtime, catalog]) => ({
+        createRuntime: overrides.createRuntime ?? runtime.createRuntime,
+        defaultModelForProvider: overrides.defaultModelForProvider ?? catalog.defaultModelForProvider,
+      }));
+    }
+
+    return await lazyDepsPromise;
   };
 
   return async function generateSessionTitle(opts: {
@@ -151,6 +166,7 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
       };
     }
 
+    const deps = await getDeps();
     const candidates = modelCandidatesForProvider(
       opts.config.provider,
       opts.config.model,

@@ -34,6 +34,87 @@ async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
   }
 }
 
+type PromptTemplateOverlaySpec = {
+  extends: string;
+  replacements?: Array<{ old: string; new: string }>;
+};
+
+function countOccurrences(haystack: string, needle: string): number {
+  if (!needle) return 0;
+  let count = 0;
+  let start = 0;
+  while (true) {
+    const found = haystack.indexOf(needle, start);
+    if (found === -1) {
+      return count;
+    }
+    count += 1;
+    start = found + needle.length;
+  }
+}
+
+function parsePromptTemplateOverlaySpec(raw: string, templatePath: string): PromptTemplateOverlaySpec {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Invalid JSON in prompt template overlay ${templatePath}: ${String(error)}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Prompt template overlay must contain a JSON object: ${templatePath}`);
+  }
+  const overlay = parsed as { extends?: unknown; replacements?: unknown };
+  if (typeof overlay.extends !== "string" || overlay.extends.trim().length === 0) {
+    throw new Error(`Prompt template overlay must include a non-empty string \"extends\": ${templatePath}`);
+  }
+  if (overlay.replacements !== undefined && !Array.isArray(overlay.replacements)) {
+    throw new Error(`Prompt template overlay replacements must be an array: ${templatePath}`);
+  }
+  const replacements = (overlay.replacements ?? []).map((replacement, index) => {
+    if (!replacement || typeof replacement !== "object" || Array.isArray(replacement)) {
+      throw new Error(`Prompt template overlay replacement ${index} must be an object: ${templatePath}`);
+    }
+    const candidate = replacement as { old?: unknown; new?: unknown };
+    if (typeof candidate.old !== "string" || typeof candidate.new !== "string") {
+      throw new Error(`Prompt template overlay replacement ${index} must include string old/new values: ${templatePath}`);
+    }
+    return { old: candidate.old, new: candidate.new };
+  });
+  return {
+    extends: overlay.extends,
+    ...(replacements.length > 0 ? { replacements } : {}),
+  };
+}
+
+async function loadPromptTemplate(templatePath: string, ancestors = new Set<string>()): Promise<string> {
+  const resolvedTemplatePath = path.resolve(templatePath);
+  if (ancestors.has(resolvedTemplatePath)) {
+    throw new Error(`Prompt template overlay cycle detected at ${resolvedTemplatePath}`);
+  }
+
+  const raw = await fs.readFile(resolvedTemplatePath, "utf-8");
+  if (!resolvedTemplatePath.endsWith(".json")) {
+    return raw;
+  }
+
+  const overlay = parsePromptTemplateOverlaySpec(raw, resolvedTemplatePath);
+  const nextAncestors = new Set(ancestors);
+  nextAncestors.add(resolvedTemplatePath);
+  let prompt = await loadPromptTemplate(path.resolve(path.dirname(resolvedTemplatePath), overlay.extends), nextAncestors);
+
+  for (const replacement of overlay.replacements ?? []) {
+    const occurrences = countOccurrences(prompt, replacement.old);
+    if (occurrences !== 1) {
+      throw new Error(
+        `Prompt template overlay replacement must match exactly once in ${overlay.extends}; got ${occurrences} matches in ${resolvedTemplatePath}`,
+      );
+    }
+    prompt = prompt.replace(replacement.old, replacement.new);
+  }
+
+  return prompt;
+}
+
 function stripPromptLine(prompt: string, matcher: RegExp): string {
   return prompt
     .split("\n")
@@ -340,7 +421,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
     log: (line) => console.warn(line),
   });
   const systemPath = await resolveSystemTemplatePath(config);
-  let prompt = await fs.readFile(systemPath, "utf-8");
+  let prompt = await loadPromptTemplate(systemPath);
 
   const skills = await discoverSkills(config.skillsDirs);
 

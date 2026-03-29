@@ -119,20 +119,18 @@ function expectWebFetchDownloadGuidance(prompt: string) {
   expect(normalized).toContain("markdown");
 }
 
-const IMAGE_GUIDANCE_PROMPT_FILES = [
-  "prompts/system.md",
-  "prompts/system-models/gpt-5.2.md",
-  "prompts/system-models/gpt-5.2.md",
-  "prompts/system-models/claude-haiku-4-5.md",
-  "prompts/system-models/claude-sonnet-4-6.md",
-  "prompts/system-models/claude-opus-4-6.md",
-  "prompts/system-models/gemini-3-flash-preview.md",
-  "prompts/system-models/gemini-3.1-pro-preview.md",
+const IMAGE_GUIDANCE_PROMPT_CONFIGS = [
+  { provider: "opencode-go", model: "kimi-k2.5", preferredChildModel: "kimi-k2.5" },
+  { provider: "openai", model: "gpt-5.2", preferredChildModel: "gpt-5.2" },
+  { provider: "anthropic", model: "claude-haiku-4-5", preferredChildModel: "claude-haiku-4-5" },
+  { provider: "anthropic", model: "claude-sonnet-4-6", preferredChildModel: "claude-sonnet-4-6" },
+  { provider: "anthropic", model: "claude-opus-4-6", preferredChildModel: "claude-opus-4-6" },
+  { provider: "google", model: "gemini-3-flash-preview", preferredChildModel: "gemini-3-flash-preview" },
+  { provider: "google", model: "gemini-3.1-pro-preview", preferredChildModel: "gemini-3.1-pro-preview" },
 ] as const;
 
-const WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_FILES = [
-  ...IMAGE_GUIDANCE_PROMPT_FILES,
-  "prompts/system-models/gemini-3.1-pro-preview.md",
+const WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_CONFIGS = [
+  ...IMAGE_GUIDANCE_PROMPT_CONFIGS,
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -378,8 +376,14 @@ describe("loadSystemPrompt", () => {
       "DEFAULT SYSTEM TEMPLATE {{modelName}}"
     );
     await writeFile(
-      path.join(builtIn, "prompts", "system-models", "gpt-5.4.md"),
-      "GPT-5.4 SYSTEM TEMPLATE {{modelName}}"
+      path.join(builtIn, "prompts", "system-models", "gpt-5.4.json"),
+      JSON.stringify({
+        extends: "../system.md",
+        replacements: [{
+          old: "DEFAULT SYSTEM TEMPLATE {{modelName}}",
+          new: "GPT-5.4 SYSTEM TEMPLATE {{modelName}}",
+        }],
+      }, null, 2),
     );
 
     const config = makeConfig({
@@ -402,8 +406,14 @@ describe("loadSystemPrompt", () => {
       "DEFAULT SYSTEM TEMPLATE {{modelName}}"
     );
     await writeFile(
-      path.join(builtIn, "prompts", "system-models", "gpt-5.4.md"),
-      "Base system prompt.\nMini marker.",
+      path.join(builtIn, "prompts", "system-models", "gpt-5.4.json"),
+      JSON.stringify({
+        extends: "../system.md",
+        replacements: [{
+          old: "DEFAULT SYSTEM TEMPLATE {{modelName}}",
+          new: "Base system prompt.\nMini marker.",
+        }],
+      }, null, 2),
     );
 
     const prompt = await loadSystemPrompt(
@@ -433,6 +443,9 @@ describe("loadSystemPrompt", () => {
     expectNoWorkspacePackageScaffoldingGuidance(prompt);
     expectImageInspectionGuidance(prompt);
     expectWebFetchDownloadGuidance(prompt);
+    expect(prompt).toContain("prefer the native search/open/find tool");
+    expect(prompt).toContain("unless provider-native citations already cover them");
+    expect(prompt).toContain("Do not create extra staging files or helper folders");
   });
 
   test("real gpt-5.2 prompt includes workspace hygiene and shell-first guidance", async () => {
@@ -463,16 +476,22 @@ describe("loadSystemPrompt", () => {
     expectWebFetchDownloadGuidance(prompt);
   });
 
-  test("all shipped prompt files that document read/webFetch include image inspection guidance", async () => {
-    for (const relPath of IMAGE_GUIDANCE_PROMPT_FILES) {
-      const prompt = await fs.readFile(path.join(repoRoot(), relPath), "utf-8");
+  test("all shipped prompt templates that document read/webFetch include image inspection guidance", async () => {
+    for (const overrides of IMAGE_GUIDANCE_PROMPT_CONFIGS) {
+      const prompt = await loadSystemPrompt(makeConfig({
+        ...overrides,
+        skillsDirs: ["/nonexistent/skills"],
+      }));
       expectImageInspectionGuidance(prompt);
     }
   });
 
-  test("all shipped prompt files that document webFetch include download guidance", async () => {
-    for (const relPath of WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_FILES) {
-      const prompt = await fs.readFile(path.join(repoRoot(), relPath), "utf-8");
+  test("all shipped prompt templates that document webFetch include download guidance", async () => {
+    for (const overrides of WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_CONFIGS) {
+      const prompt = await loadSystemPrompt(makeConfig({
+        ...overrides,
+        skillsDirs: ["/nonexistent/skills"],
+      }));
       expectWebFetchDownloadGuidance(prompt);
     }
   });
@@ -503,8 +522,14 @@ describe("loadSystemPrompt", () => {
 
     await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
     await writeFile(
-      path.join(builtIn, "prompts", "system-models", "claude-opus-4-6.md"),
-      "OPUS TEMPLATE {{modelName}}"
+      path.join(builtIn, "prompts", "system-models", "claude-opus-4-6.json"),
+      JSON.stringify({
+        extends: "../system.md",
+        replacements: [{
+          old: "DEFAULT {{modelName}}",
+          new: "OPUS TEMPLATE {{modelName}}",
+        }],
+      }, null, 2),
     );
 
     const config = makeConfig({
@@ -538,6 +563,20 @@ describe("loadSystemPrompt", () => {
 
     expect(prompt).toContain("SONNET TEMPLATE Claude Sonnet 4.6");
     expect(prompt).not.toContain("DEFAULT");
+  });
+
+  test("real Claude Haiku 4.5 prompt keeps its speed-focused guidance", async () => {
+    const prompt = await loadSystemPrompt(makeConfig({
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      preferredChildModel: "claude-haiku-4-5",
+      skillsDirs: ["/nonexistent/skills"],
+    }));
+
+    expect(prompt).toContain("You prioritize speed and conciseness while maintaining accuracy.");
+    expect(prompt).toContain("<thinking_process>");
+    expect(prompt).toContain("Use XML tags in your output when producing structured results");
+    expect(prompt).not.toContain("<opus_reasoning>");
   });
 
   test("falls back to default system template when model template is missing", async () => {

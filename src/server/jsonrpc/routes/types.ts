@@ -78,6 +78,7 @@ export interface JsonRpcRouteContext {
       cwd: string,
       runner: (binding: SessionBinding, session: AgentSession) => Promise<T>,
     ): Promise<T>;
+    readState(cwd: string): ServerEvent[];
   };
   journal: {
     enqueue(event: Omit<PersistedThreadJournalEvent, "seq">): Promise<unknown>;

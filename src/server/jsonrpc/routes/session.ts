@@ -40,10 +40,8 @@ export function createSessionRouteHandlers(
     "cowork/session/state/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      await context.workspaceControl.withSession(cwd, async (_binding, session) => {
-        context.jsonrpc.sendResult(ws, message.id, {
-          events: context.utils.buildControlSessionStateEvents(session),
-        });
+      context.jsonrpc.sendResult(ws, message.id, {
+        events: context.workspaceControl.readState(cwd),
       });
     },
 

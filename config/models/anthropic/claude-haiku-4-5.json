@@ -4,7 +4,7 @@
   "displayName": "Claude Haiku 4.5",
   "knowledgeCutoff": "February 2025",
   "supportsImageInput": true,
-  "promptTemplate": "system-models/claude-haiku-4-5.md",
+  "promptTemplate": "system-models/claude-haiku-4-5.json",
   "providerOptionsDefaults": {
     "thinking": {
       "type": "enabled",

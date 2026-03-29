@@ -32,7 +32,7 @@ describe("mobile relay IPC", () => {
     getAllWindowsMock.mockClear();
   });
 
-  test("logs workspace cache refresh failures instead of swallowing them", async () => {
+  test("throws workspace list errors when cache refresh fails", async () => {
     let workspaceListProvider: (() => Promise<unknown[]>) | null = null;
     const loadState = mock(async () => {
       throw new Error("disk offline");
@@ -66,13 +66,13 @@ describe("mobile relay IPC", () => {
 
       await flushMicrotasks();
 
-      const result = await workspaceListProvider?.();
+      expect(workspaceListProvider).toBeTruthy();
+      await expect(workspaceListProvider?.()).rejects.toThrow("Could not load workspace list: disk offline");
 
       expect(loadState).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(
         "[desktop] Failed to refresh mobile relay workspace cache during initial load: disk offline",
       );
-      expect(result).toEqual([]);
     } finally {
       console.warn = originalWarn;
     }

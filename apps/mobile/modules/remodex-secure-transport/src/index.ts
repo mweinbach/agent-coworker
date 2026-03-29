@@ -81,6 +81,8 @@ type PersistedPhoneIdentity = {
 
 type PersistedTrustedMacRecord = RemodexTrustedMacSummary & {
   lastSessionId: string | null;
+  lastOutboundCounter: number;
+  lastInboundCounter: number;
 };
 
 type PersistedRelayTransportState = {
@@ -158,6 +160,10 @@ function normalizeNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function normalizeNonNegativeCounter(value: unknown): number {
+  return Number.isSafeInteger(value) && typeof value === "number" && value >= 0 ? value : 0;
+}
+
 function normalizeRelayUrl(value: string): string {
   return value.replace(/\/+$/, "");
 }
@@ -189,6 +195,8 @@ function cloneTrustedMacRecord(record: PersistedTrustedMacRecord): PersistedTrus
     displayName: record.displayName,
     lastResolvedAt: record.lastResolvedAt,
     lastSessionId: record.lastSessionId,
+    lastOutboundCounter: record.lastOutboundCounter,
+    lastInboundCounter: record.lastInboundCounter,
   };
 }
 
@@ -230,6 +238,8 @@ function normalizePersistedTrustedMacRecord(value: unknown): PersistedTrustedMac
     displayName: normalizeNonEmptyString(record.displayName),
     lastResolvedAt: normalizeNonEmptyString(record.lastResolvedAt),
     lastSessionId: normalizeNonEmptyString(record.lastSessionId),
+    lastOutboundCounter: normalizeNonNegativeCounter(record.lastOutboundCounter),
+    lastInboundCounter: normalizeNonNegativeCounter(record.lastInboundCounter),
   };
 }
 
@@ -970,6 +980,8 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   private queuedOutboundMessages: string[] = [];
   private queuedInboundPlaintextMessages: string[] = [];
   private secureFinalizePromise: Promise<RemodexSecureTransportState> | null = null;
+  private replayCounterPersistPending = false;
+  private replayCounterPersistInFlight = false;
 
   private emitStateChanged(): void {
     (this as unknown as { emit: (eventName: "stateChanged", payload: RemodexSecureTransportState) => void }).emit(
@@ -1051,6 +1063,73 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
     return trustedMacs;
   }
 
+  private queuePersistReplayCounters(): void {
+    this.replayCounterPersistPending = true;
+    if (this.replayCounterPersistInFlight) {
+      return;
+    }
+    this.replayCounterPersistInFlight = true;
+    void this.flushPersistReplayCounters();
+  }
+
+  private async flushPersistReplayCounters(): Promise<void> {
+    try {
+      while (this.replayCounterPersistPending) {
+        this.replayCounterPersistPending = false;
+        await this.persistReplayCountersOnce();
+      }
+    } finally {
+      this.replayCounterPersistInFlight = false;
+      if (this.replayCounterPersistPending) {
+        this.replayCounterPersistInFlight = true;
+        void this.flushPersistReplayCounters();
+      }
+    }
+  }
+
+  private async persistReplayCountersOnce(): Promise<void> {
+    const target = this.currentTarget;
+    const sessionId = target?.lastSessionId;
+    if (!target || !sessionId) {
+      return;
+    }
+    const persistedState = await this.readPersistedState();
+    const targetIndex = persistedState.trustedMacs.findIndex((entry) => entry.macDeviceId === target.macDeviceId);
+    if (targetIndex < 0) {
+      return;
+    }
+    const existingRecord = persistedState.trustedMacs[targetIndex];
+    if (!existingRecord || existingRecord.lastSessionId !== sessionId) {
+      return;
+    }
+    const nextOutboundCounter = Math.max(existingRecord.lastOutboundCounter, this.outboundCounter);
+    const nextInboundCounter = Math.max(existingRecord.lastInboundCounter, this.lastInboundCounter);
+    if (
+      nextOutboundCounter === existingRecord.lastOutboundCounter
+      && nextInboundCounter === existingRecord.lastInboundCounter
+    ) {
+      return;
+    }
+    const updatedRecord: PersistedTrustedMacRecord = {
+      ...existingRecord,
+      lastOutboundCounter: nextOutboundCounter,
+      lastInboundCounter: nextInboundCounter,
+    };
+    const trustedMacs = [...persistedState.trustedMacs];
+    trustedMacs[targetIndex] = updatedRecord;
+    await this.writePersistedState({
+      ...persistedState,
+      trustedMacs,
+    });
+    if (
+      this.currentTarget
+      && this.currentTarget.macDeviceId === updatedRecord.macDeviceId
+      && this.currentTarget.lastSessionId === updatedRecord.lastSessionId
+    ) {
+      this.currentTarget = updatedRecord;
+    }
+  }
+
   private setState(
     nextState: Partial<RemodexSecureTransportState>,
     options: { emitSecureError?: string | null } = {},
@@ -1116,6 +1195,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
       plaintext: text,
     });
     this.socket.send(JSON.stringify(envelope));
+    this.queuePersistReplayCounters();
     return true;
   }
 
@@ -1208,15 +1288,22 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
           this.emitProtocolError("The desktop relay identity changed unexpectedly.");
           return { handled: true, connected: false };
         }
+        const sessionId = message.registration.sessionId ?? this.state.sessionId;
+        const preserveReplayCounters = Boolean(sessionId && currentTarget.lastSessionId === sessionId);
         const updatedRecord: PersistedTrustedMacRecord = {
           macDeviceId: message.registration.macDeviceId,
           macIdentityPublicKey: message.registration.macIdentityPublicKey,
           relay,
           displayName: message.registration.displayName,
           lastResolvedAt: nowIso(),
-          lastSessionId: message.registration.sessionId ?? this.state.sessionId,
+          lastSessionId: sessionId,
+          lastOutboundCounter: preserveReplayCounters
+            ? Math.max(currentTarget.lastOutboundCounter, this.outboundCounter)
+            : 0,
+          lastInboundCounter: preserveReplayCounters
+            ? Math.max(currentTarget.lastInboundCounter, this.lastInboundCounter)
+            : 0,
         };
-        const sessionId = updatedRecord.lastSessionId ?? this.state.sessionId;
         if (!sessionId) {
           this.emitProtocolError("The desktop relay session id is unavailable.");
           return { handled: true, connected: false };
@@ -1294,7 +1381,12 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
       throw new Error("Secure relay handshake is incomplete.");
     }
     const finalizePromise = (async () => {
-      const trustedMacs = await this.upsertTrustedMacRecord(target);
+      const replayAwareTarget: PersistedTrustedMacRecord = {
+        ...target,
+        lastOutboundCounter: Math.max(target.lastOutboundCounter, this.outboundCounter),
+        lastInboundCounter: Math.max(target.lastInboundCounter, this.lastInboundCounter),
+      };
+      const trustedMacs = await this.upsertTrustedMacRecord(replayAwareTarget);
       if (
         !this.socket
         || !this.currentTarget
@@ -1303,6 +1395,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
       ) {
         return this.state;
       }
+      this.currentTarget = replayAwareTarget;
       this.currentPairingSecret = null;
       this.secureChannelReady = true;
       this.reconnectAttempts = 0;
@@ -1332,12 +1425,23 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
 
   private async openSocket(target: PersistedTrustedMacRecord, sessionId: string): Promise<RemodexSecureTransportState> {
     const phoneIdentity = await this.ensurePhoneIdentity();
-    const preserveReplayCounters = this.state.status === "reconnecting"
+    const preserveInMemoryReplayCounters = this.state.status === "reconnecting"
       && this.currentTarget?.macDeviceId === target.macDeviceId
       && this.currentTarget?.lastSessionId === sessionId;
+    const preservePersistedReplayCounters = target.lastSessionId === sessionId
+      && (target.lastOutboundCounter > 0 || target.lastInboundCounter > 0);
+    const preserveReplayCounters = preserveInMemoryReplayCounters || preservePersistedReplayCounters;
     this.disconnecting = true;
     this.clearReconnectTimer();
     this.resetSecureChannel({ clearQueue: false, resetCounters: !preserveReplayCounters });
+    if (preserveReplayCounters) {
+      this.outboundCounter = preserveInMemoryReplayCounters
+        ? Math.max(this.outboundCounter, target.lastOutboundCounter)
+        : target.lastOutboundCounter;
+      this.lastInboundCounter = preserveInMemoryReplayCounters
+        ? Math.max(this.lastInboundCounter, target.lastInboundCounter)
+        : target.lastInboundCounter;
+    }
     const previousSocket = this.socket;
     this.socket = null;
     previousSocket?.close();
@@ -1434,6 +1538,7 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
             return;
           }
           this.lastInboundCounter = decoded.envelope.counter;
+          this.queuePersistReplayCounters();
           if (!this.secureChannelReady) {
             if (!isRelayHandshakeProofPayload(decoded.plaintext)) {
               if (this.secureFinalizePromise) {
@@ -1544,7 +1649,12 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
   }
 
   async listTrustedMacs(): Promise<RemodexTrustedMacSummary[]> {
-    return (await this.listTrustedMacRecords()).map(({ lastSessionId: _lastSessionId, ...record }) => record);
+    return (await this.listTrustedMacRecords()).map(({
+      lastSessionId: _lastSessionId,
+      lastOutboundCounter: _lastOutboundCounter,
+      lastInboundCounter: _lastInboundCounter,
+      ...record
+    }) => record);
   }
 
   async forgetTrustedMac(macDeviceId: string): Promise<RemodexSecureTransportState> {
@@ -1583,6 +1693,8 @@ class RemodexSecureTransportRelay extends EventEmitter<RemodexSecureTransportEve
       displayName: "Desktop bridge",
       lastResolvedAt: nowIso(),
       lastSessionId: sessionId,
+      lastOutboundCounter: 0,
+      lastInboundCounter: 0,
     }, sessionId);
   }
 

@@ -1056,6 +1056,75 @@ describe("mobile relay bridge", () => {
     });
   });
 
+  test("returns a bridge error when workspace list provider throws", async () => {
+    const bridge = new MobileRelayBridge({
+      serverManager: new FakeServerManager() as never,
+      userDataPath: userDataDir,
+      remodexStateDir,
+      getAppName: () => "Cowork Test",
+      getWorkspaceList: () => {
+        throw new Error("workspace cache unavailable");
+      },
+      createSidecarSocket: () => {
+        queueMicrotask(() => {
+          sidecarSocket.open();
+        });
+        return sidecarSocket;
+      },
+      createRelaySocket: () => {
+        const socket = new FakeSocket();
+        relaySockets.push(socket);
+        queueMicrotask(() => {
+          socket.open();
+        });
+        return socket;
+      },
+    });
+
+    await bridge.start({
+      workspaceId: "ws_1",
+      workspacePath: "/tmp/workspace",
+      yolo: false,
+    });
+    const relaySocket = relaySockets.at(-1)!;
+    const phoneKeyPair = managedFixture.phone1KeyPair;
+    emitPhoneHandshake(relaySocket, "phone-1", phoneKeyPair, {
+      macIdentityPublicKey: managedFixture.macKeyPair.publicKeyBase64,
+      pairingPayload: bridge.getSnapshot().pairingPayload,
+    });
+    await waitForRelaySnapshot(
+      bridge,
+      (snapshot) => snapshot.status === "connected",
+    );
+
+    const sharedKey = createRelaySharedKey(
+      phoneKeyPair.privateKeyBase64,
+      managedFixture.macKeyPair.publicKeyBase64,
+      bridge.getSnapshot().sessionId!,
+    );
+    relaySocket.emitMessage(JSON.stringify(encodeRelaySecureEnvelope({
+      sharedKey,
+      sender: "phone",
+      counter: 2,
+      plaintext: JSON.stringify({
+        id: 9,
+        method: "workspace/list",
+        params: {},
+      }),
+    })));
+
+    await waitForRelaySnapshot(bridge, (snapshot) => snapshot.status === "connected");
+    const responseText = decodeLastSecureEnvelope(relaySocket, sharedKey);
+    expect(responseText).toBeTruthy();
+    expect(JSON.parse(responseText ?? "{}")).toEqual({
+      id: 9,
+      error: {
+        code: -32000,
+        message: "workspace cache unavailable",
+      },
+    });
+  });
+
   test("rejects encrypted application payloads before handshake proof completes", async () => {
     const bridge = new MobileRelayBridge({
       serverManager: new FakeServerManager() as never,

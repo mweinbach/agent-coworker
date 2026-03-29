@@ -81,6 +81,9 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
     // If cache is empty or stale, wait for refresh to complete before returning
     if (cachedWorkspaces.length === 0 || now - cacheTimestamp > CACHE_TTL_MS) {
       await refreshWorkspaceCache("workspace list request");
+      if (lastWorkspaceCacheError) {
+        throw new Error(`Could not load workspace list: ${lastWorkspaceCacheError}`);
+      }
     }
     return toBridgeWorkspaceRecords(cachedWorkspaces);
   }, invalidateWorkspaceCache);

@@ -1105,7 +1105,11 @@ export function ChatView() {
           </ConversationContent>
         </Conversation>
 
-        <div className="relative flex shrink-0 flex-col bg-panel px-4 pb-3 pt-2" style={{ minHeight: messageBarHeight }}>
+        <div
+          className="relative flex shrink-0 flex-col bg-panel px-4 pb-3 pt-2"
+          // The stored messageBarHeight is the minimum floor; busy guidance and attachments can grow past it.
+          style={{ minHeight: messageBarHeight }}
+        >
           <MessageBarResizer />
           <PromptInputRoot
             className="max-w-[70rem]"

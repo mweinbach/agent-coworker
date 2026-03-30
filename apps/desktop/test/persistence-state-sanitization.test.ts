@@ -178,6 +178,9 @@ describe("desktop persistence state validation", () => {
       developerMode: false,
       showHiddenFiles: false,
       providerUiState: {
+        awsBedrockProxy: {
+          enabled: false,
+        },
         lmstudio: {
           enabled: true,
           hiddenModels: ["llama-3.2-vision"],
@@ -187,6 +190,9 @@ describe("desktop persistence state validation", () => {
 
     const loaded = await persistence.loadState();
     expect(loaded.providerUiState).toEqual({
+      awsBedrockProxy: {
+        enabled: false,
+      },
       lmstudio: {
         enabled: true,
         hiddenModels: ["llama-3.2-vision"],
@@ -233,8 +239,51 @@ describe("desktop persistence state validation", () => {
     });
 
     const loaded = await persistence.loadState();
+    expect(loaded.providerUiState?.awsBedrockProxy.enabled).toBe(true);
     expect(loaded.providerUiState?.lmstudio.enabled).toBe(true);
     expect(loaded.providerUiState?.lmstudio.hiddenModels).toEqual([]);
+  });
+
+  test("loadState defaults AWS Bedrock Proxy UI visibility to enabled and sanitizes invalid values", async () => {
+    const persistence = new PersistenceService();
+    const validWorkspace = path.join(userDataDir, "workspace-bedrock-default");
+    await fs.mkdir(validWorkspace, { recursive: true });
+
+    const statePath = path.join(userDataDir, "state.json");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 2,
+          workspaces: [
+            {
+              id: "ws_bedrock_default",
+              name: "Bedrock workspace",
+              path: validWorkspace,
+              createdAt: TS,
+              lastOpenedAt: TS,
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: true,
+              yolo: false,
+            },
+          ],
+          threads: [],
+          developerMode: false,
+          showHiddenFiles: false,
+          providerUiState: {
+            awsBedrockProxy: {
+              enabled: "nope",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const loaded = await persistence.loadState();
+    expect(loaded.providerUiState?.awsBedrockProxy.enabled).toBe(true);
   });
 
   test("saveState preserves workspace tool output overflow defaults", async () => {
@@ -329,6 +378,57 @@ describe("desktop persistence state validation", () => {
       instructions: "Keep answers terse.",
       work: "Platform engineer",
       details: "Prefers Bun",
+    });
+  });
+
+  test("saveState preserves aws bedrock proxy workspace provider options", async () => {
+    const persistence = new PersistenceService();
+    const bedrockWorkspace = path.join(userDataDir, "workspace-bedrock-provider-options");
+    await fs.mkdir(bedrockWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_bedrock_provider_options",
+          name: "Bedrock provider options workspace",
+          path: bedrockWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          providerOptions: {
+            "aws-bedrock-proxy": {
+              reasoningEffort: "high",
+              reasoningSummary: "detailed",
+              textVerbosity: "medium",
+              baseUrl: "https://bedrock-proxy.example.com",
+              promptCaching: {
+                enabled: true,
+                ttl: "1h",
+              },
+            },
+          },
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.workspaces[0]?.providerOptions).toEqual({
+      "aws-bedrock-proxy": {
+        reasoningEffort: "high",
+        reasoningSummary: "detailed",
+        textVerbosity: "medium",
+        baseUrl: "https://bedrock-proxy.example.com",
+        promptCaching: {
+          enabled: true,
+          ttl: "1h",
+        },
+      },
     });
   });
 
@@ -523,6 +623,9 @@ describe("desktop persistence state validation", () => {
       showHiddenFiles: false,
       perWorkspaceSettings: false,
       providerUiState: {
+        awsBedrockProxy: {
+          enabled: true,
+        },
         lmstudio: {
           enabled: false,
           hiddenModels: [],

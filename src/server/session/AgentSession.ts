@@ -7,7 +7,7 @@ import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import type { getProviderStatuses } from "../../providerStatus";
 import { defaultSupportedModel, getSupportedModel } from "../../models/registry";
-import { getKnownResolvedModelMetadata, isDynamicModelProvider } from "../../models/metadata";
+import { isDynamicModelProvider } from "../../models/metadata";
 import { MemoryStore, type MemoryScope } from "../../memoryStore";
 import { getAiCoworkerPaths } from "../../store/connections";
 import type {
@@ -46,6 +46,8 @@ import type {
   HydratedSessionState,
   PersistedModelSelection,
   PersistedProjectConfigPatch,
+  PersistedUserConfigPatch,
+  PersistedUserConfigState,
   SeededSessionContext,
   SessionBackupFactory,
   SessionContext,
@@ -53,7 +55,7 @@ import type {
   SessionInfoState,
   SessionRuntimeState,
 } from "./SessionContext";
-import type { SessionConfigPatch } from "../protocol";
+import type { SessionConfigPatch, UserConfigPatch } from "../protocol";
 import { SessionMetadataManager } from "./SessionMetadataManager";
 import { SessionRuntimeSupport } from "./SessionRuntimeSupport";
 import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
@@ -301,6 +303,8 @@ export class AgentSession {
     runTurnImpl?: typeof runTurn;
     persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
     persistProjectConfigPatchImpl?: (patch: PersistedProjectConfigPatch) => Promise<void> | void;
+    readUserConfigImpl?: () => Promise<PersistedUserConfigState> | PersistedUserConfigState;
+    persistUserConfigPatchImpl?: (patch: PersistedUserConfigPatch) => Promise<PersistedUserConfigState>;
     generateSessionTitleImpl?: typeof generateSessionTitle;
     sessionDb?: SessionDb | null;
     writePersistedSessionSnapshotImpl?: typeof writePersistedSessionSnapshot;
@@ -412,6 +416,8 @@ export class AgentSession {
       runTurnImpl: opts.runTurnImpl ?? lazyRunTurn,
       persistModelSelectionImpl: opts.persistModelSelectionImpl,
       persistProjectConfigPatchImpl: opts.persistProjectConfigPatchImpl,
+      readUserConfigImpl: opts.readUserConfigImpl,
+      persistUserConfigPatchImpl: opts.persistUserConfigPatchImpl,
       generateSessionTitleImpl: opts.generateSessionTitleImpl ?? lazyGenerateSessionTitle,
       sessionDb: opts.sessionDb ?? null,
       writePersistedSessionSnapshotImpl: opts.writePersistedSessionSnapshotImpl ?? writePersistedSessionSnapshot,
@@ -654,6 +660,8 @@ export class AgentSession {
     runTurnImpl?: typeof runTurn;
     persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
     persistProjectConfigPatchImpl?: (patch: PersistedProjectConfigPatch) => Promise<void> | void;
+    readUserConfigImpl?: () => Promise<PersistedUserConfigState> | PersistedUserConfigState;
+    persistUserConfigPatchImpl?: (patch: PersistedUserConfigPatch) => Promise<PersistedUserConfigState>;
     generateSessionTitleImpl?: typeof generateSessionTitle;
     sessionDb?: SessionDb | null;
     writePersistedSessionSnapshotImpl?: typeof writePersistedSessionSnapshot;
@@ -674,14 +682,17 @@ export class AgentSession {
     initialSessionSnapshot?: SessionSnapshot | null;
   }): AgentSession {
     const { persisted } = opts;
-    const resolvedPersistedModel = getKnownResolvedModelMetadata(persisted.provider, persisted.model);
-    const resumedModel = resolvedPersistedModel ?? defaultSupportedModel(persisted.provider);
-    const migratedLegacyModel = resolvedPersistedModel === null && !isDynamicModelProvider(persisted.provider);
+    const dynamicProvider = isDynamicModelProvider(persisted.provider);
+    const supportedPersistedModel = dynamicProvider ? null : getSupportedModel(persisted.provider, persisted.model);
+    const resumedModelId = dynamicProvider
+      ? persisted.model
+      : (supportedPersistedModel ?? defaultSupportedModel(persisted.provider)).id;
+    const migratedLegacyModel = dynamicProvider ? false : supportedPersistedModel === null;
     const clearedContinuationState = migratedLegacyModel && persisted.providerState !== null;
     const config: AgentConfig = {
       ...opts.baseConfig,
       provider: persisted.provider,
-      model: resumedModel.id,
+      model: resumedModelId,
       workingDirectory: persisted.workingDirectory,
       enableMcp: persisted.enableMcp,
       outputDirectory: persisted.outputDirectory,
@@ -696,7 +707,7 @@ export class AgentSession {
       createdAt: persisted.createdAt,
       updatedAt: persisted.updatedAt,
       provider: persisted.provider,
-      model: resumedModel.id,
+      model: resumedModelId,
       sessionKind: persisted.sessionKind,
       ...(persisted.parentSessionId ? { parentSessionId: persisted.parentSessionId } : {}),
       ...(persisted.role ? { role: persisted.role } : {}),
@@ -726,6 +737,8 @@ export class AgentSession {
       runTurnImpl: opts.runTurnImpl,
       persistModelSelectionImpl: opts.persistModelSelectionImpl,
       persistProjectConfigPatchImpl: opts.persistProjectConfigPatchImpl,
+      readUserConfigImpl: opts.readUserConfigImpl,
+      persistUserConfigPatchImpl: opts.persistUserConfigPatchImpl,
       generateSessionTitleImpl: opts.generateSessionTitleImpl,
       sessionDb: opts.sessionDb,
       writePersistedSessionSnapshotImpl: opts.writePersistedSessionSnapshotImpl,
@@ -764,7 +777,7 @@ export class AgentSession {
       opts.emit({
         type: "log",
         sessionId: persisted.sessionId,
-        line: `[session] Resumed legacy session using unsupported model "${persisted.model}" for provider ${persisted.provider}; migrated to "${resumedModel.id}".${clearedContinuationState ? " Cleared saved continuation state for the old model." : ""}`,
+        line: `[session] Resumed legacy session using unsupported model "${persisted.model}" for provider ${persisted.provider}; migrated to "${resumedModelId}".${clearedContinuationState ? " Cleared saved continuation state for the old model." : ""}`,
       });
     }
 
@@ -1310,6 +1323,14 @@ export class AgentSession {
 
   emitProviderAuthMethods() {
     this.getProviderCatalogManager().emitProviderAuthMethods();
+  }
+
+  async emitUserConfig() {
+    await this.metadataManager.emitUserConfig();
+  }
+
+  async setUserConfig(patch: UserConfigPatch) {
+    await this.metadataManager.setUserConfig(patch);
   }
 
   async authorizeProviderAuth(providerRaw: AgentConfig["provider"], methodIdRaw: string) {

@@ -36,6 +36,14 @@ export function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function asAwsBedrockProxyPromptCachingTtl(value: unknown): "5m" | "1h" | undefined {
+  return value === "5m" || value === "1h" ? value : undefined;
+}
+
 export function asNonEmptyStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const next = value
@@ -99,7 +107,11 @@ export function buildPiStreamOptions(
 
   const providerSection = providerSectionForPi(params.config.provider, params.providerOptions);
 
-  if (params.config.provider === "openai" || params.config.provider === "codex-cli") {
+  if (
+    params.config.provider === "openai"
+    || params.config.provider === "codex-cli"
+    || params.config.provider === "aws-bedrock-proxy"
+  ) {
     const reasoningEffort = asNonEmptyString(providerSection.reasoningEffort);
     if (reasoningEffort) options.reasoningEffort = reasoningEffort;
     const reasoningSummary = asNonEmptyString(providerSection.reasoningSummary);
@@ -137,6 +149,16 @@ export function buildPiStreamOptions(
       if (Object.keys(webSearchLocation).length > 0) {
         options.webSearchLocation = webSearchLocation;
       }
+    }
+  }
+
+  if (params.config.provider === "aws-bedrock-proxy") {
+    const promptCaching = asRecord(providerSection.promptCaching);
+    if (promptCaching) {
+      const enabled = asBoolean(promptCaching.enabled);
+      if (enabled !== undefined) options.openAiProxyPromptCachingEnabled = enabled;
+      const ttl = asAwsBedrockProxyPromptCachingTtl(promptCaching.ttl);
+      if (ttl) options.openAiProxyPromptCachingTtl = ttl;
     }
   }
 

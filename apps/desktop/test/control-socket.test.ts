@@ -1124,4 +1124,107 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
     expect(state.notifications).toHaveLength(1);
   });
+
+  test("requestJsonRpcControlEvent handles user_config event and updates userConfig state", async () => {
+    const workspaceId = "ws-user-config-read";
+    const { state, get, set } = createState(workspaceId, {
+      userConfig: {},
+      pendingUserConfigSave: null,
+      userConfigLastResult: null,
+    });
+
+    installFakeSocket(workspaceId, async (method: string) => {
+      expect(method).toBe("cowork/provider/userConfig/read");
+      return {
+        event: {
+          type: "user_config",
+          sessionId: "s1",
+          config: { awsBedrockProxyBaseUrl: "https://proxy.example.com" },
+        },
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/provider/userConfig/read",
+      { cwd: "/tmp/workspace" },
+    );
+
+    expect(ok).toBe(true);
+    expect((state as any).userConfig).toEqual({ awsBedrockProxyBaseUrl: "https://proxy.example.com" });
+  });
+
+  test("requestJsonRpcControlEvent handles user_config_result event and clears pendingUserConfigSave", async () => {
+    const workspaceId = "ws-user-config-set";
+    const { state, get, set } = createState(workspaceId, {
+      userConfig: {},
+      pendingUserConfigSave: { workspaceId: "ws-user-config-set", sessionId: "" },
+      userConfigLastResult: null,
+    });
+
+    installFakeSocket(workspaceId, async (method: string) => {
+      expect(method).toBe("cowork/provider/userConfig/set");
+      return {
+        event: {
+          type: "user_config_result",
+          sessionId: "s1",
+          ok: true,
+          message: "Saved globally to ~/.agent/config.json.",
+          config: { awsBedrockProxyBaseUrl: "https://proxy.example.com" },
+        },
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/provider/userConfig/set",
+      { cwd: "/tmp/workspace", config: { awsBedrockProxyBaseUrl: "https://proxy.example.com" } },
+    );
+
+    expect(ok).toBe(true);
+    expect((state as any).pendingUserConfigSave).toBeNull();
+    expect((state as any).userConfigLastResult).toMatchObject({ type: "user_config_result", ok: true });
+    expect((state as any).userConfig).toEqual({ awsBedrockProxyBaseUrl: "https://proxy.example.com" });
+  });
+
+  test("requestJsonRpcControlEvent handles user_config_result with ok:false and clears pending without updating userConfig", async () => {
+    const workspaceId = "ws-user-config-set-fail";
+    const { state, get, set } = createState(workspaceId, {
+      userConfig: { awsBedrockProxyBaseUrl: "https://old.example.com" },
+      pendingUserConfigSave: { workspaceId: "ws-user-config-set-fail", sessionId: "" },
+      userConfigLastResult: null,
+    });
+
+    installFakeSocket(workspaceId, async (method: string) => {
+      expect(method).toBe("cowork/provider/userConfig/set");
+      return {
+        event: {
+          type: "user_config_result",
+          sessionId: "s1",
+          ok: false,
+          message: "Global user config persistence is unavailable for this session.",
+        },
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/provider/userConfig/set",
+      { cwd: "/tmp/workspace", config: { awsBedrockProxyBaseUrl: null } },
+    );
+
+    expect(ok).toBe(true);
+    expect((state as any).pendingUserConfigSave).toBeNull();
+    expect((state as any).userConfigLastResult).toMatchObject({ type: "user_config_result", ok: false });
+    expect((state as any).userConfig).toEqual({ awsBedrockProxyBaseUrl: "https://old.example.com" });
+  });
 });

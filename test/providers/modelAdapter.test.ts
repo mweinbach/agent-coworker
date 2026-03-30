@@ -4,6 +4,7 @@ import path from "node:path";
 
 import {
   createAnthropicModelAdapter,
+  createAwsBedrockProxyModelAdapter,
   createBasetenModelAdapter,
   createCodexCliModelAdapter,
   createGoogleModelAdapter,
@@ -100,6 +101,42 @@ describe("provider model adapters", () => {
       const headers = await adapter.config.headers();
       expect(headers.authorization).toBe("Bearer nvkey");
     });
+  });
+
+  test("AWS Bedrock Proxy adapter resolves baseUrl from provider options before global config", async () => {
+    const config = makeConfig({
+      provider: "aws-bedrock-proxy",
+      model: "router",
+      preferredChildModel: "router",
+      awsBedrockProxyBaseUrl: "https://proxy.global.example.com/v1",
+      providerOptions: {
+        "aws-bedrock-proxy": {
+          baseUrl: "https://proxy.workspace.example.com/v1/",
+        },
+      },
+    });
+
+    const adapter = createAwsBedrockProxyModelAdapter(config, "router", "proxy-token");
+    const headers = await adapter.config.headers();
+
+    expect(adapter.modelId).toBe("router");
+    expect(adapter.provider).toBe("aws-bedrock-proxy.completions");
+    expect(adapter.config.baseUrl).toBe("https://proxy.workspace.example.com/v1");
+    expect(headers.authorization).toBe("Bearer proxy-token");
+    expect(headers.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS).toBe("1");
+  });
+
+  test("AWS Bedrock Proxy adapter falls back to global config baseUrl", async () => {
+    const config = makeConfig({
+      provider: "aws-bedrock-proxy",
+      model: "router",
+      preferredChildModel: "router",
+      awsBedrockProxyBaseUrl: "https://proxy.global.example.com/v1/",
+    });
+
+    const adapter = createAwsBedrockProxyModelAdapter(config, "router");
+
+    expect(adapter.config.baseUrl).toBe("https://proxy.global.example.com/v1");
   });
 
   test("adapters omit auth headers when no key source is available", async () => {

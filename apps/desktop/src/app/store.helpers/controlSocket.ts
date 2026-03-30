@@ -1169,6 +1169,23 @@ export function createControlSocketHelpers(
       return;
     }
 
+    if (evt.type === "user_config") {
+      set(() => ({
+        userConfig: (evt as Extract<typeof evt, { type: "user_config" }>).config,
+      }));
+      return;
+    }
+
+    if (evt.type === "user_config_result") {
+      const resultEvt = evt as Extract<typeof evt, { type: "user_config_result" }>;
+      set(() => ({
+        pendingUserConfigSave: null,
+        userConfigLastResult: resultEvt,
+        ...(resultEvt.ok && resultEvt.config ? { userConfig: resultEvt.config } : {}),
+      }));
+      return;
+    }
+
     if (evt.type === "assistant_message") {
       const text = String(evt.text ?? "").trim();
       if (!text) return;

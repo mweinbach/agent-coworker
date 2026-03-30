@@ -27,7 +27,7 @@ function renderSchemaAlias(prefix: string, method: string, schema: z.ZodTypeAny)
 
 export function buildJsonRpcJsonSchemaArtifact(): string {
   const schema = stripSchemaKeyword(z.toJSONSchema(jsonRpcSchemaBundleSchema) as Record<string, unknown>);
-  return `${JSON.stringify(schema)}\n`;
+  return `${JSON.stringify(schema, null, 2)}\n`;
 }
 
 export function buildJsonRpcTypeScriptArtifact(): string {

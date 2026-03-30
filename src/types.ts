@@ -3,6 +3,7 @@ import { z } from "zod";
 export const PROVIDER_NAMES = [
   "google",
   "openai",
+  "aws-bedrock-proxy",
   "anthropic",
   "baseten",
   "together",
@@ -16,6 +17,9 @@ export const PROVIDER_NAMES = [
 
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 const providerNameSchema = z.enum(PROVIDER_NAMES);
+const LEGACY_PROVIDER_ALIASES: Record<string, ProviderName> = {
+  "openai-proxy": "aws-bedrock-proxy",
+};
 
 export const CHILD_MODEL_ROUTING_MODES = [
   "same-provider",
@@ -36,6 +40,10 @@ export function isProviderName(v: unknown): v is ProviderName {
 }
 
 export function resolveProviderName(v: unknown): ProviderName | null {
+  if (typeof v === "string") {
+    const alias = LEGACY_PROVIDER_ALIASES[v.trim().toLowerCase()];
+    if (alias) return alias;
+  }
   const parsed = providerNameSchema.safeParse(v);
   return parsed.success ? parsed.data : null;
 }
@@ -157,6 +165,15 @@ export interface AgentConfig {
    * Optional provider-specific options forwarded to runtime model calls.
    */
   providerOptions?: Record<string, any>;
+
+  /**
+   * Optional base URL for AWS Bedrock Proxy discovery and auth validation.
+   */
+  awsBedrockProxyBaseUrl?: string;
+  /**
+   * @deprecated Legacy alias accepted while migrating from openai-proxy.
+   */
+  openaiProxyBaseUrl?: string;
 
   /**
    * Optional runtime controls for model calls.

@@ -594,7 +594,7 @@ describe("REPL slash command routing", () => {
 
     expect(tryRequest).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(
-      "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first",
+      "current provider must be openai, codex-cli, or aws-bedrock-proxy; use /provider <name> first",
     );
     expect(activateNextPrompt).toHaveBeenCalled();
   });

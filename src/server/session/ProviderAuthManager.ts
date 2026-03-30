@@ -13,6 +13,7 @@ import { supportsProviderManagedContinuationProvider } from "../../shared/provid
 import { defaultRuntimeNameForProvider, isProviderName } from "../../types";
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
 import type { ServerEvent } from "../protocol";
+import { getSavedProviderApiKey } from "../../config";
 import { resolveModelMetadata } from "../../models/metadata";
 import { normalizeChildRoutingConfig } from "../../models/childModelRouting";
 
@@ -100,7 +101,13 @@ export class ProviderAuthManager {
     let resolvedModel;
     try {
       resolvedModel = await resolveModelMetadata(nextProvider, modelId, {
+        config: currentConfig,
         providerOptions: currentConfig.providerOptions,
+        ...(nextProvider === "aws-bedrock-proxy"
+          ? {
+              awsBedrockProxySavedApiKey: getSavedProviderApiKey(currentConfig, "aws-bedrock-proxy"),
+            }
+          : {}),
         source: "model",
       });
     } catch (error) {
@@ -437,6 +444,10 @@ export class ProviderAuthManager {
         cwd: config.workingDirectory,
         paths: this.opts.getGlobalAuthPaths(),
         connect: async (opts) => await this.opts.runProviderConnect(opts),
+        config,
+        providerOptions: config.providerOptions,
+        env: process.env,
+        fetchImpl: fetch,
       });
 
       this.opts.emit({

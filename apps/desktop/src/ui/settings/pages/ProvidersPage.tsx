@@ -17,6 +17,7 @@ import {
   displayProviderName,
   isProviderNameString,
 } from "../../../lib/providerDisplayNames";
+import { getWorkspaceAwsBedrockProxyBaseUrl } from "../../../app/openaiCompatibleProviderOptions";
 
 type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
 type ProviderCatalogEntry = Extract<ServerEvent, { type: "provider_catalog" }>["all"][number];
@@ -24,6 +25,13 @@ type ProviderStatus = Extract<ServerEvent, { type: "provider_status" }>["provide
 
 const EXA_AUTH_METHOD_ID = "exa_api_key";
 export const EXA_SECTION_ID = "provider:exa-search";
+
+/**
+ * UI-side timeout for the Bedrock model refresh operation.
+ * Set higher than the backend discovery timeout (DEFAULT_DISCOVERY_TIMEOUT_MS = 7500ms)
+ * to allow for network overhead before the UI gives up.
+ */
+const BEDROCK_MODEL_REFRESH_TIMEOUT_MS = 10_000;
 
 type ProvidersPageProps = {
   initialExpandedSectionId?: string | null;
@@ -127,6 +135,32 @@ function describeLmStudioCard(opts: {
     badgeLabel: "Checking",
     subtitle: anyMessage || "Checking your local LM Studio server.",
     emptyStateMessage: "Refresh once LM Studio is running to discover available models.",
+  };
+}
+
+function describeAwsBedrockProxyCard(opts: {
+  enabled: boolean;
+  connected: boolean;
+  status?: ProviderStatus;
+  modelCount: number;
+}): {
+  badgeLabel: string;
+  subtitle: string;
+} {
+  if (!opts.enabled) {
+    return {
+      badgeLabel: "Disabled",
+      subtitle: "Disabled providers stay out of provider and model selectors until you re-enable them here.",
+    };
+  }
+
+  return {
+    badgeLabel: providerStatusLabel(opts.status),
+    subtitle: opts.connected
+      ? opts.status?.account
+        ? formatAccount(opts.status.account)
+        : `${opts.modelCount} model${opts.modelCount !== 1 ? "s" : ""} available`
+      : "Click to set up",
   };
 }
 
@@ -291,21 +325,31 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const workspaces = serverState?.workspaces ?? workspacesFromStore;
   const selectedWorkspaceId = serverState?.selectedWorkspaceId ?? selectedWorkspaceIdFromStore;
   const hasWorkspace = workspaces.length > 0;
-  const canConnectProvider = hasWorkspace || selectedWorkspaceId !== null;
+  const canConnectProvider = hasWorkspace;
+  const canEditGlobalProxyUrl = hasWorkspace;
 
   const setProviderApiKey = useAppStore((s) => s.setProviderApiKey);
   const copyProviderApiKey = useAppStore((s) => s.copyProviderApiKey);
   const authorizeProviderAuth = useAppStore((s) => s.authorizeProviderAuth);
   const logoutProviderAuth = useAppStore((s) => s.logoutProviderAuth);
   const callbackProviderAuth = useAppStore((s) => s.callbackProviderAuth);
+  const requestProviderCatalog = useAppStore((s) => s.requestProviderCatalog);
+  const requestProviderAuthMethods = useAppStore((s) => s.requestProviderAuthMethods);
+  const requestUserConfig = useAppStore((s) => s.requestUserConfig);
+  const setGlobalOpenAiProxyBaseUrl = useAppStore((s) => s.setGlobalOpenAiProxyBaseUrl);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
+  const restartWorkspaceServer = useAppStore((s) => s.restartWorkspaceServer);
   const providerStatusByNameFromStore = useAppStore((s) => s.providerStatusByName);
   const providerStatusRefreshingFromStore = useAppStore((s) => s.providerStatusRefreshing);
   const providerCatalogFromStore = useAppStore((s) => s.providerCatalog);
   const providerAuthMethodsByProviderFromStore = useAppStore((s) => s.providerAuthMethodsByProvider);
   const providerLastAuthChallengeFromStore = useAppStore((s) => s.providerLastAuthChallenge);
   const providerLastAuthResultFromStore = useAppStore((s) => s.providerLastAuthResult);
+  const userConfigFromStore = useAppStore((s) => s.userConfig);
+  const userConfigLastResultFromStore = useAppStore((s) => s.userConfigLastResult);
+  const workspaceRuntimeByIdFromStore = useAppStore((s) => s.workspaceRuntimeById);
   const providerUiStateFromStore = useAppStore((s) => s.providerUiState);
+  const setAwsBedrockProxyEnabled = useAppStore((s) => s.setAwsBedrockProxyEnabled);
   const setLmStudioEnabled = useAppStore((s) => s.setLmStudioEnabled);
   const setLmStudioModelVisible = useAppStore((s) => s.setLmStudioModelVisible);
   const providerStatusByName = serverState?.providerStatusByName ?? providerStatusByNameFromStore;
@@ -314,7 +358,17 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const providerAuthMethodsByProvider = serverState?.providerAuthMethodsByProvider ?? providerAuthMethodsByProviderFromStore;
   const providerLastAuthChallenge = serverState?.providerLastAuthChallenge ?? providerLastAuthChallengeFromStore;
   const providerLastAuthResult = serverState?.providerLastAuthResult ?? providerLastAuthResultFromStore;
+  const userConfig = serverState?.userConfig ?? userConfigFromStore;
+  const userConfigLastResult = serverState?.userConfigLastResult ?? userConfigLastResultFromStore;
+  const workspaceRuntimeById = serverState?.workspaceRuntimeById ?? workspaceRuntimeByIdFromStore;
   const providerUiState = serverState?.providerUiState ?? providerUiStateFromStore;
+  const selectedWorkspace = useMemo(
+    () => workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
+    [workspaces, selectedWorkspaceId],
+  );
+  const selectedWorkspaceRuntime = selectedWorkspace ? workspaceRuntimeById[selectedWorkspace.id] : null;
+  const selectedWorkspaceServerError = selectedWorkspaceRuntime?.error?.trim() ?? "";
+  const selectedWorkspaceStarting = selectedWorkspaceRuntime?.starting === true;
 
   const [apiKeysByMethod, setApiKeysByMethod] = useState<Record<string, string>>({});
   const [apiKeyEditingByMethod, setApiKeyEditingByMethod] = useState<Record<string, boolean>>({});
@@ -322,6 +376,15 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const [optimisticApiKeyMaskByMethod, setOptimisticApiKeyMaskByMethod] = useState<Record<string, string>>({});
   const [oauthCodesByMethod, setOauthCodesByMethod] = useState<Record<string, string>>({});
   const [expandedSectionId, setExpandedSectionId] = useState<string | null>(initialExpandedSectionId);
+  const [openAiProxyBaseUrlInput, setOpenAiProxyBaseUrlInput] = useState("");
+  const [savingOpenAiProxyBaseUrl, setSavingOpenAiProxyBaseUrl] = useState(false);
+  const [dismissedRestartPrompt, setDismissedRestartPrompt] = useState(false);
+  const [providerCatalogVersion, setProviderCatalogVersion] = useState(0);
+  const [bedrockRefresh, setBedrockRefresh] = useState<
+    | { status: "idle" }
+    | { status: "refreshing"; startVersion: number }
+    | { status: "done"; result: { ok: boolean; message: string } }
+  >({ status: "idle" });
 
   const modelChoices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
 
@@ -333,17 +396,25 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     const filtered = source.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider));
 
     const isModelProvider = (provider: ProviderName) =>
-      provider === "lmstudio" || (provider in modelChoices && modelChoices[provider]!.length > 0);
+      provider === "lmstudio" ||
+      provider === "aws-bedrock-proxy" ||
+      (provider in modelChoices && modelChoices[provider]!.length > 0);
 
     const sortProviders = (providers: ProviderName[]) => [...providers].sort((a, b) => {
       const aStatus = providerStatusByName[a];
       const bStatus = providerStatusByName[b];
-      const aConnected = a === "lmstudio"
-        ? providerUiState.lmstudio.enabled && Boolean(aStatus?.verified || aStatus?.authorized)
-        : Boolean(aStatus?.verified || aStatus?.authorized);
-      const bConnected = b === "lmstudio"
-        ? providerUiState.lmstudio.enabled && Boolean(bStatus?.verified || bStatus?.authorized)
-        : Boolean(bStatus?.verified || bStatus?.authorized);
+      const aEnabled = a === "lmstudio"
+        ? providerUiState.lmstudio.enabled
+        : a === "aws-bedrock-proxy"
+          ? providerUiState.awsBedrockProxy.enabled
+          : true;
+      const bEnabled = b === "lmstudio"
+        ? providerUiState.lmstudio.enabled
+        : b === "aws-bedrock-proxy"
+          ? providerUiState.awsBedrockProxy.enabled
+          : true;
+      const aConnected = aEnabled && Boolean(aStatus?.verified || aStatus?.authorized);
+      const bConnected = bEnabled && Boolean(bStatus?.verified || bStatus?.authorized);
 
       // 1. Connected vs Disconnected
       if (aConnected && !bConnected) return -1;
@@ -376,8 +447,76 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
 
   useEffect(() => {
     if (!canConnectProvider) return;
-    void refreshProviderStatus();
-  }, [canConnectProvider, refreshProviderStatus]);
+    void requestProviderCatalog();
+    void requestProviderAuthMethods();
+    void requestUserConfig();
+  }, [canConnectProvider, requestProviderAuthMethods, requestProviderCatalog, requestUserConfig]);
+
+  useEffect(() => {
+    setOpenAiProxyBaseUrlInput(userConfig.awsBedrockProxyBaseUrl ?? "");
+  }, [userConfig.awsBedrockProxyBaseUrl]);
+
+  useEffect(() => {
+    setProviderCatalogVersion((version) => version + 1);
+  }, [providerCatalog]);
+
+  useEffect(() => {
+    if (bedrockRefresh.status !== "refreshing") return;
+    if (providerCatalogVersion <= bedrockRefresh.startVersion) return;
+    const entry = providerCatalog.find((candidate) => candidate.id === "aws-bedrock-proxy");
+    if (!entry) {
+      setBedrockRefresh({
+        status: "done",
+        result: { ok: false, message: "Model catalog refreshed, but the AWS Bedrock Proxy entry was missing." },
+      });
+      return;
+    }
+    if (entry.state === "unreachable") {
+      setBedrockRefresh({
+        status: "done",
+        result: {
+          ok: false,
+          message: typeof entry.message === "string" && entry.message.trim()
+            ? entry.message
+            : "Model fetch failed. Check proxy URL/token and try again.",
+        },
+      });
+      return;
+    }
+    if (!Array.isArray(entry.models) || entry.models.length === 0) {
+      setBedrockRefresh({
+        status: "done",
+        result: { ok: false, message: "Model catalog refreshed, but no models were reported by the proxy." },
+      });
+      return;
+    }
+    setBedrockRefresh({
+      status: "done",
+      result: {
+        ok: true,
+        message: `Model catalog refreshed (${entry.models.length} model${entry.models.length === 1 ? "" : "s"}).`,
+      },
+    });
+  }, [bedrockRefresh, providerCatalog, providerCatalogVersion]);
+
+  useEffect(() => {
+    if (bedrockRefresh.status !== "refreshing") return;
+    const timeout = setTimeout(() => {
+      setBedrockRefresh({
+        status: "done",
+        result: { ok: false, message: "Model fetch timed out. Check proxy URL/token and try again." },
+      });
+    }, BEDROCK_MODEL_REFRESH_TIMEOUT_MS);
+    return () => clearTimeout(timeout);
+  }, [bedrockRefresh]);
+
+  useEffect(() => {
+    if (!userConfigLastResult) return;
+    setSavingOpenAiProxyBaseUrl(false);
+    if (userConfigLastResult.ok) {
+      setDismissedRestartPrompt(false);
+    }
+  }, [userConfigLastResult]);
 
   useEffect(() => {
     if (!providerLastAuthResult?.ok) return;
@@ -446,93 +585,110 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       && typeof siblingSavedApiKeyMask === "string"
       && siblingSavedApiKeyMask.trim().length > 0
       && !hasSavedApiKey;
+    const isAwsBedrockProxyTokenMethod =
+      opts.provider === "aws-bedrock-proxy" &&
+      opts.method.type === "api" &&
+      opts.method.id === "api_key";
+    const credentialDisplayName = isAwsBedrockProxyTokenMethod ? "Proxy token" : opts.method.label;
 
     return (
       <div key={stateKey} className="space-y-2 border-t border-border/70 pt-4 first:border-t-0 first:pt-0">
-        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{opts.method.label}</div>
+        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{credentialDisplayName}</div>
 
         {opts.method.type === "api" ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              className="max-w-md"
-              value={isEditingApiKey ? apiKeyValue : savedApiKeyMask ?? "••••••••"}
-              onChange={(e) => {
-                if (!isEditingApiKey) return;
-                const nextValue = e.currentTarget.value;
-                setApiKeysByMethod((s) => ({ ...s, [stateKey]: nextValue }));
-              }}
-              placeholder={
-                isEditingApiKey
-                  ? opts.method.id === EXA_AUTH_METHOD_ID
-                    ? "Paste your Exa API key"
-                    : "Paste your API key"
-                  : "Saved key (hidden)"
-              }
-              type={revealApiKey ? "text" : "password"}
-              readOnly={!isEditingApiKey}
-              aria-label={`${opts.providerDisplayName} ${opts.method.label} API key`}
-            />
-            <Button
-              variant="outline"
-              type="button"
-              disabled={!hasSavedApiKey}
-              onClick={() =>
-                setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: !revealApiKey }))
-              }
-            >
-              {revealApiKey ? "Hide" : "Reveal"}
-            </Button>
-            {!isEditingApiKey ? (
-              <Button
-                type="button"
-                disabled={!canConnectProvider}
-                title={!canConnectProvider ? "Add a workspace first." : undefined}
-                onClick={() => {
-                  setApiKeyEditingByMethod((s) => ({ ...s, [stateKey]: true }));
-                  setApiKeysByMethod((s) => ({ ...s, [stateKey]: "" }));
-                  setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: false }));
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                className="max-w-md"
+                value={isEditingApiKey ? apiKeyValue : savedApiKeyMask ?? "••••••••"}
+                onChange={(e) => {
+                  if (!isEditingApiKey) return;
+                  const nextValue = e.currentTarget.value;
+                  setApiKeysByMethod((s) => ({ ...s, [stateKey]: nextValue }));
                 }}
-              >
-                Replace key
-              </Button>
-            ) : null}
-            {isEditingApiKey && hasSavedApiKey ? (
+                placeholder={
+                  isEditingApiKey
+                    ? opts.method.id === EXA_AUTH_METHOD_ID
+                      ? "Paste your Exa API key"
+                      : isAwsBedrockProxyTokenMethod
+                        ? "Paste your LiteLLM proxy token"
+                        : "Paste your API key"
+                    : isAwsBedrockProxyTokenMethod
+                      ? "Saved token (hidden)"
+                      : "Saved key (hidden)"
+                }
+                type={revealApiKey ? "text" : "password"}
+                readOnly={!isEditingApiKey}
+                aria-label={`${opts.providerDisplayName} ${credentialDisplayName} API key`}
+              />
               <Button
                 variant="outline"
                 type="button"
-                onClick={() => {
-                  setApiKeyEditingByMethod((s) => ({ ...s, [stateKey]: false }));
-                  setApiKeysByMethod((s) => ({ ...s, [stateKey]: "" }));
-                  setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: false }));
-                }}
+                disabled={!hasSavedApiKey}
+                onClick={() =>
+                  setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: !revealApiKey }))
+                }
               >
-                Cancel
+                {revealApiKey ? "Hide" : "Reveal"}
               </Button>
-            ) : null}
-            {isEditingApiKey ? (
-              <Button
-                type="button"
-                disabled={!canConnectProvider || !apiKeyValue.trim()}
-                title={!canConnectProvider ? "Add a workspace first." : undefined}
-                onClick={() => {
-                  void setProviderApiKey(opts.provider, opts.method.id, apiKeyValue.trim());
-                }}
-              >
-                Save
-              </Button>
-            ) : null}
-            {canCopySiblingApiKey && siblingProvider && siblingDisplayName ? (
-              <Button
-                variant="outline"
-                type="button"
-                disabled={!canConnectProvider}
-                title={!canConnectProvider ? "Add a workspace first." : undefined}
-                onClick={() => {
-                  void copyProviderApiKey(opts.provider, siblingProvider);
-                }}
-              >
-                {`Use ${siblingDisplayName} key`}
-              </Button>
+              {!isEditingApiKey ? (
+                <Button
+                  type="button"
+                  disabled={!canConnectProvider}
+                  title={!canConnectProvider ? "Add a workspace first." : undefined}
+                  onClick={() => {
+                    setApiKeyEditingByMethod((s) => ({ ...s, [stateKey]: true }));
+                    setApiKeysByMethod((s) => ({ ...s, [stateKey]: "" }));
+                    setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: false }));
+                  }}
+                >
+                  {isAwsBedrockProxyTokenMethod ? "Replace token" : "Replace key"}
+                </Button>
+              ) : null}
+              {isEditingApiKey && hasSavedApiKey ? (
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={() => {
+                    setApiKeyEditingByMethod((s) => ({ ...s, [stateKey]: false }));
+                    setApiKeysByMethod((s) => ({ ...s, [stateKey]: "" }));
+                    setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: false }));
+                  }}
+                >
+                  Cancel
+                </Button>
+              ) : null}
+              {isEditingApiKey ? (
+                <Button
+                  type="button"
+                  disabled={!canConnectProvider || !apiKeyValue.trim()}
+                  title={!canConnectProvider ? "Add a workspace first." : undefined}
+                  onClick={() => {
+                    void setProviderApiKey(opts.provider, opts.method.id, apiKeyValue.trim());
+                  }}
+                >
+                  Save
+                </Button>
+              ) : null}
+              {canCopySiblingApiKey && siblingProvider && siblingDisplayName ? (
+                <Button
+                  variant="outline"
+                  type="button"
+                  disabled={!canConnectProvider}
+                  title={!canConnectProvider ? "Add a workspace first." : undefined}
+                  onClick={() => {
+                    void copyProviderApiKey(opts.provider, siblingProvider);
+                  }}
+                >
+                  {`Use ${siblingDisplayName} key`}
+                </Button>
+              ) : null}
+            </div>
+            {isAwsBedrockProxyTokenMethod ? (
+              <div className="text-xs text-muted-foreground">
+                Use the LiteLLM proxy token configured on your proxy server, not an upstream OpenAI/Anthropic key like{" "}
+                <code className="rounded bg-muted/45 px-1.5 py-0.5">sk-...</code>.
+              </div>
             ) : null}
           </div>
         ) : (
@@ -626,10 +782,36 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     const methods = visibleAuthMethods(provider, authMethodsForProvider(provider));
     const connected = Boolean(status?.authorized || status?.verified);
     const providerDisplayName = catalogNameByProvider.get(provider) ?? displayProviderName(provider);
-    const models = (modelChoices[provider] ?? []).slice(0, 8);
+    const isOpenAiProxy = provider === "aws-bedrock-proxy";
+    const awsBedrockProxyEnabled = isOpenAiProxy ? providerUiState.awsBedrockProxy.enabled : true;
+    const models = isOpenAiProxy
+      ? (modelChoices[provider] ?? [])
+      : (modelChoices[provider] ?? []).slice(0, 8);
+    const bedrockCard = isOpenAiProxy
+      ? describeAwsBedrockProxyCard({
+          enabled: awsBedrockProxyEnabled,
+          connected,
+          status,
+          modelCount: models.length,
+        })
+      : null;
     const visibleRateLimits = Array.isArray(status?.usage?.rateLimits)
       ? status.usage.rateLimits.filter(isVisibleUsageRateLimit)
       : [];
+    const hasSavedOpenAiProxyBaseUrl = typeof userConfig.awsBedrockProxyBaseUrl === "string" && userConfig.awsBedrockProxyBaseUrl.trim().length > 0;
+    const runningWorkspaceIds = workspaces
+      .filter((workspace) => {
+        const runtime = workspaceRuntimeById[workspace.id];
+        return typeof runtime?.serverUrl === "string" && runtime.serverUrl.trim().length > 0;
+      })
+      .map((workspace) => workspace.id);
+    const showRestartPrompt =
+      Boolean(userConfigLastResult?.ok)
+      && runningWorkspaceIds.length > 0
+      && !dismissedRestartPrompt;
+    const workspaceAwsBedrockProxyBaseUrl = selectedWorkspace
+      ? getWorkspaceAwsBedrockProxyBaseUrl(selectedWorkspace.providerOptions)
+      : "";
 
     if (provider === "lmstudio") {
       const lmStudioEnabled = providerUiState.lmstudio.enabled;
@@ -769,7 +951,9 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-foreground">{providerDisplayName}</div>
                 <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                  {connected
+                  {bedrockCard
+                    ? bedrockCard.subtitle
+                    : connected
                     ? status?.account
                       ? formatAccount(status.account)
                       : `${models.length} model${models.length !== 1 ? "s" : ""} available`
@@ -777,7 +961,9 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                <Badge variant={connected ? "default" : "secondary"}>{label}</Badge>
+                <Badge variant={connected && awsBedrockProxyEnabled ? "default" : "secondary"}>
+                  {bedrockCard ? bedrockCard.badgeLabel : label}
+                </Badge>
                 <span className="text-xs text-muted-foreground">{isExpanded ? "▾" : "▸"}</span>
               </div>
             </Button>
@@ -785,6 +971,36 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
 
           <CollapsibleContent>
             <CardContent id={`provider-panel-${provider}`} className="space-y-3.5 border-t border-border/70 px-4 py-3.5">
+            {isOpenAiProxy ? (
+              <div className="space-y-3">
+                <div className="text-sm text-muted-foreground">
+                  Keep AWS Bedrock Proxy configured while hiding it from provider and model selectors until you re-enable it here.
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      void setAwsBedrockProxyEnabled(!awsBedrockProxyEnabled);
+                    }}
+                  >
+                    {awsBedrockProxyEnabled ? "Disable" : "Enable"}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+            {provider === "aws-bedrock-proxy" ? (
+              <div className="rounded-sm border border-border/60 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+                {workspaceAwsBedrockProxyBaseUrl
+                  ? (
+                    <>
+                      Using workspace proxy URL <code className="rounded bg-muted/45 px-1.5 py-0.5">{workspaceAwsBedrockProxyBaseUrl}</code>.
+                      Update it in Workspaces settings if needed.
+                    </>
+                  )
+                  : "Set your AWS Bedrock Proxy URL in Workspaces settings before saving this API key."}
+              </div>
+            ) : null}
+
             {methods.map((method) =>
               renderAuthMethod({
                 provider,
@@ -793,6 +1009,80 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                 method,
               }),
             )}
+
+            {isOpenAiProxy ? (
+              <div className="space-y-3 border-t border-border/70 pt-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Global proxy URL</div>
+                <div className="text-sm text-muted-foreground">
+                  Saved in <code className="rounded bg-muted/45 px-1.5 py-0.5">~/.agent/config.json</code> and shared across workspaces.
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    className="max-w-xl"
+                    value={openAiProxyBaseUrlInput}
+                    onChange={(e) => setOpenAiProxyBaseUrlInput(e.currentTarget.value)}
+                    placeholder="https://proxy.example.com/v1"
+                    type="text"
+                    aria-label="AWS Bedrock Proxy base URL"
+                  />
+                  <Button
+                    type="button"
+                    disabled={!canEditGlobalProxyUrl || savingOpenAiProxyBaseUrl || !openAiProxyBaseUrlInput.trim()}
+                    title={!canEditGlobalProxyUrl ? "Add a workspace first." : undefined}
+                    onClick={() => {
+                      setSavingOpenAiProxyBaseUrl(true);
+                      void setGlobalOpenAiProxyBaseUrl(openAiProxyBaseUrlInput.trim());
+                    }}
+                  >
+                    {savingOpenAiProxyBaseUrl ? "Saving..." : "Save"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    type="button"
+                    disabled={!canEditGlobalProxyUrl || savingOpenAiProxyBaseUrl || !hasSavedOpenAiProxyBaseUrl}
+                    title={!canEditGlobalProxyUrl ? "Add a workspace first." : undefined}
+                    onClick={() => {
+                      setSavingOpenAiProxyBaseUrl(true);
+                      void setGlobalOpenAiProxyBaseUrl(null);
+                    }}
+                  >
+                    Clear
+                  </Button>
+                </div>
+                {userConfigLastResult ? (
+                  <div className={cn("text-xs", userConfigLastResult.ok ? "text-success" : "text-destructive")}>
+                    {userConfigLastResult.message}
+                  </div>
+                ) : null}
+                {showRestartPrompt ? (
+                  <div className="rounded-md border border-border/70 bg-muted/20 p-3">
+                    <div className="text-sm text-muted-foreground">
+                      Running workspaces need a restart before this proxy URL is used.
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        onClick={() => {
+                          void Promise.all(runningWorkspaceIds.map(async (workspaceId) => {
+                            await restartWorkspaceServer(workspaceId);
+                          }));
+                          setDismissedRestartPrompt(true);
+                        }}
+                      >
+                        Restart running workspaces
+                      </Button>
+                      <Button
+                        variant="outline"
+                        type="button"
+                        onClick={() => setDismissedRestartPrompt(true)}
+                      >
+                        Later
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             {status?.usage ? (
               <div className="space-y-2.5 border-t border-border/70 pt-3">
@@ -883,14 +1173,40 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
               <div className="border-t border-border/70 pt-4 text-sm text-muted-foreground">{status.message}</div>
             ) : null}
 
-            {models.length > 0 ? (
+            {models.length > 0 || isOpenAiProxy ? (
               <div className="space-y-2 border-t border-border/70 pt-4">
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Available models</div>
-                <div className="flex flex-wrap gap-2">
-                  {models.map((model) => (
-                    <Badge key={model} variant="secondary">{model}</Badge>
-                  ))}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Available models</div>
+                  {isOpenAiProxy ? (
+                    <Button
+                      variant="outline"
+                      type="button"
+                      size="sm"
+                      disabled={!canConnectProvider || bedrockRefresh.status === "refreshing"}
+                      title={!canConnectProvider ? "Add a workspace first." : undefined}
+                      onClick={() => {
+                        setBedrockRefresh({ status: "refreshing", startVersion: providerCatalogVersion });
+                        void requestProviderCatalog();
+                      }}
+                    >
+                      {bedrockRefresh.status === "refreshing" ? "Fetching..." : "Fetch models"}
+                    </Button>
+                  ) : null}
                 </div>
+                {models.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {models.map((model) => (
+                      <Badge key={model} variant="secondary">{model}</Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-muted-foreground">No models loaded yet.</div>
+                )}
+                {isOpenAiProxy && bedrockRefresh.status === "done" ? (
+                  <div className={cn("text-xs", bedrockRefresh.result.ok ? "text-success" : "text-destructive")}>
+                    {bedrockRefresh.result.message}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             </CardContent>
@@ -986,7 +1302,12 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
             variant="link"
             className="h-auto px-0"
             type="button"
-            onClick={() => void refreshProviderStatus()}
+            onClick={() => {
+              void requestProviderCatalog();
+              void requestProviderAuthMethods();
+              void requestUserConfig();
+              void refreshProviderStatus();
+            }}
             disabled={providerStatusRefreshing}
           >
             {providerStatusRefreshing ? "Refreshing..." : "Refresh status"}
@@ -998,6 +1319,27 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
         <Card className="border-border/80 bg-card/85">
           <CardContent className="p-6 text-center text-sm text-muted-foreground">
             Add a workspace first to connect providers.
+          </CardContent>
+        </Card>
+      ) : null}
+      {canConnectProvider && selectedWorkspace && selectedWorkspaceServerError ? (
+        <Card className="border-destructive/40 bg-destructive/10">
+          <CardContent className="flex flex-wrap items-start justify-between gap-3 p-4">
+            <div className="min-w-0 space-y-1">
+              <div className="text-sm font-semibold text-destructive">Workspace server unavailable</div>
+              <div className="text-sm text-muted-foreground">
+                {selectedWorkspace.name} failed to start. Provider setup is unavailable until the workspace server boots.
+              </div>
+              <div className="break-words text-xs text-destructive">{selectedWorkspaceServerError}</div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={selectedWorkspaceStarting}
+              onClick={() => void restartWorkspaceServer(selectedWorkspace.id)}
+            >
+              {selectedWorkspaceStarting ? "Retrying..." : "Restart workspace server"}
+            </Button>
           </CardContent>
         </Card>
       ) : null}

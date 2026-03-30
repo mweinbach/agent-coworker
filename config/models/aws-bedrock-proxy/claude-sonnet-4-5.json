@@ -1,0 +1,15 @@
+{
+  "id": "claude-sonnet-4-5",
+  "provider": "aws-bedrock-proxy",
+  "displayName": "Claude Sonnet 4.5 (Proxy)",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system-models/claude-sonnet-4-6.md",
+  "providerOptionsDefaults": {
+    "promptCaching": {
+      "enabled": true,
+      "ttl": "5m"
+    }
+  },
+  "isDefault": true
+}

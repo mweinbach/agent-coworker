@@ -30,6 +30,8 @@
 - For provider auth and saved-key lookups in this repo, treat `~/.cowork` as the only auth home; never derive auth storage from a workspace `.agent` path, and pin `HOME` in tests that fabricate auth state so they cannot accidentally read real machine credentials.
 - For desktop admin pages that auto-fetch data, do not assume store-level success/error handling is enough; add a UI-level fallback so an orphaned request cannot leave the page stuck on a perpetual loading message when the correct end state is simply empty.
 - For desktop request spinners in this repo, clear the loading flag on both success events and structured control-session errors; server-side failures like `memory_list` SQLite errors may never emit the success payload that normally resets UI state.
+- When AWS Bedrock Proxy settings can come from workspace provider options, global config, or env, do not pass a standalone base-URL override through one code path; use the shared resolver everywhere so discovery, adapters, and validation all honor the same precedence, and never swallow desktop control-session send failures without logging and clearing the optimistic UI state they started.
+- For desktop actions whose UI clears only after a terminal result event, synthesize the same failure result on every early-return failure path before a control message is sent; otherwise local spinners can get stuck even when the user already saw a generic “Not connected” notification.
 - When the user explicitly changes a CI request from “narrow the trigger” to “delete the workflow,” stop refining the trigger and remove the job/workflow exactly as requested.
 - When the user expands a bugfix to include verification failures found during the lane, treat every concrete error you surfaced as in-scope work instead of stopping after the original fix.
 - When a bugfix run exposes both a touched-area coverage gap and unrelated red tests in the repo verification lane, do not stop at the local fix; add the missing regression and clear the full failing lane before closing the task.
@@ -229,6 +231,8 @@
 - When the user corrects attachment transport limits in this repo, treat upload-path and inline-model budgets as separate contracts; do not carry the inline cap over to uploaded files, and confirm which limit applies to each path before wiring validation.
 - Before pushing or resolving PR review threads in this repo, run the same full validation lane CI runs (`bun test --max-concurrency 1` plus required typechecks/docs) instead of relying only on targeted tests; cross-file Bun module mocks can pass in isolation and still fail in the full suite.
 - When the user asks to fix/push PR review feedback in this repo, treat thread resolution as part of done: after tests and push, resolve the addressed review threads with concrete fix and verification notes instead of stopping at the code change.
+- When the user explicitly says to implement an approved fix plan, do the code, tests, and requested verification before responding; do not answer with another plan or a claimed outcome that has not been executed.
+- When a PR review calls out missing dynamic provider capability propagation, trace that capability through every behavior-changing consumer before replying; fixing only the catalog/discovery surface is insufficient if prompt rendering or runtime input negotiation still reads a conservative fallback.
 
 ## 2026-03-18 Tool Output Overflow Audit
 

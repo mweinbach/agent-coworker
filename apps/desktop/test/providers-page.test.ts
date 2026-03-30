@@ -74,8 +74,20 @@ const { EXA_SECTION_ID, ProvidersPage } = await import("../src/ui/settings/pages
 const defaultProviderActions = {
   requestProviderCatalog: useAppStore.getState().requestProviderCatalog,
   requestProviderAuthMethods: useAppStore.getState().requestProviderAuthMethods,
+  requestUserConfig: useAppStore.getState().requestUserConfig,
+  setGlobalOpenAiProxyBaseUrl: useAppStore.getState().setGlobalOpenAiProxyBaseUrl,
+  setAwsBedrockProxyEnabled: useAppStore.getState().setAwsBedrockProxyEnabled,
   refreshProviderStatus: useAppStore.getState().refreshProviderStatus,
+  restartWorkspaceServer: useAppStore.getState().restartWorkspaceServer,
 };
+
+function getButtonByText(container: HTMLElement, label: string): HTMLButtonElement {
+  const button = [...container.querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === label);
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`missing button: ${label}`);
+  }
+  return button;
+}
 
 describe("desktop providers page", () => {
   beforeEach(() => {
@@ -122,8 +134,15 @@ describe("desktop providers page", () => {
       } as any,
       providerLastAuthChallenge: null,
       providerLastAuthResult: null,
+      userConfig: {},
+      userConfigLastResult: null,
+      pendingUserConfigSave: null,
+      workspaceRuntimeById: {},
       providerConnected: [],
       providerUiState: {
+        awsBedrockProxy: {
+          enabled: true,
+        },
         lmstudio: {
           enabled: false,
           hiddenModels: [],
@@ -210,6 +229,7 @@ describe("desktop providers page", () => {
   test("mount only triggers the consolidated provider refresh", async () => {
     const requestProviderCatalog = mock(async () => {});
     const requestProviderAuthMethods = mock(async () => {});
+    const requestUserConfig = mock(async () => {});
     const refreshProviderStatus = mock(async () => {});
     const harness = setupJsdom();
 
@@ -222,6 +242,7 @@ describe("desktop providers page", () => {
         useAppStore.setState({
           requestProviderCatalog,
           requestProviderAuthMethods,
+          requestUserConfig,
           refreshProviderStatus,
         });
       });
@@ -230,9 +251,10 @@ describe("desktop providers page", () => {
         root.render(createElement(ProvidersPage));
       });
 
-      expect(refreshProviderStatus).toHaveBeenCalledTimes(1);
-      expect(requestProviderCatalog).not.toHaveBeenCalled();
-      expect(requestProviderAuthMethods).not.toHaveBeenCalled();
+      expect(requestProviderCatalog).toHaveBeenCalledTimes(1);
+      expect(requestProviderAuthMethods).toHaveBeenCalledTimes(1);
+      expect(requestUserConfig).toHaveBeenCalledTimes(1);
+      expect(refreshProviderStatus).not.toHaveBeenCalled();
 
       await act(async () => {
         root.unmount();
@@ -682,6 +704,267 @@ describe("desktop providers page", () => {
     expect(html).not.toContain("Use OpenCode Go key");
   });
 
+  test("aws-bedrock-proxy card renders global proxy URL controls and restart prompt on successful save", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      providerCatalog: [
+        { id: "aws-bedrock-proxy", name: "AWS Bedrock Proxy" },
+      ] as any,
+      providerAuthMethodsByProvider: {
+        "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+      } as any,
+      userConfig: {
+        awsBedrockProxyBaseUrl: "https://proxy.example.com/v1",
+      } as any,
+      userConfigLastResult: {
+        type: "user_config_result",
+        sessionId: "control-session",
+        ok: true,
+        message: "Saved globally to ~/.agent/config.json. Restart running workspaces to apply.",
+        config: {
+          awsBedrockProxyBaseUrl: "https://proxy.example.com/v1",
+        },
+      } as any,
+      workspaceRuntimeById: {
+        "ws-1": {
+          serverUrl: "ws://running",
+        },
+      } as any,
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:aws-bedrock-proxy",
+      }),
+    );
+
+    expect(html).toContain("Disable");
+    expect(html).toContain("Global proxy URL");
+    expect(html).toContain("~/.agent/config.json");
+    expect(html).toContain("https://proxy.example.com/v1");
+    expect(html).toContain("Restart running workspaces");
+    expect(html).toContain("Later");
+    expect(html).toContain("Fetch models");
+    expect(html).toContain("Proxy token");
+    expect(html).toContain("Paste your LiteLLM proxy token");
+    expect(html).toContain("Use the LiteLLM proxy token configured on your proxy server");
+  });
+
+  test("aws-bedrock-proxy card renders disabled badge and enable action when UI-hidden", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      providerStatusByName: {
+        "aws-bedrock-proxy": {
+          provider: "aws-bedrock-proxy",
+          authorized: true,
+          verified: false,
+          mode: "api_key",
+          account: null,
+          message: "Proxy token saved.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+      } as any,
+      providerCatalog: [
+        { id: "aws-bedrock-proxy", name: "AWS Bedrock Proxy", models: [], defaultModel: "" },
+      ] as any,
+      providerAuthMethodsByProvider: {
+        "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+      } as any,
+      providerUiState: {
+        ...useAppStore.getState().providerUiState,
+        awsBedrockProxy: {
+          enabled: false,
+        },
+      },
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:aws-bedrock-proxy",
+      }),
+    );
+
+    expect(html).toContain("Disabled");
+    expect(html).toContain("Enable");
+    expect(html).toContain("Disabled providers stay out of provider and model selectors");
+    expect(html).toContain("Global proxy URL");
+  });
+
+  test("renders selected workspace startup failure inline with restart action", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        "ws-1": {
+          error: "Server exited before startup JSON",
+          starting: false,
+        },
+      } as any,
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:google",
+      }),
+    );
+
+    expect(html).toContain("Workspace server unavailable");
+    expect(html).toContain("Workspace 1 failed to start");
+    expect(html).toContain("Server exited before startup JSON");
+    expect(html).toContain("Restart workspace server");
+  });
+
+  test("aws-bedrock-proxy global URL controls remain available when a workspace exists but none is selected", async () => {
+    const harness = setupJsdom();
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/ws-1",
+          createdAt: "2026-03-07T00:00:00.000Z",
+          lastOpenedAt: "2026-03-07T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: null,
+      providerCatalog: [
+        { id: "aws-bedrock-proxy", name: "AWS Bedrock Proxy" },
+      ] as any,
+      providerAuthMethodsByProvider: {
+        "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+      } as any,
+      userConfig: {
+        awsBedrockProxyBaseUrl: "https://proxy.example.com/v1",
+      },
+    });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(ProvidersPage, {
+          initialExpandedSectionId: "provider:aws-bedrock-proxy",
+        }));
+      });
+
+      expect(container.textContent).toContain("Global proxy URL");
+      expect(container.textContent).not.toContain("Add a workspace first to connect providers.");
+      expect(getButtonByText(container, "Clear").disabled).toBe(false);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("aws-bedrock-proxy global URL controls remain disabled only when no workspace exists", async () => {
+    const harness = setupJsdom();
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      workspaces: [],
+      selectedWorkspaceId: null,
+      providerCatalog: [
+        { id: "aws-bedrock-proxy", name: "AWS Bedrock Proxy" },
+      ] as any,
+      providerAuthMethodsByProvider: {
+        "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+      } as any,
+      userConfig: {
+        awsBedrockProxyBaseUrl: "https://proxy.example.com/v1",
+      },
+    });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(ProvidersPage, {
+          initialExpandedSectionId: "provider:aws-bedrock-proxy",
+        }));
+      });
+
+      expect(container.textContent).toContain("Global proxy URL");
+      expect(container.textContent).toContain("Add a workspace first to connect providers.");
+      expect(getButtonByText(container, "Clear").disabled).toBe(true);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("aws-bedrock-proxy fetch models shows unreachable proxy message", async () => {
+    const harness = setupJsdom();
+    const requestProviderCatalog = mock(async () => {
+      useAppStore.setState({
+        ...useAppStore.getState(),
+        providerCatalog: [
+          {
+            id: "aws-bedrock-proxy",
+            name: "AWS Bedrock Proxy",
+            state: "unreachable",
+            message: "Proxy /models request failed (503): temporary outage",
+            models: [],
+            defaultModel: "",
+          },
+        ] as any,
+      });
+    });
+    const requestProviderAuthMethods = mock(async () => {});
+    const requestUserConfig = mock(async () => {});
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          ...useAppStore.getState(),
+          providerCatalog: [
+            { id: "aws-bedrock-proxy", name: "AWS Bedrock Proxy", models: [], defaultModel: "" },
+          ] as any,
+          providerAuthMethodsByProvider: {
+            "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+          } as any,
+          requestProviderCatalog,
+          requestProviderAuthMethods,
+          requestUserConfig,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(ProvidersPage, { initialExpandedSectionId: "provider:aws-bedrock-proxy" }));
+      });
+
+      const fetchModelsButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Fetch models");
+      if (!fetchModelsButton) throw new Error("missing Fetch models button");
+      await act(async () => {
+        fetchModelsButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(requestProviderCatalog).toHaveBeenCalled();
+      expect(container.textContent).toContain("Proxy /models request failed (503): temporary outage");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("renders LM Studio as a local provider card without API token controls", () => {
     useAppStore.setState({
       ...useAppStore.getState(),
@@ -711,6 +994,9 @@ describe("desktop providers page", () => {
         },
       ] as any,
       providerUiState: {
+        awsBedrockProxy: {
+          enabled: true,
+        },
         lmstudio: {
           enabled: true,
           hiddenModels: ["llama/llama-3.2-vision"],
@@ -753,6 +1039,9 @@ describe("desktop providers page", () => {
       } as any,
       providerCatalog: [],
       providerUiState: {
+        awsBedrockProxy: {
+          enabled: true,
+        },
         lmstudio: {
           enabled: true,
           hiddenModels: [],
@@ -810,6 +1099,9 @@ describe("desktop providers page", () => {
             },
           ] as any,
           providerUiState: {
+            awsBedrockProxy: {
+              enabled: true,
+            },
             lmstudio: {
               enabled: false,
               hiddenModels: [],
@@ -847,6 +1139,141 @@ describe("desktop providers page", () => {
         modelCheckbox.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
       expect(setLmStudioModelVisible).toHaveBeenCalledWith("qwen/qwen3-30b-a3b", false);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("AWS Bedrock Proxy card action calls local enable handler", async () => {
+    const harness = setupJsdom();
+    const setAwsBedrockProxyEnabled = mock(async () => {});
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          ...useAppStore.getState(),
+          providerCatalog: [
+            {
+              id: "aws-bedrock-proxy",
+              name: "AWS Bedrock Proxy",
+              models: [],
+              defaultModel: "",
+            },
+          ] as any,
+          providerAuthMethodsByProvider: {
+            "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+          } as any,
+          providerUiState: {
+            ...useAppStore.getState().providerUiState,
+            awsBedrockProxy: {
+              enabled: true,
+            },
+          },
+          setAwsBedrockProxyEnabled,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(ProvidersPage, { initialExpandedSectionId: "provider:aws-bedrock-proxy" }));
+      });
+
+      const disableButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Disable");
+      if (!disableButton) throw new Error("missing AWS Bedrock Proxy disable button");
+      await act(async () => {
+        disableButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+      expect(setAwsBedrockProxyEnabled).toHaveBeenCalledWith(false);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("aws-bedrock-proxy with empty models catalog is classified as a model provider, not a tool provider", async () => {
+    const harness = setupJsdom();
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      providerCatalog: [
+        { id: "aws-bedrock-proxy", name: "AWS Bedrock Proxy", models: [], defaultModel: "" },
+      ] as any,
+      providerAuthMethodsByProvider: {
+        "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+      } as any,
+      providerUiState: {
+        ...useAppStore.getState().providerUiState,
+        awsBedrockProxy: { enabled: true },
+      },
+    });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(ProvidersPage));
+      });
+
+      const modelProvidersButton = getButtonByText(container, "Model Providers");
+      const toolProvidersButton = getButtonByText(container, "Tool Providers");
+
+      expect(modelProvidersButton.className).toContain("text-foreground");
+      expect(toolProvidersButton.className).toContain("text-muted-foreground");
+      expect(container.textContent).toContain("AWS Bedrock Proxy");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("deep link to provider:aws-bedrock-proxy with empty model discovery resolves to model tab", async () => {
+    const harness = setupJsdom();
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      providerCatalog: [
+        { id: "aws-bedrock-proxy", name: "AWS Bedrock Proxy", models: [], defaultModel: "" },
+      ] as any,
+      providerAuthMethodsByProvider: {
+        "aws-bedrock-proxy": [{ id: "api_key", type: "api", label: "API key" }],
+      } as any,
+      providerUiState: {
+        ...useAppStore.getState().providerUiState,
+        awsBedrockProxy: { enabled: true },
+      },
+    });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(ProvidersPage, {
+          initialExpandedSectionId: "provider:aws-bedrock-proxy",
+        }));
+      });
+
+      const modelProvidersButton = getButtonByText(container, "Model Providers");
+      const toolProvidersButton = getButtonByText(container, "Tool Providers");
+
+      expect(modelProvidersButton.className).toContain("text-foreground");
+      expect(toolProvidersButton.className).toContain("text-muted-foreground");
+      expect(container.textContent).toContain("AWS Bedrock Proxy");
+      expect(container.textContent).toContain("Global proxy URL");
 
       await act(async () => {
         root.unmount();

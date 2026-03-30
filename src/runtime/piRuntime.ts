@@ -1,5 +1,6 @@
 import { SpanStatusCode, trace, type AttributeValue, type Span } from "@opentelemetry/api";
 import { stream as piStream } from "@mariozechner/pi-ai";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   asFiniteNumber,
   asNonEmptyString,
@@ -16,6 +17,11 @@ import {
 import { mapPiEventToRawParts } from "./piStreamParts";
 
 import { getSavedProviderApiKey } from "../config";
+import {
+  awsBedrockProxyForcedHeaders,
+  resolveAwsBedrockProxyApiKey,
+  resolveAwsBedrockProxyBaseUrl,
+} from "../providers/awsBedrockProxyShared";
 import { getBasetenModelSpec, resolveBasetenApiKey } from "../providers/basetenShared";
 import { prepareLmStudioModelMetadataForInference } from "../providers/lmstudio/catalog";
 import { lmStudioOpenAiBaseUrl } from "../providers/lmstudio/client";
@@ -32,7 +38,7 @@ import {
 import { getFireworksModelSpec, resolveFireworksApiKey } from "../providers/fireworksShared";
 import { getTogetherModelSpec, resolveTogetherApiKey } from "../providers/togetherShared";
 import type { ModelMessage, ProviderName } from "../types";
-import { getResolvedModelMetadataSync } from "../models/metadata";
+import { getResolvedModelMetadataSync, resolveModelMetadata } from "../models/metadata";
 import type { TelemetrySettings } from "../observability/runtime";
 import {
   continuationMatchesTarget,
@@ -162,6 +168,8 @@ export type ResolvedPiRuntimeModel = {
   apiKey?: string;
   headers?: Record<string, string>;
   accountId?: string;
+  /** Resolved metadata from model config, when available (e.g. aws-bedrock-proxy). */
+  resolvedMetadata?: { providerOptionsDefaults: Record<string, unknown> };
 };
 
 const PI_PLACEHOLDER_COST = Object.freeze({
@@ -355,6 +363,25 @@ function getNvidiaPiModel(modelId: string): PiModel | null {
   };
 }
 
+function getAwsBedrockProxyPiModel(opts: {
+  modelId: string;
+  baseUrl: string;
+  displayName?: string;
+  supportsImageInput?: boolean;
+}): PiModel {
+  return {
+    id: opts.modelId,
+    name: opts.displayName ?? opts.modelId,
+    api: "openai-completions",
+    provider: "aws-bedrock-proxy",
+    baseUrl: opts.baseUrl,
+    reasoning: true,
+    input: opts.supportsImageInput ? ["text", "image"] : ["text"],
+    contextWindow: 262_144,
+    maxTokens: 65_536,
+  };
+}
+
 function isNvidiaChatCompletionsUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -431,58 +458,273 @@ async function maybeRewriteNvidiaFetchRequest(
   return [input, { ...(init ?? {}), body: rewrittenBody }];
 }
 
-const NVIDIA_FETCH_PATCH_STATE = Symbol.for("cowork.nvidia.fetchPatchState");
+const FETCH_REWRITE_STATE = Symbol.for("cowork.fetchRewriteState");
+const FETCH_REWRITE_CONTEXT = new AsyncLocalStorage<FetchRewriteEntry[]>();
 
-type NvidiaFetchPatchState = {
-  refCount: number;
-  originalFetch: typeof fetch;
+type FetchRewriteEntry = {
+  rewrite: (input: RequestInfo | URL, init?: RequestInit) => Promise<[RequestInfo | URL, RequestInit | undefined]>;
 };
 
-async function withPatchedNvidiaFetch<T>(run: () => Promise<T>): Promise<T> {
-  const globalWithState = globalThis as typeof globalThis & {
-    [NVIDIA_FETCH_PATCH_STATE]?: NvidiaFetchPatchState;
+type FetchPatchState = {
+  originalFetch: typeof fetch;
+  activeInvocationCount: number;
+};
+
+type OpenAiProxyPromptCachingTtl = "5m" | "1h";
+
+type OpenAiProxyPromptCachingConfig = {
+  enabled: boolean;
+  ttl: OpenAiProxyPromptCachingTtl;
+};
+
+type OpenAiProxyFetchRewriteContext = {
+  baseUrl: string;
+  modelId: string;
+  streamOptions: Record<string, unknown>;
+  /** Structured capability flag from model metadata. When set, bypasses string-based model ID heuristics. */
+  promptCachingCapable?: boolean;
+  /** Structured capability flag from model metadata. When set, bypasses string-based model ID heuristics for 1h TTL support. */
+  promptCachingOneHourCapable?: boolean;
+};
+
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function isOpenAiProxyPromptCachingTtl(value: unknown): value is OpenAiProxyPromptCachingTtl {
+  return value === "5m" || value === "1h";
+}
+
+function isClaudeLikeOpenAiProxyModel(modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  return lower.includes("claude") || lower.includes("anthropic");
+}
+
+function supportsOpenAiProxyPromptCachingOneHour(modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  return lower.includes("claude")
+    && (lower.includes("4-5") || lower.includes("4.5") || lower.includes("4_5"));
+}
+
+function resolveOpenAiProxyPromptCachingConfig(context: OpenAiProxyFetchRewriteContext): OpenAiProxyPromptCachingConfig {
+  const enabledOverride = asBoolean(context.streamOptions.openAiProxyPromptCachingEnabled);
+  const ttlOverride = isOpenAiProxyPromptCachingTtl(context.streamOptions.openAiProxyPromptCachingTtl)
+    ? context.streamOptions.openAiProxyPromptCachingTtl
+    : undefined;
+
+  // Prefer structured capability flags from model metadata; fall back to string-based heuristics.
+  const claudeLikeModel = context.promptCachingCapable ?? isClaudeLikeOpenAiProxyModel(context.modelId);
+  const enabled = enabledOverride ?? claudeLikeModel;
+  if (!enabled || !claudeLikeModel) {
+    return { enabled: false, ttl: "5m" };
+  }
+
+  const supportsOneHour = context.promptCachingOneHourCapable ?? supportsOpenAiProxyPromptCachingOneHour(context.modelId);
+  const ttl = ttlOverride === "1h" && supportsOneHour ? "1h" : "5m";
+  return { enabled: true, ttl };
+}
+
+function normalizePathWithLeadingSlash(pathname: string): string {
+  const normalized = pathname.trim().replace(/\/+$/, "");
+  if (!normalized) return "/";
+  return normalized.startsWith("/") ? normalized : `/${normalized}`;
+}
+
+function isOpenAiProxyChatCompletionsUrl(requestUrl: string, baseUrl: string): boolean {
+  try {
+    const request = new URL(requestUrl);
+    const base = new URL(baseUrl);
+    if (request.origin !== base.origin) return false;
+
+    const basePath = normalizePathWithLeadingSlash(base.pathname);
+    const expectedPath = basePath.endsWith("/chat/completions")
+      ? basePath
+      : `${basePath}/chat/completions`.replace(/\/+/g, "/");
+    const requestPath = normalizePathWithLeadingSlash(request.pathname);
+    return requestPath === expectedPath;
+  } catch {
+    return false;
+  }
+}
+
+function buildOpenAiProxyCacheControl(ttl: OpenAiProxyPromptCachingTtl): Record<string, unknown> {
+  return ttl === "1h"
+    ? { type: "ephemeral", ttl: "1h" }
+    : { type: "ephemeral" };
+}
+
+function hasExplicitOpenAiProxyCacheControl(messages: Array<Record<string, unknown>>): boolean {
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      const record = asRecord(part);
+      if (!record) continue;
+      if (record.type === "text" && "cache_control" in record) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function hasNonEmptyTextValue(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function addOpenAiProxyCacheControlToMessage(
+  message: Record<string, unknown>,
+  ttl: OpenAiProxyPromptCachingTtl,
+): boolean {
+  const content = message.content;
+  const cacheControl = buildOpenAiProxyCacheControl(ttl);
+
+  if (hasNonEmptyTextValue(content)) {
+    message.content = [{ type: "text", text: content, cache_control: cacheControl }];
+    return true;
+  }
+  if (!Array.isArray(content)) return false;
+  for (let index = content.length - 1; index >= 0; index -= 1) {
+    const part = asRecord(content[index]);
+    if (!part || part.type !== "text") continue;
+    if (!hasNonEmptyTextValue(part.text)) continue;
+    if ("cache_control" in part) return false;
+    part.cache_control = cacheControl;
+    return true;
+  }
+  return false;
+}
+
+function injectOpenAiProxyCacheControl(
+  body: Record<string, unknown>,
+  ttl: OpenAiProxyPromptCachingTtl,
+): boolean {
+  if (!Array.isArray(body.messages)) return false;
+  const messages = body.messages
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => !!entry);
+  if (messages.length === 0) return false;
+  if (hasExplicitOpenAiProxyCacheControl(messages)) return false;
+
+  const tryInjectByRole = (roles: ReadonlySet<string>): boolean => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (!roles.has(String(message.role ?? ""))) continue;
+      if (addOpenAiProxyCacheControlToMessage(message, ttl)) return true;
+    }
+    return false;
   };
-  const existingState = globalWithState[NVIDIA_FETCH_PATCH_STATE];
-  if (existingState) {
-    existingState.refCount += 1;
+
+  if (tryInjectByRole(new Set(["user"]))) return true;
+  if (tryInjectByRole(new Set(["system", "developer"]))) return true;
+  return false;
+}
+
+async function maybeRewriteOpenAiProxyFetchRequest(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  context: OpenAiProxyFetchRewriteContext,
+): Promise<[RequestInfo | URL, RequestInit | undefined]> {
+  const url = requestUrlFromFetchInput(input);
+  if (!isOpenAiProxyChatCompletionsUrl(url, context.baseUrl)) {
+    return [input, init];
+  }
+
+  const promptCachingConfig = resolveOpenAiProxyPromptCachingConfig(context);
+  if (!promptCachingConfig.enabled) {
+    return [input, init];
+  }
+
+  let rawBody = decodeRequestBody(init?.body);
+  if (!rawBody && input instanceof Request && init?.body === undefined) {
+    rawBody = await input.clone().text();
+  }
+  if (!rawBody) return [input, init];
+
+  let parsedBody: Record<string, unknown> | null = null;
+  try {
+    parsedBody = asRecord(JSON.parse(rawBody));
+  } catch {
+    parsedBody = null;
+  }
+  if (!parsedBody) return [input, init];
+
+  const injected = injectOpenAiProxyCacheControl(parsedBody, promptCachingConfig.ttl);
+  if (!injected) return [input, init];
+
+  const rewrittenBody = JSON.stringify(parsedBody);
+  if (input instanceof Request && init === undefined) {
+    return [new Request(input, { body: rewrittenBody }), undefined];
+  }
+  return [input, { ...(init ?? {}), body: rewrittenBody }];
+}
+
+async function withPatchedFetch<T>(
+  rewrite: FetchRewriteEntry["rewrite"],
+  run: () => Promise<T>,
+): Promise<T> {
+  const g = globalThis as typeof globalThis & { [FETCH_REWRITE_STATE]?: FetchPatchState };
+  const entry: FetchRewriteEntry = { rewrite };
+  let state = g[FETCH_REWRITE_STATE];
+
+  if (!state) {
+    const originalFetch = globalThis.fetch;
+    state = {
+      originalFetch,
+      activeInvocationCount: 0,
+    };
+
+    const wrappedFetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        let currentInput = input;
+        let currentInit = init;
+        const activeEntries = FETCH_REWRITE_CONTEXT.getStore() ?? [];
+        // Apply the innermost invocation rewrite first so parent rewrites don't
+        // mutate nested invocation payloads before the nested context runs.
+        for (let index = activeEntries.length - 1; index >= 0; index -= 1) {
+          const activeEntry = activeEntries[index];
+          [currentInput, currentInit] = await activeEntry.rewrite(currentInput, currentInit);
+        }
+        return originalFetch.call(globalThis, currentInput as any, currentInit as any);
+      },
+      originalFetch,
+    );
+
+    globalThis.fetch = wrappedFetch as typeof fetch;
+    g[FETCH_REWRITE_STATE] = state;
+  }
+
+  const inheritedEntries = FETCH_REWRITE_CONTEXT.getStore() ?? [];
+  const activeEntries = [...inheritedEntries, entry];
+
+  return await FETCH_REWRITE_CONTEXT.run(activeEntries, async () => {
+    state.activeInvocationCount += 1;
     try {
       return await run();
     } finally {
-      existingState.refCount -= 1;
-      if (existingState.refCount === 0) {
-        globalThis.fetch = existingState.originalFetch;
-        delete globalWithState[NVIDIA_FETCH_PATCH_STATE];
+      state.activeInvocationCount -= 1;
+      if (state.activeInvocationCount === 0) {
+        globalThis.fetch = state.originalFetch;
+        delete g[FETCH_REWRITE_STATE];
       }
     }
-  }
+  });
+}
 
-  const originalFetch = globalThis.fetch;
-  const wrappedFetch = Object.assign(
-    async (input: RequestInfo | URL, init?: RequestInit) => {
-      const [nextInput, nextInit] = await maybeRewriteNvidiaFetchRequest(input, init);
-      return originalFetch.call(globalThis, nextInput as any, nextInit as any);
-    },
-    originalFetch,
+async function withPatchedNvidiaFetch<T>(run: () => Promise<T>): Promise<T> {
+  return withPatchedFetch(
+    (input, init) => maybeRewriteNvidiaFetchRequest(input, init),
+    run,
   );
+}
 
-  globalThis.fetch = wrappedFetch as typeof fetch;
-  globalWithState[NVIDIA_FETCH_PATCH_STATE] = {
-    refCount: 1,
-    originalFetch,
-  };
-
-  try {
-    return await run();
-  } finally {
-    const currentState = globalWithState[NVIDIA_FETCH_PATCH_STATE];
-    if (currentState) {
-      currentState.refCount -= 1;
-      if (currentState.refCount === 0) {
-        globalThis.fetch = currentState.originalFetch;
-        delete globalWithState[NVIDIA_FETCH_PATCH_STATE];
-      }
-    }
-  }
+async function withPatchedOpenAiProxyFetch<T>(
+  context: OpenAiProxyFetchRewriteContext,
+  run: () => Promise<T>,
+): Promise<T> {
+  return withPatchedFetch(
+    (input, init) => maybeRewriteOpenAiProxyFetchRequest(input, init, context),
+    run,
+  );
 }
 
 type RuntimeStepOverrides = RuntimeStepOverride;
@@ -561,6 +803,41 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
       apiKey: resolveNvidiaApiKey({
         savedKey: getSavedProviderApiKey(params.config, "nvidia"),
       }),
+    };
+  }
+
+  if (provider === "aws-bedrock-proxy") {
+    const providerOptions = params.providerOptions ?? params.config.providerOptions;
+    const baseUrl = resolveAwsBedrockProxyBaseUrl({
+      config: params.config,
+      providerOptions,
+    });
+    if (!baseUrl) {
+      throw new Error(
+        "Missing AWS_BEDROCK_PROXY_BASE_URL (or providerOptions[\"aws-bedrock-proxy\"].baseUrl) for provider aws-bedrock-proxy.",
+      );
+    }
+    const apiKey = resolveAwsBedrockProxyApiKey({
+      savedKey: getSavedProviderApiKey(params.config, "aws-bedrock-proxy"),
+    });
+    const resolvedMetadata = await resolveModelMetadata(provider, modelId, {
+      config: params.config,
+      providerOptions,
+      awsBedrockProxySavedApiKey: getSavedProviderApiKey(params.config, "aws-bedrock-proxy"),
+      source: "model",
+    });
+    return {
+      model: getAwsBedrockProxyPiModel({
+        modelId: resolvedMetadata.id,
+        baseUrl,
+        displayName: resolvedMetadata.displayName,
+        supportsImageInput: resolvedMetadata.supportsImageInput,
+      }),
+      apiKey,
+      headers: awsBedrockProxyForcedHeaders(),
+      resolvedMetadata: {
+        providerOptionsDefaults: resolvedMetadata.providerOptionsDefaults,
+      },
     };
   }
 
@@ -971,6 +1248,10 @@ export const __internal = {
   asNonEmptyString,
   asRecord,
   buildStepState,
+  injectOpenAiProxyCacheControl,
+  isClaudeLikeOpenAiProxyModel,
+  maybeRewriteOpenAiProxyFetchRequest,
+  resolveOpenAiProxyPromptCachingConfig,
   redactTelemetrySecrets,
   splitStepOverrides,
   emitPiEventAsRawPart,
@@ -1075,6 +1356,24 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
 
             if (params.config.provider === "nvidia") {
               await withPatchedNvidiaFetch(runModelStep);
+            } else if (params.config.provider === "aws-bedrock-proxy") {
+              const providerDefaults = resolved.resolvedMetadata?.providerOptionsDefaults;
+              const promptCachingDefaults = providerDefaults && typeof providerDefaults === "object"
+                ? (providerDefaults as Record<string, unknown>).promptCaching
+                : undefined;
+              const pcDefaults = promptCachingDefaults && typeof promptCachingDefaults === "object"
+                ? (promptCachingDefaults as Record<string, unknown>)
+                : undefined;
+              await withPatchedOpenAiProxyFetch(
+                {
+                  baseUrl: resolved.model.baseUrl,
+                  modelId: resolved.model.id,
+                  streamOptions: stepState.streamOptions,
+                  promptCachingCapable: pcDefaults?.enabled === true ? true : undefined,
+                  promptCachingOneHourCapable: pcDefaults?.ttl === "1h" ? true : undefined,
+                },
+                runModelStep,
+              );
             } else {
               await runModelStep();
             }

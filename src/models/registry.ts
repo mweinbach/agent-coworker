@@ -15,6 +15,7 @@ import codexCliGpt51 from "../../config/models/codex-cli/gpt-5.1.json";
 import codexCliGpt52Codex from "../../config/models/codex-cli/gpt-5.2-codex.json";
 import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
 import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
+import awsBedrockProxyClaudeSonnet45 from "../../config/models/aws-bedrock-proxy/claude-sonnet-4-5.json";
 import fireworksGlm5 from "../../config/models/fireworks/accounts-fireworks-models-glm-5.json";
 import fireworksKimiK2p5 from "../../config/models/fireworks/accounts-fireworks-models-kimi-k2p5.json";
 import fireworksKimiK2p5Turbo from "../../config/models/fireworks/accounts-fireworks-routers-kimi-k2p5-turbo.json";
@@ -47,6 +48,7 @@ import type { ProviderName } from "../types";
 
 export const STATIC_MODEL_PROVIDER_NAMES = [
   "google",
+  "aws-bedrock-proxy",
   "openai",
   "anthropic",
   "baseten",
@@ -97,6 +99,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   fireworksKimiK2p5Turbo,
   fireworksMinimaxM2p5,
   googleGemini3FlashPreview,
+  awsBedrockProxyClaudeSonnet45,
   googleGemini31FlashLitePreview,
   googleGemini31ProPreview,
   googleGemini31ProPreviewCustomtools,
@@ -127,6 +130,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
 function buildRegistry(entries: SupportedModel[]) {
   const byProvider: Record<StaticModelProviderName, SupportedModel[]> = {
     google: [],
+    "aws-bedrock-proxy": [],
     openai: [],
     anthropic: [],
     baseten: [],

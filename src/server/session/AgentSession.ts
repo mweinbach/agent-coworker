@@ -1071,7 +1071,9 @@ export class AgentSession {
   }
 
   private async ensureSystemPromptReady(): Promise<boolean> {
-    if (this.state.system.trim().length > 0) {
+    const hasSystemPrompt = this.state.system.trim().length > 0;
+    const needsDiscoveredSkills = this.state.discoveredSkills.length === 0;
+    if (hasSystemPrompt && !needsDiscoveredSkills) {
       return true;
     }
     if (this.systemPromptLoadPromise) {
@@ -1081,7 +1083,9 @@ export class AgentSession {
     this.systemPromptLoadPromise = (async () => {
       try {
         const result = await this.context.deps.loadSystemPromptWithSkillsImpl(this.state.config);
-        this.state.system = result.prompt;
+        if (!hasSystemPrompt) {
+          this.state.system = result.prompt;
+        }
         this.state.discoveredSkills = result.discoveredSkills;
         return true;
       } catch (err) {

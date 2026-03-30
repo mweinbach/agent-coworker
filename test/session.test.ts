@@ -219,6 +219,7 @@ function makeSession(
     cancelAgentSessionsImpl: (parentSessionId: string) => void;
     deleteSessionImpl: (opts: any) => Promise<void>;
     sessionInfoPatch: Partial<SessionInfoState>;
+    discoveredSkills: Array<{ name: string; description: string }>;
   }>
 ) {
   const dir = "/tmp/test-session";
@@ -228,6 +229,7 @@ function makeSession(
   const session = new AgentSession({
     config: overrides?.config ?? makeConfig(dir),
     system: overrides?.system ?? "You are a test assistant.",
+    discoveredSkills: overrides?.discoveredSkills ?? [{ name: "test-skill", description: "Test skill" }],
     yolo: overrides?.yolo,
     emit: overrides?.emit ?? emit,
     connectProviderImpl: overrides?.connectProviderImpl,
@@ -546,6 +548,28 @@ describe("AgentSession", () => {
   });
 
   describe("memory settings", () => {
+    test("sendUserMessage backfills discovered skills without replacing an existing system prompt", async () => {
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "prompt:root-system",
+        discoveredSkills: [{ name: "delegated-skill", description: "Delegated skill" }],
+      }));
+      const { session } = makeSession({
+        system: "prompt:child-system",
+        loadSystemPromptWithSkillsImpl,
+        discoveredSkills: [],
+      });
+
+      await session.sendUserMessage("hello");
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+
+      const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(runTurnArgs.system).toBe("prompt:child-system");
+      expect(runTurnArgs.discoveredSkills).toEqual([
+        { name: "delegated-skill", description: "Delegated skill" },
+      ]);
+    });
+
     test("setConfig refreshes the cached system prompt when enableMemory changes", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const loadSystemPromptWithSkillsImpl = mock(async (config: AgentConfig) => ({
@@ -5605,6 +5629,7 @@ describe("AgentSession", () => {
           costTracker: tracker.getSnapshot(),
         },
         baseConfig: makeConfig("/tmp/persisted"),
+        discoveredSkills: [{ name: "test-skill", description: "Test skill" }],
         emit,
         sessionBackupFactory: makeSessionBackupFactory(),
         getProviderStatusesImpl: async () => [],
@@ -5663,6 +5688,7 @@ describe("AgentSession", () => {
           costTracker: null,
         },
         baseConfig: makeConfig("/tmp/persisted"),
+        discoveredSkills: [{ name: "test-skill", description: "Test skill" }],
         emit,
         sessionBackupFactory: makeSessionBackupFactory(),
         getProviderStatusesImpl: async () => [],
@@ -5767,6 +5793,7 @@ describe("AgentSession", () => {
           costTracker: null,
         },
         baseConfig: makeConfig("/tmp/persisted"),
+        discoveredSkills: [{ name: "test-skill", description: "Test skill" }],
         emit,
         sessionBackupFactory: makeSessionBackupFactory(),
         getProviderStatusesImpl: async () => [],

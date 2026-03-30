@@ -30,6 +30,7 @@ import {
   PromptInputFooter,
   PromptInputForm,
   PromptInputRoot,
+  PromptInputStatusRow,
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
@@ -231,7 +232,7 @@ export function getComposerSubmitState(opts: {
   };
 }
 
-export function composerBusyHint(submitState: ReturnType<typeof getComposerSubmitState>): string {
+export function composerBusyHint(submitState: ReturnType<typeof getComposerSubmitState>): string | null {
   if (submitState.status === "streaming") {
     return "Type to steer, or use stop to cancel.";
   }
@@ -241,7 +242,7 @@ export function composerBusyHint(submitState: ReturnType<typeof getComposerSubmi
   if (submitState.mode === "steer-ready") {
     return "Steer ready. Press Enter to inject it into the current run.";
   }
-  return "Press Enter to send, Shift+Enter for newline.";
+  return null;
 }
 
 export function resolveComposerBusyPolicy(busy: boolean): "reject" | "steer" {
@@ -1140,11 +1141,7 @@ export function ChatView() {
                   aria-label="Message input"
                 />
               </PromptInputBody>
-              {composerSubmitState.status === "streaming" || composerSubmitState.mode !== "send" ? (
-                <div className="px-1 pb-1 text-[11px] text-muted-foreground">
-                  {composerHint}
-                </div>
-              ) : null}
+              <PromptInputStatusRow>{composerHint}</PromptInputStatusRow>
               <PromptInputFooter>
                 <PromptInputTools>
                   <input

@@ -305,6 +305,7 @@ describe("desktop reasoning UI helpers", () => {
     expect(composerBusyHint({ status: "streaming", disabled: false, mode: "send" })).toBe("Type to steer, or use stop to cancel.");
     expect(composerBusyHint({ status: "ready", disabled: false, mode: "steer-ready" })).toBe("Steer ready. Press Enter to inject it into the current run.");
     expect(composerBusyHint({ status: "ready", disabled: false, mode: "steer-pending" })).toBe("Steer sent. Waiting for the running turn to accept it.");
+    expect(composerBusyHint({ status: "ready", disabled: false, mode: "send" })).toBeNull();
   });
 
   test("hydrates overflowed citation urls and sources from structured webSearch spill files", async () => {

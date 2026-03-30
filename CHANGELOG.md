@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.1.39 - 2026-03-30
+
+### Changed
+
+- **Startup Performance** — Major optimization to server startup and control bootstrap (#64):
+  - Control bootstrap score improved 42.9% (3987 → 2278)
+  - Packed bundle reduced from 3635 KB to 2195 KB
+  - Server ready time reduced from 338ms to 68ms
+  - Control bootstrap time reduced from 343ms to 71ms
+- **Prompt Templates** — Converted system model prompts from markdown to JSON format for faster loading and deduplication
+- **Runtime Schema Split** — Extracted `schema.sessionRuntime.ts` from session schemas for lazy loading
+- **Session Bootstrap** — Fast-path for control session startup with lazy initialization of non-critical subsystems
+- Fixed prompt readiness tracking so empty skill catalogs don't trigger reloads on every turn
+- Fixed child session skill preservation across session boundaries
+
 ## 0.1.37 - 2026-03-29
 
 ### Added

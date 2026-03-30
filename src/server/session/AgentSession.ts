@@ -305,6 +305,7 @@ export class AgentSession {
       config: opts.config,
       system: opts.system,
       discoveredSkills: opts.discoveredSkills ?? [],
+      systemPromptMetadataLoaded: opts.system.trim().length > 0 && opts.discoveredSkills !== undefined,
       yolo: opts.yolo === true,
       messages: [],
       allMessages: [...seededMessages],
@@ -1072,8 +1073,7 @@ export class AgentSession {
 
   private async ensureSystemPromptReady(): Promise<boolean> {
     const hasSystemPrompt = this.state.system.trim().length > 0;
-    const needsDiscoveredSkills = this.state.discoveredSkills.length === 0;
-    if (hasSystemPrompt && !needsDiscoveredSkills) {
+    if (hasSystemPrompt && this.state.systemPromptMetadataLoaded) {
       return true;
     }
     if (this.systemPromptLoadPromise) {
@@ -1087,6 +1087,7 @@ export class AgentSession {
           this.state.system = result.prompt;
         }
         this.state.discoveredSkills = result.discoveredSkills;
+        this.state.systemPromptMetadataLoaded = true;
         return true;
       } catch (err) {
         this.context.emitError(
@@ -1108,6 +1109,7 @@ export class AgentSession {
       const result = await this.context.deps.loadSystemPromptWithSkillsImpl(this.state.config);
       this.state.system = result.prompt;
       this.state.discoveredSkills = result.discoveredSkills;
+      this.state.systemPromptMetadataLoaded = true;
       this.queuePersistSessionSnapshot(reason);
     } catch (err) {
       this.context.emitError(

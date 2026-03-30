@@ -1,4 +1,7 @@
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "bun:test";
@@ -10,14 +13,26 @@ type NpmPackEntry = {
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 function dryRunPackPaths(): string[] {
-  const output = execFileSync("npm", ["pack", "--json", "--dry-run"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, npm_config_loglevel: "error" },
-    maxBuffer: 20 * 1024 * 1024,
-  });
-  const parsed = JSON.parse(output) as NpmPackEntry[];
-  return parsed[0]?.files.map((file) => file.path) ?? [];
+  const tempDir = mkdtempSync(path.join(tmpdir(), "cowork-pack-manifest-"));
+  const outputPath = path.join(tempDir, "pack.json");
+
+  try {
+    execFileSync("node", ["-e", [
+      "const { execFileSync } = require(\"node:child_process\");",
+      "const { writeFileSync } = require(\"node:fs\");",
+      `const output = execFileSync("npm", ["pack", "--json", "--dry-run"], { cwd: ${JSON.stringify(repoRoot)}, encoding: "utf8", env: { ...process.env, npm_config_loglevel: "error" } });`,
+      `writeFileSync(${JSON.stringify(outputPath)}, output);`,
+    ].join("\n")], {
+      cwd: repoRoot,
+      stdio: ["ignore", "ignore", "inherit"],
+    });
+
+    const output = readFileSync(outputPath, "utf8");
+    const parsed = JSON.parse(output) as NpmPackEntry[];
+    return parsed[0]?.files.map((file) => file.path) ?? [];
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 describe("package manifest", () => {

@@ -100,6 +100,7 @@ export type SessionRuntimeState = {
   config: AgentConfig;
   system: string;
   discoveredSkills: Array<{ name: string; description: string }>;
+  systemPromptMetadataLoaded: boolean;
   yolo: boolean;
   messages: ModelMessage[];
   allMessages: ModelMessage[];

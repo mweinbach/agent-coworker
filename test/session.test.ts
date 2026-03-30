@@ -226,10 +226,13 @@ function makeSession(
   const { emit, events } = makeEmit();
   const sessionBackupFactory = overrides?.sessionBackupFactory ?? makeSessionBackupFactory();
   const getProviderStatusesImpl = overrides?.getProviderStatusesImpl ?? (async () => []);
+  const discoveredSkills = overrides && "discoveredSkills" in overrides
+    ? overrides.discoveredSkills
+    : [{ name: "test-skill", description: "Test skill" }];
   const session = new AgentSession({
     config: overrides?.config ?? makeConfig(dir),
     system: overrides?.system ?? "You are a test assistant.",
-    discoveredSkills: overrides?.discoveredSkills ?? [{ name: "test-skill", description: "Test skill" }],
+    discoveredSkills,
     yolo: overrides?.yolo,
     emit: overrides?.emit ?? emit,
     connectProviderImpl: overrides?.connectProviderImpl,
@@ -548,7 +551,26 @@ describe("AgentSession", () => {
   });
 
   describe("memory settings", () => {
-    test("sendUserMessage backfills discovered skills without replacing an existing system prompt", async () => {
+    test("sendUserMessage skips prompt reload when cached metadata has zero discovered skills", async () => {
+      const loadSystemPromptWithSkillsImpl = mock(async () => {
+        throw new Error("should not reload");
+      });
+      const { session } = makeSession({
+        system: "prompt:root-system",
+        loadSystemPromptWithSkillsImpl,
+        discoveredSkills: [],
+      });
+
+      await session.sendUserMessage("hello");
+
+      expect(loadSystemPromptWithSkillsImpl).not.toHaveBeenCalled();
+
+      const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(runTurnArgs.system).toBe("prompt:root-system");
+      expect(runTurnArgs.discoveredSkills).toEqual([]);
+    });
+
+    test("sendUserMessage backfills discovered skills when prompt metadata is missing", async () => {
       const loadSystemPromptWithSkillsImpl = mock(async () => ({
         prompt: "prompt:root-system",
         discoveredSkills: [{ name: "delegated-skill", description: "Delegated skill" }],
@@ -556,7 +578,7 @@ describe("AgentSession", () => {
       const { session } = makeSession({
         system: "prompt:child-system",
         loadSystemPromptWithSkillsImpl,
-        discoveredSkills: [],
+        discoveredSkills: undefined,
       });
 
       await session.sendUserMessage("hello");

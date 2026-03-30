@@ -146,6 +146,9 @@ export async function setMCPServerOAuthClientInformation(opts: {
           ...(opts.clientInformation.clientSecret
             ? { clientSecret: opts.clientInformation.clientSecret }
             : {}),
+          ...(opts.clientInformation.redirectUris?.length
+            ? { redirectUris: [...opts.clientInformation.redirectUris] }
+            : {}),
           updatedAt: nowIso(),
         },
       },

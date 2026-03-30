@@ -205,6 +205,27 @@
   - `~/.bun/bin/bun run typecheck`
   - `~/.bun/bin/bun test` on 2026-03-23 (`2618 pass`, `3 skip`, `0 fail`)
 
+## Fix Quartr MCP OAuth Completion
+
+- [x] Confirm the Quartr MCP OAuth failures are real and identify the protocol mismatches blocking sign-in.
+- [x] Preserve RFC 9728 protected-resource `resource` values and redirect-URI-aware dynamic client reuse for MCP OAuth authorize/token flows.
+- [x] Finish auto-mode MCP OAuth in the harness by completing the captured loopback callback automatically and persisting the token into the correct `.cowork/auth/mcp-credentials.json` scope.
+- [x] Re-run focused MCP auth tests, repo typecheck, and the full `bun test` lane.
+
+## Fix Quartr MCP OAuth Completion Review
+
+- Confirmed two real Quartr-specific MCP OAuth mismatches before the final auto-complete fix:
+  - When `resource` was omitted from the authorize request, Quartr returned `{"error":"invalid_target","error_description":"resource does not match this server"}`; protected-resource discovery published `resource: "https://mcp.quartr.com"`, so the MCP OAuth layer now discovers and persists that resource when config omits it.
+  - Reusing a dynamically registered client across different loopback callback ports caused Quartr to return `{"error":"invalid_request","error_description":"redirect_uri not registered for this client"}`; stored MCP OAuth client info now persists `redirectUris`, and the authorize flow re-registers when the current redirect URI no longer matches the saved registration.
+- `src/server/session/mcp/McpAuthFlow.ts` now treats MCP `oauthMode: "auto"` as a full harness-owned flow: after the authorize challenge is emitted it keeps polling the captured loopback callback in the background, waits for the session connection lane to go idle, exchanges the code automatically, writes the resulting token to the correct MCP auth store, clears pending state, and emits the normal `mcp_server_auth_result` plus refreshed MCP server snapshot without requiring the desktop `Continue` button.
+- `src/runtime/piRuntimeOptions.ts` now normalizes provider-facing MCP tool schemas before they reach OpenAI-compatible runtimes. Tuple-style JSON Schema nodes like `items: [{type:"number"}, {type:"number"}]` are collapsed into provider-safe object schemas, schema-valued keywords are normalized recursively, and tuple-only keywords that OpenAI-compatible backends reject are stripped or converted before function registration.
+- Added focused regression coverage in `test/mcp.auth-flow.test.ts`, extended MCP auth-store coverage in `test/mcp.auth-store.test.ts`, and kept the Quartr-specific authorize/token regressions in `test/mcp.oauth-provider.test.ts`.
+- Added a shared tuple-schema regression in `test/runtime.pi-options.test.ts` and reran the OpenAI-compatible request-builder coverage in `test/runtime.openai-responses-runtime.test.ts` so MCP tools with tuple arrays stop failing provider-side schema validation.
+- Verification passed with:
+  - `~/.bun/bin/bun test test/runtime.pi-options.test.ts test/runtime.openai-responses-runtime.test.ts test/mcp.auth-flow.test.ts test/mcp.auth-store.test.ts test/mcp.oauth-provider.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test` on 2026-03-30 (`2872 pass`, `3 skip`, `0 fail`)
+
 ## Citation Chip Polish
 
 - [x] Inspect the current native citation rendering path and confirm the chip styling has to be applied in the shared markdown normalizer rather than provider-specific UI code.
@@ -678,3 +699,18 @@
 - The root cause was a file-level `mock.module("../src/ui/skills/SkillDetailDialog", ...)` in `apps/desktop/test/skills-catalog-page.test.ts`. On Bun/Linux CI that mock can leak into the adjacent skill dialog test file, causing `SkillDetailDialog` to stay mocked as `null`.
 - `apps/desktop/test/skills-catalog-page.test.ts` no longer mocks `SkillDetailDialog`. Those catalog-page tests only assert loading and empty states while the dialog remains closed, so the extra mock was unnecessary and destabilized CI.
 - Verification passed with `bun test apps/desktop/test/skills-catalog-page.test.ts apps/desktop/test/skill-detail-dialog.test.ts --rerun-each 25`, `bun test apps/desktop/test/skill-detail-dialog.test.ts apps/desktop/test/protocol-v2-events.test.ts apps/desktop/test/thread-reconnect.test.ts apps/desktop/test/jsonrpc-single-connection.test.ts apps/desktop/test/bootstrap-cache.test.ts`, `bun run typecheck`, and `bun test`.
+
+## Quartr MCP OAuth
+
+- [x] Reproduce Quartr OAuth failures against the live authorize/register endpoints.
+- [x] Fix missing protected-resource `resource` indicators in the harness MCP OAuth flow.
+- [x] Fix dynamic-client reuse so stored MCP OAuth client ids are only reused when their saved redirect URIs still match the current auth attempt.
+- [x] Re-run focused MCP OAuth verification, repo typecheck, a live Quartr stale-client smoke check, and the full Bun test lane.
+
+## Quartr MCP OAuth Review
+
+- Live Quartr repro showed two distinct contract gaps in our custom MCP OAuth helpers: omitting `resource` from the authorize/token requests caused `{\"error\":\"invalid_target\",\"error_description\":\"resource does not match this server\"}`, and reusing a dynamically registered client across different loopback callback ports caused `{\"error\":\"invalid_request\",\"error_description\":\"redirect_uri not registered for this client\"}`.
+- `src/mcp/oauthProvider.ts` now auto-discovers the protected resource from RFC 9728 metadata when `auth.resource` is unset, persists that resolved resource through pending auth state, and reuses it during token exchange. It also only reuses stored dynamic client registrations when their saved `redirectUris` still cover the current redirect URI; otherwise it registers a fresh client for the current auth flow.
+- `src/mcp/authStore/types.ts`, `src/mcp/authStore/parser.ts`, `src/mcp/authStore/editor.ts`, and `src/mcp/index.ts` now persist MCP OAuth client redirect URIs so runtime auth/client state can make the correct reuse decision.
+- `test/mcp.oauth-provider.test.ts` now covers auto-discovered resource indicators, redirect-aware client re-registration, and safe reuse when redirect URIs still match.
+- Verification passed with `bun test test/mcp.oauth-provider.test.ts`, `bun run typecheck`, a live Quartr stale-client smoke check via `bun -e '...authorizeMCPServerOAuth(...)...'`, and `bun test`.

@@ -242,4 +242,26 @@ describe("pi runtime provider option mapping", () => {
     expect(jsonSchema.properties.path.type).toBe("string");
     expect(jsonSchema.$schema).toBeUndefined();
   });
+
+  test("normalizes tuple array items into provider-safe json schema", () => {
+    const jsonSchema = __internal.toPiJsonSchema({
+      type: "object",
+      properties: {
+        position: {
+          type: "array",
+          items: [
+            { type: "number" },
+            { type: "number" },
+          ],
+          additionalItems: false,
+        },
+      },
+      required: ["position"],
+    }) as any;
+
+    expect(Array.isArray(jsonSchema.properties.position.items)).toBe(false);
+    expect(jsonSchema.properties.position.items).toEqual({ type: "number" });
+    expect(jsonSchema.properties.position.maxItems).toBe(2);
+    expect(jsonSchema.properties.position.additionalItems).toBeUndefined();
+  });
 });

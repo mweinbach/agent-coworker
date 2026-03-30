@@ -177,17 +177,151 @@ export function isZodSchema(value: unknown): value is z.ZodTypeAny {
   return !!maybe && typeof maybe.safeParse === "function" && typeof maybe._zod === "object";
 }
 
+type ToolJsonSchema = Record<string, unknown> | boolean;
+
+const SCHEMA_MAP_KEYS = new Set([
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "patternProperties",
+  "properties",
+]);
+
+const SCHEMA_SINGLE_KEYS = new Set([
+  "additionalProperties",
+  "contains",
+  "else",
+  "if",
+  "not",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+]);
+
+const SCHEMA_ARRAY_KEYS = new Set([
+  "allOf",
+  "anyOf",
+  "oneOf",
+]);
+
+function normalizeSchemaArray(value: unknown): ToolJsonSchema[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => normalizeToolJsonSchema(entry))
+    .filter((entry): entry is ToolJsonSchema => entry !== undefined);
+}
+
+function collapseTupleSchemas(entries: ToolJsonSchema[]): ToolJsonSchema | undefined {
+  if (entries.length === 0) return undefined;
+  if (entries.length === 1) return entries[0];
+
+  const first = JSON.stringify(entries[0]);
+  if (entries.every((entry) => JSON.stringify(entry) === first)) {
+    return entries[0];
+  }
+
+  return { anyOf: entries };
+}
+
+function normalizeToolJsonSchema(schema: unknown): ToolJsonSchema | undefined {
+  if (typeof schema === "boolean") return schema;
+
+  const record = asRecord(schema);
+  if (!record) return undefined;
+
+  const normalized: Record<string, unknown> = {};
+  const tupleItems = Array.isArray(record.items) ? normalizeSchemaArray(record.items) : [];
+  const prefixItems = normalizeSchemaArray(record.prefixItems);
+  const normalizedItems = collapseTupleSchemas(tupleItems.length > 0 ? tupleItems : prefixItems);
+
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "$schema" || key === "additionalItems" || key === "prefixItems") continue;
+
+    if (key === "items") {
+      if (Array.isArray(value)) {
+        if (normalizedItems !== undefined) {
+          normalized.items = normalizedItems;
+        }
+        continue;
+      }
+
+      const normalizedValue = normalizeToolJsonSchema(value);
+      if (normalizedValue !== undefined) {
+        normalized.items = normalizedValue;
+      }
+      continue;
+    }
+
+    if (SCHEMA_MAP_KEYS.has(key)) {
+      const childRecord = asRecord(value);
+      if (!childRecord) continue;
+
+      const childNormalized: Record<string, unknown> = {};
+      for (const [childKey, childValue] of Object.entries(childRecord)) {
+        const normalizedChildValue = normalizeToolJsonSchema(childValue);
+        if (normalizedChildValue !== undefined) {
+          childNormalized[childKey] = normalizedChildValue;
+        }
+      }
+      normalized[key] = childNormalized;
+      continue;
+    }
+
+    if (SCHEMA_SINGLE_KEYS.has(key)) {
+      const normalizedValue = normalizeToolJsonSchema(value);
+      if (normalizedValue !== undefined) {
+        normalized[key] = normalizedValue;
+      }
+      continue;
+    }
+
+    if (SCHEMA_ARRAY_KEYS.has(key)) {
+      const normalizedValue = normalizeSchemaArray(value);
+      if (normalizedValue.length > 0) {
+        normalized[key] = normalizedValue;
+      }
+      continue;
+    }
+
+    normalized[key] = value;
+  }
+
+  if (normalized.items === undefined && prefixItems.length > 0 && normalizedItems !== undefined) {
+    normalized.items = normalizedItems;
+  }
+  if (
+    tupleItems.length > 0
+    && record.additionalItems === false
+    && typeof normalized.maxItems !== "number"
+    && typeof record.maxItems !== "number"
+  ) {
+    normalized.maxItems = tupleItems.length;
+  }
+  if (
+    prefixItems.length > 0
+    && record.items === undefined
+    && typeof normalized.maxItems !== "number"
+    && typeof record.maxItems !== "number"
+  ) {
+    normalized.maxItems = prefixItems.length;
+  }
+
+  return normalized;
+}
+
 export function toPiJsonSchema(inputSchema: unknown): Record<string, unknown> {
   if (isZodSchema(inputSchema)) {
     const schema = z.toJSONSchema(inputSchema);
-    const record = asRecord(schema);
+    const normalized = normalizeToolJsonSchema(schema);
+    const record = asRecord(normalized);
     if (record) {
-      const { $schema: _dropSchema, ...rest } = record;
-      return rest;
+      return record;
     }
   }
 
-  const record = asRecord(inputSchema);
+  const normalized = normalizeToolJsonSchema(inputSchema);
+  const record = asRecord(normalized);
   if (record) return record;
   return { type: "object", properties: {}, additionalProperties: true };
 }

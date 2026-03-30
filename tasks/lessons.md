@@ -1,5 +1,7 @@
 # Lessons
 
+- For provider-facing MCP tool schemas, do not pass tuple-style JSON Schema arrays like `items: [{...}, {...}]` through unchanged; normalize schema-valued keywords to provider-safe object/boolean nodes before registering tools or OpenAI-compatible runtimes will reject the function definition at request build time.
+- For MCP OAuth servers with `oauthMode: "auto"`, do not stop after emitting the browser challenge; the harness must continue the loopback callback through token exchange automatically and persist the result into the correct scope-specific `.cowork/auth/mcp-credentials.json` store.
 - When the user adds or corrects required commit trailers in this repo, carry that requirement forward into the active plan and the eventual commit message instead of treating it as a one-off chat note.
 - When cleaning up unrelated local diffs in this repo, do not revert adjacent user-wanted changes just because they were outside the current feature slice; confirm intent from the conversation first and preserve explicitly requested model/catalog phrasing updates.
 - When the user mentions merge errors in this repo, immediately scan for conflict markers and `UU` paths before continuing implementation; resolve the active merge state first so new edits do not stack on unresolved files.

@@ -72,6 +72,7 @@ const oauthProviderTokensSchema = z.object({
 const oauthClientInformationSchema = z.object({
   client_id: nonEmptyTrimmedStringSchema,
   client_secret: nonEmptyTrimmedStringSchema.optional(),
+  redirect_uris: z.array(nonEmptyTrimmedStringSchema).min(1).optional(),
 }).passthrough();
 const retryCountSchema = z.number().finite().transform((value) => Math.max(0, Math.floor(value)));
 const mcpToolRecordSchema = z.record(z.string(), z.unknown());
@@ -262,6 +263,9 @@ function createRuntimeOAuthProvider(opts: {
         ...(latestClientInfo.clientSecret
           ? { client_secret: latestClientInfo.clientSecret }
           : {}),
+        ...(latestClientInfo.redirectUris?.length
+          ? { redirect_uris: [...latestClientInfo.redirectUris] }
+          : {}),
       };
     },
     saveClientInformation: async (info) => {
@@ -273,13 +277,22 @@ function createRuntimeOAuthProvider(opts: {
       latestClientInfo = {
         clientId,
         ...(clientSecret ? { clientSecret } : {}),
+        ...(parsedInfo.data.redirect_uris?.length
+          ? { redirectUris: [...parsedInfo.data.redirect_uris] }
+          : {}),
         updatedAt: new Date().toISOString(),
       };
       try {
         await setMCPServerOAuthClientInformation({
           config: opts.config,
           server: opts.server,
-          clientInformation: { clientId, ...(clientSecret ? { clientSecret } : {}) },
+          clientInformation: {
+            clientId,
+            ...(clientSecret ? { clientSecret } : {}),
+            ...(parsedInfo.data.redirect_uris?.length
+              ? { redirectUris: [...parsedInfo.data.redirect_uris] }
+              : {}),
+          },
         });
       } catch {
         // best effort persistence only

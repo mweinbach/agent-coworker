@@ -13,6 +13,7 @@ const oauthPendingSchema = z.object({
   createdAt: isoTimestampSchema,
   expiresAt: isoTimestampSchema,
   authorizationServerUrl: nonEmptyStringSchema.optional(),
+  resource: nonEmptyStringSchema.optional(),
 });
 
 const oauthTokensSchema = z.object({
@@ -28,6 +29,7 @@ const oauthTokensSchema = z.object({
 const oauthClientInfoSchema = z.object({
   clientId: nonEmptyStringSchema,
   clientSecret: nonEmptyStringSchema.optional(),
+  redirectUris: z.array(nonEmptyStringSchema).min(1).optional(),
   updatedAt: isoTimestampSchema,
 });
 

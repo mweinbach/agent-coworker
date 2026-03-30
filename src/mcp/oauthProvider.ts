@@ -8,6 +8,7 @@ import {
   exchangeAuthorization,
   registerClient,
 } from "@modelcontextprotocol/sdk/client/auth.js";
+import { checkResourceAllowed, resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
 import type {
   AuthorizationServerMetadata,
   OAuthClientInformationMixed,
@@ -172,6 +173,33 @@ async function resolveAuthorizationServerUrl(serverUrl: string): Promise<string>
   return new URL(serverUrl).origin;
 }
 
+async function resolveOAuthResource(
+  server: MCPRegistryServer & { transport: Extract<MCPRegistryServer["transport"], { type: "http" | "sse" }> },
+  pendingResource?: string,
+): Promise<URL | undefined> {
+  if (pendingResource?.trim()) {
+    return new URL(pendingResource.trim());
+  }
+  const configuredResource = server.auth?.type === "oauth" ? server.auth.resource?.trim() : undefined;
+  if (configuredResource) {
+    return new URL(configuredResource);
+  }
+
+  let resourceMetadata;
+  try {
+    resourceMetadata = await discoverOAuthProtectedResourceMetadata(server.transport.url);
+  } catch {
+    return undefined;
+  }
+  const requestedResource = resourceUrlFromServerUrl(server.transport.url);
+  if (!checkResourceAllowed({ requestedResource, configuredResource: resourceMetadata.resource })) {
+    throw new Error(
+      `Protected resource ${resourceMetadata.resource} does not match expected ${requestedResource.href} (or origin)`,
+    );
+  }
+  return new URL(resourceMetadata.resource);
+}
+
 /**
  * Discover OAuth/OIDC authorization server metadata (RFC 8414 / OIDC Discovery).
  * Returns undefined when the server doesn't publish metadata.
@@ -199,8 +227,18 @@ async function ensureClientInformation(opts: {
   storedClientInfo?: MCPServerOAuthClientInfo;
   scope?: string;
 }): Promise<{ clientInfo: OAuthClientInformationMixed; registered?: MCPServerOAuthClientInfo }> {
-  // Use stored credentials if available.
-  if (opts.storedClientInfo) {
+  const metadata = authServerMetadataSchema.safeParse(opts.metadata);
+  const registrationEndpoint = metadata.success ? metadata.data.registration_endpoint : undefined;
+  const storedClientRedirectUris = opts.storedClientInfo?.redirectUris?.filter((value) => value.trim().length > 0) ?? [];
+  const canReuseStoredClientInfo = (() => {
+    if (!opts.storedClientInfo) return false;
+    if (!registrationEndpoint) return true;
+    if (storedClientRedirectUris.length === 0) return false;
+    return storedClientRedirectUris.includes(opts.redirectUri);
+  })();
+
+  // Use stored credentials if available and compatible with the current redirect URI.
+  if (canReuseStoredClientInfo && opts.storedClientInfo) {
     const info: OAuthClientInformationMixed = {
       client_id: opts.storedClientInfo.clientId,
       ...(opts.storedClientInfo.clientSecret
@@ -211,8 +249,6 @@ async function ensureClientInformation(opts: {
   }
 
   // Attempt dynamic client registration (RFC 7591).
-  const metadata = authServerMetadataSchema.safeParse(opts.metadata);
-  const registrationEndpoint = metadata.success ? metadata.data.registration_endpoint : undefined;
   if (registrationEndpoint) {
     try {
       const registered = await registerClient(opts.authServerUrl, {
@@ -230,6 +266,7 @@ async function ensureClientInformation(opts: {
       const clientInfo: MCPServerOAuthClientInfo = {
         clientId: registered.client_id,
         ...(registered.client_secret ? { clientSecret: registered.client_secret } : {}),
+        ...(registered.redirect_uris?.length ? { redirectUris: [...registered.redirect_uris] } : {}),
         updatedAt: nowIso(),
       };
 
@@ -275,6 +312,7 @@ export async function authorizeMCPServerOAuth(
   // 2. Discover authorization server via RFC 9728 + RFC 8414.
   const authServerUrl = await resolveAuthorizationServerUrl(transport.url);
   const metadata = await resolveAuthServerMetadata(authServerUrl);
+  const resource = await resolveOAuthResource(server);
 
   // 3. Ensure we have client credentials (stored, registered, or fallback).
   const { clientInfo, registered } = await ensureClientInformation({
@@ -292,7 +330,7 @@ export async function authorizeMCPServerOAuth(
     redirectUrl: redirectUri,
     scope: server.auth.scope,
     state,
-    ...(server.auth.resource ? { resource: new URL(server.auth.resource) } : {}),
+    ...(resource ? { resource } : {}),
   });
 
   const url = authorizationUrl.toString();
@@ -310,6 +348,7 @@ export async function authorizeMCPServerOAuth(
     createdAt,
     expiresAt,
     authorizationServerUrl: authServerUrl,
+    ...(resource ? { resource: resource.href } : {}),
   };
 
   const instructions = method === "auto"
@@ -365,6 +404,7 @@ export async function exchangeMCPServerOAuthCode(opts: {
     throw new Error("OAuth is only supported for HTTP/SSE MCP transports.");
   }
   const transport = opts.server.transport;
+  const resource = await resolveOAuthResource(opts.server, opts.pending.resource);
 
   // Resolve authorization server URL — use stored value from pending, or re-discover.
   const authServerUrl = opts.pending.authorizationServerUrl
@@ -390,7 +430,7 @@ export async function exchangeMCPServerOAuthCode(opts: {
     authorizationCode: code,
     codeVerifier: opts.pending.codeVerifier,
     redirectUri: opts.pending.redirectUri,
-    ...(opts.server.auth.resource ? { resource: new URL(opts.server.auth.resource) } : {}),
+    ...(resource ? { resource } : {}),
   });
 
   const expiresAt = (() => {
@@ -406,7 +446,7 @@ export async function exchangeMCPServerOAuthCode(opts: {
     ...(sdkTokens.refresh_token ? { refreshToken: sdkTokens.refresh_token } : {}),
     ...(expiresAt ? { expiresAt } : {}),
     ...(sdkTokens.scope ? { scope: sdkTokens.scope } : {}),
-    ...(opts.server.auth.resource ? { resource: opts.server.auth.resource } : {}),
+    ...(resource ? { resource: resource.href } : {}),
   };
 
   return {

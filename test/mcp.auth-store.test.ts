@@ -10,6 +10,7 @@ import {
   renameMCPServerCredentials,
   resolveMCPServerAuthState,
   setMCPServerApiKeyCredential,
+  setMCPServerOAuthClientInformation,
   setMCPServerOAuthPending,
   type MCPServerOAuthPending,
 } from "../src/mcp/authStore";
@@ -252,6 +253,50 @@ describe("mcp auth store", () => {
       const parsed = JSON.parse(await fs.readFile(authFile, "utf-8")) as Record<string, any>;
       expect(parsed.version).toBe(1);
       expect(parsed.servers?.["workspace-key"]?.apiKey?.value).toBe("workspace-secret");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("setMCPServerOAuthClientInformation persists redirect URIs for dynamic clients", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-clientinfo-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-clientinfo-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-clientinfo-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const oauthServer: MCPRegistryServer = {
+        name: "oauth-server",
+        source: "workspace",
+        inherited: false,
+        transport: { type: "http", url: "https://mcp.oauth.example.com" },
+        auth: { type: "oauth", oauthMode: "auto" },
+      };
+
+      await setMCPServerOAuthClientInformation({
+        config,
+        server: oauthServer,
+        clientInformation: {
+          clientId: "registered-client",
+          clientSecret: "registered-secret",
+          redirectUris: [
+            "http://127.0.0.1:1455/oauth/callback",
+            "http://127.0.0.1:2455/oauth/callback",
+          ],
+        },
+      });
+
+      const files = await readMCPAuthFiles(config);
+      expect(files.workspace.doc.servers["oauth-server"]?.oauth?.clientInformation).toMatchObject({
+        clientId: "registered-client",
+        clientSecret: "registered-secret",
+        redirectUris: [
+          "http://127.0.0.1:1455/oauth/callback",
+          "http://127.0.0.1:2455/oauth/callback",
+        ],
+      });
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

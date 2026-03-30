@@ -12,6 +12,8 @@ export interface MCPServerOAuthPending {
   expiresAt: string;
   /** Authorization server URL resolved during the authorize phase (RFC 9728 / RFC 8414). */
   authorizationServerUrl?: string;
+  /** Protected resource URI sent during OAuth authorization/token exchange. */
+  resource?: string;
 }
 
 export interface MCPServerOAuthTokens {
@@ -27,6 +29,7 @@ export interface MCPServerOAuthTokens {
 export interface MCPServerOAuthClientInfo {
   clientId: string;
   clientSecret?: string;
+  redirectUris?: string[];
   updatedAt: string;
 }
 

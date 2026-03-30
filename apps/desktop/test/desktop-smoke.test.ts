@@ -358,7 +358,7 @@ describe("runDesktopSmokePromptLoadCheck", () => {
     expect(closeCalls).toBe(1);
   });
 
-  test("rejects non-completed turn statuses and still closes the connection", async () => {
+  test("accepts failed turn statuses so smoke does not depend on provider credentials", async () => {
     let closeCalls = 0;
     const rpc: DesktopSmokeJsonRpcConnection = {
       async sendRequest(method) {
@@ -388,7 +388,41 @@ describe("runDesktopSmokePromptLoadCheck", () => {
         clientVersion: "1.2.3",
         connectJsonRpc: async () => rpc,
       }),
-    ).rejects.toThrow("Desktop smoke turn ended with status: failed");
+    ).resolves.toBeUndefined();
+    expect(closeCalls).toBe(1);
+  });
+
+  test("rejects missing or unrecognized turn statuses and still closes the connection", async () => {
+    let closeCalls = 0;
+    const rpc: DesktopSmokeJsonRpcConnection = {
+      async sendRequest(method) {
+        if (method === "thread/start") {
+          return { result: { thread: { id: "thread-1" } } };
+        }
+        if (method === "turn/start") {
+          return { result: { turn: { id: "turn-1" } } };
+        }
+        return { result: {} };
+      },
+      async waitFor(_predicate, options) {
+        if (options.label.startsWith("thread/started")) {
+          return { method: "thread/started", params: { thread: { id: "thread-1" } } };
+        }
+        return { method: "turn/completed", params: { turn: { id: "turn-1", status: "mystery" } } };
+      },
+      close() {
+        closeCalls += 1;
+      },
+    };
+
+    await expect(
+      runDesktopSmokePromptLoadCheck({
+        url: "ws://example.test/socket",
+        workspacePath: "/workspace",
+        clientVersion: "1.2.3",
+        connectJsonRpc: async () => rpc,
+      }),
+    ).rejects.toThrow("Desktop smoke turn/completed reported an invalid status: mystery");
     expect(closeCalls).toBe(1);
   });
 });

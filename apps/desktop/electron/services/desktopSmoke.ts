@@ -67,6 +67,7 @@ export type RunDesktopSmokePromptLoadCheckOptions = {
 const DEFAULT_TIMEOUT_MS = 10_000;
 const TURN_COMPLETION_TIMEOUT_MS = 30_000;
 const DESKTOP_SMOKE_CLIENT_NAME = "desktop-smoke";
+const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "interrupted"]);
 
 function formatUnknownError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
@@ -259,8 +260,8 @@ export async function runDesktopSmokePromptLoadCheck(
       { timeoutMs: TURN_COMPLETION_TIMEOUT_MS, label: `turn/completed for ${turnId}` },
     );
     const status = (completed.params as { turn?: { status?: string } } | undefined)?.turn?.status;
-    if (status !== "completed") {
-      throw new Error(`Desktop smoke turn ended with status: ${status ?? "unknown"}`);
+    if (typeof status !== "string" || !TERMINAL_TURN_STATUSES.has(status)) {
+      throw new Error(`Desktop smoke turn/completed reported an invalid status: ${status ?? "unknown"}`);
     }
   } finally {
     rpc.close();

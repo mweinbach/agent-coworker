@@ -1124,6 +1124,7 @@ export function ChatView() {
                 submitComposer(resolveComposerBusyPolicy(busy));
               }}
             >
+              <PromptInputStatusRow>{composerHint}</PromptInputStatusRow>
               <PromptInputBody>
                 {attachmentPickerError ? (
                   <div className="flex items-center gap-1.5 px-1 pb-1 text-xs text-destructive">
@@ -1141,7 +1142,6 @@ export function ChatView() {
                   aria-label="Message input"
                 />
               </PromptInputBody>
-              <PromptInputStatusRow>{composerHint}</PromptInputStatusRow>
               <PromptInputFooter>
                 <PromptInputTools>
                   <input

@@ -1038,7 +1038,7 @@ export function ChatView() {
     : disconnected
       ? "Reconnect to continue..."
       : busy
-        ? "Type to steer the current run..."
+        ? "Steer..."
         : "Message...";
   const composerHint = composerBusyHint(composerSubmitState);
 

@@ -160,7 +160,7 @@ export const PromptInputBody = forwardRef<HTMLDivElement, ComponentProps<"div">>
   { className, ...props },
   ref,
 ) {
-  return <div ref={ref} className={cn("flex min-h-0 flex-1 px-0.5", className)} {...props} />;
+  return <div ref={ref} className={cn("flex min-h-0 flex-1 overflow-hidden px-0.5", className)} {...props} />;
 });
 
 export const PromptInputFooter = forwardRef<HTMLDivElement, ComponentProps<"div">>(function PromptInputFooter(
@@ -209,7 +209,7 @@ export const PromptInputTextarea = forwardRef<HTMLTextAreaElement, ComponentProp
       ref={ref}
       rows={rows}
       className={cn(
-        "min-h-[3.25rem] w-full flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-[15px] leading-6 text-foreground shadow-none outline-none ring-0 placeholder:text-muted-foreground/90 focus:border-0 focus:shadow-none focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:shadow-none focus-visible:outline-none focus-visible:ring-0",
+        "min-h-0 w-full flex-1 resize-none border-0 bg-transparent px-1 py-1.5 text-[15px] leading-6 text-foreground shadow-none outline-none ring-0 placeholder:text-muted-foreground/90 focus:border-0 focus:shadow-none focus:outline-none focus:ring-0 focus-visible:border-0 focus-visible:shadow-none focus-visible:outline-none focus-visible:ring-0",
         className,
       )}
       {...props}

@@ -184,6 +184,8 @@ describe("desktop chat view stability", () => {
 
       expect(container.textContent).toContain("Send a message to start.");
       expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(false);
+      expect(container.querySelector('[data-slot="prompt-input-status-row"]')).toBeNull();
+      expect(container.textContent).not.toContain("Press Enter to send");
     } finally {
       if (root) {
         await act(async () => {
@@ -731,6 +733,9 @@ describe("desktop chat view stability", () => {
       const textarea = container.querySelector("textarea");
       expect(textarea?.hasAttribute("disabled")).toBe(false);
       expect(container.querySelector('[aria-label="Stop generating response"]')).not.toBeNull();
+      const statusRow = container.querySelector('[data-slot="prompt-input-status-row"]');
+      expect(statusRow).not.toBeNull();
+      expect(statusRow?.textContent).toContain("Type to steer, or use stop to cancel.");
 
       await act(async () => {
         useAppStore.setState({ composerText: "tighten scope" });
@@ -738,7 +743,8 @@ describe("desktop chat view stability", () => {
 
       expect(container.querySelector('[aria-label="Stop generating response"]')).toBeNull();
       expect(container.querySelector('[aria-label="Steer current response"]')).not.toBeNull();
-      expect(container.textContent).toContain("Steer ready. Press Enter to inject it into the current run.");
+      const steerRow = container.querySelector('[data-slot="prompt-input-status-row"]');
+      expect(steerRow?.textContent).toContain("Steer ready. Press Enter to inject it into the current run.");
 
       await act(async () => {
         useAppStore.setState((state) => ({
@@ -757,7 +763,8 @@ describe("desktop chat view stability", () => {
       });
 
       expect(container.querySelector('[aria-label="Steer current response"]')).not.toBeNull();
-      expect(container.textContent).toContain("Steer sent. Waiting for the running turn to accept it.");
+      const pendingRow = container.querySelector('[data-slot="prompt-input-status-row"]');
+      expect(pendingRow?.textContent).toContain("Steer sent. Waiting for the running turn to accept it.");
     } finally {
       if (root) {
         await act(async () => {

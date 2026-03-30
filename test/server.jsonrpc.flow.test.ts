@@ -273,6 +273,39 @@ describe("server JSON-RPC flows", () => {
     }
   });
 
+  test("turn/start still loads a real system prompt when preloadSystemPrompt is disabled", async () => {
+    const tmpDir = await makeTmpProject();
+    let capturedSystem = "";
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      preloadSystemPrompt: false,
+      runTurnImpl: (async (params: any) => {
+        capturedSystem = params.system;
+        return {
+          text: "lazy prompt reply",
+          responseMessages: [],
+        };
+      }) as any,
+    }));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const started = await rpc.sendRequest("thread/start", { cwd: tmpDir });
+      await rpc.waitFor((message) => message.method === "thread/started");
+
+      await rpc.sendRequest("turn/start", {
+        threadId: started.result.thread.id,
+        input: [{ type: "text", text: "hello lazy system" }],
+      });
+      await rpc.waitFor((message) => message.method === "turn/completed");
+
+      expect(capturedSystem.length).toBeGreaterThan(10);
+      expect(capturedSystem).toContain("## Available Skills");
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("turn/start accepts legacy string input payloads", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir, {

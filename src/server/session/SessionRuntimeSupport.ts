@@ -1,5 +1,4 @@
-import { loadMCPConfigRegistry, type MCPRegistryServer } from "../../mcp/configRegistry";
-import { emitObservabilityEvent } from "../../observability/otel";
+import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import type { ServerErrorCode, ServerErrorSource } from "../../types";
 import { resolveAuthHomeDir } from "../../utils/authHome";
 import { resolveCoworkHomedir } from "../../utils/coworkHome";
@@ -57,6 +56,7 @@ export class SessionRuntimeSupport {
     durationMs?: number
   ) {
     void (async () => {
+      const { emitObservabilityEvent } = await import("../../observability/otel");
       const result = await emitObservabilityEvent(this.opts.state.config, {
         name,
         at: new Date().toISOString(),
@@ -100,6 +100,7 @@ export class SessionRuntimeSupport {
       return null;
     }
 
+    const { loadMCPConfigRegistry } = await import("../../mcp/configRegistry");
     const registry = await loadMCPConfigRegistry(this.opts.state.config);
     const server = registry.servers.find((entry) => entry.name === name) ?? null;
     if (!server) {

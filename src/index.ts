@@ -1,8 +1,6 @@
 #!/usr/bin/env bun
 
 import { parseCliArgs } from "./cli/args";
-import { runCliRepl } from "./cli/repl";
-import { DEFAULT_PROVIDER_OPTIONS } from "./providers";
 
 // Keep output clean by default.
 const globalSettings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?: boolean };
@@ -35,6 +33,11 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+
+  const [{ runCliRepl }, { DEFAULT_PROVIDER_OPTIONS }] = await Promise.all([
+    import("./cli/repl"),
+    import("./providers/providerOptions"),
+  ]);
 
   await runCliRepl({ dir: args.dir, providerOptions: DEFAULT_PROVIDER_OPTIONS, yolo: args.yolo });
 }

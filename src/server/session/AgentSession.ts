@@ -1,11 +1,13 @@
-import { connectProvider as connectModelProvider, getAiCoworkerPaths, type ConnectProviderResult } from "../../connect";
-import { loadSystemPromptWithSkills } from "../../prompt";
-import { runTurn } from "../../agent";
+import { createRequire } from "node:module";
+
+import type { connectProvider as connectModelProvider, getAiCoworkerPaths, ConnectProviderResult } from "../../connect";
+import type { loadSystemPromptWithSkills } from "../../prompt";
+import type { runTurn } from "../../agent";
 import { HarnessContextStore } from "../../harness/contextStore";
 import { SessionCostTracker } from "../../session/costTracker";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
-import { getProviderCatalog } from "../../providers/connectionCatalog";
-import { getProviderStatuses } from "../../providerStatus";
+import type { getProviderCatalog } from "../../providers/connectionCatalog";
+import type { getProviderStatuses } from "../../providerStatus";
 import { defaultSupportedModel, getSupportedModel } from "../../models/registry";
 import { getKnownResolvedModelMetadata, isDynamicModelProvider } from "../../models/metadata";
 import { MemoryStore, type MemoryScope } from "../../memoryStore";
@@ -31,14 +33,15 @@ import {
   type PersistedSessionSnapshot,
   writePersistedSessionSnapshot,
 } from "../sessionStore";
-import { DEFAULT_SESSION_TITLE, generateSessionTitle } from "../sessionTitleService";
+import { DEFAULT_SESSION_TITLE } from "../sessionTitleService";
+import type { generateSessionTitle } from "../sessionTitleService";
 import { HistoryManager } from "./HistoryManager";
 import { InteractionManager, type PendingPromptReplayEvent } from "./InteractionManager";
-import { McpManager } from "./McpManager";
+import type { McpManager } from "./McpManager";
 import { PersistenceManager } from "./PersistenceManager";
-import { ProviderAuthManager } from "./ProviderAuthManager";
-import { ProviderCatalogManager } from "./ProviderCatalogManager";
-import { SessionAdminManager } from "./SessionAdminManager";
+import type { ProviderAuthManager } from "./ProviderAuthManager";
+import type { ProviderCatalogManager } from "./ProviderCatalogManager";
+import type { SessionAdminManager } from "./SessionAdminManager";
 import { SessionBackupController } from "./SessionBackupController";
 import type {
   HydratedSessionState,
@@ -56,10 +59,27 @@ import { SessionMetadataManager } from "./SessionMetadataManager";
 import { SessionRuntimeSupport } from "./SessionRuntimeSupport";
 import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
 import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
-import { SkillManager } from "./SkillManager";
-import { TurnExecutionManager } from "./TurnExecutionManager";
+import type { SkillManager } from "./SkillManager";
+import type { TurnExecutionManager } from "./TurnExecutionManager";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
+
+const require = createRequire(import.meta.url);
+
+const lazyConnectProvider: typeof connectModelProvider = async (...args) =>
+  await (require("../../connect") as typeof import("../../connect")).connectProvider(...args);
+const lazyGetAiCoworkerPaths: typeof getAiCoworkerPaths = (...args) =>
+  (require("../../connect") as typeof import("../../connect")).getAiCoworkerPaths(...args);
+const lazyLoadSystemPromptWithSkills: typeof loadSystemPromptWithSkills = async (...args) =>
+  await (require("../../prompt") as typeof import("../../prompt")).loadSystemPromptWithSkills(...args);
+const lazyGetProviderCatalog: typeof getProviderCatalog = async (...args) =>
+  await (require("../../providers/connectionCatalog") as typeof import("../../providers/connectionCatalog")).getProviderCatalog(...args);
+const lazyGetProviderStatuses: typeof getProviderStatuses = async (...args) =>
+  await (require("../../providerStatus") as typeof import("../../providerStatus")).getProviderStatuses(...args);
+const lazyRunTurn: typeof runTurn = async (...args) =>
+  await (require("../../agent") as typeof import("../../agent")).runTurn(...args);
+const lazyGenerateSessionTitle: typeof generateSessionTitle = async (...args) =>
+  await (require("../sessionTitleService") as typeof import("../sessionTitleService")).generateSessionTitle(...args);
 
 function makeId(): string {
   return crypto.randomUUID();
@@ -214,16 +234,17 @@ export class AgentSession {
   private readonly persistenceManager: PersistenceManager;
   private readonly historyManager: HistoryManager;
   private readonly interactionManager: InteractionManager;
-  private readonly mcpManager: McpManager;
-  private readonly providerAuthManager: ProviderAuthManager;
-  private readonly providerCatalogManager: ProviderCatalogManager;
-  private readonly turnExecutionManager: TurnExecutionManager;
-  private readonly skillManager: SkillManager;
+  private mcpManager: McpManager | null = null;
+  private providerAuthManager: ProviderAuthManager | null = null;
+  private providerCatalogManager: ProviderCatalogManager | null = null;
+  private turnExecutionManager: TurnExecutionManager | null = null;
+  private skillManager: SkillManager | null = null;
   private readonly metadataManager: SessionMetadataManager;
-  private readonly adminManager: SessionAdminManager;
+  private adminManager: SessionAdminManager | null = null;
   private readonly backupController: SessionBackupController;
   private pendingConfigMutation: Promise<void> = Promise.resolve();
   private readonly memoryStore: MemoryStore;
+  private systemPromptLoadPromise: Promise<boolean> | null = null;
   private bufferDisconnectedEvents = false;
   private disconnectedReplayEvents: ServerEvent[] = [];
   private persistedLastEventSeq: number;
@@ -284,6 +305,7 @@ export class AgentSession {
       config: opts.config,
       system: opts.system,
       discoveredSkills: opts.discoveredSkills ?? [],
+      systemPromptMetadataLoaded: opts.system.trim().length > 0 && opts.discoveredSkills !== undefined,
       yolo: opts.yolo === true,
       messages: [],
       allMessages: [...seededMessages],
@@ -344,18 +366,18 @@ export class AgentSession {
     this.memoryStore = new MemoryStore(`${opts.config.projectAgentDir}/memory.sqlite`, `${opts.config.userAgentDir}/memory.sqlite`);
 
     this.deps = {
-      connectProviderImpl: opts.connectProviderImpl ?? connectModelProvider,
-      getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl ?? getAiCoworkerPaths,
-      loadSystemPromptWithSkillsImpl: opts.loadSystemPromptWithSkillsImpl ?? loadSystemPromptWithSkills,
-      getProviderCatalogImpl: opts.getProviderCatalogImpl ?? getProviderCatalog,
-      getProviderStatusesImpl: opts.getProviderStatusesImpl ?? getProviderStatuses,
+      connectProviderImpl: opts.connectProviderImpl ?? lazyConnectProvider,
+      getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl ?? lazyGetAiCoworkerPaths,
+      loadSystemPromptWithSkillsImpl: opts.loadSystemPromptWithSkillsImpl ?? lazyLoadSystemPromptWithSkills,
+      getProviderCatalogImpl: opts.getProviderCatalogImpl ?? lazyGetProviderCatalog,
+      getProviderStatusesImpl: opts.getProviderStatusesImpl ?? lazyGetProviderStatuses,
       sessionBackupFactory:
         opts.sessionBackupFactory ?? (async (factoryOpts: SessionBackupInitOptions): Promise<SessionBackupHandle> => await SessionBackupManager.create(factoryOpts)),
       harnessContextStore: opts.harnessContextStore ?? new HarnessContextStore(),
-      runTurnImpl: opts.runTurnImpl ?? runTurn,
+      runTurnImpl: opts.runTurnImpl ?? lazyRunTurn,
       persistModelSelectionImpl: opts.persistModelSelectionImpl,
       persistProjectConfigPatchImpl: opts.persistProjectConfigPatchImpl,
-      generateSessionTitleImpl: opts.generateSessionTitleImpl ?? generateSessionTitle,
+      generateSessionTitleImpl: opts.generateSessionTitleImpl ?? lazyGenerateSessionTitle,
       sessionDb: opts.sessionDb ?? null,
       writePersistedSessionSnapshotImpl: opts.writePersistedSessionSnapshotImpl ?? writePersistedSessionSnapshot,
       createAgentSessionImpl: opts.createAgentSessionImpl,
@@ -417,8 +439,8 @@ export class AgentSession {
       updateSessionInfo: (patch, infoOpts) => this.metadataManager.updateSessionInfo(patch, infoOpts),
       emitConfigUpdated: () => this.metadataManager.emitConfigUpdated(),
       syncSessionBackupAvailability: async () => {},
-      refreshProviderStatus: async () => await this.providerCatalogManager.refreshProviderStatus(),
-      emitProviderCatalog: async () => await this.providerCatalogManager.emitProviderCatalog(),
+      refreshProviderStatus: async () => await this.getProviderCatalogManager().refreshProviderStatus(),
+      emitProviderCatalog: async () => await this.getProviderCatalogManager().emitProviderCatalog(),
       getSkillMutationBlockReason: () =>
         this.deps.getSkillMutationBlockReasonImpl?.(this.state.config.workingDirectory) ?? null,
       refreshSkillsAcrossWorkspaceSessions: async () => {
@@ -470,57 +492,6 @@ export class AgentSession {
     this.context.syncSessionBackupAvailability = async () => {
       await this.backupController.syncSessionBackupAvailability();
     };
-    this.skillManager = new SkillManager(this.context, {
-      sendUserMessage: (text, clientMessageId, displayText) => this.sendUserMessage(text, clientMessageId, displayText),
-    });
-    this.mcpManager = new McpManager(this.context);
-    this.providerCatalogManager = new ProviderCatalogManager({
-      sessionId: this.id,
-      getConfig: () => this.state.config,
-      getGlobalAuthPaths: () => this.getGlobalAuthPaths(),
-      getProviderCatalog: this.deps.getProviderCatalogImpl,
-      getProviderStatuses: this.deps.getProviderStatusesImpl,
-      emit: (evt) => this.context.emit(evt),
-      emitError: (code, source, message) => this.context.emitError(code, source, message),
-      emitTelemetry: (name, status, attributes, durationMs) => this.emitTelemetry(name, status, attributes, durationMs),
-      formatError: (err) => this.formatErrorMessage(err),
-    });
-    this.providerAuthManager = new ProviderAuthManager({
-      sessionId: this.id,
-      getConfig: () => this.state.config,
-      setConfig: (next) => {
-        this.state.config = next;
-      },
-      isRunning: () => this.state.running,
-      guardBusy: () => this.guardBusy(),
-      setConnecting: (connecting) => {
-        this.state.connecting = connecting;
-      },
-      emit: (evt) => this.context.emit(evt),
-      emitError: (code, source, message) => this.context.emitError(code, source, message),
-      emitTelemetry: (name, status, attributes, durationMs) => this.emitTelemetry(name, status, attributes, durationMs),
-      formatError: (err) => this.formatErrorMessage(err),
-      log: (line) => this.log(line),
-      clearProviderState: () => {
-        this.state.providerState = null;
-      },
-      persistModelSelection: this.deps.persistModelSelectionImpl,
-      updateSessionInfo: (patch) => this.metadataManager.updateSessionInfo(patch),
-      queuePersistSessionSnapshot: (reason) => this.queuePersistSessionSnapshot(reason),
-      emitConfigUpdated: () => this.metadataManager.emitConfigUpdated(),
-      emitProviderCatalog: async () => await this.providerCatalogManager.emitProviderCatalog(),
-      refreshProviderStatus: async () => await this.providerCatalogManager.refreshProviderStatus(),
-      getGlobalAuthPaths: () => this.getGlobalAuthPaths(),
-      runProviderConnect: async (providerOpts) => await this.runProviderConnect(providerOpts),
-    });
-    this.turnExecutionManager = new TurnExecutionManager(this.context, {
-      interactionManager: this.interactionManager,
-      historyManager: this.historyManager,
-      metadataManager: this.metadataManager,
-      backupController: this.backupController,
-    });
-    this.adminManager = new SessionAdminManager(this.context);
-
     this.historyManager.refreshRuntimeMessagesFromHistory();
 
     // Initialize cost tracker for this session.
@@ -544,6 +515,99 @@ export class AgentSession {
     if (!opts.skipInitialPersist) {
       this.queuePersistSessionSnapshot("session.created");
     }
+  }
+
+  private getSkillManager(): SkillManager {
+    if (!this.skillManager) {
+      const { SkillManager } = require("./SkillManager") as typeof import("./SkillManager");
+      this.skillManager = new SkillManager(this.context, {
+        sendUserMessage: (text, clientMessageId, displayText) =>
+          this.sendUserMessage(text, clientMessageId, displayText),
+      });
+    }
+    return this.skillManager;
+  }
+
+  private getMcpManager(): McpManager {
+    if (!this.mcpManager) {
+      const { McpManager } = require("./McpManager") as typeof import("./McpManager");
+      this.mcpManager = new McpManager(this.context);
+    }
+    return this.mcpManager;
+  }
+
+  private getTurnExecutionManager(): TurnExecutionManager {
+    if (!this.turnExecutionManager) {
+      const { TurnExecutionManager } = require("./TurnExecutionManager") as typeof import("./TurnExecutionManager");
+      this.turnExecutionManager = new TurnExecutionManager(this.context, {
+        interactionManager: this.interactionManager,
+        historyManager: this.historyManager,
+        metadataManager: this.metadataManager,
+        backupController: this.backupController,
+      });
+    }
+    return this.turnExecutionManager;
+  }
+
+  private getAdminManager(): SessionAdminManager {
+    if (!this.adminManager) {
+      const { SessionAdminManager } = require("./SessionAdminManager") as typeof import("./SessionAdminManager");
+      this.adminManager = new SessionAdminManager(this.context);
+    }
+    return this.adminManager;
+  }
+
+  private getProviderCatalogManager(): ProviderCatalogManager {
+    if (!this.providerCatalogManager) {
+      const { ProviderCatalogManager } = require("./ProviderCatalogManager") as typeof import("./ProviderCatalogManager");
+      this.providerCatalogManager = new ProviderCatalogManager({
+        sessionId: this.id,
+        getConfig: () => this.state.config,
+        getGlobalAuthPaths: () => this.getGlobalAuthPaths(),
+        getProviderCatalog: this.deps.getProviderCatalogImpl,
+        getProviderStatuses: this.deps.getProviderStatusesImpl,
+        emit: (evt) => this.context.emit(evt),
+        emitError: (code, source, message) => this.context.emitError(code, source, message),
+        emitTelemetry: (name, status, attributes, durationMs) => this.emitTelemetry(name, status, attributes, durationMs),
+        formatError: (err) => this.formatErrorMessage(err),
+      });
+    }
+    return this.providerCatalogManager;
+  }
+
+  private getProviderAuthManager(): ProviderAuthManager {
+    if (!this.providerAuthManager) {
+      const { ProviderAuthManager } = require("./ProviderAuthManager") as typeof import("./ProviderAuthManager");
+      this.providerAuthManager = new ProviderAuthManager({
+        sessionId: this.id,
+        getConfig: () => this.state.config,
+        setConfig: (next) => {
+          this.state.config = next;
+        },
+        isRunning: () => this.state.running,
+        guardBusy: () => this.guardBusy(),
+        setConnecting: (connecting) => {
+          this.state.connecting = connecting;
+        },
+        emit: (evt) => this.context.emit(evt),
+        emitError: (code, source, message) => this.context.emitError(code, source, message),
+        emitTelemetry: (name, status, attributes, durationMs) => this.emitTelemetry(name, status, attributes, durationMs),
+        formatError: (err) => this.formatErrorMessage(err),
+        log: (line) => this.log(line),
+        clearProviderState: () => {
+          this.state.providerState = null;
+        },
+        persistModelSelection: this.deps.persistModelSelectionImpl,
+        updateSessionInfo: (patch) => this.metadataManager.updateSessionInfo(patch),
+        queuePersistSessionSnapshot: (reason) => this.queuePersistSessionSnapshot(reason),
+        emitConfigUpdated: () => this.metadataManager.emitConfigUpdated(),
+        emitProviderCatalog: async () => await this.getProviderCatalogManager().emitProviderCatalog(),
+        refreshProviderStatus: async () => await this.getProviderCatalogManager().refreshProviderStatus(),
+        getGlobalAuthPaths: () => this.getGlobalAuthPaths(),
+        runProviderConnect: async (providerOpts) => await this.runProviderConnect(providerOpts),
+      });
+    }
+    return this.providerAuthManager;
   }
 
   static fromPersisted(opts: {
@@ -878,83 +942,83 @@ export class AgentSession {
   }
 
   reset() {
-    this.adminManager.reset();
+    this.getAdminManager().reset();
   }
 
   listTools() {
-    this.skillManager.listTools();
+    this.getSkillManager().listTools();
   }
 
   async listCommands() {
-    await this.skillManager.listCommands();
+    await this.getSkillManager().listCommands();
   }
 
   async executeCommand(nameRaw: string, argumentsText = "", clientMessageId?: string) {
-    await this.skillManager.executeCommand(nameRaw, argumentsText, clientMessageId);
+    await this.getSkillManager().executeCommand(nameRaw, argumentsText, clientMessageId);
   }
 
   async listSkills() {
-    await this.skillManager.listSkills();
+    await this.getSkillManager().listSkills();
   }
 
   async readSkill(skillNameRaw: string) {
-    await this.skillManager.readSkill(skillNameRaw);
+    await this.getSkillManager().readSkill(skillNameRaw);
   }
 
   async disableSkill(skillNameRaw: string) {
-    await this.skillManager.disableSkill(skillNameRaw);
+    await this.getSkillManager().disableSkill(skillNameRaw);
   }
 
   async enableSkill(skillNameRaw: string) {
-    await this.skillManager.enableSkill(skillNameRaw);
+    await this.getSkillManager().enableSkill(skillNameRaw);
   }
 
   async deleteSkill(skillNameRaw: string) {
-    await this.skillManager.deleteSkill(skillNameRaw);
+    await this.getSkillManager().deleteSkill(skillNameRaw);
   }
 
   async getSkillsCatalog() {
-    await this.skillManager.getSkillsCatalog();
+    await this.getSkillManager().getSkillsCatalog();
   }
 
   async getSkillInstallation(installationId: string) {
-    await this.skillManager.getSkillInstallation(installationId);
+    await this.getSkillManager().getSkillInstallation(installationId);
   }
 
   async previewSkillInstall(sourceInput: string, targetScope: "project" | "global") {
-    await this.skillManager.previewSkillInstall(sourceInput, targetScope);
+    await this.getSkillManager().previewSkillInstall(sourceInput, targetScope);
   }
 
   async installSkills(sourceInput: string, targetScope: "project" | "global") {
-    await this.skillManager.installSkills(sourceInput, targetScope);
+    await this.getSkillManager().installSkills(sourceInput, targetScope);
   }
 
   async enableSkillInstallation(installationId: string) {
-    await this.skillManager.enableSkillInstallation(installationId);
+    await this.getSkillManager().enableSkillInstallation(installationId);
   }
 
   async disableSkillInstallation(installationId: string) {
-    await this.skillManager.disableSkillInstallation(installationId);
+    await this.getSkillManager().disableSkillInstallation(installationId);
   }
 
   async deleteSkillInstallation(installationId: string) {
-    await this.skillManager.deleteSkillInstallation(installationId);
+    await this.getSkillManager().deleteSkillInstallation(installationId);
   }
 
   async copySkillInstallation(installationId: string, targetScope: "project" | "global") {
-    await this.skillManager.copySkillInstallation(installationId, targetScope);
+    await this.getSkillManager().copySkillInstallation(installationId, targetScope);
   }
 
   async checkSkillInstallationUpdate(installationId: string) {
-    await this.skillManager.checkSkillInstallationUpdate(installationId);
+    await this.getSkillManager().checkSkillInstallationUpdate(installationId);
   }
 
   async updateSkillInstallation(installationId: string) {
-    await this.skillManager.updateSkillInstallation(installationId);
+    await this.getSkillManager().updateSkillInstallation(installationId);
   }
 
   async setEnableMcp(enableMcp: boolean) {
-    await this.mcpManager.setEnableMcp(enableMcp);
+    await this.getMcpManager().setEnableMcp(enableMcp);
   }
 
   async setEnableMemory(enableMemory: boolean) {
@@ -1007,11 +1071,45 @@ export class AgentSession {
     await this.refreshSystemPromptWithSkills("session.memory_delete");
   }
 
+  private async ensureSystemPromptReady(): Promise<boolean> {
+    const hasSystemPrompt = this.state.system.trim().length > 0;
+    if (hasSystemPrompt && this.state.systemPromptMetadataLoaded) {
+      return true;
+    }
+    if (this.systemPromptLoadPromise) {
+      return await this.systemPromptLoadPromise;
+    }
+
+    this.systemPromptLoadPromise = (async () => {
+      try {
+        const result = await this.context.deps.loadSystemPromptWithSkillsImpl(this.state.config);
+        if (!hasSystemPrompt) {
+          this.state.system = result.prompt;
+        }
+        this.state.discoveredSkills = result.discoveredSkills;
+        this.state.systemPromptMetadataLoaded = true;
+        return true;
+      } catch (err) {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to load system prompt: ${String(err)}`,
+        );
+        return false;
+      } finally {
+        this.systemPromptLoadPromise = null;
+      }
+    })();
+
+    return await this.systemPromptLoadPromise;
+  }
+
   async refreshSystemPromptWithSkills(reason = "session.refresh_system_prompt") {
     try {
       const result = await this.context.deps.loadSystemPromptWithSkillsImpl(this.state.config);
       this.state.system = result.prompt;
       this.state.discoveredSkills = result.discoveredSkills;
+      this.state.systemPromptMetadataLoaded = true;
       this.queuePersistSessionSnapshot(reason);
     } catch (err) {
       this.context.emitError(
@@ -1023,35 +1121,35 @@ export class AgentSession {
   }
 
   async emitMcpServers() {
-    await this.mcpManager.emitMcpServers();
+    await this.getMcpManager().emitMcpServers();
   }
 
   async upsertMcpServer(server: MCPServerConfig, previousName?: string) {
-    await this.mcpManager.upsert(server, previousName);
+    await this.getMcpManager().upsert(server, previousName);
   }
 
   async deleteMcpServer(nameRaw: string) {
-    await this.mcpManager.delete(nameRaw);
+    await this.getMcpManager().delete(nameRaw);
   }
 
   async validateMcpServer(nameRaw: string) {
-    await this.mcpManager.validate(nameRaw);
+    await this.getMcpManager().validate(nameRaw);
   }
 
   async authorizeMcpServerAuth(nameRaw: string) {
-    await this.mcpManager.authorize(nameRaw);
+    await this.getMcpManager().authorize(nameRaw);
   }
 
   async callbackMcpServerAuth(nameRaw: string, codeRaw?: string) {
-    await this.mcpManager.callback(nameRaw, codeRaw);
+    await this.getMcpManager().callback(nameRaw, codeRaw);
   }
 
   async setMcpServerApiKey(nameRaw: string, apiKeyRaw: string) {
-    await this.mcpManager.setApiKey(nameRaw, apiKeyRaw);
+    await this.getMcpManager().setApiKey(nameRaw, apiKeyRaw);
   }
 
   async migrateLegacyMcpServers(scope: "workspace" | "user") {
-    await this.mcpManager.migrate(scope);
+    await this.getMcpManager().migrate(scope);
   }
 
   getHarnessContext() {
@@ -1063,7 +1161,7 @@ export class AgentSession {
   }
 
   async setModel(modelIdRaw: string, providerRaw?: AgentConfig["provider"]) {
-    await this.providerAuthManager.setModel(modelIdRaw, providerRaw);
+    await this.getProviderAuthManager().setModel(modelIdRaw, providerRaw);
   }
 
   async applySessionDefaults(opts: {
@@ -1087,7 +1185,7 @@ export class AgentSession {
       }
 
       const preparedModel = opts.provider !== undefined && opts.model !== undefined
-        ? await this.providerAuthManager.prepareModelSelection(opts.model, opts.provider)
+        ? await this.getProviderAuthManager().prepareModelSelection(opts.model, opts.provider)
         : null;
       if (opts.provider !== undefined && opts.model !== undefined && !preparedModel) {
         return;
@@ -1105,7 +1203,7 @@ export class AgentSession {
       }
 
       const preparedEnableMcp = typeof opts.enableMcp === "boolean"
-        ? this.mcpManager.prepareEnableMcpChange(opts.enableMcp)
+        ? this.getMcpManager().prepareEnableMcpChange(opts.enableMcp)
         : null;
 
       const changed =
@@ -1141,7 +1239,7 @@ export class AgentSession {
       }
 
       if (preparedModel?.changed) {
-        await this.providerAuthManager.applyPreparedModelSelection(preparedModel, {
+        await this.getProviderAuthManager().applyPreparedModelSelection(preparedModel, {
           persistSelection: false,
           queuePersistSessionSnapshot: false,
         });
@@ -1153,7 +1251,7 @@ export class AgentSession {
         });
       }
       if (preparedEnableMcp?.changed) {
-        await this.mcpManager.applyPreparedEnableMcpChange(preparedEnableMcp, {
+        await this.getMcpManager().applyPreparedEnableMcpChange(preparedEnableMcp, {
           persistDefaults: false,
           queuePersistSessionSnapshot: false,
         });
@@ -1178,53 +1276,53 @@ export class AgentSession {
   }
 
   async emitProviderCatalog() {
-    await this.providerCatalogManager.emitProviderCatalog();
+    await this.getProviderCatalogManager().emitProviderCatalog();
   }
 
   emitProviderAuthMethods() {
-    this.providerCatalogManager.emitProviderAuthMethods();
+    this.getProviderCatalogManager().emitProviderAuthMethods();
   }
 
   async authorizeProviderAuth(providerRaw: AgentConfig["provider"], methodIdRaw: string) {
-    await this.providerAuthManager.authorizeProviderAuth(providerRaw, methodIdRaw);
+    await this.getProviderAuthManager().authorizeProviderAuth(providerRaw, methodIdRaw);
   }
 
   async logoutProviderAuth(providerRaw: AgentConfig["provider"]) {
-    await this.providerAuthManager.logoutProviderAuth(providerRaw);
+    await this.getProviderAuthManager().logoutProviderAuth(providerRaw);
   }
 
   async callbackProviderAuth(providerRaw: AgentConfig["provider"], methodIdRaw: string, codeRaw?: string) {
-    await this.providerAuthManager.callbackProviderAuth(providerRaw, methodIdRaw, codeRaw);
+    await this.getProviderAuthManager().callbackProviderAuth(providerRaw, methodIdRaw, codeRaw);
   }
 
   async setProviderApiKey(providerRaw: AgentConfig["provider"], methodIdRaw: string, apiKeyRaw: string) {
-    await this.providerAuthManager.setProviderApiKey(providerRaw, methodIdRaw, apiKeyRaw);
+    await this.getProviderAuthManager().setProviderApiKey(providerRaw, methodIdRaw, apiKeyRaw);
   }
 
   async copyProviderApiKey(providerRaw: AgentConfig["provider"], sourceProviderRaw: AgentConfig["provider"]) {
-    await this.providerAuthManager.copyProviderApiKey(providerRaw, sourceProviderRaw);
+    await this.getProviderAuthManager().copyProviderApiKey(providerRaw, sourceProviderRaw);
   }
 
   async refreshProviderStatus() {
-    await this.providerCatalogManager.refreshProviderStatus();
+    await this.getProviderCatalogManager().refreshProviderStatus();
   }
 
   handleAskResponse(requestId: string, answer: string) {
-    const handled = this.turnExecutionManager.handleAskResponse(requestId, answer);
+    const handled = this.getTurnExecutionManager().handleAskResponse(requestId, answer);
     if (handled) {
       this.sessionSnapshotProjector.syncSessionState({ hasPendingAsk: this.hasPendingAsk });
     }
   }
 
   handleApprovalResponse(requestId: string, approved: boolean) {
-    const handled = this.turnExecutionManager.handleApprovalResponse(requestId, approved);
+    const handled = this.getTurnExecutionManager().handleApprovalResponse(requestId, approved);
     if (handled) {
       this.sessionSnapshotProjector.syncSessionState({ hasPendingApproval: this.hasPendingApproval });
     }
   }
 
   cancel(opts?: { includeSubagents?: boolean }) {
-    this.turnExecutionManager.cancel(opts);
+    this.getTurnExecutionManager().cancel(opts);
   }
 
   async closeForHistory(): Promise<void> {
@@ -1261,7 +1359,7 @@ export class AgentSession {
   }
 
   getMessages(offset = 0, limit = 100) {
-    this.adminManager.getMessages(offset, limit);
+    this.getAdminManager().getMessages(offset, limit);
   }
 
   buildForkContextSeed(): SeededSessionContext {
@@ -1277,15 +1375,15 @@ export class AgentSession {
   }
 
   async listSessions(scope: "all" | "workspace" = "all") {
-    await this.adminManager.listSessions(scope);
+    await this.getAdminManager().listSessions(scope);
   }
 
   async getSessionSnapshot(targetSessionId: string) {
-    await this.adminManager.getSessionSnapshot(targetSessionId);
+    await this.getAdminManager().getSessionSnapshot(targetSessionId);
   }
 
   async listAgentSessions() {
-    await this.adminManager.listAgentSessions();
+    await this.getAdminManager().listAgentSessions();
   }
 
   async createAgentSession(opts: {
@@ -1295,27 +1393,27 @@ export class AgentSession {
     reasoningEffort?: AgentReasoningEffort;
     forkContext?: boolean;
   }) {
-    await this.adminManager.createAgentSession(opts);
+    await this.getAdminManager().createAgentSession(opts);
   }
 
   async sendAgentInput(agentId: string, message: string, interrupt?: boolean) {
-    await this.adminManager.sendAgentInput(agentId, message, interrupt);
+    await this.getAdminManager().sendAgentInput(agentId, message, interrupt);
   }
 
   async waitForAgents(agentIds: string[], timeoutMs?: number) {
-    await this.adminManager.waitForAgents(agentIds, timeoutMs);
+    await this.getAdminManager().waitForAgents(agentIds, timeoutMs);
   }
 
   async resumeAgent(agentId: string) {
-    await this.adminManager.resumeAgent(agentId);
+    await this.getAdminManager().resumeAgent(agentId);
   }
 
   async closeAgent(agentId: string) {
-    await this.adminManager.closeAgent(agentId);
+    await this.getAdminManager().closeAgent(agentId);
   }
 
   async deleteSession(targetSessionId: string) {
-    await this.adminManager.deleteSession(targetSessionId);
+    await this.getAdminManager().deleteSession(targetSessionId);
   }
 
   // Each workspace backup method calls getSessionBackupState() first to ensure
@@ -1324,32 +1422,32 @@ export class AgentSession {
 
   async listWorkspaceBackups() {
     await this.backupController.getSessionBackupState();
-    await this.adminManager.listWorkspaceBackups();
+    await this.getAdminManager().listWorkspaceBackups();
   }
 
   async createWorkspaceBackupCheckpoint(targetSessionId: string) {
     await this.backupController.getSessionBackupState();
-    await this.adminManager.createWorkspaceBackupCheckpoint(targetSessionId);
+    await this.getAdminManager().createWorkspaceBackupCheckpoint(targetSessionId);
   }
 
   async restoreWorkspaceBackup(targetSessionId: string, checkpointId?: string) {
     await this.backupController.getSessionBackupState();
-    await this.adminManager.restoreWorkspaceBackup(targetSessionId, checkpointId);
+    await this.getAdminManager().restoreWorkspaceBackup(targetSessionId, checkpointId);
   }
 
   async deleteWorkspaceBackupCheckpoint(targetSessionId: string, checkpointId: string) {
     await this.backupController.getSessionBackupState();
-    await this.adminManager.deleteWorkspaceBackupCheckpoint(targetSessionId, checkpointId);
+    await this.getAdminManager().deleteWorkspaceBackupCheckpoint(targetSessionId, checkpointId);
   }
 
   async deleteWorkspaceBackupEntry(targetSessionId: string) {
     await this.backupController.getSessionBackupState();
-    await this.adminManager.deleteWorkspaceBackupEntry(targetSessionId);
+    await this.getAdminManager().deleteWorkspaceBackupEntry(targetSessionId);
   }
 
   async getWorkspaceBackupDelta(targetSessionId: string, checkpointId: string) {
     await this.backupController.getSessionBackupState();
-    await this.adminManager.getWorkspaceBackupDelta(targetSessionId, checkpointId);
+    await this.getAdminManager().getWorkspaceBackupDelta(targetSessionId, checkpointId);
   }
 
   async setConfig(patch: SessionConfigPatch) {
@@ -1363,7 +1461,7 @@ export class AgentSession {
   }
 
   async uploadFile(filename: string, contentBase64: string) {
-    await this.adminManager.uploadFile(filename, contentBase64);
+    await this.getAdminManager().uploadFile(filename, contentBase64);
   }
 
   async getSessionBackupState() {
@@ -1394,7 +1492,10 @@ export class AgentSession {
     inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
   ) {
     await this.pendingConfigMutation.catch(() => {});
-    await this.turnExecutionManager.sendUserMessage(text, clientMessageId, displayText, attachments, inputParts);
+    if (!await this.ensureSystemPromptReady()) {
+      return;
+    }
+    await this.getTurnExecutionManager().sendUserMessage(text, clientMessageId, displayText, attachments, inputParts);
   }
 
   async sendSteerMessage(
@@ -1405,7 +1506,10 @@ export class AgentSession {
     inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
   ) {
     await this.pendingConfigMutation.catch(() => {});
-    await this.turnExecutionManager.sendSteerMessage(text, expectedTurnId, clientMessageId, attachments, inputParts);
+    if (!await this.ensureSystemPromptReady()) {
+      return;
+    }
+    await this.getTurnExecutionManager().sendSteerMessage(text, expectedTurnId, clientMessageId, attachments, inputParts);
   }
 
   getSessionUsage() {

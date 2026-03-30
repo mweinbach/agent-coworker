@@ -2,17 +2,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import {
-  SIDECAR_BUN_ENTRYPOINT_PATH,
-  SIDECAR_BUN_EXECUTABLE_NAME,
-  shouldUseBundledBunRuntime,
-} from "../apps/desktop/electron/services/sidecar";
-import {
   copyDir,
   ensureBundledBunRuntime,
+  pathExists,
   resolveBuildTarget,
   rmrf,
   runCommand,
 } from "./releaseBuildUtils";
+
+const SIDECAR_BUN_EXECUTABLE_NAME = "bun.exe";
+const SIDECAR_BUN_ENTRYPOINT_PATH = "server/index.js";
+
+function shouldUseBundledBunRuntime(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): boolean {
+  return platform === "win32" && arch === "arm64";
+}
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -86,16 +92,22 @@ async function main() {
     await fs.copyFile(executablePath, path.join(outDir, SIDECAR_BUN_EXECUTABLE_NAME));
     await fs.writeFile(resolvedOutfile, buildWindowsBundleLauncher(), "utf8");
 
+      const bundledDirs: string[] = [];
     for (const dir of ["prompts", "config", "docs"] as const) {
+      const srcDir = path.join(root, dir);
+      if (!(await pathExists(srcDir))) {
+        continue;
+      }
       const dest = path.join(outDir, dir);
       await rmrf(dest);
-      await copyDir(path.join(root, dir), dest);
+      await copyDir(srcDir, dest);
+      bundledDirs.push(dir);
     }
 
     console.log(`[build] cowork-server launcher: ${path.relative(root, resolvedOutfile)}`);
     console.log(`[build] cowork-server Bun runtime: ${path.relative(root, path.join(outDir, SIDECAR_BUN_EXECUTABLE_NAME))} (v${version})`);
     console.log(`[build] cowork-server entrypoint: ${path.relative(root, serverEntrypointPath)}`);
-    console.log(`[build] cowork-server resources: ${path.relative(root, outDir)}/{prompts,config,docs}`);
+    console.log(`[build] cowork-server resources: ${path.relative(root, outDir)}/{${bundledDirs.join(",")}}`);
     return;
   }
 
@@ -113,14 +125,20 @@ async function main() {
     }
   );
 
+  const bundledDirs: string[] = [];
   for (const dir of ["prompts", "config", "docs"] as const) {
+    const srcDir = path.join(root, dir);
+    if (!(await pathExists(srcDir))) {
+      continue;
+    }
     const dest = path.join(outDir, dir);
     await rmrf(dest);
-    await copyDir(path.join(root, dir), dest);
+    await copyDir(srcDir, dest);
+    bundledDirs.push(dir);
   }
 
   console.log(`[build] cowork-server binary: ${path.relative(root, resolvedOutfile)}`);
-  console.log(`[build] cowork-server resources: ${path.relative(root, outDir)}/{prompts,config,docs}`);
+  console.log(`[build] cowork-server resources: ${path.relative(root, outDir)}/{${bundledDirs.join(",")}}`);
 }
 
 main().catch((error) => {

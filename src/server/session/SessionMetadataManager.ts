@@ -523,6 +523,7 @@ export class SessionMetadataManager {
     if (prepared.refreshedSystemPrompt) {
       this.context.state.system = prepared.refreshedSystemPrompt.prompt;
       this.context.state.discoveredSkills = prepared.refreshedSystemPrompt.discoveredSkills;
+      this.context.state.systemPromptMetadataLoaded = true;
     }
 
     if (prepared.emitObservabilityStatus) {

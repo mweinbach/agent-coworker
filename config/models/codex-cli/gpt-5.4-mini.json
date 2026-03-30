@@ -4,7 +4,7 @@
   "displayName": "GPT-5.4 Mini (Codex CLI)",
   "knowledgeCutoff": "August 31, 2025",
   "supportsImageInput": true,
-  "promptTemplate": "system-models/gpt-5.4.md",
+  "promptTemplate": "system-models/gpt-5.4.json",
   "providerOptionsDefaults": {
     "reasoningEffort": "high",
     "reasoningSummary": "detailed",

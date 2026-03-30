@@ -8,23 +8,19 @@ import {
   optionalNonEmptyTrimmedStringSchema,
 } from "./schema.shared";
 import {
-  configUpdatedEventSchema as sharedConfigUpdatedEventSchema,
-  jsonRpcControlRequestSchemas,
-  jsonRpcControlResultSchemas,
-  sessionConfigEventSchema as sharedSessionConfigEventSchema,
-  sessionSettingsEventSchema as sharedSessionSettingsEventSchema,
-} from "../../shared/jsonrpcControlSchemas";
+  configUpdatedEventSchema,
+  sessionConfigEventSchema,
+  sessionDefaultsApplyRequestSchema,
+  sessionDefaultsApplyResultSchema,
+  sessionSettingsEventSchema,
+  sessionStateReadRequestSchema,
+  sessionStateReadResultSchema,
+} from "./schema.sessionRuntime";
 
 export const sessionInfoEventSchema = z.object({
   type: z.literal("session_info"),
   title: z.string(),
 }).passthrough();
-
-export const configUpdatedEventSchema = sharedConfigUpdatedEventSchema;
-
-export const sessionConfigEventSchema = sharedSessionConfigEventSchema;
-
-export const sessionSettingsEventSchema = sharedSessionSettingsEventSchema;
 
 export const sessionUsageEventSchema = z.object({
   type: z.literal("session_usage"),
@@ -85,7 +81,7 @@ export const jsonRpcSessionRequestSchemas = {
     threadId: nonEmptyTrimmedStringSchema,
     title: z.string(),
   }).strict(),
-  "cowork/session/state/read": jsonRpcControlRequestSchemas["cowork/session/state/read"],
+  "cowork/session/state/read": sessionStateReadRequestSchema,
   "cowork/session/model/set": z.object({
     threadId: nonEmptyTrimmedStringSchema,
     provider: optionalNonEmptyTrimmedStringSchema,
@@ -107,7 +103,7 @@ export const jsonRpcSessionRequestSchemas = {
     threadId: nonEmptyTrimmedStringSchema,
     context: harnessContextPayloadSchema,
   }).strict(),
-  "cowork/session/defaults/apply": jsonRpcControlRequestSchemas["cowork/session/defaults/apply"],
+  "cowork/session/defaults/apply": sessionDefaultsApplyRequestSchema,
   "cowork/session/file/upload": z.object({
     cwd: nonEmptyTrimmedStringSchema.optional(),
     filename: nonEmptyTrimmedStringSchema,
@@ -135,13 +131,13 @@ export const jsonRpcSessionNotificationSchemas = {
 
 export const jsonRpcSessionResultSchemas = {
   "cowork/session/title/set": legacyEventEnvelope(sessionInfoEventSchema),
-  "cowork/session/state/read": jsonRpcControlResultSchemas["cowork/session/state/read"],
+  "cowork/session/state/read": sessionStateReadResultSchema,
   "cowork/session/model/set": legacyEventEnvelope(configUpdatedEventSchema),
   "cowork/session/usageBudget/set": legacyEventEnvelope(sessionUsageEventSchema),
   "cowork/session/config/set": legacyEventEnvelope(sessionConfigEventSchema),
   "cowork/session/harnessContext/get": legacyEventEnvelope(harnessContextEventSchema),
   "cowork/session/harnessContext/set": legacyEventEnvelope(harnessContextEventSchema),
-  "cowork/session/defaults/apply": jsonRpcControlResultSchemas["cowork/session/defaults/apply"],
+  "cowork/session/defaults/apply": sessionDefaultsApplyResultSchema,
   "cowork/session/file/upload": legacyEventEnvelope(fileUploadedEventSchema),
   "cowork/session/delete": legacyEventEnvelope(sessionDeletedEventSchema),
 } as const;

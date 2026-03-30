@@ -219,15 +219,20 @@ function makeSession(
     cancelAgentSessionsImpl: (parentSessionId: string) => void;
     deleteSessionImpl: (opts: any) => Promise<void>;
     sessionInfoPatch: Partial<SessionInfoState>;
+    discoveredSkills: Array<{ name: string; description: string }>;
   }>
 ) {
   const dir = "/tmp/test-session";
   const { emit, events } = makeEmit();
   const sessionBackupFactory = overrides?.sessionBackupFactory ?? makeSessionBackupFactory();
   const getProviderStatusesImpl = overrides?.getProviderStatusesImpl ?? (async () => []);
+  const discoveredSkills = overrides && "discoveredSkills" in overrides
+    ? overrides.discoveredSkills
+    : [{ name: "test-skill", description: "Test skill" }];
   const session = new AgentSession({
     config: overrides?.config ?? makeConfig(dir),
     system: overrides?.system ?? "You are a test assistant.",
+    discoveredSkills,
     yolo: overrides?.yolo,
     emit: overrides?.emit ?? emit,
     connectProviderImpl: overrides?.connectProviderImpl,
@@ -546,6 +551,47 @@ describe("AgentSession", () => {
   });
 
   describe("memory settings", () => {
+    test("sendUserMessage skips prompt reload when cached metadata has zero discovered skills", async () => {
+      const loadSystemPromptWithSkillsImpl = mock(async () => {
+        throw new Error("should not reload");
+      });
+      const { session } = makeSession({
+        system: "prompt:root-system",
+        loadSystemPromptWithSkillsImpl,
+        discoveredSkills: [],
+      });
+
+      await session.sendUserMessage("hello");
+
+      expect(loadSystemPromptWithSkillsImpl).not.toHaveBeenCalled();
+
+      const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(runTurnArgs.system).toBe("prompt:root-system");
+      expect(runTurnArgs.discoveredSkills).toEqual([]);
+    });
+
+    test("sendUserMessage backfills discovered skills when prompt metadata is missing", async () => {
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "prompt:root-system",
+        discoveredSkills: [{ name: "delegated-skill", description: "Delegated skill" }],
+      }));
+      const { session } = makeSession({
+        system: "prompt:child-system",
+        loadSystemPromptWithSkillsImpl,
+        discoveredSkills: undefined,
+      });
+
+      await session.sendUserMessage("hello");
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+
+      const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(runTurnArgs.system).toBe("prompt:child-system");
+      expect(runTurnArgs.discoveredSkills).toEqual([
+        { name: "delegated-skill", description: "Delegated skill" },
+      ]);
+    });
+
     test("setConfig refreshes the cached system prompt when enableMemory changes", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const loadSystemPromptWithSkillsImpl = mock(async (config: AgentConfig) => ({
@@ -5605,6 +5651,7 @@ describe("AgentSession", () => {
           costTracker: tracker.getSnapshot(),
         },
         baseConfig: makeConfig("/tmp/persisted"),
+        discoveredSkills: [{ name: "test-skill", description: "Test skill" }],
         emit,
         sessionBackupFactory: makeSessionBackupFactory(),
         getProviderStatusesImpl: async () => [],
@@ -5663,6 +5710,7 @@ describe("AgentSession", () => {
           costTracker: null,
         },
         baseConfig: makeConfig("/tmp/persisted"),
+        discoveredSkills: [{ name: "test-skill", description: "Test skill" }],
         emit,
         sessionBackupFactory: makeSessionBackupFactory(),
         getProviderStatusesImpl: async () => [],
@@ -5767,6 +5815,7 @@ describe("AgentSession", () => {
           costTracker: null,
         },
         baseConfig: makeConfig("/tmp/persisted"),
+        discoveredSkills: [{ name: "test-skill", description: "Test skill" }],
         emit,
         sessionBackupFactory: makeSessionBackupFactory(),
         getProviderStatusesImpl: async () => [],

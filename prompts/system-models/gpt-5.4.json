@@ -1,0 +1,21 @@
+{
+  "extends": "gpt-5.2.md",
+  "replacements": [
+    {
+      "old": "- Use the current year ({{currentYear}}) in queries when searching for recent information.\n- After answering with search results, include a \"Sources:\" section with URLs.",
+      "new": "- Use the current year ({{currentYear}}) in queries when searching for recent information.\n- After answering with search results, include a \"Sources:\" section with URLs.\n- In Codex CLI sessions that expose provider-native web search, prefer the native search/open/find tool and rely on native citations instead of manually formatting a \"Sources:\" section."
+    },
+    {
+      "old": "- Use to read specific documentation pages, articles, or web content.\n- If the URL points directly to an image, webFetch may save it into `{{workingDirectory}}/Downloads` and return `File downloaded ...`. Use `read` on the downloaded path to inspect it visually.",
+      "new": "- Use to read specific documentation pages, articles, or web content.\n- In Codex CLI sessions with provider-native web search, do not use webFetch for ordinary HTML page reading; reserve it for direct file downloads that must be saved locally.\n- If the URL points directly to an image, webFetch may save it into `{{workingDirectory}}/Downloads` and return `File downloaded ...`. Use `read` on the downloaded path to inspect it visually."
+    },
+    {
+      "old": "Use webSearch for open-ended queries. Use webFetch when you need the full content of a specific page (documentation, articles, reference material), or when you need to download a direct image URL and inspect it with `read`.\n\nWhen your answer draws on web sources, include a \"Sources:\" section at the end with markdown links to the URLs you used.",
+      "new": "Use webSearch for open-ended queries. Use webFetch when you need the full content of a specific page (documentation, articles, reference material), or when you need to download a direct image URL and inspect it with `read`. In Codex CLI sessions with provider-native web search, prefer the native tool for search and ordinary page reading.\n\nWhen your answer draws on web sources, include a \"Sources:\" section at the end with markdown links to the URLs you used, unless provider-native citations already cover them in a Codex CLI native-web-search session."
+    },
+    {
+      "old": "For long content (>100 lines), create the file and build it iteratively — start with structure, add content section by section, then review.\n\nAlways create actual files when the user asks for a deliverable. Don't just show content in chat and tell the user to save it.",
+      "new": "For long content (>100 lines), create the file and build it iteratively — start with structure, add content section by section, then review.\n\nDo not create extra staging files or helper folders unless they are part of the requested deliverable or materially improve reliability. Intermediate work should stay lightweight and task-relevant.\n\nAlways create actual files when the user asks for a deliverable. Don't just show content in chat and tell the user to save it."
+    }
+  ]
+}

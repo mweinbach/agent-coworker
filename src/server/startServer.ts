@@ -7,24 +7,28 @@ import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from
 import type { runTurn as runTurnFn } from "../agent";
 import { defaultRuntimeNameForProvider, type AgentConfig } from "../types";
 import { loadConfig } from "../config";
-import { emitObservabilityEvent } from "../observability/otel";
-import { loadAgentPrompt, loadSystemPromptWithSkills } from "../prompt";
+import type { emitObservabilityEvent as emitObservabilityEventFn } from "../observability/otel";
+import type {
+  loadAgentPrompt as loadAgentPromptFn,
+  loadSystemPromptWithSkills as loadSystemPromptWithSkillsFn,
+} from "../prompt";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
 import type { SessionKind } from "../shared/agents";
 import {
   EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES,
   mergeEditableOpenAiCompatibleProviderOptions,
+  pickEditableOpenAiCompatibleProviderOptions,
 } from "../shared/openaiCompatibleOptions";
+import { effectiveToolOutputOverflowChars } from "../shared/toolOutputOverflow";
 import { ensureDefaultGlobalSkillsReady } from "../skills/defaultGlobalSkills";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 import { getProviderCatalog } from "../providers/connectionCatalog";
 import { resolveAuthHomeDir } from "../utils/authHome";
 
-import { AgentControl } from "./agents/AgentControl";
-import { AgentSession } from "./session/AgentSession";
-import { createLegacySessionSnapshot } from "./session/SessionSnapshotProjector";
+import type { AgentControl } from "./agents/AgentControl";
+import type { AgentSession } from "./session/AgentSession";
 import { SessionDb, type PersistedSessionRecord } from "./sessionDb";
-import { WorkspaceBackupService } from "./workspaceBackups";
+import type { WorkspaceBackupService } from "./workspaceBackups";
 import {
   type ServerEvent,
 } from "./protocol";
@@ -59,6 +63,37 @@ const jsonObjectSchema = z.record(z.string(), z.unknown());
 const errorWithCodeSchema = z.object({
   code: z.string().optional(),
 }).passthrough();
+let observabilityOtelModulePromise: Promise<typeof import("../observability/otel")> | null = null;
+let promptModulePromise: Promise<typeof import("../prompt")> | null = null;
+let agentSessionModule: typeof import("./session/AgentSession") | null = null;
+let sessionSnapshotProjectorModule: typeof import("./session/SessionSnapshotProjector") | null = null;
+
+const lazyEmitObservabilityEvent: typeof emitObservabilityEventFn = async (...args) => {
+  observabilityOtelModulePromise ??= import("../observability/otel");
+  return await (await observabilityOtelModulePromise).emitObservabilityEvent(...args);
+};
+
+const loadPromptModule = async (): Promise<typeof import("../prompt")> => {
+  promptModulePromise ??= import("../prompt");
+  return await promptModulePromise;
+};
+
+const loadAgentSessionModule = (): typeof import("./session/AgentSession") => {
+  agentSessionModule ??= require("./session/AgentSession") as typeof import("./session/AgentSession");
+  return agentSessionModule;
+};
+
+const loadSessionSnapshotProjectorModule = (): typeof import("./session/SessionSnapshotProjector") => {
+  sessionSnapshotProjectorModule ??= require("./session/SessionSnapshotProjector") as typeof import("./session/SessionSnapshotProjector");
+  return sessionSnapshotProjectorModule;
+};
+
+const lazyLoadAgentPrompt: typeof loadAgentPromptFn = async (...args) =>
+  await (await loadPromptModule()).loadAgentPrompt(...args);
+
+const lazyLoadSystemPromptWithSkills: typeof loadSystemPromptWithSkillsFn = async (...args) =>
+  await (await loadPromptModule()).loadSystemPromptWithSkills(...args);
+
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return jsonObjectSchema.safeParse(v).success;
@@ -244,6 +279,7 @@ export interface StartAgentServerOptions {
   getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
   runTurnImpl?: typeof runTurnFn;
   wsProtocolDefault?: "jsonrpc";
+  preloadSystemPrompt?: boolean;
 }
 
 export async function startAgentServer(
@@ -296,12 +332,18 @@ export async function startAgentServer(
 
   await fs.mkdir(config.projectAgentDir, { recursive: true });
 
-  const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
+  let system = "";
+  let discoveredSkills: Array<{ name: string; description: string }> = [];
+  if (opts.preloadSystemPrompt !== false) {
+    const loadedSystemPrompt = await lazyLoadSystemPromptWithSkills(config);
+    system = loadedSystemPrompt.prompt;
+    discoveredSkills = loadedSystemPrompt.discoveredSkills;
+  }
   const getAiCoworkerPathsImpl = opts.getAiCoworkerPathsImpl ?? getAiCoworkerPathsDefault;
   const sessionDb = await SessionDb.create({
     paths: getAiCoworkerPathsImpl({ homedir: opts.homedir }),
     emitTelemetry: (name, status, attributes, durationMs) => {
-      void emitObservabilityEvent(config, {
+      void lazyEmitObservabilityEvent(config, {
         name,
         at: new Date().toISOString(),
         status,
@@ -314,32 +356,41 @@ export async function startAgentServer(
   });
   const sessionBindings = new Map<string, SessionBinding>();
   const workspaceControlBindings = new Map<string, SessionBinding>();
-  const workspaceBackupService = new WorkspaceBackupService({
-    homedir: opts.homedir,
-    sessionDb,
-    getLiveSession: (sessionId) => {
-      const session = sessionBindings.get(sessionId)?.session;
-      if (!session) return null;
-      const info = session.getSessionInfoEvent();
-      return {
-        sessionId: session.id,
-        title: info.title,
-        provider: info.provider,
-        model: info.model,
-        updatedAt: info.updatedAt,
-        status: session.persistenceStatus,
-        busy: session.isBusy,
-        setBackupsEnabledOverride: async (enabled) => {
-          await session.setBackupsEnabledOverride(enabled);
-        },
-        reloadBackupStateFromDisk: async () => {
-          await session.reloadSessionBackupStateFromDisk();
-        },
-      };
-    },
-  });
+  const workspaceControlStateIds = new Map<string, string>();
+  let workspaceBackupService: WorkspaceBackupService | null = null;
+  let getAgentControl: () => AgentControl;
 
-  let agentControl: AgentControl;
+  const getWorkspaceBackupService = (): WorkspaceBackupService => {
+    if (workspaceBackupService) {
+      return workspaceBackupService;
+    }
+    const { WorkspaceBackupService } = require("./workspaceBackups") as typeof import("./workspaceBackups");
+    workspaceBackupService = new WorkspaceBackupService({
+      homedir: opts.homedir,
+      sessionDb,
+      getLiveSession: (sessionId) => {
+        const session = sessionBindings.get(sessionId)?.session;
+        if (!session) return null;
+        const info = session.getSessionInfoEvent();
+        return {
+          sessionId: session.id,
+          title: info.title,
+          provider: info.provider,
+          model: info.model,
+          updatedAt: info.updatedAt,
+          status: session.persistenceStatus,
+          busy: session.isBusy,
+          setBackupsEnabledOverride: async (enabled) => {
+            await session.setBackupsEnabledOverride(enabled);
+          },
+          reloadBackupStateFromDisk: async () => {
+            await session.reloadSessionBackupStateFromDisk();
+          },
+        };
+      },
+    });
+    return workspaceBackupService;
+  };
 
   const addBindingSink = (binding: SessionBinding, sinkId: string, sink: (evt: ServerEvent) => void) => {
     binding.sinks.set(sinkId, sink);
@@ -358,22 +409,90 @@ export async function startAgentServer(
     removeBindingSink,
   });
 
+  const getOrCreateWorkspaceControlStateId = (cwd: string): string => {
+    const existing = workspaceControlStateIds.get(cwd);
+    if (existing) {
+      return existing;
+    }
+    const created = `jsonrpc-control:${crypto.randomUUID()}`;
+    workspaceControlStateIds.set(cwd, created);
+    return created;
+  };
+
+  const buildWorkspaceControlConfig = (cwd: string): AgentConfig => ({
+    ...config,
+    workingDirectory: cwd,
+  });
+
+  const buildWorkspaceControlStateEventsFromConfig = (cwd: string): ServerEvent[] => {
+    const controlConfig = buildWorkspaceControlConfig(cwd);
+    const sessionId = getOrCreateWorkspaceControlStateId(cwd);
+    const providerOptions = pickEditableOpenAiCompatibleProviderOptions(controlConfig.providerOptions);
+    const defaultBackupsEnabled = controlConfig.backupsEnabled ?? true;
+    const defaultToolOutputOverflowChars = controlConfig.projectConfigOverrides?.toolOutputOverflowChars;
+    const toolOutputOverflowChars = effectiveToolOutputOverflowChars(controlConfig.toolOutputOverflowChars);
+    const preferredChildModelRef =
+      controlConfig.preferredChildModelRef ?? `${controlConfig.provider}:${controlConfig.preferredChildModel}`;
+
+    return [
+      {
+        type: "config_updated",
+        sessionId,
+        config: {
+          provider: controlConfig.provider,
+          model: controlConfig.model,
+          workingDirectory: controlConfig.workingDirectory,
+          ...(controlConfig.outputDirectory ? { outputDirectory: controlConfig.outputDirectory } : {}),
+        },
+      },
+      {
+        type: "session_settings",
+        sessionId,
+        enableMcp: controlConfig.enableMcp ?? false,
+        enableMemory: controlConfig.enableMemory ?? true,
+        memoryRequireApproval: controlConfig.memoryRequireApproval ?? false,
+      },
+      {
+        type: "session_config",
+        sessionId,
+        config: {
+          yolo: opts.yolo === true,
+          observabilityEnabled: controlConfig.observabilityEnabled ?? false,
+          backupsEnabled: defaultBackupsEnabled,
+          defaultBackupsEnabled,
+          enableMemory: controlConfig.enableMemory ?? true,
+          memoryRequireApproval: controlConfig.memoryRequireApproval ?? false,
+          preferredChildModel: controlConfig.preferredChildModel,
+          childModelRoutingMode: controlConfig.childModelRoutingMode ?? "same-provider",
+          preferredChildModelRef,
+          allowedChildModelRefs: controlConfig.allowedChildModelRefs ?? [],
+          maxSteps: 100,
+          toolOutputOverflowChars,
+          ...(defaultToolOutputOverflowChars !== undefined ? { defaultToolOutputOverflowChars } : {}),
+          ...(providerOptions ? { providerOptions } : {}),
+          userName: controlConfig.userName,
+          userProfile: {
+            instructions: controlConfig.userProfile?.instructions ?? "",
+            work: controlConfig.userProfile?.work ?? "",
+            details: controlConfig.userProfile?.details ?? "",
+          },
+        },
+      },
+    ];
+  };
+
   const getOrCreateWorkspaceControlBinding = (cwd: string): SessionBinding => {
     const existing = workspaceControlBindings.get(cwd);
     if (existing?.session) {
       return existing;
     }
-    const binding: SessionBinding = {
+    const binding: SessionBinding = existing ?? {
       session: null,
       socket: null,
       sinks: new Map(),
     };
-    const controlConfig: AgentConfig = {
-      ...config,
-      workingDirectory: cwd,
-    };
     const built = buildSession(binding, undefined, {
-      config: controlConfig,
+      config: buildWorkspaceControlConfig(cwd),
     });
     binding.session = built.session;
     workspaceControlBindings.set(cwd, binding);
@@ -441,25 +560,25 @@ export async function startAgentServer(
       emit,
       createAgentSessionImpl: async (
         agentOpts: Parameters<NonNullable<SessionDependencies["createAgentSessionImpl"]>>[0],
-      ) => await agentControl.spawn(agentOpts),
+      ) => await getAgentControl().spawn(agentOpts),
       listAgentSessionsImpl: async (
         parentSessionId: Parameters<NonNullable<SessionDependencies["listAgentSessionsImpl"]>>[0],
-      ) => await agentControl.list(parentSessionId),
+      ) => await getAgentControl().list(parentSessionId),
       sendAgentInputImpl: async (
         agentOpts: Parameters<NonNullable<SessionDependencies["sendAgentInputImpl"]>>[0],
-      ) => await agentControl.sendInput(agentOpts),
+      ) => await getAgentControl().sendInput(agentOpts),
       waitForAgentImpl: async (
         agentOpts: Parameters<NonNullable<SessionDependencies["waitForAgentImpl"]>>[0],
-      ) => await agentControl.wait(agentOpts),
+      ) => await getAgentControl().wait(agentOpts),
       resumeAgentImpl: async (
         agentOpts: Parameters<NonNullable<SessionDependencies["resumeAgentImpl"]>>[0],
-      ) => await agentControl.resume(agentOpts),
+      ) => await getAgentControl().resume(agentOpts),
       closeAgentImpl: async (
         agentOpts: Parameters<NonNullable<SessionDependencies["closeAgentImpl"]>>[0],
-      ) => await agentControl.close(agentOpts),
+      ) => await getAgentControl().close(agentOpts),
       cancelAgentSessionsImpl: (
         parentSessionId: Parameters<NonNullable<SessionDependencies["cancelAgentSessionsImpl"]>>[0],
-      ) => agentControl.cancelAll(parentSessionId),
+      ) => getAgentControl().cancelAll(parentSessionId),
       deleteSessionImpl: async (opts: { requesterSessionId: string; targetSessionId: string }): Promise<void> => {
         void opts.requesterSessionId;
         const liveChildIds = [...sessionBindings.values()]
@@ -479,45 +598,45 @@ export async function startAgentServer(
         await sessionDb.deleteSession(opts.targetSessionId);
       },
       listWorkspaceBackupsImpl: async (opts: { requesterSessionId: string; workingDirectory: string }) =>
-        await workspaceBackupService.listWorkspaceBackups(opts.workingDirectory),
+        await getWorkspaceBackupService().listWorkspaceBackups(opts.workingDirectory),
       createWorkspaceBackupCheckpointImpl: async (opts: {
         requesterSessionId: string;
         workingDirectory: string;
         targetSessionId: string;
       }) =>
-        await workspaceBackupService.createCheckpoint(opts.workingDirectory, opts.targetSessionId),
+        await getWorkspaceBackupService().createCheckpoint(opts.workingDirectory, opts.targetSessionId),
       restoreWorkspaceBackupImpl: async (opts: {
         requesterSessionId: string;
         workingDirectory: string;
         targetSessionId: string;
         checkpointId?: string;
       }) =>
-        await workspaceBackupService.restoreBackup(opts.workingDirectory, opts.targetSessionId, opts.checkpointId),
+        await getWorkspaceBackupService().restoreBackup(opts.workingDirectory, opts.targetSessionId, opts.checkpointId),
       deleteWorkspaceBackupCheckpointImpl: async (opts: {
         requesterSessionId: string;
         workingDirectory: string;
         targetSessionId: string;
         checkpointId: string;
       }) =>
-        await workspaceBackupService.deleteCheckpoint(opts.workingDirectory, opts.targetSessionId, opts.checkpointId),
+        await getWorkspaceBackupService().deleteCheckpoint(opts.workingDirectory, opts.targetSessionId, opts.checkpointId),
       deleteWorkspaceBackupEntryImpl: async (opts: {
         requesterSessionId: string;
         workingDirectory: string;
         targetSessionId: string;
       }) =>
-        await workspaceBackupService.deleteEntry(opts.workingDirectory, opts.targetSessionId),
+        await getWorkspaceBackupService().deleteEntry(opts.workingDirectory, opts.targetSessionId),
       getWorkspaceBackupDeltaImpl: async (opts: {
         requesterSessionId: string;
         workingDirectory: string;
         targetSessionId: string;
         checkpointId: string;
       }) =>
-        await workspaceBackupService.getCheckpointDelta(opts.workingDirectory, opts.targetSessionId, opts.checkpointId),
+        await getWorkspaceBackupService().getCheckpointDelta(opts.workingDirectory, opts.targetSessionId, opts.checkpointId),
       getLiveSessionSnapshotImpl: (sessionId: string) => sessionBindings.get(sessionId)?.session?.peekSessionSnapshot() ?? null,
       getLiveSessionWorkingDirectoryImpl: (sessionId: string) =>
         sessionBindings.get(sessionId)?.session?.getWorkingDirectory() ?? null,
       buildLegacySessionSnapshotImpl: (record: import("./sessionDb").PersistedSessionRecord) =>
-        createLegacySessionSnapshot(record),
+        loadSessionSnapshotProjectorModule().createLegacySessionSnapshot(record),
       getSkillMutationBlockReasonImpl: (workingDirectory: string) => {
         const busySession = [...sessionBindings.values()]
           .map((candidate) => candidate.session)
@@ -567,14 +686,14 @@ export async function startAgentServer(
     try {
       const snapshot = sessionDb.getSessionSnapshot(persisted.sessionId);
       if (!snapshot) {
-        return createLegacySessionSnapshot(persisted);
+        return loadSessionSnapshotProjectorModule().createLegacySessionSnapshot(persisted);
       }
       if (snapshot.lastEventSeq < persisted.lastEventSeq) {
-        return createLegacySessionSnapshot(persisted);
+        return loadSessionSnapshotProjectorModule().createLegacySessionSnapshot(persisted);
       }
       return snapshot;
     } catch {
-      return createLegacySessionSnapshot(persisted);
+      return loadSessionSnapshotProjectorModule().createLegacySessionSnapshot(persisted);
     }
   };
 
@@ -596,6 +715,7 @@ export async function startAgentServer(
       const persisted = sessionDb.getSessionRecord(persistedSessionId);
       if (persisted) {
         const common = buildSessionCommon(binding, persisted.sessionKind);
+        const { AgentSession } = loadAgentSessionModule();
         const session = AgentSession.fromPersisted({
           persisted,
           initialSessionSnapshot: loadInitialSessionSnapshot(persisted),
@@ -608,6 +728,7 @@ export async function startAgentServer(
 
     const sessionKind = overrides?.sessionInfoPatch?.sessionKind ?? "root";
     const common = buildSessionCommon(binding, sessionKind);
+    const { AgentSession } = loadAgentSessionModule();
     const session = new AgentSession({
       config: { ...(overrides?.config ?? config) },
       system: overrides?.system ?? system,
@@ -622,36 +743,44 @@ export async function startAgentServer(
     await getProviderCatalog({ homedir: resolveAuthHomeDir(parentConfig, opts.homedir) })
   ).connected as AgentConfig["provider"][];
 
-  agentControl = new AgentControl({
-    sessionBindings,
-    sessionDb,
-    getConnectedProviders,
-    buildSession,
-    loadAgentPrompt,
-    disposeBinding,
-    emitParentAgentStatus: (parentSessionId, agent) => {
-      const parentBinding = sessionBindings.get(parentSessionId);
-      if (!parentBinding) return;
-      for (const sink of parentBinding.sinks.values()) {
-        try {
-          sink({ type: "agent_status", sessionId: parentSessionId, agent });
-        } catch {
-          // ignore
+  let agentControl: AgentControl | null = null;
+  getAgentControl = (): AgentControl => {
+    if (agentControl) {
+      return agentControl;
+    }
+    const { AgentControl } = require("./agents/AgentControl") as typeof import("./agents/AgentControl");
+    agentControl = new AgentControl({
+      sessionBindings,
+      sessionDb,
+      getConnectedProviders,
+      buildSession,
+      loadAgentPrompt: lazyLoadAgentPrompt,
+      disposeBinding,
+      emitParentAgentStatus: (parentSessionId, agent) => {
+        const parentBinding = sessionBindings.get(parentSessionId);
+        if (!parentBinding) return;
+        for (const sink of parentBinding.sinks.values()) {
+          try {
+            sink({ type: "agent_status", sessionId: parentSessionId, agent });
+          } catch {
+            // ignore
+          }
         }
-      }
-    },
-    emitParentLog: (parentSessionId, line) => {
-      const parentBinding = sessionBindings.get(parentSessionId);
-      if (!parentBinding) return;
-      for (const sink of parentBinding.sinks.values()) {
-        try {
-          sink({ type: "log", sessionId: parentSessionId, line });
-        } catch {
-          // ignore
+      },
+      emitParentLog: (parentSessionId, line) => {
+        const parentBinding = sessionBindings.get(parentSessionId);
+        if (!parentBinding) return;
+        for (const sink of parentBinding.sinks.values()) {
+          try {
+            sink({ type: "log", sessionId: parentSessionId, line });
+          } catch {
+            // ignore
+          }
         }
-      }
-    },
-  });
+      },
+    });
+    return agentControl;
+  };
 
   const threadJournalWriteQueues = new Map<string, Promise<void>>();
   const pendingThreadJournalEvents = new Map<string, Array<{
@@ -808,6 +937,14 @@ export async function startAgentServer(
     return await runner(binding, binding.session);
   };
 
+  const readWorkspaceControlState = (cwd: string): ServerEvent[] => {
+    const existing = workspaceControlBindings.get(cwd)?.session;
+    if (existing) {
+      return buildControlSessionStateEvents(existing);
+    }
+    return buildWorkspaceControlStateEventsFromConfig(cwd);
+  };
+
   const jsonRpcRequestRouter = createJsonRpcRequestRouter({
     getConfig: () => config,
     threads: {
@@ -831,6 +968,7 @@ export async function startAgentServer(
     workspaceControl: {
       getOrCreateBinding: (cwd) => getOrCreateWorkspaceControlBinding(cwd),
       withSession: async (cwd, runner) => await withWorkspaceControlSession(cwd, runner),
+      readState: (cwd) => readWorkspaceControlState(cwd),
     },
     journal: {
       enqueue: async (event) => await enqueueThreadJournalEvent(event),

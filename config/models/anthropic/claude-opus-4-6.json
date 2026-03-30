@@ -4,7 +4,7 @@
   "displayName": "Claude Opus 4.6",
   "knowledgeCutoff": "May 2025",
   "supportsImageInput": true,
-  "promptTemplate": "system-models/claude-opus-4-6.md",
+  "promptTemplate": "system-models/claude-opus-4-6.json",
   "providerOptionsDefaults": {
     "thinking": {
       "type": "enabled",

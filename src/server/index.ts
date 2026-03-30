@@ -4,8 +4,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { DEFAULT_PROVIDER_OPTIONS } from "../providers";
-import { startAgentServer } from "./startServer";
 
 // Keep server output clean by default.
 const globalSettings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?: boolean };
@@ -113,6 +111,11 @@ async function main() {
   const cwd = dir ? await resolveAndValidateDir(dir) : process.cwd();
   if (dir) process.chdir(cwd);
 
+  const [{ DEFAULT_PROVIDER_OPTIONS }, { startAgentServer }] = await Promise.all([
+    import("../providers/providerOptions"),
+    import("./startServer"),
+  ]);
+
   const { server, config, url } = await startAgentServer({
     cwd,
     hostname: host,
@@ -120,6 +123,7 @@ async function main() {
     env: { ...process.env, AGENT_WORKING_DIR: cwd },
     providerOptions: DEFAULT_PROVIDER_OPTIONS,
     yolo,
+    preloadSystemPrompt: false,
     ...(wsProtocolDefault ? { wsProtocolDefault } : {}),
   });
 

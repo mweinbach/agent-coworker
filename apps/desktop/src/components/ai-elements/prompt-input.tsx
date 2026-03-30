@@ -231,7 +231,7 @@ export function PromptInputSubmit({ className, disabled, mode = "send", onStop, 
         size="icon"
         variant="destructive"
         className={cn(
-          "size-10 rounded-full border border-border/40 bg-foreground text-background shadow-none hover:bg-foreground/90 disabled:border-border/50 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
+          "size-10 rounded-full border border-destructive/20 bg-destructive text-destructive-foreground shadow-none hover:bg-destructive/90 disabled:border-border/50 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
           className,
         )}
         disabled={disabled || !onStop}
@@ -239,7 +239,7 @@ export function PromptInputSubmit({ className, disabled, mode = "send", onStop, 
         aria-label="Stop generating response"
         {...props}
       >
-        <SquareIcon data-icon="stop" />
+        <SquareIcon data-icon="stop" className="size-4" strokeWidth={2.25} />
       </Button>
     );
   }
@@ -254,7 +254,7 @@ export function PromptInputSubmit({ className, disabled, mode = "send", onStop, 
       className={cn(
         steerReady || steerPending
           ? "size-10 rounded-full border border-warning/35 bg-warning text-warning-foreground shadow-none hover:brightness-105"
-          : "size-10 rounded-full border border-foreground/10 bg-foreground text-background shadow-none hover:bg-foreground/90",
+          : "size-10 rounded-full border border-primary/15 bg-primary text-primary-foreground shadow-none hover:bg-primary/85",
         steerPending && "animate-pulse",
         "disabled:brightness-100 disabled:border-border/50 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
         className,
@@ -264,7 +264,9 @@ export function PromptInputSubmit({ className, disabled, mode = "send", onStop, 
       title={steerPending ? "Steer sent, waiting for acceptance" : steerReady ? "Steer the current response" : "Send message"}
       {...props}
     >
-      {steerPending ? <LoaderCircleIcon data-icon="send" className="animate-spin" /> : <ArrowUpIcon data-icon="send" />}
+      {steerPending
+        ? <LoaderCircleIcon data-icon="send" className="size-4 animate-spin" strokeWidth={2.25} />
+        : <ArrowUpIcon data-icon="send" className="size-4" strokeWidth={2.25} />}
     </Button>
   );
 }

@@ -734,7 +734,9 @@ describe("desktop chat view stability", () => {
 
       const textarea = container.querySelector("textarea");
       expect(textarea?.hasAttribute("disabled")).toBe(false);
-      expect(container.querySelector('[aria-label="Stop generating response"]')).not.toBeNull();
+      const stopButton = container.querySelector('[aria-label="Stop generating response"]');
+      expect(stopButton).not.toBeNull();
+      expect(stopButton?.className).toContain("bg-destructive");
       const statusRow = container.querySelector('[data-slot="prompt-input-status-row"]');
       expect(statusRow).not.toBeNull();
       expect(statusRow?.textContent).toContain("Type to steer, or use stop to cancel.");
@@ -744,7 +746,9 @@ describe("desktop chat view stability", () => {
       });
 
       expect(container.querySelector('[aria-label="Stop generating response"]')).toBeNull();
-      expect(container.querySelector('[aria-label="Steer current response"]')).not.toBeNull();
+      const steerButton = container.querySelector('[aria-label="Steer current response"]');
+      expect(steerButton).not.toBeNull();
+      expect(steerButton?.className).toContain("bg-warning");
       const steerRow = container.querySelector('[data-slot="prompt-input-status-row"]');
       expect(steerRow?.textContent).toContain("Steer ready. Press Enter to inject it into the current run.");
 
@@ -767,6 +771,23 @@ describe("desktop chat view stability", () => {
       expect(container.querySelector('[aria-label="Steer current response"]')).not.toBeNull();
       const pendingRow = container.querySelector('[data-slot="prompt-input-status-row"]');
       expect(pendingRow?.textContent).toContain("Steer sent. Waiting for the running turn to accept it.");
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            "thread-1": {
+              ...state.threadRuntimeById["thread-1"]!,
+              busy: false,
+              pendingSteer: null,
+            },
+          },
+        }));
+      });
+
+      const sendButton = container.querySelector('[aria-label="Send message"]');
+      expect(sendButton).not.toBeNull();
+      expect(sendButton?.className).toContain("bg-primary");
     } finally {
       if (root) {
         await act(async () => {

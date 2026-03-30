@@ -53,7 +53,13 @@ import {
 import { createSessionEventCapture } from "./jsonrpc/sessionEventCapture";
 import { createJsonRpcTransportAdapter } from "./jsonrpc/transportAdapter";
 import { type SessionBinding, type StartServerSocketData } from "./startServer/types";
-import type { SeededSessionContext, SessionDependencies, SessionInfoState } from "./session/SessionContext";
+import type {
+  PersistedUserConfigPatch,
+  PersistedUserConfigState,
+  SeededSessionContext,
+  SessionDependencies,
+  SessionInfoState,
+} from "./session/SessionContext";
 import {
   parseWsProtocolDefault,
   resolveWsProtocol,
@@ -1050,6 +1056,7 @@ export async function startAgentServer(
       sendError: (ws, id, error) => sendJsonRpc(ws, buildJsonRpcErrorResponse(id, error)),
     },
     utils: {
+      requireWorkspacePath: (params, method) => requireWorkspacePath(params, method, config.workingDirectory),
       resolveWorkspacePath: (params, method) => requireWorkspacePath(params, method, config.workingDirectory),
       extractTextInput: extractJsonRpcTextInput,
       extractInput: extractJsonRpcInput,

@@ -170,7 +170,7 @@ export const PromptInputFooter = forwardRef<HTMLDivElement, ComponentProps<"div"
   return (
     <div
       ref={ref}
-      className={cn("flex flex-nowrap items-center justify-between gap-x-3 px-0.5 pt-1", className)}
+      className={cn("flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-0.5 pt-1", className)}
       {...props}
     />
   );
@@ -185,10 +185,10 @@ export const PromptInputStatusRow = forwardRef<HTMLDivElement, ComponentProps<"d
     <div
       ref={ref}
       data-slot="prompt-input-status-row"
-      className={cn("flex h-6 shrink-0 items-center px-1 text-[11px] leading-none text-muted-foreground", className)}
+      className={cn("flex h-6 min-w-0 shrink-0 items-center px-1 text-[11px] leading-none text-muted-foreground", className)}
       {...props}
     >
-      <span className="truncate">{children}</span>
+      <span className="block min-w-0 truncate">{children}</span>
     </div>
   );
 });
@@ -197,7 +197,7 @@ export const PromptInputTools = forwardRef<HTMLDivElement, ComponentProps<"div">
   { className, ...props },
   ref,
 ) {
-  return <div ref={ref} className={cn("flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden", className)} {...props} />;
+  return <div ref={ref} className={cn("flex min-w-0 flex-1 items-center gap-1.5", className)} {...props} />;
 });
 
 export const PromptInputTextarea = forwardRef<HTMLTextAreaElement, ComponentProps<"textarea">>(function PromptInputTextarea(

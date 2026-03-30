@@ -271,8 +271,15 @@ describe("desktop chat view stability", () => {
       });
 
       expect(container.textContent).toContain("Existing reply");
+      const attachButton = container.querySelector('[aria-label="Attach files"]');
       const modelIndicator = container.querySelector('[title="OpenAI / gpt-5.4-session-lock"]');
+      const toolsRow = attachButton?.parentElement;
+      const footer = toolsRow?.parentElement;
+
+      expect(attachButton).not.toBeNull();
       expect(modelIndicator?.textContent).toContain("gpt-5.4-session-lock");
+      expect(toolsRow?.className).not.toContain("overflow-hidden");
+      expect(footer?.className).toContain("flex-wrap");
       expect(container.querySelector('[data-slot="select-trigger"]')).toBeNull();
     } finally {
       if (root) {
@@ -820,7 +827,7 @@ describe("desktop chat view stability", () => {
           id: "thread-1",
           workspaceId: "ws-1",
           title: "Busy attachments",
-          status: "running",
+          status: "active",
           updatedAt: "2026-03-12T00:00:00.000Z",
           model: "gpt-5.4",
           provider: "openai",
@@ -890,6 +897,9 @@ describe("desktop chat view stability", () => {
       expect(container.querySelector('[data-slot="prompt-input-status-row"]')?.textContent).toContain(
         "Steer ready. Press Enter to inject it into the current run.",
       );
+      const steerButton = container.querySelector('[aria-label="Steer current response"]');
+      expect(steerButton).not.toBeNull();
+      expect(steerButton?.hasAttribute("disabled")).toBe(false);
 
       const separator = container.querySelector('[aria-label="Resize minimum message bar height"]');
       expect(separator?.getAttribute("aria-valuenow")).toBe("120");

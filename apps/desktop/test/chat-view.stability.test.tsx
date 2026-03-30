@@ -184,6 +184,8 @@ describe("desktop chat view stability", () => {
 
       expect(container.textContent).toContain("Send a message to start.");
       expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(false);
+      expect(container.querySelector('[data-slot="prompt-input-status-row"]')).toBeNull();
+      expect(container.textContent).not.toContain("Press Enter to send");
     } finally {
       if (root) {
         await act(async () => {
@@ -269,8 +271,15 @@ describe("desktop chat view stability", () => {
       });
 
       expect(container.textContent).toContain("Existing reply");
+      const attachButton = container.querySelector('[aria-label="Attach files"]');
       const modelIndicator = container.querySelector('[title="OpenAI / gpt-5.4-session-lock"]');
+      const toolsRow = attachButton?.parentElement;
+      const footer = toolsRow?.parentElement;
+
+      expect(attachButton).not.toBeNull();
       expect(modelIndicator?.textContent).toContain("gpt-5.4-session-lock");
+      expect(toolsRow?.className).not.toContain("overflow-hidden");
+      expect(footer?.className).toContain("flex-wrap");
       expect(container.querySelector('[data-slot="select-trigger"]')).toBeNull();
     } finally {
       if (root) {
@@ -282,7 +291,7 @@ describe("desktop chat view stability", () => {
     }
   });
 
-  test("keeps the message bar resize rail invisible and the composer shell borderless", async () => {
+  test("keeps the message bar resize rail invisible and exposes minimum-height semantics", async () => {
     useAppStore.setState({
       ready: true,
       startupError: null,
@@ -355,14 +364,16 @@ describe("desktop chat view stability", () => {
         );
       });
 
-      const separator = container.querySelector('[aria-label="Resize message bar"]');
+      const separator = container.querySelector('[aria-label="Resize minimum message bar height"]');
       const composerShell = separator?.parentElement;
 
       expect(separator).not.toBeNull();
       expect(separator?.className).toContain("-top-1");
       expect(separator?.className).toContain("h-3");
       expect(separator?.className).not.toContain("hover:bg-border/80");
+      expect(separator?.getAttribute("tabindex")).toBe("0");
       expect(separator?.getAttribute("aria-valuenow")).toBe("144");
+      expect(separator?.getAttribute("aria-valuetext")).toBe("Minimum height 144 pixels");
       expect(composerShell?.className).not.toContain("border-t");
     } finally {
       if (root) {
@@ -730,15 +741,23 @@ describe("desktop chat view stability", () => {
 
       const textarea = container.querySelector("textarea");
       expect(textarea?.hasAttribute("disabled")).toBe(false);
-      expect(container.querySelector('[aria-label="Stop generating response"]')).not.toBeNull();
+      const stopButton = container.querySelector('[aria-label="Stop generating response"]');
+      expect(stopButton).not.toBeNull();
+      expect(stopButton?.className).toContain("bg-destructive");
+      const statusRow = container.querySelector('[data-slot="prompt-input-status-row"]');
+      expect(statusRow).not.toBeNull();
+      expect(statusRow?.textContent).toContain("Type to steer, or use stop to cancel.");
 
       await act(async () => {
         useAppStore.setState({ composerText: "tighten scope" });
       });
 
       expect(container.querySelector('[aria-label="Stop generating response"]')).toBeNull();
-      expect(container.querySelector('[aria-label="Steer current response"]')).not.toBeNull();
-      expect(container.textContent).toContain("Steer ready. Press Enter to inject it into the current run.");
+      const steerButton = container.querySelector('[aria-label="Steer current response"]');
+      expect(steerButton).not.toBeNull();
+      expect(steerButton?.className).toContain("bg-warning");
+      const steerRow = container.querySelector('[data-slot="prompt-input-status-row"]');
+      expect(steerRow?.textContent).toContain("Steer ready. Press Enter to inject it into the current run.");
 
       await act(async () => {
         useAppStore.setState((state) => ({
@@ -757,7 +776,134 @@ describe("desktop chat view stability", () => {
       });
 
       expect(container.querySelector('[aria-label="Steer current response"]')).not.toBeNull();
-      expect(container.textContent).toContain("Steer sent. Waiting for the running turn to accept it.");
+      const pendingRow = container.querySelector('[data-slot="prompt-input-status-row"]');
+      expect(pendingRow?.textContent).toContain("Steer sent. Waiting for the running turn to accept it.");
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            "thread-1": {
+              ...state.threadRuntimeById["thread-1"]!,
+              busy: false,
+              pendingSteer: null,
+            },
+          },
+        }));
+      });
+
+      const sendButton = container.querySelector('[aria-label="Send message"]');
+      expect(sendButton).not.toBeNull();
+      expect(sendButton?.className).toContain("bg-primary");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test("busy composer keeps minimum-height separator semantics when attachments make the shell grow", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          threadIds: ["thread-1"],
+          settings: {},
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Busy attachments",
+          status: "active",
+          updatedAt: "2026-03-12T00:00:00.000Z",
+          model: "gpt-5.4",
+          provider: "openai",
+          mcpServers: [],
+          draft: false,
+          plannerEnabled: false,
+          effort: "medium",
+          reasoningSummary: "auto",
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          connected: true,
+          sessionId: "session-1",
+          config: {
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+          sessionConfig: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: true,
+          busySince: "2026-03-12T00:00:05.000Z",
+          feed: [],
+          pendingSteer: null,
+          transcriptOnly: false,
+          activeTurnId: "turn-1",
+        },
+      },
+      composerText: "",
+      messageBarHeight: 120,
+    });
+
+    const harness = setupChatViewJsdom();
+
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+      if (!fileInput) throw new Error("missing file input");
+
+      const fakeFile = {
+        name: "diagram.png",
+        type: "image/png",
+        size: 3,
+        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+      } as File;
+      Object.defineProperty(fileInput, "files", {
+        configurable: true,
+        value: [fakeFile],
+      });
+
+      await act(async () => {
+        fileInput.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
+        await Promise.resolve();
+      });
+
+      expect(container.textContent).toContain("diagram.png");
+      expect(container.querySelector('[data-slot="prompt-input-status-row"]')?.textContent).toContain(
+        "Steer ready. Press Enter to inject it into the current run.",
+      );
+      const steerButton = container.querySelector('[aria-label="Steer current response"]');
+      expect(steerButton).not.toBeNull();
+      expect(steerButton?.hasAttribute("disabled")).toBe(false);
+
+      const separator = container.querySelector('[aria-label="Resize minimum message bar height"]');
+      expect(separator?.getAttribute("aria-valuenow")).toBe("120");
+      expect(separator?.getAttribute("aria-valuetext")).toBe("Minimum height 120 pixels");
     } finally {
       if (root) {
         await act(async () => {

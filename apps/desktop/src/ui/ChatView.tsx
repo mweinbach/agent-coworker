@@ -30,6 +30,7 @@ import {
   PromptInputFooter,
   PromptInputForm,
   PromptInputRoot,
+  PromptInputStatusRow,
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
@@ -231,7 +232,7 @@ export function getComposerSubmitState(opts: {
   };
 }
 
-export function composerBusyHint(submitState: ReturnType<typeof getComposerSubmitState>): string {
+export function composerBusyHint(submitState: ReturnType<typeof getComposerSubmitState>): string | null {
   if (submitState.status === "streaming") {
     return "Type to steer, or use stop to cancel.";
   }
@@ -241,7 +242,7 @@ export function composerBusyHint(submitState: ReturnType<typeof getComposerSubmi
   if (submitState.mode === "steer-ready") {
     return "Steer ready. Press Enter to inject it into the current run.";
   }
-  return "Press Enter to send, Shift+Enter for newline.";
+  return null;
 }
 
 export function resolveComposerBusyPolicy(busy: boolean): "reject" | "steer" {
@@ -1037,7 +1038,7 @@ export function ChatView() {
     : disconnected
       ? "Reconnect to continue..."
       : busy
-        ? "Type to steer the current run..."
+        ? "Steer..."
         : "Message...";
   const composerHint = composerBusyHint(composerSubmitState);
 
@@ -1104,7 +1105,11 @@ export function ChatView() {
           </ConversationContent>
         </Conversation>
 
-        <div className="relative flex shrink-0 flex-col bg-panel px-4 pb-3 pt-2" style={{ height: messageBarHeight }}>
+        <div
+          className="relative flex shrink-0 flex-col bg-panel px-4 pb-3 pt-2"
+          // The stored messageBarHeight is the minimum floor; busy guidance and attachments can grow past it.
+          style={{ minHeight: messageBarHeight }}
+        >
           <MessageBarResizer />
           <PromptInputRoot
             className="max-w-[70rem]"
@@ -1123,6 +1128,7 @@ export function ChatView() {
                 submitComposer(resolveComposerBusyPolicy(busy));
               }}
             >
+              <PromptInputStatusRow>{composerHint}</PromptInputStatusRow>
               <PromptInputBody>
                 {attachmentPickerError ? (
                   <div className="flex items-center gap-1.5 px-1 pb-1 text-xs text-destructive">
@@ -1140,11 +1146,6 @@ export function ChatView() {
                   aria-label="Message input"
                 />
               </PromptInputBody>
-              {composerSubmitState.status === "streaming" || composerSubmitState.mode !== "send" ? (
-                <div className="px-1 pb-1 text-[11px] text-muted-foreground">
-                  {composerHint}
-                </div>
-              ) : null}
               <PromptInputFooter>
                 <PromptInputTools>
                   <input

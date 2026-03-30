@@ -8,6 +8,7 @@ export function MessageBarResizer() {
   const messageBarHeight = useAppStore((s) => s.messageBarHeight);
   const setMessageBarHeight = useAppStore((s) => s.setMessageBarHeight);
   const [dragging, setDragging] = useState(false);
+  const minimumHeightValueText = `Minimum height ${messageBarHeight} pixels`;
 
   const startYRef = useRef(0);
   const startHeightRef = useRef(0);
@@ -69,10 +70,11 @@ export function MessageBarResizer() {
       className={cn("absolute -top-1 left-0 right-0 z-20 h-3 cursor-row-resize bg-transparent transition-colors", dragging && "bg-primary/20")}
       role="separator"
       aria-orientation="horizontal"
-      aria-label="Resize message bar"
+      aria-label="Resize minimum message bar height"
       aria-valuemin={80}
       aria-valuemax={500}
       aria-valuenow={messageBarHeight}
+      aria-valuetext={minimumHeightValueText}
       tabIndex={0}
       onMouseDown={handleMouseDown}
       onKeyDown={handleKeyDown}

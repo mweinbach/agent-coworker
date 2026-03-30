@@ -60,6 +60,7 @@ function makeSession(overrides?: { config?: AgentConfig; provider?: string }) {
   const session = new AgentSession({
     config,
     system: "Test assistant.",
+    discoveredSkills: [{ name: "test-skill", description: "Test skill" }],
     emit,
     generateSessionTitleImpl: mockGenerateSessionTitle,
     writePersistedSessionSnapshotImpl: mockWritePersistedSessionSnapshot,

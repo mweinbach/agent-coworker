@@ -3,11 +3,12 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import type { AgentConfig } from "../types";
+import { buildPluginCatalogSnapshot } from "../plugins";
 import { isPathInside } from "./paths";
 
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 const WRITE_ROOT_LABEL = "workingDirectory/outputDirectory/uploadsDirectory/project root";
-const READ_ROOT_LABEL = "workingDirectory/outputDirectory/uploadsDirectory/project root/skills directories";
+const READ_ROOT_LABEL = "workingDirectory/outputDirectory/uploadsDirectory/project root/skills directories/plugin roots";
 
 function writeRoots(config: AgentConfig): string[] {
   const projectRoot = path.dirname(config.projectAgentDir);
@@ -23,7 +24,24 @@ function readRoots(config: AgentConfig): string[] {
   return [
     ...writeRoots(config),
     ...config.skillsDirs.filter(Boolean),
+    ...(config.workspacePluginsDir ? [config.workspacePluginsDir] : []),
+    ...(config.userPluginsDir ? [config.userPluginsDir] : []),
   ];
+}
+
+async function pluginReadRoots(config: AgentConfig): Promise<string[]> {
+  try {
+    const snapshot = await buildPluginCatalogSnapshot(config);
+    return snapshot.plugins.flatMap((plugin) => {
+      const roots = [plugin.rootDir];
+      for (const skill of plugin.skills) {
+        roots.push(skill.rootDir);
+      }
+      return roots;
+    });
+  } catch {
+    return [];
+  }
 }
 
 function isPathInsideAnyRoot(filePath: string, roots: string[]): boolean {
@@ -141,7 +159,10 @@ export async function assertReadPathAllowed(
   action: "read" | "glob" | "grep"
 ): Promise<string> {
   const resolved = path.resolve(filePath);
-  const roots = readRoots(config);
+  const roots = [
+    ...readRoots(config),
+    ...(await pluginReadRoots(config)),
+  ];
   if (!isPathInsideAnyRoot(resolved, roots)) {
     throw new Error(
       `${action} blocked: path is outside ${READ_ROOT_LABEL}: ${resolved}`

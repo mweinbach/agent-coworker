@@ -282,6 +282,7 @@ export const mcpServerEventSourceSchema = z.enum([
   "system",
   "workspace_legacy",
   "user_legacy",
+  "plugin",
 ]);
 
 export const mcpServerAuthModeSchema = z.enum([
@@ -302,6 +303,10 @@ export const mcpServersEventSchema = z.object({
     authMode: mcpServerAuthModeSchema,
     authScope: z.enum(["workspace", "user"]),
     authMessage: z.string(),
+    pluginId: z.string().optional(),
+    pluginName: z.string().optional(),
+    pluginDisplayName: z.string().optional(),
+    pluginScope: z.enum(["workspace", "user"]).optional(),
   }).passthrough()),
   legacy: z.object({
     workspace: z.object({
@@ -380,6 +385,8 @@ const skillInstallStateSchema = z.enum(["effective", "shadowed", "disabled", "in
 const skillInstallOriginKindSchema = z.enum(["github", "skills.sh", "local", "manual", "bootstrap", "unknown"]);
 const skillDescriptionSourceSchema = z.enum(["frontmatter", "directory", "unknown"]);
 const skillDiagnosticSeveritySchema = z.enum(["info", "warning", "error"]);
+const pluginScopeSchema = z.enum(["workspace", "user"]);
+const pluginDiscoveryKindSchema = z.enum(["marketplace", "direct"]);
 
 const skillInterfaceSchema = z.object({
   displayName: z.string().optional(),
@@ -390,6 +397,32 @@ const skillInterfaceSchema = z.object({
   agents: z.array(z.string()).optional(),
 }).passthrough();
 
+const pluginInterfaceSchema = z.object({
+  displayName: z.string().optional(),
+  shortDescription: z.string().optional(),
+  longDescription: z.string().optional(),
+  developerName: z.string().optional(),
+  category: z.string().optional(),
+  capabilities: z.array(z.string()).optional(),
+  websiteURL: z.string().optional(),
+  privacyPolicyURL: z.string().optional(),
+  termsOfServiceURL: z.string().optional(),
+  defaultPrompt: z.array(z.string()).optional(),
+  brandColor: z.string().optional(),
+  composerIcon: z.string().optional(),
+  logo: z.string().optional(),
+  screenshots: z.array(z.string()).optional(),
+}).passthrough();
+
+const skillPluginOwnerSchema = z.object({
+  pluginId: nonEmptyTrimmedStringSchema,
+  name: nonEmptyTrimmedStringSchema,
+  displayName: nonEmptyTrimmedStringSchema,
+  scope: pluginScopeSchema,
+  discoveryKind: pluginDiscoveryKindSchema,
+  rootDir: z.string(),
+}).strict();
+
 export const skillEntrySchema = z.object({
   name: nonEmptyTrimmedStringSchema,
   path: z.string(),
@@ -398,6 +431,7 @@ export const skillEntrySchema = z.object({
   triggers: z.array(z.string()),
   description: z.string(),
   interface: skillInterfaceSchema.optional(),
+  plugin: skillPluginOwnerSchema.optional(),
 }).passthrough();
 
 const skillInstallOriginSchema = z.object({
@@ -457,12 +491,69 @@ export const skillInstallationEntrySchema = z.object({
   installedAt: z.string().optional(),
   updatedAt: z.string().optional(),
   fileModifiedAt: z.string().optional(),
+  plugin: skillPluginOwnerSchema.optional(),
 }).passthrough();
 
 export const skillCatalogSnapshotSchema = z.object({
   scopes: z.array(skillScopeDescriptorSchema),
   effectiveSkills: z.array(skillInstallationEntrySchema),
   installations: z.array(skillInstallationEntrySchema),
+}).strict();
+
+const pluginSkillSummarySchema = z.object({
+  name: nonEmptyTrimmedStringSchema,
+  rawName: nonEmptyTrimmedStringSchema,
+  description: z.string(),
+  enabled: z.boolean(),
+  rootDir: z.string(),
+  skillPath: z.string(),
+  triggers: z.array(z.string()),
+  interface: skillInterfaceSchema.optional(),
+}).passthrough();
+
+const pluginAppSummarySchema = z.object({
+  id: nonEmptyTrimmedStringSchema,
+  displayName: nonEmptyTrimmedStringSchema,
+  description: z.string().optional(),
+  authType: z.string().optional(),
+}).passthrough();
+
+const pluginCatalogEntrySchema = z.object({
+  id: nonEmptyTrimmedStringSchema,
+  name: nonEmptyTrimmedStringSchema,
+  displayName: nonEmptyTrimmedStringSchema,
+  description: z.string(),
+  scope: pluginScopeSchema,
+  discoveryKind: pluginDiscoveryKindSchema,
+  enabled: z.boolean(),
+  rootDir: z.string(),
+  manifestPath: z.string(),
+  skillsPath: z.string(),
+  mcpPath: z.string().optional(),
+  appPath: z.string().optional(),
+  version: z.string().optional(),
+  authorName: z.string().optional(),
+  homepage: z.string().optional(),
+  repository: z.string().optional(),
+  license: z.string().optional(),
+  keywords: z.array(z.string()).optional(),
+  interface: pluginInterfaceSchema.optional(),
+  marketplace: z.object({
+    name: nonEmptyTrimmedStringSchema,
+    displayName: z.string().optional(),
+    category: z.string().optional(),
+    installationPolicy: z.string().optional(),
+    authenticationPolicy: z.string().optional(),
+  }).optional(),
+  skills: z.array(pluginSkillSummarySchema),
+  mcpServers: z.array(z.string()),
+  apps: z.array(pluginAppSummarySchema),
+  warnings: z.array(z.string()),
+}).passthrough();
+
+export const pluginCatalogSnapshotSchema = z.object({
+  plugins: z.array(pluginCatalogEntrySchema),
+  warnings: z.array(z.string()),
 }).strict();
 
 const skillSourceDescriptorSchema = z.object({
@@ -551,6 +642,18 @@ export const skillInstallUpdateCheckEventSchema = z.object({
   type: z.literal("skill_installation_update_check"),
   sessionId: nonEmptyTrimmedStringSchema.optional(),
   result: skillUpdateCheckResultSchema,
+}).passthrough();
+
+export const pluginsCatalogEventSchema = z.object({
+  type: z.literal("plugins_catalog"),
+  sessionId: nonEmptyTrimmedStringSchema.optional(),
+  catalog: pluginCatalogSnapshotSchema,
+}).passthrough();
+
+export const pluginDetailEventSchema = z.object({
+  type: z.literal("plugin_detail"),
+  sessionId: nonEmptyTrimmedStringSchema.optional(),
+  plugin: pluginCatalogEntrySchema.nullable(),
 }).passthrough();
 
 export const sessionBackupPublicCheckpointSchema = z.object({
@@ -736,6 +839,20 @@ export const skillInstallationMutationRequestSchema = z.object({
   installationId: nonEmptyTrimmedStringSchema,
 }).strict();
 
+export const pluginCatalogReadRequestSchema = z.object({
+  cwd: optionalNonEmptyTrimmedStringSchema,
+}).strict();
+
+export const pluginReadRequestSchema = z.object({
+  cwd: optionalNonEmptyTrimmedStringSchema,
+  pluginId: nonEmptyTrimmedStringSchema,
+}).strict();
+
+export const pluginMutationRequestSchema = z.object({
+  cwd: optionalNonEmptyTrimmedStringSchema,
+  pluginId: nonEmptyTrimmedStringSchema,
+}).strict();
+
 export const skillInstallationCopyRequestSchema = z.object({
   cwd: optionalNonEmptyTrimmedStringSchema,
   installationId: nonEmptyTrimmedStringSchema,
@@ -848,6 +965,10 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/skills/installation/update": skillInstallationMutationRequestSchema,
   "cowork/skills/installation/copy": skillInstallationCopyRequestSchema,
   "cowork/skills/installation/checkUpdate": skillInstallationMutationRequestSchema,
+  "cowork/plugins/catalog/read": pluginCatalogReadRequestSchema,
+  "cowork/plugins/read": pluginReadRequestSchema,
+  "cowork/plugins/enable": pluginMutationRequestSchema,
+  "cowork/plugins/disable": pluginMutationRequestSchema,
   "cowork/memory/list": memoryListRequestSchema,
   "cowork/memory/upsert": memoryUpsertRequestSchema,
   "cowork/memory/delete": memoryDeleteRequestSchema,
@@ -899,6 +1020,10 @@ export const jsonRpcControlResultSchemas = {
   "cowork/skills/installation/update": legacyEventEnvelope(skillsCatalogEventSchema),
   "cowork/skills/installation/copy": legacyEventEnvelope(skillsCatalogEventSchema),
   "cowork/skills/installation/checkUpdate": legacyEventEnvelope(skillInstallUpdateCheckEventSchema),
+  "cowork/plugins/catalog/read": legacyEventEnvelope(pluginsCatalogEventSchema),
+  "cowork/plugins/read": legacyEventEnvelope(pluginDetailEventSchema),
+  "cowork/plugins/enable": legacyEventEnvelope(pluginsCatalogEventSchema),
+  "cowork/plugins/disable": legacyEventEnvelope(pluginsCatalogEventSchema),
   "cowork/memory/list": legacyEventEnvelope(memoryListEventSchema),
   "cowork/memory/upsert": legacyEventEnvelope(memoryListEventSchema),
   "cowork/memory/delete": legacyEventEnvelope(memoryListEventSchema),
@@ -931,6 +1056,7 @@ export type SkillInstallationEntry = z.infer<typeof skillInstallationEntrySchema
 export type SkillCatalogSnapshot = z.infer<typeof skillCatalogSnapshotSchema>;
 export type SkillInstallPreview = z.infer<typeof skillInstallPreviewSchema>;
 export type SkillUpdateCheckResult = z.infer<typeof skillUpdateCheckResultSchema>;
+export type PluginCatalogSnapshot = z.infer<typeof pluginCatalogSnapshotSchema>;
 export type MemoryEntry = z.infer<typeof memoryEntrySchema>;
 export type WorkspaceBackupEntry = z.infer<typeof workspaceBackupEntrySchema>;
 export type WorkspaceControlStateEvents = z.infer<typeof jsonRpcControlResultSchemas["cowork/session/state/read"]>;

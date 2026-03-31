@@ -1010,6 +1010,22 @@ export class AgentSession {
     await this.getSkillManager().getSkillsCatalog();
   }
 
+  async getPluginsCatalog() {
+    await this.getSkillManager().getPluginsCatalog();
+  }
+
+  async getPlugin(pluginId: string) {
+    await this.getSkillManager().getPlugin(pluginId);
+  }
+
+  async enablePlugin(pluginId: string) {
+    await this.getSkillManager().enablePlugin(pluginId);
+  }
+
+  async disablePlugin(pluginId: string) {
+    await this.getSkillManager().disablePlugin(pluginId);
+  }
+
   async getSkillInstallation(installationId: string) {
     await this.getSkillManager().getSkillInstallation(installationId);
   }

@@ -1,10 +1,14 @@
-import type { MCPServerConfig } from "../../types";
+import type { MCPServerConfig, PluginScope } from "../../types";
 
-export type MCPServerSource = "workspace" | "user" | "system" | "workspace_legacy" | "user_legacy";
+export type MCPServerSource = "workspace" | "user" | "system" | "workspace_legacy" | "user_legacy" | "plugin";
 
 export interface MCPRegistryServer extends MCPServerConfig {
   source: MCPServerSource;
   inherited: boolean;
+  pluginId?: string;
+  pluginName?: string;
+  pluginDisplayName?: string;
+  pluginScope?: PluginScope;
 }
 
 export interface MCPRegistryLegacyState {
@@ -24,6 +28,10 @@ export interface MCPRegistryFileState {
   exists: boolean;
   editable: boolean;
   legacy: boolean;
+  pluginId?: string;
+  pluginName?: string;
+  pluginDisplayName?: string;
+  pluginScope?: PluginScope;
   parseError?: string;
   serverCount: number;
 }

@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { z } from "zod";
 
-import type { AgentConfig } from "../../types";
+import type { AgentConfig, PluginScope } from "../../types";
 import { nowIso } from "../../utils/typeGuards";
 import { resolveMcpConfigPaths } from "../configPaths";
 import { DEFAULT_MCP_CREDENTIALS_DOCUMENT, normalizeCredentialsDoc } from "./parser";
@@ -13,7 +13,7 @@ import type {
   MCPServerCredentialRecord,
   MCPServerCredentialsDocument,
 } from "./types";
-import type { MCPServerSource } from "../configRegistry/types";
+import type { MCPRegistryServer, MCPServerSource } from "../configRegistry/types";
 
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
@@ -82,15 +82,38 @@ async function writeDoc(filePath: string, doc: MCPServerCredentialsDocument): Pr
   await atomicWrite(filePath, payload);
 }
 
-export function resolvePrimaryScope(source: MCPServerSource): MCPAuthScope {
-  if (source === "workspace" || source === "workspace_legacy") return "workspace";
-  return "user";
+function resolvePluginAuthScope(scope: PluginScope | undefined): MCPAuthScope {
+  return scope === "workspace" ? "workspace" : "user";
 }
 
-export function resolveScopeReadOrder(source: MCPServerSource): MCPAuthScope[] {
+export function resolvePrimaryScope(
+  source: MCPServerSource | { source: MCPServerSource; pluginScope?: PluginScope },
+): MCPAuthScope {
+  if (typeof source === "string") {
+    if (source === "workspace" || source === "workspace_legacy") return "workspace";
+    return "user";
+  }
+  if (source.source === "plugin") {
+    return resolvePluginAuthScope(source.pluginScope);
+  }
+  return resolvePrimaryScope(source.source);
+}
+
+export function resolveScopeReadOrder(
+  source: MCPServerSource | { source: MCPServerSource; pluginScope?: PluginScope },
+): MCPAuthScope[] {
   // Keep credential resolution scoped to the originating config layer.
   // Workspace-defined servers must never fall back to user credentials.
-  if (source === "workspace" || source === "workspace_legacy") {
+  if (typeof source === "string") {
+    if (source === "workspace" || source === "workspace_legacy") {
+      return ["workspace"];
+    }
+    return ["user"];
+  }
+  if (source.source === "plugin") {
+    return resolvePluginAuthScope(source.pluginScope) === "workspace" ? ["workspace"] : ["user"];
+  }
+  if (source.source === "workspace" || source.source === "workspace_legacy") {
     return ["workspace"];
   }
   return ["user"];
@@ -138,7 +161,7 @@ export async function mutateScopeDoc(
 
 export function selectCredentialRecord(opts: {
   byScope: { workspace: MCPAuthFileState; user: MCPAuthFileState };
-  source: MCPServerSource;
+  source: MCPRegistryServer | MCPServerSource;
   serverName: string;
 }): { scope: MCPAuthScope; record: MCPServerCredentialRecord | undefined } {
   const readOrder = resolveScopeReadOrder(opts.source);

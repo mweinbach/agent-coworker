@@ -312,6 +312,10 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
   const projectAgentDir = path.join(cwd, ".agent");
   const userAgentDir = path.join(homedir, ".agent");
+  const workspaceAgentsDir = path.join(cwd, ".agents");
+  const userAgentsDir = path.join(homedir, ".agents");
+  const workspacePluginsDir = path.join(workspaceAgentsDir, "plugins");
+  const userPluginsDir = path.join(userAgentsDir, "plugins");
   const builtInConfigDir = path.join(builtInDir, "config");
   const coworkPaths = getAiCoworkerPaths({ homedir });
 
@@ -551,6 +555,10 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
     projectAgentDir,
     userAgentDir,
+    workspaceAgentsDir,
+    userAgentsDir,
+    workspacePluginsDir,
+    userPluginsDir,
     builtInDir,
     builtInConfigDir,
 

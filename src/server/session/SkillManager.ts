@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 
-import type { SkillInstallationEntry, SkillMutationTargetScope } from "../../types";
+import type { PluginCatalogEntry, SkillInstallationEntry, SkillMutationTargetScope } from "../../types";
 import { getEffectiveInstallationByName } from "../../skills/catalog";
-import { discoverSkills, stripSkillFrontMatter } from "../../skills";
+import { discoverSkillsForConfig, stripSkillFrontMatter } from "../../skills";
 import {
   buildSkillInstallPreview,
 } from "../../skills/sourceResolver";
@@ -17,6 +17,8 @@ import {
   installSkillsFromSource,
   updateSkillInstallation,
 } from "../../skills/operations";
+import { buildPluginCatalogSnapshot } from "../../plugins";
+import { setPluginEnabled } from "../../plugins/overrides";
 import { createTools } from "../../tools";
 import { expandCommandTemplate, listCommands as listServerCommands, resolveCommand } from "../commands";
 import type { SessionContext } from "./SessionContext";
@@ -38,7 +40,7 @@ export class SkillManager {
   }
 
   private async emitLegacySkillsList() {
-    const skills = await discoverSkills(this.context.state.config.skillsDirs, { includeDisabled: true });
+    const skills = await discoverSkillsForConfig(this.context.state.config, { includeDisabled: true });
     this.context.state.discoveredSkills = skills
       .filter((skill) => skill.enabled)
       .map((skill) => ({ name: skill.name, description: skill.description }));
@@ -55,6 +57,25 @@ export class SkillManager {
       mutationBlocked: mutationBlockedReason !== null,
       ...(clearedMutationPendingKeys.length > 0 ? { clearedMutationPendingKeys } : {}),
       ...(mutationBlockedReason ? { mutationBlockedReason } : {}),
+    });
+  }
+
+  private async emitPluginsCatalog() {
+    const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
+    this.context.emit({
+      type: "plugins_catalog",
+      sessionId: this.context.id,
+      catalog,
+    });
+  }
+
+  private async emitPluginDetail(pluginId: string) {
+    const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
+    const plugin = catalog.plugins.find((entry) => entry.id === pluginId) ?? null;
+    this.context.emit({
+      type: "plugin_detail",
+      sessionId: this.context.id,
+      plugin,
     });
   }
 
@@ -101,6 +122,7 @@ export class SkillManager {
     await this.emitLegacySkillsList();
     await this.listCommands();
     await this.emitSkillsCatalog(clearedMutationPendingKeys);
+    await this.emitPluginsCatalog();
     if (selectedInstallationId) {
       await this.emitInstallationDetail(selectedInstallationId);
     }
@@ -187,7 +209,7 @@ export class SkillManager {
     }
 
     try {
-      const skills = await discoverSkills(this.context.state.config.skillsDirs, { includeDisabled: true });
+      const skills = await discoverSkillsForConfig(this.context.state.config, { includeDisabled: true });
       const skill = skills.find((s) => s.name === skillName);
       if (!skill) {
         this.context.emitError("validation_failed", "session", `Skill "${skillName}" not found.`);
@@ -316,6 +338,81 @@ export class SkillManager {
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to get skill catalog: ${String(err)}`);
     }
+  }
+
+  async getPluginsCatalog() {
+    try {
+      await this.emitPluginsCatalog();
+    } catch (err) {
+      this.context.emitError("internal_error", "session", `Failed to get plugin catalog: ${String(err)}`);
+    }
+  }
+
+  async getPlugin(pluginIdRaw: string) {
+    const pluginId = pluginIdRaw.trim();
+    if (!pluginId) {
+      this.context.emitError("validation_failed", "session", "Plugin ID is required");
+      return;
+    }
+    try {
+      await this.emitPluginDetail(pluginId);
+    } catch (err) {
+      this.context.emitError("internal_error", "session", `Failed to read plugin detail: ${String(err)}`);
+    }
+  }
+
+  async enablePlugin(pluginIdRaw: string) {
+    const pluginId = pluginIdRaw.trim();
+    if (!pluginId) {
+      this.context.emitError("validation_failed", "session", "Plugin ID is required");
+      return;
+    }
+    await this.withSkillMutationLock(async () => {
+      try {
+        const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
+        const plugin = catalog.plugins.find((entry) => entry.id === pluginId);
+        if (!plugin) {
+          this.context.emitError("validation_failed", "session", `Plugin "${pluginId}" not found.`);
+          return;
+        }
+        await setPluginEnabled({
+          config: this.context.state.config,
+          pluginId: plugin.id,
+          scope: plugin.scope,
+          enabled: true,
+        });
+        await this.afterSuccessfulMutation();
+      } catch (err) {
+        this.context.emitError("internal_error", "session", `Failed to enable plugin: ${String(err)}`);
+      }
+    });
+  }
+
+  async disablePlugin(pluginIdRaw: string) {
+    const pluginId = pluginIdRaw.trim();
+    if (!pluginId) {
+      this.context.emitError("validation_failed", "session", "Plugin ID is required");
+      return;
+    }
+    await this.withSkillMutationLock(async () => {
+      try {
+        const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
+        const plugin = catalog.plugins.find((entry) => entry.id === pluginId);
+        if (!plugin) {
+          this.context.emitError("validation_failed", "session", `Plugin "${pluginId}" not found.`);
+          return;
+        }
+        await setPluginEnabled({
+          config: this.context.state.config,
+          pluginId: plugin.id,
+          scope: plugin.scope,
+          enabled: false,
+        });
+        await this.afterSuccessfulMutation();
+      } catch (err) {
+        this.context.emitError("internal_error", "session", `Failed to disable plugin: ${String(err)}`);
+      }
+    });
   }
 
   async getSkillInstallation(installationId: string) {

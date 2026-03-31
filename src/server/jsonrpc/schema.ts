@@ -15,6 +15,7 @@ import {
 import { jsonRpcMemoryRequestSchemas, jsonRpcMemoryResultSchemas } from "./schema.memory";
 import { jsonRpcMiscNotificationSchemas } from "./schema.misc";
 import { jsonRpcMcpRequestSchemas, jsonRpcMcpResultSchemas } from "./schema.mcp";
+import { jsonRpcPluginsRequestSchemas, jsonRpcPluginsResultSchemas } from "./schema.plugins";
 import { jsonRpcProviderRequestSchemas, jsonRpcProviderResultSchemas } from "./schema.provider";
 import {
   jsonRpcSessionNotificationSchemas,
@@ -38,6 +39,7 @@ export const jsonRpcRequestSchemas = {
   ...jsonRpcAgentRequestSchemas,
   ...jsonRpcProviderRequestSchemas,
   ...jsonRpcMcpRequestSchemas,
+  ...jsonRpcPluginsRequestSchemas,
   ...jsonRpcSkillsRequestSchemas,
   ...jsonRpcMemoryRequestSchemas,
   ...jsonRpcBackupsRequestSchemas,
@@ -61,6 +63,7 @@ export const jsonRpcResultSchemas = {
   ...jsonRpcAgentResultSchemas,
   ...jsonRpcProviderResultSchemas,
   ...jsonRpcMcpResultSchemas,
+  ...jsonRpcPluginsResultSchemas,
   ...jsonRpcSkillsResultSchemas,
   ...jsonRpcMemoryResultSchemas,
   ...jsonRpcBackupsResultSchemas,

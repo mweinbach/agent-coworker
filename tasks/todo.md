@@ -1,5 +1,14 @@
 # Task Plan
 
+## Add Codex-style First-Class Plugin Layer
+
+- [ ] Extend core config/types with `.agents` plugin roots and plugin-aware skill/MCP metadata without folding plugins into `skillsDirs`.
+- [ ] Add plugin discovery/catalog/override/MCP parsing modules and bridge enabled plugin skills into source-aware skill scanning.
+- [ ] Integrate plugin-aware skills into prompt loading, `skill` tool resolution, slash commands, permissions, and MCP runtime layering/auth scope.
+- [ ] Add plugin catalog + enable/disable control methods/events through protocol, JSON-RPC, `SkillManager`, and `AgentSession`.
+- [ ] Update the desktop `skills` view shell into visible `Plugins` UI with `Plugins | Skills` switch, plugin catalog/detail state, plugin-owned skill badges/actions, and plugin MCP read-only entries.
+- [ ] Add/update focused backend and desktop tests, run targeted Bun test slices plus `bun run typecheck`, then do a manual desktop walkthrough with artifacts.
+
 ## Fix Mobile Relay Pairing Trust and Workspace Cache
 
 - [x] Confirm the three mobile-relay review findings are still real against current `HEAD`.

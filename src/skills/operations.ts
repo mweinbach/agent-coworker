@@ -11,8 +11,11 @@ import type {
   SkillMutationTargetScope,
   SkillUpdateCheckResult,
 } from "../types";
+import { setPluginSkillEnabled } from "../plugins";
 import { workspacePathOverlaps } from "../utils/workspacePath";
 import { getInstallationById, getSkillScopeDescriptors, scanSkillCatalog } from "./catalog";
+import { buildPluginCatalogSnapshot } from "../plugins";
+import { scanSkillCatalogFromSources } from "./catalog";
 import { createManagedInstallationId, adoptSkillInstallManifest, writeSkillInstallManifest } from "./manifest";
 import { buildSkillInstallPreview, materializeSkillSource, resolveSkillSource } from "./sourceResolver";
 
@@ -135,7 +138,21 @@ function installSourceFromOrigin(installation: SkillInstallationEntry): string |
 }
 
 async function refreshCatalog(config: AgentConfig): Promise<SkillCatalogSnapshot> {
-  return await scanSkillCatalog(config.skillsDirs, { includeDisabled: true });
+  const pluginCatalog = await buildPluginCatalogSnapshot(config);
+  return await scanSkillCatalogFromSources(
+    [
+      ...getSkillScopeDescriptors(config.skillsDirs).map((descriptor) => ({ kind: "standalone" as const, descriptor })),
+      ...pluginCatalog.plugins.flatMap((plugin) =>
+        plugin.skills.map((skill) => ({
+          kind: "plugin" as const,
+          plugin,
+          skill,
+          enabled: skill.enabled,
+        }))
+      ),
+    ],
+    { includeDisabled: true },
+  );
 }
 
 type NamedUpdateCandidate = {
@@ -252,6 +269,9 @@ export async function copySkillInstallationToScope(opts: {
   installation: SkillInstallationEntry;
   targetScope: SkillMutationTargetScope;
 }): Promise<{ installationId: string; catalog: SkillCatalogSnapshot }> {
+  if (opts.installation.plugin) {
+    throw new Error("Plugin-owned skills are read-only and cannot be copied in phase 1.");
+  }
   if (opts.installation.scope === opts.targetScope) {
     throw new Error(
       `Cannot copy "${opts.installation.name}" into the ${opts.targetScope} scope because it already lives there; that would delete the source before copying.`,
@@ -290,6 +310,16 @@ export async function disableSkillInstallation(opts: {
   config: AgentConfig;
   installation: SkillInstallationEntry;
 }): Promise<SkillCatalogSnapshot> {
+  if (opts.installation.plugin) {
+    await setPluginSkillEnabled({
+      config: opts.config,
+      pluginId: opts.installation.plugin.pluginId,
+      scope: opts.installation.plugin.scope,
+      rawSkillName: opts.installation.name.split(":").slice(1).join(":") || opts.installation.name,
+      enabled: false,
+    });
+    return await refreshCatalog(opts.config);
+  }
   if (!opts.installation.writable) {
     throw new Error("This installation is read-only and cannot be disabled directly");
   }
@@ -322,6 +352,16 @@ export async function enableSkillInstallation(opts: {
   config: AgentConfig;
   installation: SkillInstallationEntry;
 }): Promise<SkillCatalogSnapshot> {
+  if (opts.installation.plugin) {
+    await setPluginSkillEnabled({
+      config: opts.config,
+      pluginId: opts.installation.plugin.pluginId,
+      scope: opts.installation.plugin.scope,
+      rawSkillName: opts.installation.name.split(":").slice(1).join(":") || opts.installation.name,
+      enabled: true,
+    });
+    return await refreshCatalog(opts.config);
+  }
   if (!opts.installation.writable) {
     throw new Error("This installation is read-only and cannot be enabled directly");
   }
@@ -354,6 +394,9 @@ export async function deleteSkillInstallation(opts: {
   config: AgentConfig;
   installation: SkillInstallationEntry;
 }): Promise<SkillCatalogSnapshot> {
+  if (opts.installation.plugin) {
+    throw new Error("Plugin-owned skills are read-only and cannot be deleted in phase 1.");
+  }
   if (!opts.installation.writable) {
     throw new Error("This installation is read-only and cannot be deleted directly");
   }
@@ -366,6 +409,13 @@ export async function checkSkillInstallationUpdate(opts: {
   config: AgentConfig;
   installation: SkillInstallationEntry;
 }): Promise<SkillUpdateCheckResult> {
+  if (opts.installation.plugin) {
+    return {
+      installationId: opts.installation.installationId,
+      canUpdate: false,
+      reason: "Plugin-owned skills are read-only in phase 1.",
+    };
+  }
   if (!opts.installation.writable) {
     return {
       installationId: opts.installation.installationId,
@@ -410,6 +460,9 @@ export async function updateSkillInstallation(opts: {
   config: AgentConfig;
   installation: SkillInstallationEntry;
 }): Promise<{ preview: SkillInstallPreview; catalog: SkillCatalogSnapshot }> {
+  if (opts.installation.plugin) {
+    throw new Error("Plugin-owned skills are read-only and cannot be updated in phase 1.");
+  }
   if (!opts.installation.writable) {
     throw new Error("This installation is read-only and cannot be updated directly");
   }

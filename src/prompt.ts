@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { AgentConfig } from "./types";
-import { discoverSkills } from "./skills";
+import { discoverSkillsForConfig } from "./skills";
 import { getResolvedModelMetadataSync, resolveModelMetadata } from "./models/metadata";
 import type { ResolvedModelMetadata } from "./models/metadataTypes";
 import { getChildAgentModelInfo, listChildAgentModelsWithInfo } from "./models/childAgentModelInfo";
@@ -353,6 +353,26 @@ function buildSkillSearchOrder(config: AgentConfig): string {
     .join(" -> ");
 }
 
+function buildEnabledPluginSummary(skills: Array<{ name: string; description: string; plugin?: { displayName: string; name: string } }>): string[] {
+  const seen = new Map<string, { displayName: string; namespacedSkills: string[] }>();
+  for (const skill of skills) {
+    if (!skill.plugin) continue;
+    const key = skill.plugin.name;
+    const entry = seen.get(key) ?? {
+      displayName: skill.plugin.displayName,
+      namespacedSkills: [],
+    };
+    entry.namespacedSkills.push(skill.name);
+    seen.set(key, entry);
+  }
+  return [...seen.entries()]
+    .sort((left, right) => left[0].localeCompare(right[0]))
+    .map(([pluginName, entry]) => {
+      const skillsList = entry.namespacedSkills.sort((left, right) => left.localeCompare(right)).join(", ");
+      return `- **${entry.displayName}** (\`${pluginName}\`): ${skillsList}`;
+    });
+}
+
 function buildSkillPolicySection(skillNames: string, skillExamples: string, config: AgentConfig): string {
   return [
     "## Skill Loading Policy (Strict)",
@@ -423,7 +443,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   const systemPath = await resolveSystemTemplatePath(config);
   let prompt = await loadPromptTemplate(systemPath);
 
-  const skills = await discoverSkills(config.skillsDirs);
+  const skills = await discoverSkillsForConfig(config);
 
   // Build dynamic skill-related template variables from discovered skills.
   let skillNames = "";
@@ -476,11 +496,18 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt += `\n\n${buildSkillPolicySection(vars.skillNames, vars.skillExamples, config)}`;
   prompt += `\n\n${buildShellExecutionPolicySection()}`;
 
+  const enabledPluginLines = buildEnabledPluginSummary(skills);
+  if (enabledPluginLines.length > 0) {
+    prompt +=
+      "\n\n## Enabled Plugin Bundles\n\nInstalled plugin bundles can contribute read-only skills and MCP servers. Plugin skills use namespaced runtime names and should be loaded exactly as listed.\n\n"
+      + enabledPluginLines.join("\n");
+  }
+
   if (skills.length > 0) {
     const list = skills
       .map(
         (s) =>
-          `- **${s.name}**: ${s.description} (location: ${s.path}; source: ${s.source}; triggers: ${s.triggers.join(", ")})`
+          `- **${s.name}**: ${s.description} (location: ${s.path}; source: ${s.source}${s.plugin ? `; plugin: ${s.plugin.displayName}` : ""}; triggers: ${s.triggers.join(", ")})`
       )
       .join("\n");
     prompt +=

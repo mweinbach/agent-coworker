@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 
 import { z } from "zod";
 
 import type { AgentConfig, MCPServerConfig } from "../../types";
+import { buildPluginCatalogSnapshot, readPluginMcpServers } from "../../plugins";
 import { resolveMcpConfigPaths } from "../configPaths";
 import { parseMCPServersDocument } from "./parser";
 import type {
@@ -83,31 +85,112 @@ function mergeLayers(layers: MCPConfigLayer[]): MCPRegistryServer[] {
   return [...mergedByName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+async function readPluginLayers(config: AgentConfig): Promise<{ layers: MCPConfigLayer[]; warnings: string[] }> {
+  const catalog = await buildPluginCatalogSnapshot(config);
+  const layers: MCPConfigLayer[] = [];
+  const warnings = [...catalog.warnings];
+
+  for (const plugin of catalog.plugins) {
+    if (!plugin.mcpPath) continue;
+    if (!plugin.enabled) continue;
+    const filePath = path.resolve(plugin.mcpPath);
+    let servers: MCPServerConfig[] = [];
+    let parseError: string | undefined;
+    try {
+      servers = await readPluginMcpServers(plugin.mcpPath);
+    } catch (error) {
+      parseError = String(error);
+      warnings.push(`[MCP] Ignoring malformed plugin MCP config at ${filePath}: ${parseError}`);
+    }
+
+    layers.push({
+      source: "plugin",
+      file: {
+        source: "plugin",
+        path: filePath,
+        exists: true,
+        editable: false,
+        legacy: false,
+        ...(parseError ? { parseError } : {}),
+        serverCount: servers.length,
+        pluginId: plugin.id,
+        pluginName: plugin.name,
+        pluginDisplayName: plugin.displayName,
+        pluginScope: plugin.scope,
+      },
+      servers,
+    });
+  }
+
+  return { layers, warnings };
+}
+
+function mergePluginLayers(baseServers: MCPRegistryServer[], pluginLayers: MCPConfigLayer[]): {
+  servers: MCPRegistryServer[];
+  warnings: string[];
+} {
+  const mergedByName = new Map(baseServers.map((server) => [server.name, server]));
+  const warnings: string[] = [];
+
+  for (const layer of pluginLayers) {
+    for (const server of layer.servers) {
+      if (mergedByName.has(server.name)) {
+        warnings.push(
+          `[MCP] Ignoring plugin server "${server.name}" from ${layer.file.path} because a configured server with the same name already exists.`,
+        );
+        continue;
+      }
+      mergedByName.set(server.name, {
+        ...server,
+        source: "plugin",
+        inherited: layer.file.pluginScope !== "workspace",
+        pluginId: layer.file.pluginId,
+        pluginName: layer.file.pluginName,
+        pluginDisplayName: layer.file.pluginDisplayName,
+        pluginScope: layer.file.pluginScope,
+      });
+    }
+  }
+
+  return {
+    servers: [...mergedByName.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    warnings,
+  };
+}
+
 export async function loadMCPConfigRegistry(config: AgentConfig): Promise<MCPConfigRegistrySnapshot> {
   const paths = resolveMcpConfigPaths(config);
 
-  const layers = await Promise.all([
-    readLayer({ source: "workspace", filePath: paths.workspaceConfigFile, editable: true, legacy: false }),
-    readLayer({ source: "user", filePath: paths.userConfigFile, editable: false, legacy: false }),
-    readLayer({ source: "system", filePath: paths.systemConfigFile, editable: false, legacy: false }),
-    readLayer({ source: "workspace_legacy", filePath: paths.workspaceLegacyFile, editable: false, legacy: true }),
-    readLayer({ source: "user_legacy", filePath: paths.userLegacyFile, editable: false, legacy: true }),
+  const [layers, pluginData] = await Promise.all([
+    Promise.all([
+      readLayer({ source: "workspace", filePath: paths.workspaceConfigFile, editable: true, legacy: false }),
+      readLayer({ source: "user", filePath: paths.userConfigFile, editable: false, legacy: false }),
+      readLayer({ source: "system", filePath: paths.systemConfigFile, editable: false, legacy: false }),
+      readLayer({ source: "workspace_legacy", filePath: paths.workspaceLegacyFile, editable: false, legacy: true }),
+      readLayer({ source: "user_legacy", filePath: paths.userLegacyFile, editable: false, legacy: true }),
+    ]),
+    readPluginLayers(config),
   ]);
 
   const warnings = layers
     .filter((layer) => Boolean(layer.file.parseError))
     .map((layer) => `[MCP] Ignoring malformed ${layer.source} config at ${layer.file.path}: ${layer.file.parseError}`);
+  warnings.push(...pluginData.warnings);
+
+  const merged = mergePluginLayers(mergeLayers(layers), pluginData.layers);
+  warnings.push(...merged.warnings);
 
   const fileForSource = (source: MCPServerSource) => layers.find((layer) => layer.source === source)!.file;
 
   return {
-    servers: mergeLayers(layers),
+    servers: merged.servers,
     files: [
       fileForSource("workspace"),
       fileForSource("user"),
       fileForSource("system"),
       fileForSource("workspace_legacy"),
       fileForSource("user_legacy"),
+      ...pluginData.layers.map((layer) => layer.file),
     ],
     legacy: {
       workspace: {

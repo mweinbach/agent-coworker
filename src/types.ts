@@ -146,6 +146,10 @@ export interface AgentConfig {
 
   projectAgentDir: string;
   userAgentDir: string;
+  workspaceAgentsDir?: string;
+  userAgentsDir?: string;
+  workspacePluginsDir?: string;
+  userPluginsDir?: string;
   builtInDir: string;
   builtInConfigDir: string;
 
@@ -216,6 +220,100 @@ export interface AgentConfig {
   command?: Record<string, CommandTemplateConfig>;
 }
 
+export type PluginScope = "workspace" | "user";
+export type PluginDiscoveryKind = "marketplace" | "direct";
+
+export interface SkillInterfaceMeta {
+  displayName?: string;
+  shortDescription?: string;
+  iconSmall?: string; // data: URI (best-effort)
+  iconLarge?: string; // data: URI (best-effort)
+  defaultPrompt?: string;
+  agents?: string[];
+}
+
+export interface PluginInterfaceMeta {
+  displayName?: string;
+  shortDescription?: string;
+  longDescription?: string;
+  developerName?: string;
+  category?: string;
+  capabilities?: string[];
+  websiteURL?: string;
+  privacyPolicyURL?: string;
+  termsOfServiceURL?: string;
+  defaultPrompt?: string[];
+  brandColor?: string;
+  composerIcon?: string;
+  logo?: string;
+  screenshots?: string[];
+}
+
+export interface PluginAppSummary {
+  id: string;
+  displayName: string;
+  description?: string;
+  authType?: string;
+}
+
+export interface PluginSkillSummary {
+  name: string;
+  rawName: string;
+  description: string;
+  enabled: boolean;
+  rootDir: string;
+  skillPath: string;
+  triggers: string[];
+  interface?: SkillInterfaceMeta;
+}
+
+export interface PluginCatalogEntry {
+  id: string;
+  name: string;
+  displayName: string;
+  description: string;
+  scope: PluginScope;
+  discoveryKind: PluginDiscoveryKind;
+  enabled: boolean;
+  rootDir: string;
+  manifestPath: string;
+  skillsPath: string;
+  mcpPath?: string;
+  appPath?: string;
+  version?: string;
+  authorName?: string;
+  homepage?: string;
+  repository?: string;
+  license?: string;
+  keywords?: string[];
+  interface?: PluginInterfaceMeta;
+  marketplace?: {
+    name: string;
+    displayName?: string;
+    category?: string;
+    installationPolicy?: string;
+    authenticationPolicy?: string;
+  };
+  skills: PluginSkillSummary[];
+  mcpServers: string[];
+  apps: PluginAppSummary[];
+  warnings: string[];
+}
+
+export interface PluginCatalogSnapshot {
+  plugins: PluginCatalogEntry[];
+  warnings: string[];
+}
+
+export interface SkillPluginOwner {
+  pluginId: string;
+  name: string;
+  displayName: string;
+  scope: PluginScope;
+  discoveryKind: PluginDiscoveryKind;
+  rootDir: string;
+}
+
 export interface SkillEntry {
   name: string;
   path: string;
@@ -223,14 +321,8 @@ export interface SkillEntry {
   enabled: boolean;
   triggers: string[];
   description: string;
-  interface?: {
-    displayName?: string;
-    shortDescription?: string;
-    iconSmall?: string; // data: URI (best-effort)
-    iconLarge?: string; // data: URI (best-effort)
-    defaultPrompt?: string;
-    agents?: string[];
-  };
+  interface?: SkillInterfaceMeta;
+  plugin?: SkillPluginOwner;
 }
 
 export type SkillScope = SkillEntry["source"];
@@ -291,7 +383,7 @@ export interface SkillInstallationEntry {
   path: string;
   triggers: string[];
   descriptionSource: "frontmatter" | "directory" | "unknown";
-  interface?: SkillEntry["interface"];
+  interface?: SkillInterfaceMeta;
   diagnostics: SkillInstallationDiagnostic[];
   origin?: SkillInstallOrigin;
   manifest?: SkillInstallManifest;
@@ -300,6 +392,7 @@ export interface SkillInstallationEntry {
   installedAt?: string;
   updatedAt?: string;
   fileModifiedAt?: string;
+  plugin?: SkillPluginOwner;
 }
 
 export interface SkillCatalogSnapshot {

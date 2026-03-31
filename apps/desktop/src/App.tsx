@@ -120,7 +120,7 @@ const ChatShell = memo(function ChatShell({
   const busy = runtime?.busy === true;
   const showContextSidebar = view === "chat" && activeThread !== null;
   const topBarTitle = view === "skills"
-    ? "Skills"
+    ? "Plugins"
     : activeThread?.title?.trim() || "New thread";
   const topBarSubtitle = view === "skills"
     ? selectedWorkspace?.name ?? "Cowork"

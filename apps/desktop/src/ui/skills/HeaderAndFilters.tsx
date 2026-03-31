@@ -57,7 +57,7 @@ export function HeaderAndFilters({
     <div className="mb-6 flex flex-col gap-4">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <h1 className="mb-1 text-[2rem] font-semibold tracking-tight">Skills</h1>
+          <h1 className="mb-1 text-[2rem] font-semibold tracking-tight">Plugins</h1>
           <p className="text-sm text-muted-foreground">
             Skills for <span className="font-medium text-foreground/80">{workspace?.name ?? "this workspace"}</span>
             <span className="mx-2 text-muted-foreground/65">•</span>

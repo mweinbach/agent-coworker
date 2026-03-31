@@ -98,6 +98,88 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("plugin control methods return catalog and detail events for discovered Codex plugins", async () => {
+    const tmpDir = await makeTmpProject();
+    const pluginRoot = `${tmpDir}/.agents/plugins/figma-toolkit`;
+    await fs.mkdir(`${pluginRoot}/.codex-plugin`, { recursive: true });
+    await fs.mkdir(`${pluginRoot}/skills/import-frame`, { recursive: true });
+    await fs.writeFile(
+      `${pluginRoot}/.codex-plugin/plugin.json`,
+      `${JSON.stringify({
+        name: "figma-toolkit",
+        description: "Figma helpers",
+        interface: {
+          displayName: "Figma Toolkit",
+        },
+      }, null, 2)}\n`,
+    );
+    await fs.writeFile(
+      `${pluginRoot}/skills/import-frame/SKILL.md`,
+      [
+        "---",
+        "name: import-frame",
+        "description: Import a Figma frame",
+        "---",
+        "",
+        "# Import frame",
+      ].join("\n"),
+    );
+    await fs.writeFile(
+      `${pluginRoot}/.mcp.json`,
+      `${JSON.stringify({
+        mcpServers: {
+          figma: {
+            type: "stdio",
+            command: "figma-mcp",
+          },
+        },
+      }, null, 2)}\n`,
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+
+      const catalogResponse = await rpc.request("cowork/plugins/catalog/read", {
+        cwd: tmpDir,
+      });
+      expect(catalogResponse.result.event.type).toBe("plugins_catalog");
+      expect(catalogResponse.result.event.catalog.plugins).toEqual([
+        expect.objectContaining({
+          id: "figma-toolkit",
+          name: "figma-toolkit",
+          displayName: "Figma Toolkit",
+          enabled: true,
+          scope: "workspace",
+          discoveryKind: "direct",
+        }),
+      ]);
+
+      const pluginId = catalogResponse.result.event.catalog.plugins[0]?.id;
+      expect(typeof pluginId).toBe("string");
+
+      const detailResponse = await rpc.request("cowork/plugins/read", {
+        cwd: tmpDir,
+        pluginId,
+      });
+      expect(detailResponse.result.event).toEqual(
+        expect.objectContaining({
+          type: "plugin_detail",
+          plugin: expect.objectContaining({
+            id: pluginId,
+            name: "figma-toolkit",
+            displayName: "Figma Toolkit",
+          }),
+        }),
+      );
+
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("session state read returns the workspace control config bundle", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

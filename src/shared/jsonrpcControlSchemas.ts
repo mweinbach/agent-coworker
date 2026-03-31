@@ -648,6 +648,7 @@ export const pluginsCatalogEventSchema = z.object({
   type: z.literal("plugins_catalog"),
   sessionId: nonEmptyTrimmedStringSchema.optional(),
   catalog: pluginCatalogSnapshotSchema,
+  clearedMutationPendingKeys: z.array(z.string()).optional(),
 }).passthrough();
 
 export const pluginDetailEventSchema = z.object({

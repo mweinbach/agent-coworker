@@ -37,7 +37,7 @@ function formatWorkspaceMeta(opts: {
   const sessionLabel = opts.threadCount === 1 ? "1 session" : `${opts.threadCount} sessions`;
 
   if (opts.isActive && opts.view === "skills") {
-    return `${sessionLabel} · viewing skills`;
+    return `${sessionLabel} · viewing plugins`;
   }
   if (opts.isCurrentThreadWorkspace) {
     return `${sessionLabel} · current chat`;
@@ -298,7 +298,7 @@ export const Sidebar = memo(function Sidebar() {
           onClick={() => void openSkills()}
         >
           <SparklesIcon className="h-4 w-4 text-muted-foreground" />
-          Skills
+          Plugins
         </Button>
       </nav>
 

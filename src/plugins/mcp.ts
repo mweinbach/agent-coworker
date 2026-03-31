@@ -40,12 +40,27 @@ const authSchema = z.discriminatedUnion("type", [
   }).strict(),
 ]);
 
-const mcpServerConfigSchema = z.object({
+const wrappedMcpServerConfigSchema = z.object({
   transport: transportSchema,
   required: z.boolean().optional(),
   retries: z.number().finite().optional(),
   auth: authSchema.optional(),
 }).strict();
+
+const shorthandMcpServerConfigSchema = z.union([
+  stdioTransportSchema.extend({
+    required: z.boolean().optional(),
+    retries: z.number().finite().optional(),
+    auth: authSchema.optional(),
+  }).strict(),
+  httpTransportSchema.extend({
+    required: z.boolean().optional(),
+    retries: z.number().finite().optional(),
+    auth: authSchema.optional(),
+  }).strict(),
+]);
+
+const mcpServerConfigSchema = z.union([wrappedMcpServerConfigSchema, shorthandMcpServerConfigSchema]);
 
 const mcpDocumentSchema = z.object({
   mcpServers: z.record(z.string().trim().min(1), mcpServerConfigSchema).default({}),
@@ -72,7 +87,29 @@ export function parsePluginMcpDocument(rawJson: string, filePath = ".mcp.json"):
   }
 
   const servers = Object.entries(validated.data.mcpServers)
-    .map(([name, config]) => ({ name, ...config }))
+    .map(([name, config]) => {
+      const normalized =
+        "transport" in config
+          ? config
+          : {
+              transport: {
+                type: config.type,
+                ...("command" in config ? {
+                  command: config.command,
+                  ...(config.args ? { args: config.args } : {}),
+                  ...(config.env ? { env: config.env } : {}),
+                  ...(config.cwd ? { cwd: config.cwd } : {}),
+                } : {
+                  url: config.url,
+                  ...(config.headers ? { headers: config.headers } : {}),
+                }),
+              },
+              ...(config.required !== undefined ? { required: config.required } : {}),
+              ...(config.retries !== undefined ? { retries: config.retries } : {}),
+              ...(config.auth ? { auth: config.auth } : {}),
+            };
+      return { name, ...normalized };
+    })
     .sort((left, right) => left.name.localeCompare(right.name));
 
   return { servers };

@@ -232,6 +232,11 @@ export type AppStoreState = {
 
   openSkills: () => Promise<void>;
   refreshSkillsCatalog: () => Promise<void>;
+  refreshPluginsCatalog: () => Promise<void>;
+  selectPlugin: (pluginId: string | null) => Promise<void>;
+  enablePlugin: (pluginId: string) => Promise<void>;
+  disablePlugin: (pluginId: string) => Promise<void>;
+  setPluginViewMode: (mode: "plugins" | "skills") => void;
   selectSkill: (skillName: string) => Promise<void>;
   selectSkillInstallation: (installationId: string | null) => Promise<void>;
   previewSkillInstall: (sourceInput: string, targetScope: "project" | "global") => Promise<void>;

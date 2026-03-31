@@ -2,6 +2,8 @@ import type {
   ApprovalRiskCode,
   ChildModelRoutingMode,
   ConfigSubset,
+  PluginCatalogEntry,
+  PluginCatalogSnapshot,
   ProviderName,
   ServerErrorCode,
   ServerErrorSource,
@@ -131,6 +133,7 @@ export type PersistedOnboardingState = {
 
 export type OnboardingStep = "welcome" | "workspace" | "provider" | "defaults" | "firstThread";
 export type ViewId = "chat" | "skills" | "settings";
+export type PluginViewMode = "plugins" | "skills";
 export type SettingsPageId =
   | "providers"
   | "usage"
@@ -208,6 +211,8 @@ export type SessionUsageSnapshot = NonNullable<Extract<ServerEvent, { type: "ses
 export type TurnUsageSnapshot = Pick<Extract<ServerEvent, { type: "turn_usage" }>, "turnId" | "usage">;
 export type WorkspaceBackupsEvent = Extract<ServerEvent, { type: "workspace_backups" }>;
 export type WorkspaceBackupDeltaEvent = Extract<ServerEvent, { type: "workspace_backup_delta" }>;
+export type PluginsCatalogEvent = Extract<ServerEvent, { type: "plugins_catalog" }>;
+export type PluginDetailEvent = Extract<ServerEvent, { type: "plugin_detail" }>;
 export type SessionSnapshot = Extract<ServerEvent, { type: "session_snapshot" }>["snapshot"];
 export type SessionSnapshotFingerprint = Pick<SessionSnapshot, "updatedAt" | "messageCount" | "lastEventSeq">;
 export type CachedSessionSnapshot = {
@@ -245,6 +250,12 @@ export type WorkspaceRuntime = {
   mcpValidationByName: Record<string, MCPServerValidationEvent>;
   mcpLastAuthChallenge: MCPServerAuthChallengeEvent | null;
   mcpLastAuthResult: MCPServerAuthResultEvent | null;
+  pluginsCatalog: PluginCatalogSnapshot | null;
+  selectedPluginId: string | null;
+  selectedPlugin: PluginCatalogEntry | null;
+  pluginsLoading: boolean;
+  pluginsError: string | null;
+  pluginViewMode: PluginViewMode;
   skills: SkillEntry[];
   skillsCatalog: SkillCatalogSnapshot | null;
   selectedSkillName: string | null;

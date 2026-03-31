@@ -692,6 +692,123 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
   });
 
+  test("requestJsonRpcControlEvent applies plugin catalog events and clears matching pending keys", async () => {
+    const workspaceId = "ws-plugins";
+    const { state, get, set } = createState(workspaceId, {
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          pluginsLoading: true,
+          selectedPluginId: "plugin-1",
+          skillMutationPendingKeys: {
+            "plugin:enable:plugin-1": true,
+            other: true,
+          },
+        },
+      },
+    });
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("cowork/plugins/catalog/read");
+      return {
+        event: {
+          type: "plugins_catalog",
+          sessionId: "jsonrpc-control",
+          clearedMutationPendingKeys: ["plugin:enable:plugin-1"],
+          catalog: {
+            warnings: [],
+            plugins: [
+              {
+                id: "plugin-1",
+                name: "figma-toolkit",
+                displayName: "Figma Toolkit",
+                description: "Figma helpers",
+                scope: "workspace",
+                discoveryKind: "marketplace",
+                enabled: true,
+                rootDir: "/tmp/workspace/.agents/plugins/figma-toolkit",
+                manifestPath: "/tmp/workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
+                skillsPath: "/tmp/workspace/.agents/plugins/figma-toolkit/skills",
+                skills: [],
+                mcpServers: [],
+                apps: [],
+                warnings: [],
+              },
+            ],
+          },
+        },
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/plugins/catalog/read",
+      { cwd: "/tmp/workspace" },
+    );
+
+    expect(ok).toBe(true);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsCatalog?.plugins).toHaveLength(1);
+    expect(state.workspaceRuntimeById[workspaceId].selectedPlugin?.id).toBe("plugin-1");
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ other: true });
+  });
+
+  test("requestJsonRpcControlEvent applies plugin detail events", async () => {
+    const workspaceId = "ws-plugin-detail";
+    const { state, get, set } = createState(workspaceId, {
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          pluginsLoading: true,
+          selectedPluginId: "plugin-1",
+        },
+      },
+    });
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("cowork/plugins/read");
+      return {
+        event: {
+          type: "plugin_detail",
+          sessionId: "jsonrpc-control",
+          plugin: {
+            id: "plugin-1",
+            name: "figma-toolkit",
+            displayName: "Figma Toolkit",
+            description: "Figma helpers",
+            scope: "workspace",
+            discoveryKind: "marketplace",
+            enabled: true,
+            rootDir: "/tmp/workspace/.agents/plugins/figma-toolkit",
+            manifestPath: "/tmp/workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
+            skillsPath: "/tmp/workspace/.agents/plugins/figma-toolkit/skills",
+            skills: [],
+            mcpServers: [],
+            apps: [],
+            warnings: [],
+          },
+        },
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/plugins/read",
+      { cwd: "/tmp/workspace", pluginId: "plugin-1" },
+    );
+
+    expect(ok).toBe(true);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].selectedPlugin?.displayName).toBe("Figma Toolkit");
+  });
+
   test("requestJsonRpcControlEvent applies error events and rejects pending install waiters", async () => {
     const workspaceId = "ws-error";
     const { state, get, set } = createState(workspaceId, {

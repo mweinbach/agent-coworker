@@ -211,6 +211,11 @@ Currently implemented `cowork/*` methods include:
   - `cowork/skills/installation/update`
   - `cowork/skills/installation/copy`
   - `cowork/skills/installation/checkUpdate`
+- plugin controls
+  - `cowork/plugins/catalog/read`
+  - `cowork/plugins/read`
+  - `cowork/plugins/enable`
+  - `cowork/plugins/disable`
 - memory controls
   - `cowork/memory/list`
   - `cowork/memory/upsert`
@@ -229,6 +234,7 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - message turns
 - approvals / asks
 - provider panels
+- plugin catalog + detail
 - skills management
 - MCP management
 - memories

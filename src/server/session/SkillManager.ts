@@ -60,12 +60,13 @@ export class SkillManager {
     });
   }
 
-  private async emitPluginsCatalog() {
+  private async emitPluginsCatalog(clearedMutationPendingKeys: string[] = []) {
     const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
     this.context.emit({
       type: "plugins_catalog",
       sessionId: this.context.id,
       catalog,
+      ...(clearedMutationPendingKeys.length > 0 ? { clearedMutationPendingKeys } : {}),
     });
   }
 
@@ -122,7 +123,7 @@ export class SkillManager {
     await this.emitLegacySkillsList();
     await this.listCommands();
     await this.emitSkillsCatalog(clearedMutationPendingKeys);
-    await this.emitPluginsCatalog();
+    await this.emitPluginsCatalog(clearedMutationPendingKeys);
     if (selectedInstallationId) {
       await this.emitInstallationDetail(selectedInstallationId);
     }
@@ -381,7 +382,9 @@ export class SkillManager {
           scope: plugin.scope,
           enabled: true,
         });
-        await this.afterSuccessfulMutation();
+        await this.afterSuccessfulMutation({
+          clearedMutationPendingKeys: [this.skillMutationPendingKey("plugin:enable", plugin.id)],
+        });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to enable plugin: ${String(err)}`);
       }
@@ -408,7 +411,9 @@ export class SkillManager {
           scope: plugin.scope,
           enabled: false,
         });
-        await this.afterSuccessfulMutation();
+        await this.afterSuccessfulMutation({
+          clearedMutationPendingKeys: [this.skillMutationPendingKey("plugin:disable", plugin.id)],
+        });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to disable plugin: ${String(err)}`);
       }

@@ -192,14 +192,13 @@ describe("desktop sidebar", () => {
       if (!container) throw new Error("missing root");
       root = createRoot(container);
 
-      resetAppStore({
-        workspaces: [makeWorkspace()],
-        threads: makeThreads(12),
-        selectedWorkspaceId: "ws-1",
-        selectedThreadId: "thread-12",
-      });
-
       await act(async () => {
+        resetAppStore({
+          workspaces: [makeWorkspace()],
+          threads: makeThreads(12),
+          selectedWorkspaceId: "ws-1",
+          selectedThreadId: "thread-12",
+        });
         root.render(createElement(Sidebar));
       });
 
@@ -249,15 +248,14 @@ describe("desktop sidebar", () => {
       if (!container) throw new Error("missing root");
       root = createRoot(container);
 
-      resetAppStore({
-        workspaces: [makeWorkspace()],
-        threads: makeThreads(3),
-        selectedWorkspaceId: "ws-1",
-        selectedThreadId: "thread-3",
-        selectThread,
-      });
-
       await act(async () => {
+        resetAppStore({
+          workspaces: [makeWorkspace()],
+          threads: makeThreads(3),
+          selectedWorkspaceId: "ws-1",
+          selectedThreadId: "thread-3",
+          selectThread,
+        });
         root.render(createElement(Sidebar));
       });
 
@@ -298,22 +296,21 @@ describe("desktop sidebar", () => {
       if (!container) throw new Error("missing root");
       root = createRoot(container);
 
-      resetAppStore({
-        view: "skills",
-        workspaces: [makeWorkspace()],
-        threads: makeThreads(2),
-        selectedWorkspaceId: "ws-1",
-        selectedThreadId: "thread-2",
-      });
-
       await act(async () => {
+        resetAppStore({
+          view: "skills",
+          workspaces: [makeWorkspace()],
+          threads: makeThreads(2),
+          selectedWorkspaceId: "ws-1",
+          selectedThreadId: "thread-2",
+        });
         root.render(createElement(Sidebar));
       });
 
       expect(container.textContent).toContain("New Chat");
-      expect(container.textContent).toContain("Skills");
+      expect(container.textContent).toContain("Plugins");
       expect(container.textContent).toContain("2 sessions");
-      expect(container.textContent).toContain("viewing skills");
+      expect(container.textContent).toContain("viewing plugins");
 
       const newChatButton = Array.from(container.querySelectorAll("button")).find((button) =>
         button.textContent?.includes("New Chat"),
@@ -330,10 +327,10 @@ describe("desktop sidebar", () => {
       expect(titlebandButtons[1]?.getAttribute("aria-label")).toBe("Hide sidebar");
 
       const skillsButton = Array.from(container.querySelectorAll("button")).find((button) =>
-        button.textContent?.includes("Skills"),
+        button.textContent?.includes("Plugins"),
       );
       if (!(skillsButton instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing skills button");
+        throw new Error("missing plugins button");
       }
       expect(skillsButton.className).toContain("w-full");
 

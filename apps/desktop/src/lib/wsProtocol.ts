@@ -11,6 +11,8 @@ export type {
   ApprovalRiskCode,
   ChildModelRoutingMode,
   MCPServerConfig,
+  PluginCatalogEntry,
+  PluginCatalogSnapshot,
   ProviderName,
   SkillCatalogSnapshot,
   ServerErrorCode,

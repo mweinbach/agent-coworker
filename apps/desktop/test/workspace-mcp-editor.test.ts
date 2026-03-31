@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act } from "react";
 
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
@@ -138,6 +139,19 @@ function setDefaultHandlers(workspacePath = "/tmp/workspace") {
           authScope: "workspace",
           authMessage: "OAuth required.",
         },
+        {
+          name: "figma-mcp",
+          transport: { type: "stdio", command: "figma-mcp" },
+          source: "plugin",
+          inherited: false,
+          pluginId: "plugin-1",
+          pluginName: "figma-toolkit",
+          pluginDisplayName: "Figma Toolkit",
+          pluginScope: "workspace",
+          authMode: "none",
+          authScope: "workspace",
+          authMessage: "",
+        },
       ],
       legacy: {
         workspace: { path: `${workspacePath}/.agent/mcp-servers.json`, exists: true },
@@ -150,6 +164,18 @@ function setDefaultHandlers(workspacePath = "/tmp/workspace") {
           exists: true,
           editable: true,
           legacy: false,
+          serverCount: 1,
+        },
+        {
+          source: "plugin",
+          path: `${workspacePath}/.agents/plugins/figma-toolkit/.mcp.json`,
+          exists: true,
+          editable: false,
+          legacy: false,
+          pluginId: "plugin-1",
+          pluginName: "figma-toolkit",
+          pluginDisplayName: "Figma Toolkit",
+          pluginScope: "workspace",
           serverCount: 1,
         },
       ],
@@ -171,55 +197,57 @@ describe("workspace MCP editor flow", () => {
     RUNTIME.sessionSnapshots.clear();
     setDefaultHandlers();
 
-    useAppStore.setState({
-      ready: true,
-      startupError: null,
-      view: "chat",
-      settingsPage: "workspaces",
-      lastNonSettingsView: "chat",
-      workspaces: [
-        {
-          id: workspaceId,
-          name: "Workspace 1",
-          path: "/tmp/workspace",
-          createdAt: "2026-02-19T00:00:00.000Z",
-          lastOpenedAt: "2026-02-19T00:00:00.000Z",
-          defaultProvider: "openai",
-          defaultModel: "gpt-5.2",
-          defaultPreferredChildModel: "gpt-5.2",
-          defaultEnableMcp: true,
-          defaultBackupsEnabled: true,
-          yolo: false,
-        },
-      ],
-      threads: [],
-      selectedWorkspaceId: workspaceId,
-      selectedThreadId: null,
-      workspaceRuntimeById: {},
-      threadRuntimeById: {},
-      latestTodosByThreadId: {},
-      workspaceExplorerById: {},
-      promptModal: null,
-      notifications: [],
-      providerStatusByName: {},
-      providerStatusLastUpdatedAt: null,
-      providerStatusRefreshing: false,
-      providerCatalog: [],
-      providerDefaultModelByProvider: {},
-      providerConnected: [],
-      providerAuthMethodsByProvider: {},
-      providerLastAuthChallenge: null,
-      providerLastAuthResult: null,
-      composerText: "",
-      injectContext: false,
-      developerMode: false,
-      showHiddenFiles: false,
-      sidebarCollapsed: false,
-      contextSidebarCollapsed: false,
-      contextSidebarWidth: 300,
-      messageBarHeight: 120,
-      sidebarWidth: 280,
-    } as any);
+    act(() => {
+      useAppStore.setState({
+        ready: true,
+        startupError: null,
+        view: "chat",
+        settingsPage: "workspaces",
+        lastNonSettingsView: "chat",
+        workspaces: [
+          {
+            id: workspaceId,
+            name: "Workspace 1",
+            path: "/tmp/workspace",
+            createdAt: "2026-02-19T00:00:00.000Z",
+            lastOpenedAt: "2026-02-19T00:00:00.000Z",
+            defaultProvider: "openai",
+            defaultModel: "gpt-5.2",
+            defaultPreferredChildModel: "gpt-5.2",
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: true,
+            yolo: false,
+          },
+        ],
+        threads: [],
+        selectedWorkspaceId: workspaceId,
+        selectedThreadId: null,
+        workspaceRuntimeById: {},
+        threadRuntimeById: {},
+        latestTodosByThreadId: {},
+        workspaceExplorerById: {},
+        promptModal: null,
+        notifications: [],
+        providerStatusByName: {},
+        providerStatusLastUpdatedAt: null,
+        providerStatusRefreshing: false,
+        providerCatalog: [],
+        providerDefaultModelByProvider: {},
+        providerConnected: [],
+        providerAuthMethodsByProvider: {},
+        providerLastAuthChallenge: null,
+        providerLastAuthResult: null,
+        composerText: "",
+        injectContext: false,
+        developerMode: false,
+        showHiddenFiles: false,
+        sidebarCollapsed: false,
+        contextSidebarCollapsed: false,
+        contextSidebarWidth: 300,
+        messageBarHeight: 120,
+        sidebarWidth: 280,
+      } as any);
+    });
   });
 
   afterEach(() => {
@@ -233,9 +261,20 @@ describe("workspace MCP editor flow", () => {
     expect(jsonRpcRequests.map((entry) => entry.method)).toContain("cowork/mcp/servers/read");
 
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    expect(runtime?.mcpServers).toHaveLength(1);
+    expect(runtime?.mcpServers).toHaveLength(2);
     expect(runtime?.mcpServers[0]?.name).toBe("grep");
+    expect(runtime?.mcpServers[1]).toMatchObject({
+      name: "figma-mcp",
+      source: "plugin",
+      pluginDisplayName: "Figma Toolkit",
+    });
     expect(runtime?.mcpFiles[0]?.path).toBe("/tmp/workspace/.cowork/mcp-servers.json");
+    expect(runtime?.mcpFiles[1]).toMatchObject({
+      source: "plugin",
+      path: "/tmp/workspace/.agents/plugins/figma-toolkit/.mcp.json",
+      editable: false,
+      pluginDisplayName: "Figma Toolkit",
+    });
     expect(runtime?.mcpWarnings[0]).toContain("invalid JSON");
   });
 

@@ -56,6 +56,17 @@ const failedSkillMutationActions = [
   },
 ] as const;
 
+const failedPluginMutationActions = [
+  {
+    name: "enablePlugin",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.enablePlugin("plugin-1"),
+  },
+  {
+    name: "disablePlugin",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.disablePlugin("plugin-1"),
+  },
+] as const;
+
 describe("skill store actions", () => {
   beforeEach(() => {
     RUNTIME.jsonRpcSockets.clear();
@@ -123,6 +134,121 @@ describe("skill store actions", () => {
 
     expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
     expect(state.notifications).toHaveLength(0);
+  });
+
+  test("refreshPluginsCatalog clears loading when sendControl fails", async () => {
+    const state = createState();
+    const { get, set } = createStoreHarness(state);
+
+    await createSkillActions(set as any, get as any).refreshPluginsCatalog();
+
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe("Unable to refresh plugins catalog.");
+    expect(state.notifications).toHaveLength(1);
+  });
+
+  test("refreshPluginsCatalog requests the plugin catalog and clears loading after success", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+      pluginsLoading: false,
+      pluginsError: "stale plugin error",
+    } as any;
+    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
+    const { get, set } = createStoreHarness(state);
+
+    let resolveCatalog!: (value: unknown) => void;
+    const catalogPromise = new Promise((resolve) => {
+      resolveCatalog = resolve;
+    });
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: (method: string) => {
+        expect(method).toBe("cowork/plugins/catalog/read");
+        return catalogPromise;
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    const refreshPromise = createSkillActions(set as any, get as any).refreshPluginsCatalog();
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(true);
+    resolveCatalog({
+      event: {
+        type: "plugins_catalog",
+        sessionId: "jsonrpc-control",
+        catalog: { plugins: [], warnings: [] },
+      },
+    });
+    await refreshPromise;
+
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
+    expect(state.notifications).toHaveLength(0);
+  });
+
+  test("selectPlugin enters loading state before the request and preserves loaded detail after success", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+      pluginsCatalog: {
+        plugins: [],
+        warnings: [],
+      },
+    } as any;
+    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
+    const { get, set } = createStoreHarness(state);
+
+    const plugin = {
+      id: "plugin-1",
+      name: "figma-toolkit",
+      displayName: "Figma Toolkit",
+      description: "Figma helpers",
+      scope: "workspace",
+      discoveryKind: "marketplace",
+      enabled: true,
+      rootDir: "/tmp/workspace/.agents/plugins/figma-toolkit",
+      manifestPath: "/tmp/workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
+      skillsPath: "/tmp/workspace/.agents/plugins/figma-toolkit/skills",
+      skills: [],
+      mcpServers: [],
+      apps: [],
+      warnings: [],
+    };
+
+    let resolveRequest!: (value: unknown) => void;
+    const requestPromise = new Promise((resolve) => {
+      resolveRequest = resolve;
+    });
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => await requestPromise,
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    const selectPromise = createSkillActions(set as any, get as any).selectPlugin("plugin-1");
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginId).toBe("plugin-1");
+    expect(state.workspaceRuntimeById[workspaceId].selectedPlugin).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(true);
+
+    resolveRequest({
+      event: {
+        type: "plugin_detail",
+        sessionId: "jsonrpc-control",
+        plugin,
+      },
+    });
+    await selectPromise;
+
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginId).toBe("plugin-1");
+    expect(state.workspaceRuntimeById[workspaceId].selectedPlugin).toEqual(plugin);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
   });
 
   test("previewSkillInstall removes only its pending key when sendControl fails", async () => {
@@ -290,6 +416,23 @@ describe("skill store actions", () => {
     test(`${name} removes only its pending key when sendControl fails`, async () => {
       const state = createState();
       state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys = { other: true };
+      const { get, set } = createStoreHarness(state);
+
+      await invoke(createSkillActions(set as any, get as any));
+
+      expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ other: true });
+      expect(state.notifications).toHaveLength(1);
+    });
+  }
+
+  for (const { name, invoke } of failedPluginMutationActions) {
+    test(`${name} removes only its pending key when sendControl fails`, async () => {
+      const state = createState();
+      state.workspaceRuntimeById[workspaceId] = {
+        ...defaultWorkspaceRuntime(),
+        skillMutationPendingKeys: { other: true },
+      } as any;
+      state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
       const { get, set } = createStoreHarness(state);
 
       await invoke(createSkillActions(set as any, get as any));

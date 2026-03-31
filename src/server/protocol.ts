@@ -322,6 +322,7 @@ export type ServerEvent =
     type: "plugins_catalog";
     sessionId: string;
     catalog: PluginCatalogSnapshot;
+    clearedMutationPendingKeys?: string[];
   }
   | {
     type: "plugin_detail";

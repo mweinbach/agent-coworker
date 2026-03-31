@@ -298,11 +298,18 @@ export function createControlSocketHelpers(
                 controlSessionId: null,
                 controlConfig: null,
                 controlSessionConfig: null,
+                pluginsCatalog: null,
+                selectedPluginId: null,
+                selectedPlugin: null,
+                pluginsLoading: false,
+                pluginsError: null,
                 memoriesLoading: false,
                 skillCatalogLoading: false,
+                skillCatalogError: workspaceRuntime.skillCatalogError,
                 skillsMutationBlocked: false,
                 skillsMutationBlockedReason: null,
                 skillMutationPendingKeys: {},
+                skillMutationError: null,
                 workspaceBackupsLoading: false,
                 workspaceBackupsError: workspaceRuntime.workspaceBackupsError,
                 workspaceBackupPendingActionKeys: {},
@@ -564,6 +571,7 @@ export function createControlSocketHelpers(
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/servers/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/list", { cwd }),
+      requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/catalog/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/catalog/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/list", { cwd }),
     ]);
@@ -587,6 +595,14 @@ export function createControlSocketHelpers(
       await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/read", {
         cwd,
         installationId: selectedInstallationId,
+      });
+    }
+
+    const selectedPluginId = get().workspaceRuntimeById[workspaceId]?.selectedPluginId;
+    if (selectedPluginId) {
+      await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/read", {
+        cwd,
+        pluginId: selectedPluginId,
       });
     }
   }
@@ -888,6 +904,51 @@ export function createControlSocketHelpers(
       return;
     }
 
+    if (evt.type === "plugins_catalog") {
+      set((s) => {
+        const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
+        const selectedPluginId = workspaceRuntime.selectedPluginId;
+        const selectedPlugin =
+          selectedPluginId
+            ? evt.catalog.plugins.find((plugin) => plugin.id === selectedPluginId) ?? null
+            : null;
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...workspaceRuntime,
+              pluginsCatalog: evt.catalog,
+              pluginsLoading: false,
+              pluginsError: null,
+              skillMutationPendingKeys: omitSkillMutationPendingKeys(
+                workspaceRuntime.skillMutationPendingKeys,
+                evt.clearedMutationPendingKeys ?? [],
+              ),
+              selectedPluginId: selectedPlugin ? selectedPluginId : null,
+              selectedPlugin,
+            },
+          },
+        };
+      });
+      return;
+    }
+
+    if (evt.type === "plugin_detail") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            selectedPluginId: evt.plugin?.id ?? null,
+            selectedPlugin: evt.plugin,
+            pluginsLoading: false,
+            pluginsError: null,
+          },
+        },
+      }));
+      return;
+    }
+
     if (evt.type === "skill_content") {
       set((s) => ({
         workspaceRuntimeById: {
@@ -1141,6 +1202,12 @@ export function createControlSocketHelpers(
                     skillCatalogError: evt.message,
                     skillMutationPendingKeys: {},
                     skillMutationError: evt.message,
+                  }
+                : {}),
+              ...(workspaceRuntime.pluginsLoading
+                ? {
+                    pluginsLoading: false,
+                    pluginsError: evt.message,
                   }
                 : {}),
               ...(hasPendingBackupState

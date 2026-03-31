@@ -51,6 +51,10 @@ function skillPendingKey(action: string, id?: string): string {
   return id ? `${action}:${id}` : action;
 }
 
+function pluginPendingKey(action: string, id?: string): string {
+  return id ? `plugin:${action}:${id}` : `plugin:${action}`;
+}
+
 function clearFailedSkillMutationSend(set: StoreSet, workspaceId: string, key: string, detail: string): void {
   set((s) => ({
     workspaceRuntimeById: {
@@ -81,6 +85,11 @@ export function createSkillActions(
   AppStoreActions,
   | "openSkills"
   | "refreshSkillsCatalog"
+  | "refreshPluginsCatalog"
+  | "selectPlugin"
+  | "setPluginViewMode"
+  | "enablePlugin"
+  | "disablePlugin"
   | "selectSkill"
   | "selectSkillInstallation"
   | "previewSkillInstall"
@@ -125,7 +134,179 @@ export function createSkillActions(
       ensureWorkspaceRuntime(get, set, workspaceId);
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
-      await get().refreshSkillsCatalog();
+      await Promise.all([
+        get().refreshPluginsCatalog(),
+        get().refreshSkillsCatalog(),
+      ]);
+    },
+
+    refreshPluginsCatalog: async () => {
+      const workspaceId = get().selectedWorkspaceId;
+      if (!workspaceId) return;
+      const cwd = workspacePath(workspaceId);
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            pluginsLoading: true,
+            pluginsError: null,
+          },
+        },
+      }));
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/catalog/read", { cwd });
+      if (!ok) {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              pluginsLoading: false,
+              pluginsError: "Unable to refresh plugins catalog.",
+            },
+          },
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to refresh plugins catalog.",
+          }),
+        }));
+      }
+    },
+
+    selectPlugin: async (pluginId: string | null) => {
+      const workspaceId = get().selectedWorkspaceId;
+      if (!workspaceId) return;
+      if (pluginId === null) {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              selectedPluginId: null,
+              selectedPlugin: null,
+            },
+          },
+        }));
+        return;
+      }
+      const cwd = workspacePath(workspaceId);
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            selectedPluginId: pluginId,
+            selectedPlugin: null,
+            pluginsLoading: true,
+            pluginsError: null,
+          },
+        },
+      }));
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/read", { cwd, pluginId });
+      if (!ok) {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              selectedPluginId: null,
+              pluginsLoading: false,
+              pluginsError: "Unable to load plugin details.",
+            },
+          },
+        }));
+      }
+    },
+
+    setPluginViewMode: async (mode: "plugins" | "skills") => {
+      const workspaceId = get().selectedWorkspaceId;
+      if (!workspaceId) return;
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            pluginViewMode: mode,
+          },
+        },
+      }));
+    },
+
+    enablePlugin: async (pluginId: string) => {
+      const workspaceId = get().selectedWorkspaceId;
+      if (!workspaceId) return;
+      const cwd = workspacePath(workspaceId);
+      const key = pluginPendingKey("enable", pluginId);
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            skillMutationPendingKeys: {
+              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
+              [key]: true,
+            },
+          },
+        },
+      }));
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/enable", { cwd, pluginId });
+      if (!ok) {
+        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to enable plugin.");
+      } else {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              skillMutationPendingKeys: (() => {
+                const pendingKeys = { ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys };
+                delete pendingKeys[key];
+                return pendingKeys;
+              })(),
+            },
+          },
+        }));
+      }
+    },
+
+    disablePlugin: async (pluginId: string) => {
+      const workspaceId = get().selectedWorkspaceId;
+      if (!workspaceId) return;
+      const cwd = workspacePath(workspaceId);
+      const key = pluginPendingKey("disable", pluginId);
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            skillMutationPendingKeys: {
+              ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys,
+              [key]: true,
+            },
+          },
+        },
+      }));
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/disable", { cwd, pluginId });
+      if (!ok) {
+        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to disable plugin.");
+      } else {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              skillMutationPendingKeys: (() => {
+                const pendingKeys = { ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys };
+                delete pendingKeys[key];
+                return pendingKeys;
+              })(),
+            },
+          },
+        }));
+      }
     },
 
     refreshSkillsCatalog: async () => {

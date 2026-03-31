@@ -46,6 +46,43 @@ export function createPluginsRouteHandlers(
       context.jsonrpc.sendResult(ws, message.id, { event });
     },
 
+    "cowork/plugins/install/preview": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const sourceInput = typeof params.sourceInput === "string" ? params.sourceInput : "";
+      const targetScope = params.targetScope === "user" ? "user" : "workspace";
+      const event = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (session) => await session.previewPluginInstall(sourceInput, targetScope),
+        (event): event is Extract<ServerEvent, { type: "plugin_install_preview" }> =>
+          event.type === "plugin_install_preview",
+      );
+      if (context.utils.isSessionError(event)) {
+        sendSessionMutationError(context, ws, message.id, event);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event });
+    },
+
+    "cowork/plugins/install": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const sourceInput = typeof params.sourceInput === "string" ? params.sourceInput : "";
+      const targetScope = params.targetScope === "user" ? "user" : "workspace";
+      const event = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (session) => await session.installPlugins(sourceInput, targetScope),
+        (event): event is Extract<ServerEvent, { type: "plugins_catalog" }> => event.type === "plugins_catalog",
+      );
+      if (context.utils.isSessionError(event)) {
+        sendSessionMutationError(context, ws, message.id, event);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event });
+    },
+
     "cowork/plugins/enable": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);

@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 
-import type { PluginCatalogEntry, SkillInstallationEntry, SkillMutationTargetScope } from "../../types";
+import type {
+  PluginCatalogEntry,
+  PluginInstallTargetScope,
+  SkillInstallationEntry,
+  SkillMutationTargetScope,
+} from "../../types";
 import { getEffectiveInstallationByName } from "../../skills/catalog";
 import { discoverSkillsForConfig, stripSkillFrontMatter } from "../../skills";
 import {
@@ -17,7 +22,11 @@ import {
   installSkillsFromSource,
   updateSkillInstallation,
 } from "../../skills/operations";
-import { buildPluginCatalogSnapshot } from "../../plugins";
+import {
+  buildPluginCatalogSnapshot,
+  buildPluginInstallPreview,
+  installPluginsFromSource,
+} from "../../plugins";
 import { setPluginEnabled } from "../../plugins/overrides";
 import { createTools } from "../../tools";
 import { expandCommandTemplate, listCommands as listServerCommands, resolveCommand } from "../commands";
@@ -67,6 +76,14 @@ export class SkillManager {
       sessionId: this.context.id,
       catalog,
       ...(clearedMutationPendingKeys.length > 0 ? { clearedMutationPendingKeys } : {}),
+    });
+  }
+
+  private async emitPluginInstallPreview(preview: import("../../types").PluginInstallPreview) {
+    this.context.emit({
+      type: "plugin_install_preview",
+      sessionId: this.context.id,
+      preview,
     });
   }
 
@@ -124,6 +141,7 @@ export class SkillManager {
     await this.listCommands();
     await this.emitSkillsCatalog(clearedMutationPendingKeys);
     await this.emitPluginsCatalog(clearedMutationPendingKeys);
+    await this.context.emitMcpServers?.();
     if (selectedInstallationId) {
       await this.emitInstallationDetail(selectedInstallationId);
     }
@@ -360,6 +378,39 @@ export class SkillManager {
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to read plugin detail: ${String(err)}`);
     }
+  }
+
+  async previewPluginInstall(sourceInput: string, targetScope: PluginInstallTargetScope) {
+    try {
+      const preview = await buildPluginInstallPreview({
+        input: sourceInput,
+        targetScope,
+        catalog: await buildPluginCatalogSnapshot(this.context.state.config),
+        cwd: this.context.state.config.workingDirectory,
+      });
+      await this.emitPluginInstallPreview(preview);
+    } catch (err) {
+      this.context.emitError("internal_error", "session", `Failed to preview plugin install: ${String(err)}`);
+    }
+  }
+
+  async installPlugins(sourceInput: string, targetScope: PluginInstallTargetScope) {
+    await this.withSkillMutationLock(async () => {
+      try {
+        const result = await installPluginsFromSource({
+          config: this.context.state.config,
+          input: sourceInput,
+          targetScope,
+        });
+        await this.emitPluginInstallPreview(result.preview);
+        await this.afterSuccessfulMutation({
+          clearedMutationPendingKeys: [this.skillMutationPendingKey(`plugin:install:${targetScope}`)],
+        });
+        await this.emitPluginDetail(result.pluginIds[0] ?? "");
+      } catch (err) {
+        this.context.emitError("internal_error", "session", `Failed to install plugins: ${String(err)}`);
+      }
+    });
   }
 
   async enablePlugin(pluginIdRaw: string) {

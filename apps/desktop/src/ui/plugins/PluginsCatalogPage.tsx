@@ -2,12 +2,19 @@ import { useMemo, useState } from "react";
 import { useAppStore } from "../../app/store";
 import { PluginCardGrid } from "./PluginCardGrid";
 import { PluginDetailDialog } from "./PluginDetailDialog";
+import { InstallPluginDialog } from "./InstallPluginDialog";
 import { Button } from "../../components/ui/button";
 import { Badge } from "../../components/ui/badge";
 import { Input } from "../../components/ui/input";
 import { MessageSquareIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
 
-export function PluginsCatalogPage({ workspaceId }: { workspaceId: string }) {
+export function PluginsCatalogPage({
+  workspaceId,
+  managementScope = "workspace",
+}: {
+  workspaceId: string;
+  managementScope?: "workspace" | "global";
+}) {
   const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
   const refreshPluginsCatalog = useAppStore((s) => s.refreshPluginsCatalog);
   const selectPlugin = useAppStore((s) => s.selectPlugin);
@@ -58,6 +65,9 @@ export function PluginsCatalogPage({ workspaceId }: { workspaceId: string }) {
 
   const plugins = useMemo(() => {
     let items = [...(catalog?.plugins ?? [])];
+    if (managementScope === "global") {
+      items = items.filter((plugin) => plugin.scope === "user");
+    }
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       items = items.filter((plugin) =>
@@ -73,6 +83,14 @@ export function PluginsCatalogPage({ workspaceId }: { workspaceId: string }) {
   const enabledPlugins = useMemo(() => plugins.filter((plugin) => plugin.enabled), [plugins]);
   const disabledPlugins = useMemo(() => plugins.filter((plugin) => !plugin.enabled), [plugins]);
 
+  const scopeLabel = managementScope === "global" ? "Global plugins" : "Plugins";
+  const ownerLabel = managementScope === "global"
+    ? "your global library"
+    : workspace?.name ?? "this workspace";
+  const emptyLabel = managementScope === "global"
+    ? "No Codex-style plugins were discovered in your global library."
+    : "No Codex-style plugins were discovered for this workspace.";
+
   return (
     <div className="app-skills-view h-full min-h-0 overflow-y-auto px-6 py-5">
       <div className="mx-auto max-w-6xl">
@@ -81,7 +99,7 @@ export function PluginsCatalogPage({ workspaceId }: { workspaceId: string }) {
             <div className="min-w-0">
               <h1 className="mb-1 text-[2rem] font-semibold tracking-tight">Plugins</h1>
               <p className="text-sm text-muted-foreground">
-                Plugins for <span className="font-medium text-foreground/80">{workspace?.name ?? "this workspace"}</span>
+                {scopeLabel} for <span className="font-medium text-foreground/80">{ownerLabel}</span>
                 <span className="mx-2 text-muted-foreground/65">•</span>
                 {sessionLabel}
               </p>
@@ -105,6 +123,7 @@ export function PluginsCatalogPage({ workspaceId }: { workspaceId: string }) {
                 <RefreshCwIcon className="mr-2 h-4 w-4" />
                 Refresh
               </Button>
+              <InstallPluginDialog workspaceId={workspaceId} />
               <div className="relative w-60">
                 <SearchIcon className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -158,7 +177,7 @@ export function PluginsCatalogPage({ workspaceId }: { workspaceId: string }) {
             <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-muted/10 py-10 text-center">
               <div className="mb-1 text-base font-medium">No plugins found</div>
               <div className="text-sm text-muted-foreground">
-                {searchQuery ? "Try adjusting your search query." : "No Codex-style plugins were discovered for this workspace."}
+                {searchQuery ? "Try adjusting your search query." : emptyLabel}
               </div>
             </div>
           ) : null}

@@ -20,6 +20,7 @@ const initialState: AppStoreDataState = {
 
   selectedWorkspaceId: null,
   selectedThreadId: null,
+  pluginManagementWorkspaceId: null,
 
   workspaceRuntimeById: {},
   threadRuntimeById: {},

@@ -8,10 +8,12 @@ import { useAppStore } from "../../app/store";
 
 export function HeaderAndFilters({
   workspaceId,
+  managementScope = "workspace",
   searchQuery,
   setSearchQuery,
 }: {
   workspaceId: string;
+  managementScope?: "workspace" | "global";
   searchQuery: string;
   setSearchQuery: (query: string) => void;
 }) {
@@ -44,6 +46,10 @@ export function HeaderAndFilters({
 
   const sessionLabel = workspaceThreads.length === 1 ? "1 session" : `${workspaceThreads.length} sessions`;
   const chatButtonLabel = workspaceThreads.length > 0 ? "Open chat" : "New thread";
+  const scopeLabel = managementScope === "global" ? "Global skills" : "Skills";
+  const ownerLabel = managementScope === "global"
+    ? "your global library"
+    : workspace?.name ?? "this workspace";
 
   const handleOpenChat = async () => {
     if (activeThread) {
@@ -57,9 +63,9 @@ export function HeaderAndFilters({
     <div className="mb-6 flex flex-col gap-4">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <h1 className="mb-1 text-[2rem] font-semibold tracking-tight">Plugins</h1>
+          <h1 className="mb-1 text-[2rem] font-semibold tracking-tight">Skills</h1>
           <p className="text-sm text-muted-foreground">
-            Skills for <span className="font-medium text-foreground/80">{workspace?.name ?? "this workspace"}</span>
+            {scopeLabel} for <span className="font-medium text-foreground/80">{ownerLabel}</span>
             <span className="mx-2 text-muted-foreground/65">•</span>
             {sessionLabel}
           </p>

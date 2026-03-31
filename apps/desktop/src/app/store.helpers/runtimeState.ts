@@ -41,6 +41,8 @@ export type RuntimeMaps = {
   workspaceJsonRpcSocketGenerations: Map<string, number>;
   /** Latest in-flight skill install per workspace; resolved when `skills_catalog` completes the matching pending key. */
   skillInstallWaiters: Map<string, SkillInstallWaiter>;
+  /** Latest in-flight plugin install per workspace; resolved when `plugins_catalog` completes the matching pending key. */
+  pluginInstallWaiters: Map<string, SkillInstallWaiter>;
   optimisticUserMessageIds: Map<string, Set<string>>;
   pendingThreadMessages: Map<string, string[]>;
   pendingThreadAttachments: Map<string, Array<import("./jsonRpcSocket").FileAttachmentInput[] | undefined>>;
@@ -61,6 +63,7 @@ export const RUNTIME: RuntimeMaps = {
   jsonRpcSockets: new Map(),
   workspaceJsonRpcSocketGenerations: new Map(),
   skillInstallWaiters: new Map(),
+  pluginInstallWaiters: new Map(),
   optimisticUserMessageIds: new Map(),
   pendingThreadMessages: new Map(),
   pendingThreadAttachments: new Map(),
@@ -252,6 +255,7 @@ export function defaultWorkspaceRuntime(): WorkspaceRuntime {
     pluginsCatalog: null,
     selectedPluginId: null,
     selectedPlugin: null,
+    selectedPluginPreview: null,
     pluginsLoading: false,
     pluginsError: null,
     skills: [],

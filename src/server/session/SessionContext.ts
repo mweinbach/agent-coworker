@@ -240,6 +240,7 @@ export type SessionContext = {
   syncSessionBackupAvailability: () => Promise<void>;
   refreshProviderStatus: () => Promise<void>;
   emitProviderCatalog: () => Promise<void>;
+  emitMcpServers?: () => Promise<void>;
   getSkillMutationBlockReason: () => string | null;
   refreshSkillsAcrossWorkspaceSessions: () => Promise<void>;
 };

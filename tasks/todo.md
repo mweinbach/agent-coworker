@@ -1,13 +1,28 @@
 # Task Plan
 
+## Add Plugin Install Flow
+
+- [x] Add backend plugin source preview/install support that materializes Codex-style plugin bundles into workspace or user `.agents/plugins` roots without folding plugins into `skillsDirs`.
+- [x] Extend plugin JSON-RPC/session/protocol/schema contracts plus desktop runtime/store state for plugin install preview/install mutations.
+- [x] Add a desktop `+ New plugin` dialog in the Plugins page using the same preview/install interaction pattern as skills, then verify with focused tests, typecheck, docs generation, and a manual desktop walkthrough.
+
 ## Add Codex-style First-Class Plugin Layer
 
-- [ ] Extend core config/types with `.agents` plugin roots and plugin-aware skill/MCP metadata without folding plugins into `skillsDirs`.
-- [ ] Add plugin discovery/catalog/override/MCP parsing modules and bridge enabled plugin skills into source-aware skill scanning.
-- [ ] Integrate plugin-aware skills into prompt loading, `skill` tool resolution, slash commands, permissions, and MCP runtime layering/auth scope.
-- [ ] Add plugin catalog + enable/disable control methods/events through protocol, JSON-RPC, `SkillManager`, and `AgentSession`.
-- [ ] Update the desktop `skills` view shell into visible `Plugins` UI with `Plugins | Skills` switch, plugin catalog/detail state, plugin-owned skill badges/actions, and plugin MCP read-only entries.
-- [ ] Add/update focused backend and desktop tests, run targeted Bun test slices plus `bun run typecheck`, then do a manual desktop walkthrough with artifacts.
+- [x] Extend core config/types with `.agents` plugin roots and plugin-aware skill/MCP metadata without folding plugins into `skillsDirs`.
+- [x] Add plugin discovery/catalog/override/MCP parsing modules and bridge enabled plugin skills into source-aware skill scanning.
+- [x] Integrate plugin-aware skills into prompt loading, `skill` tool resolution, slash commands, permissions, and MCP runtime layering/auth scope.
+- [x] Add plugin catalog + enable/disable control methods/events through protocol, JSON-RPC, `SkillManager`, and `AgentSession`.
+- [x] Update the desktop `skills` view shell into visible `Plugins` UI with `Plugins | Skills` switch, plugin catalog/detail state, plugin-owned skill badges/actions, and plugin MCP read-only entries.
+- [x] Add/update focused backend and desktop tests, run targeted Bun test slices plus `bun run typecheck`, then do a manual desktop walkthrough with artifacts.
+
+## Add Plugin Install Flow Review
+
+- Added dedicated plugin source resolution and install operations so Codex-style bundles can be previewed and installed into workspace or user `.agents/plugins` roots without piggybacking on `skillsDirs`.
+- Exposed the new preview/install flow through JSON-RPC control routes, session management, protocol/schema types, and desktop store/runtime state, including plugin install previews and waiter handling.
+- Finished the desktop renderer integration with a `+ New plugin` dialog, management-workspace-aware store actions, and a Global-default top-bar selector that now drives the plugin/skills management surface.
+- Focused verification passed with:
+  - `~/.bun/bin/bun test test/server.jsonrpc.control.test.ts apps/desktop/test/app-topbar.test.tsx apps/desktop/test/plugins-catalog-page.test.ts apps/desktop/test/skills-actions.test.ts`
+  - `~/.bun/bin/bun run typecheck`
 
 ## Fix Mobile Relay Pairing Trust and Workspace Cache
 

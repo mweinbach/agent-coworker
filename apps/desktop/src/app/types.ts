@@ -4,6 +4,7 @@ import type {
   ConfigSubset,
   PluginCatalogEntry,
   PluginCatalogSnapshot,
+  PluginInstallPreview,
   ProviderName,
   ServerErrorCode,
   ServerErrorSource,
@@ -147,6 +148,7 @@ export type SettingsPageId =
 
 export type CachedDesktopUiState = {
   selectedWorkspaceId?: string | null;
+  pluginManagementWorkspaceId?: string | null;
   selectedThreadId?: string | null;
   view?: ViewId;
   settingsPage?: SettingsPageId;
@@ -253,6 +255,7 @@ export type WorkspaceRuntime = {
   pluginsCatalog: PluginCatalogSnapshot | null;
   selectedPluginId: string | null;
   selectedPlugin: PluginCatalogEntry | null;
+  selectedPluginPreview: PluginInstallPreview | null;
   pluginsLoading: boolean;
   pluginsError: string | null;
   pluginViewMode: PluginViewMode;

@@ -8,6 +8,7 @@ import type {
   ObservabilityHealth,
   PluginCatalogEntry,
   PluginCatalogSnapshot,
+  PluginInstallPreview,
   SkillCatalogSnapshot,
   ServerErrorCode,
   ServerErrorSource,
@@ -328,6 +329,12 @@ export type ServerEvent =
     type: "plugin_detail";
     sessionId: string;
     plugin: PluginCatalogEntry | null;
+  }
+  | {
+    type: "plugin_install_preview";
+    sessionId: string;
+    preview: PluginInstallPreview;
+    fromUserPreviewRequest?: boolean;
   }
   | {
     type: "session_backup_state";

@@ -5,14 +5,19 @@ import { PluginsCatalogPage } from "./plugins/PluginsCatalogPage";
 
 export function SkillsView() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
-  const pluginViewMode = useAppStore((s) => s.workspaceRuntimeById[selectedWorkspaceId ?? ""]?.pluginViewMode ?? "plugins");
+  const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
+  const catalogWorkspaceId = pluginManagementWorkspaceId ?? selectedWorkspaceId;
+  const managementScope = pluginManagementWorkspaceId ? "workspace" : "global";
+  const pluginViewMode = useAppStore((s) => s.workspaceRuntimeById[catalogWorkspaceId ?? ""]?.pluginViewMode ?? "plugins");
   const setPluginViewMode = useAppStore((s) => s.setPluginViewMode);
 
-  if (!selectedWorkspaceId) {
+  if (!catalogWorkspaceId) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
         <h2 className="text-[1.75rem] font-semibold tracking-tight">Pick a workspace</h2>
-        <p className="text-sm text-muted-foreground">Select a workspace to view available plugins and skills.</p>
+        <p className="text-sm text-muted-foreground">
+          Select a workspace to load global and workspace plugin catalogs.
+        </p>
       </div>
     );
   }
@@ -41,8 +46,8 @@ export function SkillsView() {
       </div>
       <div className="min-h-0 flex-1">
         {pluginViewMode === "plugins"
-          ? <PluginsCatalogPage workspaceId={selectedWorkspaceId} />
-          : <SkillsCatalogPage workspaceId={selectedWorkspaceId} />}
+          ? <PluginsCatalogPage workspaceId={catalogWorkspaceId} managementScope={managementScope} />
+          : <SkillsCatalogPage workspaceId={catalogWorkspaceId} managementScope={managementScope} />}
       </div>
     </div>
   );

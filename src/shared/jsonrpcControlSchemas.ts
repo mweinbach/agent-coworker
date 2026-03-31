@@ -556,6 +556,44 @@ export const pluginCatalogSnapshotSchema = z.object({
   warnings: z.array(z.string()),
 }).strict();
 
+const pluginSourceDescriptorSchema = z.object({
+  kind: z.enum([
+    "github_repo",
+    "github_tree",
+    "github_blob",
+    "github_raw",
+    "github_shorthand",
+    "local_path",
+  ]),
+  raw: z.string(),
+  displaySource: z.string(),
+  url: z.string().optional(),
+  repo: z.string().optional(),
+  ref: z.string().optional(),
+  subdir: z.string().optional(),
+  refPath: z.string().optional(),
+  localPath: z.string().optional(),
+}).passthrough();
+
+const pluginInstallPreviewCandidateSchema = z.object({
+  pluginId: nonEmptyTrimmedStringSchema,
+  displayName: z.string(),
+  description: z.string(),
+  relativeRootPath: z.string(),
+  conflictsWithPluginId: z.string().optional(),
+  conflictsWithScope: pluginScopeSchema.optional(),
+  wouldBePrimary: z.boolean(),
+  shadowedPluginIds: z.array(z.string()),
+  diagnostics: z.array(skillInstallationDiagnosticSchema),
+}).passthrough();
+
+const pluginInstallPreviewSchema = z.object({
+  source: pluginSourceDescriptorSchema,
+  targetScope: pluginScopeSchema,
+  candidates: z.array(pluginInstallPreviewCandidateSchema),
+  warnings: z.array(z.string()),
+}).passthrough();
+
 const skillSourceDescriptorSchema = z.object({
   kind: z.enum([
     "skills.sh",
@@ -649,6 +687,13 @@ export const pluginsCatalogEventSchema = z.object({
   sessionId: nonEmptyTrimmedStringSchema.optional(),
   catalog: pluginCatalogSnapshotSchema,
   clearedMutationPendingKeys: z.array(z.string()).optional(),
+}).passthrough();
+
+export const pluginInstallPreviewEventSchema = z.object({
+  type: z.literal("plugin_install_preview"),
+  sessionId: nonEmptyTrimmedStringSchema.optional(),
+  preview: pluginInstallPreviewSchema,
+  fromUserPreviewRequest: z.boolean().optional(),
 }).passthrough();
 
 export const pluginDetailEventSchema = z.object({
@@ -854,6 +899,18 @@ export const pluginMutationRequestSchema = z.object({
   pluginId: nonEmptyTrimmedStringSchema,
 }).strict();
 
+export const pluginsInstallPreviewRequestSchema = z.object({
+  cwd: optionalNonEmptyTrimmedStringSchema,
+  sourceInput: z.string(),
+  targetScope: z.enum(["workspace", "user"]),
+}).strict();
+
+export const pluginsInstallRequestSchema = z.object({
+  cwd: optionalNonEmptyTrimmedStringSchema,
+  sourceInput: z.string(),
+  targetScope: z.enum(["workspace", "user"]),
+}).strict();
+
 export const skillInstallationCopyRequestSchema = z.object({
   cwd: optionalNonEmptyTrimmedStringSchema,
   installationId: nonEmptyTrimmedStringSchema,
@@ -970,6 +1027,8 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/plugins/read": pluginReadRequestSchema,
   "cowork/plugins/enable": pluginMutationRequestSchema,
   "cowork/plugins/disable": pluginMutationRequestSchema,
+  "cowork/plugins/install/preview": pluginsInstallPreviewRequestSchema,
+  "cowork/plugins/install": pluginsInstallRequestSchema,
   "cowork/memory/list": memoryListRequestSchema,
   "cowork/memory/upsert": memoryUpsertRequestSchema,
   "cowork/memory/delete": memoryDeleteRequestSchema,
@@ -1025,6 +1084,8 @@ export const jsonRpcControlResultSchemas = {
   "cowork/plugins/read": legacyEventEnvelope(pluginDetailEventSchema),
   "cowork/plugins/enable": legacyEventEnvelope(pluginsCatalogEventSchema),
   "cowork/plugins/disable": legacyEventEnvelope(pluginsCatalogEventSchema),
+  "cowork/plugins/install/preview": legacyEventEnvelope(pluginInstallPreviewEventSchema),
+  "cowork/plugins/install": legacyEventEnvelope(pluginsCatalogEventSchema),
   "cowork/memory/list": legacyEventEnvelope(memoryListEventSchema),
   "cowork/memory/upsert": legacyEventEnvelope(memoryListEventSchema),
   "cowork/memory/delete": legacyEventEnvelope(memoryListEventSchema),

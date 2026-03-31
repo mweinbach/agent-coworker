@@ -194,6 +194,48 @@ describe("plugins catalog page", () => {
     }
   });
 
+  test("renders the new plugin install affordance", async () => {
+    const previousState = useAppStore.getState();
+    let root: ReturnType<typeof createRoot> | null = null;
+    useAppStore.setState({
+      ...baseWorkspaceState(),
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          pluginsCatalog: {
+            warnings: [],
+            plugins: [],
+          },
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PluginsCatalogPage, { workspaceId }));
+      });
+
+      expect(container.textContent).toContain("+ New plugin");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
   test("renders enabled and disabled plugin sections with counts", async () => {
     const previousState = useAppStore.getState();
     let root: ReturnType<typeof createRoot> | null = null;

@@ -303,6 +303,118 @@ describe("skill store actions", () => {
     expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
   });
 
+  test("previewPluginInstall uses the management workspace when selected", async () => {
+    const state = createState();
+    const managementWorkspaceId = "ws-plugin-management";
+    state.selectedWorkspaceId = workspaceId;
+    state.pluginManagementWorkspaceId = managementWorkspaceId;
+    state.workspaceRuntimeById = {
+      [workspaceId]: {
+        ...defaultWorkspaceRuntime(),
+      },
+      [managementWorkspaceId]: {
+        ...defaultWorkspaceRuntime(),
+        serverUrl: "ws://management",
+        controlSessionId: "jsonrpc-control",
+      },
+    } as any;
+    state.workspaces = [
+      { id: workspaceId, path: "/tmp/workspace" },
+      { id: managementWorkspaceId, path: "/tmp/management" },
+    ];
+    const { get, set } = createStoreHarness(state);
+
+    const requests: Array<{ method: string; params: any }> = [];
+    RUNTIME.jsonRpcSockets.set(managementWorkspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string, params: any) => {
+        requests.push({ method, params });
+        return {
+          event: {
+            type: "plugin_install_preview",
+            sessionId: "jsonrpc-control",
+            preview: {
+              source: {
+                kind: "github_shorthand",
+                raw: "owner/repo",
+                displaySource: "https://github.com/owner/repo",
+                url: "https://github.com/owner/repo",
+                repo: "owner/repo",
+              },
+              targetScope: "workspace",
+              candidates: [],
+              warnings: [],
+            },
+          },
+        };
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    await createSkillActions(set as any, get as any).previewPluginInstall("owner/repo", "workspace");
+
+    expect(requests).toEqual([
+      {
+        method: "cowork/plugins/install/preview",
+        params: {
+          cwd: "/tmp/management",
+          sourceInput: "owner/repo",
+          targetScope: "workspace",
+        },
+      },
+    ]);
+    expect(state.workspaceRuntimeById[managementWorkspaceId].selectedPluginPreview?.targetScope).toBe("workspace");
+    expect(state.workspaceRuntimeById[managementWorkspaceId].skillMutationPendingKeys).toEqual({});
+  });
+
+  test("installPlugins registers its waiter on the management workspace", async () => {
+    const state = createState();
+    const managementWorkspaceId = "ws-plugin-management";
+    state.selectedWorkspaceId = workspaceId;
+    state.pluginManagementWorkspaceId = managementWorkspaceId;
+    state.workspaceRuntimeById = {
+      [workspaceId]: {
+        ...defaultWorkspaceRuntime(),
+      },
+      [managementWorkspaceId]: {
+        ...defaultWorkspaceRuntime(),
+        serverUrl: "ws://management",
+        controlSessionId: "jsonrpc-control",
+      },
+    } as any;
+    state.workspaces = [
+      { id: workspaceId, path: "/tmp/workspace" },
+      { id: managementWorkspaceId, path: "/tmp/management" },
+    ];
+    const { get, set } = createStoreHarness(state);
+
+    let waiterPendingKey: string | null = null;
+    let requestedParams: any = null;
+    RUNTIME.jsonRpcSockets.set(managementWorkspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (_method: string, params: any) => {
+        waiterPendingKey = RUNTIME.pluginInstallWaiters.get(managementWorkspaceId)?.pendingKey ?? null;
+        requestedParams = params;
+        throw new Error("request failed");
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    await expect(
+      createSkillActions(set as any, get as any).installPlugins("owner/repo", "user"),
+    ).rejects.toThrow("Unable to install plugins.");
+
+    expect(waiterPendingKey).toBe("plugin:install:user");
+    expect(requestedParams).toEqual({
+      cwd: "/tmp/management",
+      sourceInput: "owner/repo",
+      targetScope: "user",
+    });
+    expect(RUNTIME.pluginInstallWaiters.has(managementWorkspaceId)).toBe(false);
+  });
+
   test("selectSkill preserves loaded content after the JSON-RPC read succeeds", async () => {
     const state = createState();
     state.workspaceRuntimeById[workspaceId] = {

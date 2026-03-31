@@ -180,6 +180,88 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("plugin install preview and install mutate the workspace plugin catalog", async () => {
+    const tmpDir = await makeTmpProject();
+    const sourceRoot = `${tmpDir}/plugin-source/figma-toolkit`;
+    await fs.mkdir(`${sourceRoot}/.codex-plugin`, { recursive: true });
+    await fs.mkdir(`${sourceRoot}/skills/import-frame`, { recursive: true });
+    await fs.writeFile(
+      `${sourceRoot}/.codex-plugin/plugin.json`,
+      `${JSON.stringify({
+        name: "figma-toolkit",
+        description: "Figma helpers",
+        interface: {
+          displayName: "Figma Toolkit",
+        },
+      }, null, 2)}\n`,
+    );
+    await fs.writeFile(
+      `${sourceRoot}/skills/import-frame/SKILL.md`,
+      [
+        "---",
+        "name: import-frame",
+        "description: Import a Figma frame",
+        "---",
+        "",
+        "# Import frame",
+      ].join("\n"),
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+
+      const previewResponse = await rpc.request("cowork/plugins/install/preview", {
+        cwd: tmpDir,
+        sourceInput: sourceRoot,
+        targetScope: "workspace",
+      });
+      expect(previewResponse.result.event).toEqual(
+        expect.objectContaining({
+          type: "plugin_install_preview",
+          preview: expect.objectContaining({
+            targetScope: "workspace",
+            candidates: [
+              expect.objectContaining({
+                pluginId: "figma-toolkit",
+                displayName: "Figma Toolkit",
+                diagnostics: [],
+              }),
+            ],
+          }),
+        }),
+      );
+
+      const installResponse = await rpc.request("cowork/plugins/install", {
+        cwd: tmpDir,
+        sourceInput: sourceRoot,
+        targetScope: "workspace",
+      });
+      expect(installResponse.result.event).toEqual(
+        expect.objectContaining({
+          type: "plugins_catalog",
+          catalog: expect.objectContaining({
+            plugins: [
+              expect.objectContaining({
+                id: "figma-toolkit",
+                displayName: "Figma Toolkit",
+                scope: "workspace",
+              }),
+            ],
+          }),
+        }),
+      );
+
+      const installedPluginPath = `${tmpDir}/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json`;
+      await expect(fs.stat(installedPluginPath)).resolves.toBeDefined();
+
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("session state read returns the workspace control config bundle", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

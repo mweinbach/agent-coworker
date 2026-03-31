@@ -13,6 +13,7 @@ export type {
   MCPServerConfig,
   PluginCatalogEntry,
   PluginCatalogSnapshot,
+  PluginInstallPreview,
   ProviderName,
   SkillCatalogSnapshot,
   ServerErrorCode,

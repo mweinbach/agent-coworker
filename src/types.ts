@@ -305,6 +305,47 @@ export interface PluginCatalogSnapshot {
   warnings: string[];
 }
 
+export type PluginInstallTargetScope = "workspace" | "user";
+
+export type PluginSourceInputKind =
+  | "github_repo"
+  | "github_tree"
+  | "github_blob"
+  | "github_raw"
+  | "github_shorthand"
+  | "local_path";
+
+export interface PluginSourceDescriptor {
+  kind: PluginSourceInputKind;
+  raw: string;
+  displaySource: string;
+  url?: string;
+  repo?: string;
+  ref?: string;
+  subdir?: string;
+  refPath?: string;
+  localPath?: string;
+}
+
+export interface PluginInstallPreviewCandidate {
+  pluginId: string;
+  displayName: string;
+  description: string;
+  relativeRootPath: string;
+  conflictsWithPluginId?: string;
+  conflictsWithScope?: PluginScope;
+  wouldBePrimary: boolean;
+  shadowedPluginIds: string[];
+  diagnostics: SkillInstallationDiagnostic[];
+}
+
+export interface PluginInstallPreview {
+  source: PluginSourceDescriptor;
+  targetScope: PluginInstallTargetScope;
+  candidates: PluginInstallPreviewCandidate[];
+  warnings: string[];
+}
+
 export interface SkillPluginOwner {
   pluginId: string;
   name: string;

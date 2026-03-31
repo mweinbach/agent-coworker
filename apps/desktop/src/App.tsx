@@ -92,6 +92,8 @@ const ChatShell = memo(function ChatShell({
   const threads = useAppStore((s) => s.threads);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
+  const setPluginManagementWorkspace = useAppStore((s) => s.setPluginManagementWorkspace);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
@@ -116,6 +118,10 @@ const ChatShell = memo(function ChatShell({
     () => workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null,
     [selectedWorkspaceId, workspaces],
   );
+  const pluginManagementWorkspace = useMemo(
+    () => workspaces.find((workspace) => workspace.id === pluginManagementWorkspaceId) ?? null,
+    [pluginManagementWorkspaceId, workspaces],
+  );
   const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
   const busy = runtime?.busy === true;
   const showContextSidebar = view === "chat" && activeThread !== null;
@@ -123,7 +129,7 @@ const ChatShell = memo(function ChatShell({
     ? "Plugins"
     : activeThread?.title?.trim() || "New thread";
   const topBarSubtitle = view === "skills"
-    ? selectedWorkspace?.name ?? "Cowork"
+    ? pluginManagementWorkspace?.name ?? "Global"
     : activeWorkspace?.name ?? "Cowork";
   const canClearHardCap = runtime?.sessionUsage?.budgetStatus.stopTriggered === true
     && runtime?.transcriptOnly !== true
@@ -159,6 +165,17 @@ const ChatShell = memo(function ChatShell({
         onToggleContextSidebar={toggleContextSidebar}
         title={topBarTitle}
         subtitle={topBarSubtitle}
+        managementMode={view === "skills" ? "plugins" : "thread"}
+        managementWorkspaceId={pluginManagementWorkspaceId}
+        managementWorkspaces={workspaces.map((workspace) => ({
+          id: workspace.id,
+          name: workspace.name,
+        }))}
+        onSelectManagementWorkspace={
+          view === "skills"
+            ? (workspaceId: string | null) => void setPluginManagementWorkspace(workspaceId)
+            : undefined
+        }
         sessionUsage={view === "chat" ? (runtime?.sessionUsage ?? null) : null}
         lastTurnUsage={view === "chat" ? (runtime?.lastTurnUsage ?? null) : null}
         canClearHardCap={canClearHardCap}

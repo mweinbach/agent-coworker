@@ -247,6 +247,7 @@ const persistedThreadSchema = z.object({
 const persistedUiSchema = z.object({
   selectedWorkspaceId: normalizedNullableSelectionSchema.optional(),
   selectedThreadId: normalizedNullableSelectionSchema.optional(),
+  pluginManagementWorkspaceId: normalizedNullableSelectionSchema.optional(),
   view: normalizedViewSchema.optional(),
   settingsPage: normalizedSettingsPageSchema.optional(),
   lastNonSettingsView: normalizedViewSchema.optional(),
@@ -258,6 +259,7 @@ const persistedUiSchema = z.object({
 }).passthrough().transform((ui): CachedDesktopUiState => ({
   selectedWorkspaceId: ui.selectedWorkspaceId ?? null,
   selectedThreadId: ui.selectedThreadId ?? null,
+  pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId ?? null,
   view: ui.view ?? "chat",
   settingsPage: ui.settingsPage ?? "providers",
   lastNonSettingsView: ui.lastNonSettingsView ?? "chat",
@@ -313,6 +315,10 @@ function buildResolvedDesktopUiState(
     normalizedUi.selectedWorkspaceId && workspaces.some((workspace) => workspace.id === normalizedUi.selectedWorkspaceId)
       ? normalizedUi.selectedWorkspaceId
       : fallbackSelectedWorkspaceId;
+  const pluginManagementWorkspaceId =
+    normalizedUi.pluginManagementWorkspaceId && workspaces.some((workspace) => workspace.id === normalizedUi.pluginManagementWorkspaceId)
+      ? normalizedUi.pluginManagementWorkspaceId
+      : null;
   const workspaceThreads = selectedWorkspaceId
     ? threads
         .filter((thread) => thread.workspaceId === selectedWorkspaceId)
@@ -340,6 +346,7 @@ function buildResolvedDesktopUiState(
   return {
     selectedWorkspaceId,
     selectedThreadId,
+    pluginManagementWorkspaceId,
     view: normalizedUi.view ?? "chat",
     settingsPage: normalizeSettingsPageId(normalizedUi.settingsPage),
     lastNonSettingsView,

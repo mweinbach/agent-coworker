@@ -4,6 +4,7 @@ type JsdomGlobalKey =
   | "window"
   | "document"
   | "navigator"
+  | "CSS"
   | "HTMLElement"
   | "HTMLButtonElement"
   | "HTMLInputElement"
@@ -11,6 +12,7 @@ type JsdomGlobalKey =
   | "HTMLSelectElement"
   | "Image"
   | "MutationObserver"
+  | "NodeFilter"
   | "SVGElement"
   | "Node"
   | "getComputedStyle"
@@ -54,14 +56,20 @@ function restoreGlobalProperty({ key, descriptor }: SavedGlobalDescriptor) {
   delete (globalThis as Record<string, unknown>)[key];
 }
 
+function cssEscape(value: string): string {
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, (char) => `\\${char}`);
+}
+
 export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", {
     url: "http://localhost",
   });
+  const cssShim = { escape: cssEscape };
   const saved: SavedGlobalDescriptor[] = [
     "window",
     "document",
     "navigator",
+    "CSS",
     "HTMLElement",
     "HTMLButtonElement",
     "HTMLInputElement",
@@ -69,6 +77,7 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
     "HTMLSelectElement",
     "Image",
     "MutationObserver",
+    "NodeFilter",
     "SVGElement",
     "Node",
     "getComputedStyle",
@@ -88,6 +97,13 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
   setGlobalProperty("HTMLSelectElement", dom.window.HTMLSelectElement);
   setGlobalProperty("Image", dom.window.Image);
   setGlobalProperty("MutationObserver", dom.window.MutationObserver);
+  Object.defineProperty(dom.window, "CSS", {
+    configurable: true,
+    writable: true,
+    value: dom.window.CSS ?? cssShim,
+  });
+  setGlobalProperty("CSS", dom.window.CSS ?? cssShim);
+  setGlobalProperty("NodeFilter", dom.window.NodeFilter);
   setGlobalProperty("SVGElement", dom.window.SVGElement);
   setGlobalProperty("Node", dom.window.Node);
   setGlobalProperty("getComputedStyle", dom.window.getComputedStyle.bind(dom.window));

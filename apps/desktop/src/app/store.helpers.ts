@@ -160,6 +160,7 @@ export type AppStoreState = {
   threads: ThreadRecord[];
 
   selectedWorkspaceId: string | null;
+  pluginManagementWorkspaceId: string | null;
   selectedThreadId: string | null;
 
   workspaceRuntimeById: Record<string, WorkspaceRuntime>;
@@ -234,6 +235,9 @@ export type AppStoreState = {
   refreshSkillsCatalog: () => Promise<void>;
   refreshPluginsCatalog: () => Promise<void>;
   selectPlugin: (pluginId: string | null) => Promise<void>;
+  setPluginManagementWorkspace: (workspaceId: string | null) => Promise<void>;
+  previewPluginInstall: (sourceInput: string, targetScope: "workspace" | "user") => Promise<void>;
+  installPlugins: (sourceInput: string, targetScope: "workspace" | "user") => Promise<void>;
   enablePlugin: (pluginId: string) => Promise<void>;
   disablePlugin: (pluginId: string) => Promise<void>;
   setPluginViewMode: (mode: "plugins" | "skills") => void;

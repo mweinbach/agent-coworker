@@ -476,6 +476,7 @@ export class AgentSession {
       syncSessionBackupAvailability: async () => {},
       refreshProviderStatus: async () => await this.getProviderCatalogManager().refreshProviderStatus(),
       emitProviderCatalog: async () => await this.getProviderCatalogManager().emitProviderCatalog(),
+      emitMcpServers: async () => await this.getMcpManager().emitMcpServers(),
       getSkillMutationBlockReason: () =>
         this.deps.getSkillMutationBlockReasonImpl?.(this.state.config.workingDirectory) ?? null,
       refreshSkillsAcrossWorkspaceSessions: async () => {
@@ -1024,6 +1025,14 @@ export class AgentSession {
 
   async disablePlugin(pluginId: string) {
     await this.getSkillManager().disablePlugin(pluginId);
+  }
+
+  async previewPluginInstall(sourceInput: string, targetScope: "workspace" | "user") {
+    await this.getSkillManager().previewPluginInstall(sourceInput, targetScope);
+  }
+
+  async installPlugins(sourceInput: string, targetScope: "workspace" | "user") {
+    await this.getSkillManager().installPlugins(sourceInput, targetScope);
   }
 
   async getSkillInstallation(installationId: string) {

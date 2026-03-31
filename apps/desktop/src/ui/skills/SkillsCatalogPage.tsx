@@ -4,7 +4,13 @@ import { HeaderAndFilters } from "./HeaderAndFilters";
 import { InstallationCardGrid } from "./InstallationCardGrid";
 import { SkillDetailDialog } from "./SkillDetailDialog";
 
-export function SkillsCatalogPage({ workspaceId }: { workspaceId: string }) {
+export function SkillsCatalogPage({
+  workspaceId,
+  managementScope = "workspace",
+}: {
+  workspaceId: string;
+  managementScope?: "workspace" | "global";
+}) {
   const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
   const selectSkillInstallation = useAppStore((s) => s.selectSkillInstallation);
 
@@ -17,6 +23,9 @@ export function SkillsCatalogPage({ workspaceId }: { workspaceId: string }) {
 
   const installations = useMemo(() => {
     let items = [...(catalog?.installations ?? [])];
+    if (managementScope === "global") {
+      items = items.filter((installation) => installation.scope === "global");
+    }
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -32,7 +41,7 @@ export function SkillsCatalogPage({ workspaceId }: { workspaceId: string }) {
     return items.sort((left, right) =>
       `${left.name}:${left.scope}:${left.installationId}`.localeCompare(`${right.name}:${right.scope}:${right.installationId}`),
     );
-  }, [catalog, searchQuery]);
+  }, [catalog, managementScope, searchQuery]);
 
   const effectiveSkills = useMemo(() => {
     return installations.filter((i) => i.state === "effective");
@@ -47,6 +56,7 @@ export function SkillsCatalogPage({ workspaceId }: { workspaceId: string }) {
       <div className="mx-auto max-w-6xl">
         <HeaderAndFilters
           workspaceId={workspaceId}
+          managementScope={managementScope}
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
         />

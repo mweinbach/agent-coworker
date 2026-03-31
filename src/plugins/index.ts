@@ -34,3 +34,13 @@ export {
   setPluginSkillEnabled,
   type PluginOverrideSnapshot,
 } from "./overrides";
+export {
+  installPluginsFromSource,
+  resolvePluginSourceDescriptorForInstallInput,
+} from "./operations";
+export {
+  buildPluginInstallPreview,
+  materializePluginSource,
+  resolvePluginSource,
+  type MaterializedPluginSource,
+} from "./sourceResolver";

@@ -1320,8 +1320,16 @@ export function createControlSocketHelpers(
     workspaceId: string,
     method: string,
     params: Record<string, unknown>,
+    errorDetailOut?: { message?: string },
   ): Promise<boolean> {
+    const setErrorDetail = (message: string) => {
+      if (errorDetailOut) {
+        errorDetailOut.message = message;
+      }
+    };
+
     if (isWorkspaceDisposed(workspaceId)) {
+      setErrorDetail("Workspace control session was disposed.");
       return false;
     }
     try {
@@ -1336,6 +1344,7 @@ export function createControlSocketHelpers(
           ? [event]
           : [];
       if (isWorkspaceDisposed(workspaceId)) {
+        setErrorDetail("Workspace control session was disposed.");
         return false;
       }
       if (normalizedEvents.length === 0) {
@@ -1346,10 +1355,14 @@ export function createControlSocketHelpers(
         applyJsonRpcControlEvent(get, set, workspaceId, nextEvent);
         if (nextEvent.type === "error") {
           ok = false;
+          if (typeof (nextEvent as Extract<ServerEvent, { type: "error" }>).message === "string") {
+            setErrorDetail((nextEvent as Extract<ServerEvent, { type: "error" }>).message);
+          }
         }
       }
       return ok;
-    } catch {
+    } catch (err) {
+      setErrorDetail(err instanceof Error ? err.message : String(err));
       return false;
     }
   }

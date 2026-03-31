@@ -291,13 +291,24 @@ export function createSkillActions(
           },
         },
       }));
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/install/preview", {
-        cwd,
-        sourceInput,
-        targetScope,
-      });
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+      const rpcError: { message?: string } = {};
+      const ok = await requestJsonRpcControlEvent(
+        get,
+        set,
+        workspaceId,
+        "cowork/plugins/install/preview",
+        {
+          cwd,
+          sourceInput,
+          targetScope,
+        },
+        rpcError,
+      );
       if (!ok) {
-        clearFailedPluginMutationSend(set, workspaceId, key, "Unable to preview plugin install.");
+        const detail = rpcError.message?.trim() || "Unable to preview plugin install.";
+        clearFailedPluginMutationSend(set, workspaceId, key, detail);
       }
     },
 

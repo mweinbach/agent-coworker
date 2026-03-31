@@ -236,6 +236,81 @@ describe("plugins catalog page", () => {
     }
   });
 
+  test("new plugin dialog opens from a clean state", async () => {
+    const previousState = useAppStore.getState();
+    let root: ReturnType<typeof createRoot> | null = null;
+    useAppStore.setState({
+      ...baseWorkspaceState(),
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          selectedPluginPreview: {
+            source: {
+              kind: "local_path",
+              raw: "/tmp/old-plugin",
+              displaySource: "/tmp/old-plugin",
+              localPath: "/tmp/old-plugin",
+            },
+            targetScope: "workspace",
+            warnings: [],
+            candidates: [{
+              pluginId: "old-plugin",
+              displayName: "Old Plugin",
+              description: "Old preview should be cleared",
+              relativeRootPath: ".",
+              wouldBePrimary: true,
+              shadowedPluginIds: [],
+              diagnostics: [],
+            }],
+          },
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PluginsCatalogPage, { workspaceId }));
+      });
+
+      const newPluginButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.includes("+ New plugin"),
+      );
+      if (!(newPluginButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing new plugin button");
+      }
+
+      await act(async () => {
+        newPluginButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const dialogText = harness.dom.window.document.body.textContent ?? "";
+      expect(dialogText).toContain("Install plugin from source");
+      expect(dialogText).not.toContain("Old Plugin");
+      expect(dialogText).not.toContain("/tmp/old-plugin");
+
+      const textarea = harness.dom.window.document.querySelector("textarea");
+      expect(textarea?.getAttribute("placeholder")).toContain("https://github.com/example/codex-plugin-repo");
+      expect((textarea as HTMLTextAreaElement | null)?.value ?? "").toBe("");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
   test("renders enabled and disabled plugin sections with counts", async () => {
     const previousState = useAppStore.getState();
     let root: ReturnType<typeof createRoot> | null = null;

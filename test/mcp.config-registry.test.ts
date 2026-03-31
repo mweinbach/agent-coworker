@@ -18,6 +18,10 @@ function makeConfig(workspaceRoot: string, userHome: string, builtInConfigDir: s
     knowledgeCutoff: "unknown",
     projectAgentDir: path.join(workspaceRoot, ".agent"),
     userAgentDir: path.join(userHome, ".agent"),
+    workspaceAgentsDir: path.join(workspaceRoot, ".agents"),
+    userAgentsDir: path.join(userHome, ".agents"),
+    workspacePluginsDir: path.join(workspaceRoot, ".agents", "plugins"),
+    userPluginsDir: path.join(userHome, ".agents", "plugins"),
     builtInDir: path.dirname(builtInConfigDir),
     builtInConfigDir,
     skillsDirs: [],
@@ -100,6 +104,62 @@ describe("mcp config registry", () => {
       expect(snapshot.warnings).toHaveLength(1);
       expect(snapshot.warnings[0]).toContain("workspace");
       expect(snapshot.warnings[0]).toContain(path.join(workspace, ".cowork", "mcp-servers.json"));
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin MCP servers retain oauth auth config and plugin scope metadata", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-oauth-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-oauth-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-oauth-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "oauth-toolkit");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "oauth-toolkit",
+          description: "Plugin oauth helpers",
+          interface: { displayName: "OAuth Toolkit" },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".mcp.json"),
+        `${JSON.stringify({
+          mcpServers: {
+            oauthPlugin: {
+              type: "http",
+              url: "https://mcp.plugin.example.com",
+              auth: {
+                type: "oauth",
+                oauthMode: "auto",
+                scope: "plugin.read",
+              },
+            },
+          },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const snapshot = await loadMCPConfigRegistry(config);
+      const server = snapshot.servers.find((entry) => entry.name === "oauthPlugin");
+      expect(server).toBeTruthy();
+      expect(server?.source).toBe("plugin");
+      expect(server?.pluginId).toBe("oauth-toolkit");
+      expect(server?.pluginDisplayName).toBe("OAuth Toolkit");
+      expect(server?.pluginScope).toBe("workspace");
+      expect(server?.inherited).toBe(false);
+      expect(server?.auth).toEqual({
+        type: "oauth",
+        oauthMode: "auto",
+        scope: "plugin.read",
+      });
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

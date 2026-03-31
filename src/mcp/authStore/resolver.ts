@@ -42,7 +42,7 @@ export async function resolveMCPServerAuthState(
   const files = await readMCPAuthFiles(config);
   const selected = selectCredentialRecord({
     byScope: files,
-    source: server.source,
+    source: server,
     serverName: server.name,
   });
 
@@ -161,7 +161,7 @@ export async function readMCPServerOAuthPending(opts: {
   const files = await readMCPAuthFiles(opts.config);
   const selected = selectCredentialRecord({
     byScope: files,
-    source: opts.server.source,
+    source: opts.server,
     serverName: opts.server.name,
   });
   return {
@@ -177,7 +177,7 @@ export async function readMCPServerOAuthClientInformation(opts: {
   const files = await readMCPAuthFiles(opts.config);
   const selected = selectCredentialRecord({
     byScope: files,
-    source: opts.server.source,
+    source: opts.server,
     serverName: opts.server.name,
   });
   return {

@@ -97,7 +97,7 @@ describe("skills catalog page", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(SkillsCatalogPage, { workspaceId: "ws-1" }));
+        root.render(createElement(SkillsCatalogPage, { workspaceId: "ws-1", searchQuery: "", setSearchQuery: () => {} }));
       });
 
       expect(container.firstElementChild?.className).toContain("app-skills-view");
@@ -142,7 +142,7 @@ describe("skills catalog page", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(SkillsCatalogPage, { workspaceId: "ws-1" }));
+        root.render(createElement(SkillsCatalogPage, { workspaceId: "ws-1", searchQuery: "", setSearchQuery: () => {} }));
       });
 
       expect(container.textContent).toContain("No skills found");

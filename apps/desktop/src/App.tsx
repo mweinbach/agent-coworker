@@ -95,6 +95,7 @@ const ChatShell = memo(function ChatShell({
   const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
   const setPluginManagementWorkspace = useAppStore((s) => s.setPluginManagementWorkspace);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
+  const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
@@ -125,8 +126,12 @@ const ChatShell = memo(function ChatShell({
   const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
   const busy = runtime?.busy === true;
   const showContextSidebar = view === "chat" && activeThread !== null;
+  const catalogWorkspaceId = pluginManagementWorkspaceId ?? selectedWorkspaceId;
+  const pluginViewMode = catalogWorkspaceId
+    ? workspaceRuntimeById[catalogWorkspaceId]?.pluginViewMode ?? "plugins"
+    : "plugins";
   const topBarTitle = view === "skills"
-    ? "Plugins"
+    ? (pluginViewMode === "skills" ? "Skills" : "Plugins")
     : activeThread?.title?.trim() || "New thread";
   const topBarSubtitle = view === "skills"
     ? pluginManagementWorkspace?.name ?? "Global"

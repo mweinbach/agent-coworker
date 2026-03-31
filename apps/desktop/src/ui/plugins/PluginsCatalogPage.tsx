@@ -1,67 +1,32 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useAppStore } from "../../app/store";
 import { PluginCardGrid } from "./PluginCardGrid";
 import { PluginDetailDialog } from "./PluginDetailDialog";
 import { InstallPluginDialog } from "./InstallPluginDialog";
 import { Button } from "../../components/ui/button";
 import { Badge } from "../../components/ui/badge";
-import { Input } from "../../components/ui/input";
-import { MessageSquareIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { RefreshCwIcon } from "lucide-react";
 
 export function PluginsCatalogPage({
   workspaceId,
   managementScope = "workspace",
+  searchQuery,
+  setSearchQuery,
 }: {
   workspaceId: string;
   managementScope?: "workspace" | "global";
+  searchQuery: string;
+  setSearchQuery: (query: string) => void;
 }) {
   const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
   const refreshPluginsCatalog = useAppStore((s) => s.refreshPluginsCatalog);
   const selectPlugin = useAppStore((s) => s.selectPlugin);
-  const workspaces = useAppStore((s) => s.workspaces);
-  const threads = useAppStore((s) => s.threads);
-  const selectedThreadId = useAppStore((s) => s.selectedThreadId);
-  const selectThread = useAppStore((s) => s.selectThread);
-  const newThread = useAppStore((s) => s.newThread);
-
-  const [searchQuery, setSearchQuery] = useState("");
 
   const rt = wsRtById[workspaceId];
   const catalog = rt?.pluginsCatalog ?? null;
   const pluginsLoading = rt?.pluginsLoading ?? false;
   const pluginsError = rt?.pluginsError ?? null;
   const showLoadingState = pluginsLoading && catalog === null;
-
-  const workspace = useMemo(
-    () => workspaces.find((entry) => entry.id === workspaceId) ?? null,
-    [workspaceId, workspaces],
-  );
-
-  const workspaceThreads = useMemo(
-    () =>
-      threads
-        .filter((thread) => thread.workspaceId === workspaceId)
-        .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt)),
-    [threads, workspaceId],
-  );
-
-  const activeThread = useMemo(() => {
-    if (!selectedThreadId) {
-      return workspaceThreads[0] ?? null;
-    }
-    return workspaceThreads.find((thread) => thread.id === selectedThreadId) ?? workspaceThreads[0] ?? null;
-  }, [selectedThreadId, workspaceThreads]);
-
-  const sessionLabel = workspaceThreads.length === 1 ? "1 session" : `${workspaceThreads.length} sessions`;
-  const chatButtonLabel = workspaceThreads.length > 0 ? "Open chat" : "New thread";
-
-  const handleOpenChat = async () => {
-    if (activeThread) {
-      await selectThread(activeThread.id);
-      return;
-    }
-    await newThread({ workspaceId });
-  };
 
   const plugins = useMemo(() => {
     let items = [...(catalog?.plugins ?? [])];
@@ -78,63 +43,29 @@ export function PluginsCatalogPage({
       );
     }
     return items.sort((left, right) => left.displayName.localeCompare(right.displayName));
-  }, [catalog, searchQuery]);
+  }, [catalog, searchQuery, managementScope]);
 
   const enabledPlugins = useMemo(() => plugins.filter((plugin) => plugin.enabled), [plugins]);
   const disabledPlugins = useMemo(() => plugins.filter((plugin) => !plugin.enabled), [plugins]);
 
-  const scopeLabel = managementScope === "global" ? "Global plugins" : "Plugins";
-  const ownerLabel = managementScope === "global"
-    ? "your global library"
-    : workspace?.name ?? "this workspace";
   const emptyLabel = managementScope === "global"
     ? "No Codex-style plugins were discovered in your global library."
     : "No Codex-style plugins were discovered for this workspace.";
 
   return (
-    <div className="app-skills-view h-full min-h-0 overflow-y-auto px-6 py-5">
+    <div className="app-skills-view h-full min-h-0 overflow-y-auto px-6 py-4">
       <div className="mx-auto max-w-6xl">
-        <div className="mb-6 flex flex-col gap-4">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <h1 className="mb-1 text-[2rem] font-semibold tracking-tight">Plugins</h1>
-              <p className="text-sm text-muted-foreground">
-                {scopeLabel} for <span className="font-medium text-foreground/80">{ownerLabel}</span>
-                <span className="mx-2 text-muted-foreground/65">•</span>
-                {sessionLabel}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-muted-foreground hover:text-foreground"
-                onClick={() => void handleOpenChat()}
-              >
-                <MessageSquareIcon className="mr-2 h-4 w-4" />
-                {chatButtonLabel}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-muted-foreground hover:text-foreground"
-                onClick={() => void refreshPluginsCatalog()}
-              >
-                <RefreshCwIcon className="mr-2 h-4 w-4" />
-                Refresh
-              </Button>
-              <InstallPluginDialog workspaceId={workspaceId} />
-              <div className="relative w-60">
-                <SearchIcon className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder="Search plugins"
-                  className="h-8 border-transparent bg-muted/30 pl-9 focus-visible:border-ring focus-visible:bg-background"
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                />
-              </div>
-            </div>
-          </div>
+        <div className="mb-4 flex items-center justify-end gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-muted-foreground hover:text-foreground"
+            onClick={() => void refreshPluginsCatalog()}
+          >
+            <RefreshCwIcon className="mr-1.5 h-4 w-4" />
+            Refresh
+          </Button>
+          <InstallPluginDialog workspaceId={workspaceId} />
         </div>
 
         <div className="space-y-8">

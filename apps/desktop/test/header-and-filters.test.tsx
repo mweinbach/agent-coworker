@@ -85,19 +85,10 @@ describe("skills header and filters", () => {
       const text = await waitForTextContent(
         container,
         (value) =>
-          value.includes("Skills")
-          && value.includes("Skills for")
-          && value.includes("Cowork Test")
-          && value.includes("1 session")
-          && value.includes("Open chat")
+          value.includes("Open chat")
           && value.includes("Refresh"),
       );
 
-      expect(text).toContain("Skills");
-      expect(text).toContain("Skills for");
-      expect(text).toContain("Cowork Test");
-      expect(text).toContain("1 session");
-      expect(text).not.toContain("Current chat");
       expect(text).toContain("Open chat");
       expect(text).toContain("Refresh");
     } finally {

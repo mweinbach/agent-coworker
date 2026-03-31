@@ -257,11 +257,13 @@ export function AppTopBar({
                 compact
               >
                 <span className="app-topbar__thread-title truncate">{title}</span>
-                <span className="app-topbar__thread-separator text-muted-foreground/52" aria-hidden="true">|</span>
+                <span className="app-topbar__thread-separator mx-1.5 text-muted-foreground/52" aria-hidden="true">|</span>
                 <SelectValue placeholder="Global">
-                  {managementWorkspaceId
-                    ? managementWorkspaces.find((workspace) => workspace.id === managementWorkspaceId)?.name ?? "Global"
-                    : "Global"}
+                  <span className="italic">
+                    {managementWorkspaceId
+                      ? managementWorkspaces.find((workspace) => workspace.id === managementWorkspaceId)?.name ?? "Global"
+                      : "Global"}
+                  </span>
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>

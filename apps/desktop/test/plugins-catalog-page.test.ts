@@ -131,7 +131,7 @@ describe("plugins catalog page", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(PluginsCatalogPage, { workspaceId }));
+        root.render(createElement(PluginsCatalogPage, { workspaceId, searchQuery: "", setSearchQuery: () => {} }));
       });
 
       expect(container.textContent).toContain("Loading...");
@@ -173,7 +173,7 @@ describe("plugins catalog page", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(PluginsCatalogPage, { workspaceId }));
+        root.render(createElement(PluginsCatalogPage, { workspaceId, searchQuery: "", setSearchQuery: () => {} }));
       });
 
       expect(container.textContent).toContain("Connection issue");
@@ -217,7 +217,7 @@ describe("plugins catalog page", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(PluginsCatalogPage, { workspaceId }));
+        root.render(createElement(PluginsCatalogPage, { workspaceId, searchQuery: "", setSearchQuery: () => {} }));
       });
 
       expect(container.textContent).toContain("+ New plugin");
@@ -274,7 +274,7 @@ describe("plugins catalog page", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(PluginsCatalogPage, { workspaceId }));
+        root.render(createElement(PluginsCatalogPage, { workspaceId, searchQuery: "", setSearchQuery: () => {} }));
       });
 
       const newPluginButton = Array.from(container.querySelectorAll("button")).find(
@@ -367,7 +367,7 @@ describe("plugins catalog page", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(PluginsCatalogPage, { workspaceId }));
+        root.render(createElement(PluginsCatalogPage, { workspaceId, searchQuery: "", setSearchQuery: () => {} }));
       });
 
       expect(container.textContent).toContain("Enabled");

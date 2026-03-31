@@ -1,20 +1,54 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import { MessageSquareIcon, RefreshCwIcon } from "lucide-react";
 import { useAppStore } from "../../app/store";
-import { HeaderAndFilters } from "./HeaderAndFilters";
+import { Button } from "../../components/ui/button";
 import { InstallationCardGrid } from "./InstallationCardGrid";
+import { InstallSkillDialog } from "./InstallSkillDialog";
 import { SkillDetailDialog } from "./SkillDetailDialog";
 
 export function SkillsCatalogPage({
   workspaceId,
   managementScope = "workspace",
+  searchQuery,
+  setSearchQuery,
 }: {
   workspaceId: string;
   managementScope?: "workspace" | "global";
+  searchQuery: string;
+  setSearchQuery: (query: string) => void;
 }) {
   const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
   const selectSkillInstallation = useAppStore((s) => s.selectSkillInstallation);
+  const refreshSkillsCatalog = useAppStore((s) => s.refreshSkillsCatalog);
+  const threads = useAppStore((s) => s.threads);
+  const selectedThreadId = useAppStore((s) => s.selectedThreadId);
+  const selectThread = useAppStore((s) => s.selectThread);
+  const newThread = useAppStore((s) => s.newThread);
 
-  const [searchQuery, setSearchQuery] = useState("");
+  const workspaceThreads = useMemo(
+    () =>
+      threads
+        .filter((thread) => thread.workspaceId === workspaceId)
+        .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt)),
+    [threads, workspaceId],
+  );
+
+  const activeThread = useMemo(() => {
+    if (!selectedThreadId) {
+      return workspaceThreads[0] ?? null;
+    }
+    return workspaceThreads.find((thread) => thread.id === selectedThreadId) ?? workspaceThreads[0] ?? null;
+  }, [selectedThreadId, workspaceThreads]);
+
+  const chatButtonLabel = workspaceThreads.length > 0 ? "Open chat" : "New thread";
+
+  const handleOpenChat = async () => {
+    if (activeThread) {
+      await selectThread(activeThread.id);
+      return;
+    }
+    await newThread({ workspaceId });
+  };
 
   const rt = wsRtById[workspaceId];
   const catalog = rt?.skillsCatalog ?? null;
@@ -52,16 +86,31 @@ export function SkillsCatalogPage({
   }, [installations]);
 
   return (
-    <div className="app-skills-view h-full min-h-0 overflow-y-auto px-6 py-5">
+    <div className="app-skills-view h-full min-h-0 overflow-y-auto px-6 py-4">
       <div className="mx-auto max-w-6xl">
-        <HeaderAndFilters
-          workspaceId={workspaceId}
-          managementScope={managementScope}
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
-        />
+        <div className="mb-4 flex items-center justify-end gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-muted-foreground hover:text-foreground"
+            onClick={() => void handleOpenChat()}
+          >
+            <MessageSquareIcon className="mr-1.5 h-4 w-4" />
+            {chatButtonLabel}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-muted-foreground hover:text-foreground"
+            onClick={() => void refreshSkillsCatalog()}
+          >
+            <RefreshCwIcon className="mr-1.5 h-4 w-4" />
+            Refresh
+          </Button>
+          <InstallSkillDialog workspaceId={workspaceId} />
+        </div>
 
-        <div className="space-y-8">
+        <div className="space-y-6">
           {effectiveSkills.length > 0 && (
             <section>
               <h2 className="text-lg font-semibold mb-4">Installed</h2>

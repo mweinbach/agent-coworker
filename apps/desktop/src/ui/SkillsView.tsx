@@ -1,5 +1,8 @@
+import { useState } from "react";
+import { SearchIcon } from "lucide-react";
 import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { SkillsCatalogPage } from "./skills";
 import { PluginsCatalogPage } from "./plugins/PluginsCatalogPage";
 
@@ -10,6 +13,7 @@ export function SkillsView() {
   const managementScope = pluginManagementWorkspaceId ? "workspace" : "global";
   const pluginViewMode = useAppStore((s) => s.workspaceRuntimeById[catalogWorkspaceId ?? ""]?.pluginViewMode ?? "plugins");
   const setPluginViewMode = useAppStore((s) => s.setPluginViewMode);
+  const [searchQuery, setSearchQuery] = useState("");
 
   if (!catalogWorkspaceId) {
     return (
@@ -24,12 +28,12 @@ export function SkillsView() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b border-border/50 px-6 pt-5 pb-4">
+      <div className="flex items-center justify-between gap-4 px-6 py-2.5 border-b border-border/50">
         <div className="inline-flex rounded-lg border border-border/60 bg-muted/20 p-1">
           <Button
             size="sm"
             variant={pluginViewMode === "plugins" ? "secondary" : "ghost"}
-            className="h-8 rounded-md px-3"
+            className="h-7 rounded-md px-2.5 text-xs"
             onClick={() => void setPluginViewMode("plugins")}
           >
             Plugins
@@ -37,17 +41,26 @@ export function SkillsView() {
           <Button
             size="sm"
             variant={pluginViewMode === "skills" ? "secondary" : "ghost"}
-            className="h-8 rounded-md px-3"
+            className="h-7 rounded-md px-2.5 text-xs"
             onClick={() => void setPluginViewMode("skills")}
           >
             Skills
           </Button>
         </div>
+        <div className="relative w-48">
+          <SearchIcon className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder={pluginViewMode === "skills" ? "Search skills" : "Search plugins"}
+            className="h-7 border-transparent bg-muted/30 pl-8 text-xs focus-visible:border-ring focus-visible:bg-background"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 overflow-hidden">
         {pluginViewMode === "plugins"
-          ? <PluginsCatalogPage workspaceId={catalogWorkspaceId} managementScope={managementScope} />
-          : <SkillsCatalogPage workspaceId={catalogWorkspaceId} managementScope={managementScope} />}
+          ? <PluginsCatalogPage workspaceId={catalogWorkspaceId} managementScope={managementScope} searchQuery={searchQuery} setSearchQuery={setSearchQuery} />
+          : <SkillsCatalogPage workspaceId={catalogWorkspaceId} managementScope={managementScope} searchQuery={searchQuery} setSearchQuery={setSearchQuery} />}
       </div>
     </div>
   );

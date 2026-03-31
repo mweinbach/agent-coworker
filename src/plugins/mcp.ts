@@ -88,27 +88,35 @@ export function parsePluginMcpDocument(rawJson: string, filePath = ".mcp.json"):
 
   const servers = Object.entries(validated.data.mcpServers)
     .map(([name, config]) => {
-      const normalized =
+      const normalized: MCPServerConfig =
         "transport" in config
-          ? config
-          : {
-              transport: {
-                type: config.type,
-                ...("command" in config ? {
+          ? { name, ...config }
+          : "command" in config
+            ? {
+                name,
+                transport: {
+                  type: "stdio",
                   command: config.command,
                   ...(config.args ? { args: config.args } : {}),
                   ...(config.env ? { env: config.env } : {}),
                   ...(config.cwd ? { cwd: config.cwd } : {}),
-                } : {
+                },
+                ...(config.required !== undefined ? { required: config.required } : {}),
+                ...(config.retries !== undefined ? { retries: config.retries } : {}),
+                ...(config.auth ? { auth: config.auth } : {}),
+              }
+            : {
+                name,
+                transport: {
+                  type: config.type,
                   url: config.url,
                   ...(config.headers ? { headers: config.headers } : {}),
-                }),
-              },
-              ...(config.required !== undefined ? { required: config.required } : {}),
-              ...(config.retries !== undefined ? { retries: config.retries } : {}),
-              ...(config.auth ? { auth: config.auth } : {}),
-            };
-      return { name, ...normalized };
+                },
+                ...(config.required !== undefined ? { required: config.required } : {}),
+                ...(config.retries !== undefined ? { retries: config.retries } : {}),
+                ...(config.auth ? { auth: config.auth } : {}),
+              };
+      return normalized;
     })
     .sort((left, right) => left.name.localeCompare(right.name));
 

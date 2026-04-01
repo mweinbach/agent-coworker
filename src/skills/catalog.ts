@@ -340,6 +340,14 @@ function buildPluginOwner(plugin: PluginCatalogEntry): SkillPluginOwner {
   };
 }
 
+function buildPluginSkillInstallationId(
+  plugin: PluginCatalogEntry,
+  skill: PluginCatalogEntry["skills"][number],
+): string {
+  const relativeSkillRoot = path.relative(plugin.rootDir, skill.rootDir).split(path.sep).join("/");
+  return `plugin:${plugin.scope}:${plugin.id}:${relativeSkillRoot || skill.rawName}`;
+}
+
 export function getSkillScopeDescriptors(skillsDirs: string[]): SkillScopeDescriptor[] {
   const scopes: SkillScope[] = ["project", "global", "user", "built-in"];
   return skillsDirs.map((skillsDir, index) => {
@@ -410,7 +418,7 @@ async function buildPluginInstallationEntry(opts: {
 
   const pluginOwner = buildPluginOwner(opts.plugin);
   return {
-    installationId: `plugin:${opts.plugin.id}:${opts.skill.rawName}`,
+    installationId: buildPluginSkillInstallationId(opts.plugin, opts.skill),
     name: opts.skill.name,
     description: opts.skill.description,
     scope: opts.plugin.scope === "workspace" ? "project" : "user",

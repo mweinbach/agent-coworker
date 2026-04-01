@@ -468,11 +468,11 @@ function wouldCandidateBePrimary(
   targetScope: PluginInstallTargetScope,
   catalog: PluginCatalogSnapshot,
 ): boolean {
-  const existingPlugin = catalog.plugins.find((plugin) => plugin.id === candidatePluginId);
-  if (!existingPlugin) {
+  const activePlugins = catalog.plugins.filter((plugin) => plugin.id === candidatePluginId && plugin.enabled);
+  if (activePlugins.length === 0) {
     return true;
   }
-  if (existingPlugin.scope === targetScope) {
+  if (activePlugins.some((plugin) => plugin.scope === targetScope)) {
     return true;
   }
   return targetScope === "workspace";

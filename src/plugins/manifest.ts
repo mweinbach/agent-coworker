@@ -69,6 +69,7 @@ export interface PluginManifest {
   keywords: string[];
   interface?: PluginInterfaceMeta;
   skillsPath: string;
+  skillsPaths: string[];
   mcpPath?: string;
   appPath?: string;
   manifestPath: string;
@@ -339,33 +340,60 @@ export function manifestPathForPluginRoot(pluginRoot: string): string {
   return path.join(pluginRoot, ".codex-plugin", "plugin.json");
 }
 
+async function resolvePluginSkillsPaths(
+  pluginRoot: string,
+  skillsValue: string | string[] | undefined,
+  manifestPath: string,
+): Promise<string[]> {
+  const requestedValues = Array.isArray(skillsValue)
+    ? (skillsValue.length > 0 ? skillsValue : [undefined])
+    : [skillsValue];
+  const shouldValidateExistingPaths = skillsValue !== undefined && (!Array.isArray(skillsValue) || skillsValue.length > 0);
+  const resolvedSkillsPaths: string[] = [];
+
+  for (const requestedValue of requestedValues) {
+    const skillsPath = resolveRelativePath(pluginRoot, requestedValue, "./skills/");
+    if (!skillsPath) {
+      throw new Error(`Plugin manifest at ${manifestPath} is missing a skills path.`);
+    }
+    await assertPathInsidePluginRoot(pluginRoot, skillsPath, manifestPath, "skills");
+    if (resolvedSkillsPaths.includes(skillsPath)) {
+      continue;
+    }
+
+    if (shouldValidateExistingPaths) {
+      let skillsStat;
+      try {
+        skillsStat = await fs.stat(skillsPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+          throw new Error(
+            `Plugin manifest at ${manifestPath} declares skills path ${skillsPath}, but that directory does not exist.`,
+          );
+        }
+        throw error;
+      }
+      if (!skillsStat.isDirectory()) {
+        throw new Error(
+          `Plugin manifest at ${manifestPath} declares skills path ${skillsPath}, but it is not a directory.`,
+        );
+      }
+    }
+
+    resolvedSkillsPaths.push(skillsPath);
+  }
+
+  return resolvedSkillsPaths;
+}
+
 export async function readPluginManifest(pluginRoot: string): Promise<PluginManifest> {
   const manifestPath = manifestPathForPluginRoot(pluginRoot);
   const raw = await fs.readFile(manifestPath, "utf-8");
   const parsed = pluginManifestSchema.parse(JSON.parse(raw));
-  const skillsValue = Array.isArray(parsed.skills) ? parsed.skills[0] : parsed.skills;
-  const skillsPath = resolveRelativePath(pluginRoot, skillsValue, "./skills/");
+  const skillsPaths = await resolvePluginSkillsPaths(pluginRoot, parsed.skills, manifestPath);
+  const skillsPath = skillsPaths[0];
   if (!skillsPath) {
     throw new Error(`Plugin manifest at ${manifestPath} is missing a skills path.`);
-  }
-  await assertPathInsidePluginRoot(pluginRoot, skillsPath, manifestPath, "skills");
-  if (skillsValue !== undefined) {
-    let skillsStat;
-    try {
-      skillsStat = await fs.stat(skillsPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-        throw new Error(
-          `Plugin manifest at ${manifestPath} declares skills path ${skillsPath}, but that directory does not exist.`,
-        );
-      }
-      throw error;
-    }
-    if (!skillsStat.isDirectory()) {
-      throw new Error(
-        `Plugin manifest at ${manifestPath} declares skills path ${skillsPath}, but it is not a directory.`,
-      );
-    }
   }
   const mcpPath = await resolveOptionalRelativePath(pluginRoot, parsed.mcpServers, "./.mcp.json");
   const appPath = await resolveOptionalRelativePath(pluginRoot, parsed.apps, "./.app.json");
@@ -383,6 +411,7 @@ export async function readPluginManifest(pluginRoot: string): Promise<PluginMani
     keywords: parsed.keywords ?? [],
     ...(normalizePluginInterface(parsed.interface) ? { interface: normalizePluginInterface(parsed.interface) } : {}),
     skillsPath,
+    skillsPaths,
     ...(mcpPath ? { mcpPath } : {}),
     ...(appPath ? { appPath } : {}),
     manifestPath,
@@ -390,14 +419,24 @@ export async function readPluginManifest(pluginRoot: string): Promise<PluginMani
   };
 }
 
-async function readPluginSkillDirents(pluginManifest: PluginManifest): Promise<Array<{ name: string; isDirectory: () => boolean }>> {
-  let dirents: Array<{ name: string; isDirectory: () => boolean }> = [];
-  try {
-    dirents = await fs.readdir(pluginManifest.skillsPath, { withFileTypes: true, encoding: "utf8" });
-  } catch {
-    return [];
+async function readPluginSkillDirents(pluginManifest: PluginManifest): Promise<Array<{ skillsPath: string; name: string }>> {
+  const dirents: Array<{ skillsPath: string; name: string }> = [];
+
+  for (const skillsPath of pluginManifest.skillsPaths) {
+    let entries: Array<{ name: string; isDirectory: () => boolean }> = [];
+    try {
+      entries = await fs.readdir(skillsPath, { withFileTypes: true, encoding: "utf8" });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      dirents.push({ skillsPath, name: entry.name });
+    }
   }
-  return dirents;
+
+  return dirents.sort((left, right) => `${left.skillsPath}:${left.name}`.localeCompare(`${right.skillsPath}:${right.name}`));
 }
 
 export async function validatePluginBundledSkills(pluginManifest: PluginManifest): Promise<string[]> {
@@ -405,8 +444,7 @@ export async function validatePluginBundledSkills(pluginManifest: PluginManifest
   const warnings: string[] = [];
 
   for (const dirent of dirents) {
-    if (!dirent.isDirectory()) continue;
-    const skillPath = path.join(pluginManifest.skillsPath, dirent.name, "SKILL.md");
+    const skillPath = path.join(dirent.skillsPath, dirent.name, "SKILL.md");
     try {
       const parsed = await parseSkillFrontMatter(skillPath, dirent.name);
       if (!parsed) {
@@ -435,8 +473,7 @@ export async function readPluginSkillSummaries(pluginManifest: PluginManifest): 
   const skills: ParsedPluginSkill[] = [];
   const warnings: string[] = [];
   for (const dirent of dirents) {
-    if (!dirent.isDirectory()) continue;
-    const skillRoot = path.join(pluginManifest.skillsPath, dirent.name);
+    const skillRoot = path.join(dirent.skillsPath, dirent.name);
     const skillPath = path.join(skillRoot, "SKILL.md");
     try {
       const parsed = await parseSkillFrontMatter(skillPath, dirent.name);

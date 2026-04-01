@@ -73,6 +73,22 @@ async function writePlugin(rootDir: string, displayName: string, description = "
   );
 }
 
+async function writeBundledSkill(skillsDir: string, name: string, description: string) {
+  await fs.mkdir(path.join(skillsDir, name), { recursive: true });
+  await fs.writeFile(
+    path.join(skillsDir, name, "SKILL.md"),
+    [
+      "---",
+      `name: ${name}`,
+      `description: ${description}`,
+      "---",
+      "",
+      `# ${name}`,
+    ].join("\n"),
+    "utf-8",
+  );
+}
+
 function pluginEntry(scope: "workspace" | "user", rootDir: string): PluginCatalogEntry {
   return {
     id: "figma-toolkit",
@@ -221,6 +237,100 @@ describe("plugin catalog and install operations", () => {
       if (figmaServer?.transport.type === "http") {
         expect(figmaServer.transport.url).toBe("https://workspace-figma-toolkit.example.com");
       }
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("preview treats disabled workspace plugins as non-blocking for user installs", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-preview-disabled-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-preview-disabled-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-preview-disabled-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const workspacePluginRoot = path.join(workspace, ".agents", "plugins", "figma-toolkit");
+      const sourceRoot = path.join(workspace, "plugin-source", "figma-toolkit");
+      await writePlugin(workspacePluginRoot, "Workspace Figma Toolkit", "Workspace override");
+      await writePlugin(sourceRoot, "User Figma Toolkit", "Global plugin");
+      await fs.mkdir(path.join(workspace, ".cowork"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspace, ".cowork", "plugins.json"),
+        `${JSON.stringify({
+          version: 1,
+          updatedAt: "2026-04-01T00:00:00.000Z",
+          plugins: {
+            "figma-toolkit": false,
+          },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const catalog = await buildPluginCatalogSnapshot(config);
+      expect(catalog.plugins.find((plugin) => plugin.id === "figma-toolkit" && plugin.scope === "workspace")?.enabled).toBe(false);
+
+      const preview = await previewPluginInstall({
+        config,
+        input: sourceRoot,
+        targetScope: "user",
+      });
+
+      expect(preview.candidates).toEqual([
+        expect.objectContaining({
+          pluginId: "figma-toolkit",
+          wouldBePrimary: true,
+        }),
+      ]);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin manifests can declare multiple bundled skills directories", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-multi-skills-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-multi-skills-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-multi-skills-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "multi-skill");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, "skills-a"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, "skills-b"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "multi-skill",
+          description: "Plugin with multiple bundled skill directories",
+          skills: ["./skills-a", "./skills-b"],
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await writeBundledSkill(path.join(pluginRoot, "skills-a"), "alpha", "Alpha skill");
+      await writeBundledSkill(path.join(pluginRoot, "skills-b"), "beta", "Beta skill");
+
+      const manifest = await readPluginManifest(pluginRoot);
+      expect(manifest.skillsPath).toBe(path.join(pluginRoot, "skills-a"));
+      expect(manifest.skillsPaths).toEqual([
+        path.join(pluginRoot, "skills-a"),
+        path.join(pluginRoot, "skills-b"),
+      ]);
+
+      const catalog = await buildPluginCatalogSnapshot(config);
+      const plugin = catalog.plugins.find((entry) => entry.id === "multi-skill");
+      expect(plugin?.skills.map((skill) => skill.rawName)).toEqual(["alpha", "beta"]);
+
+      const discoveredSkills = await discoverSkillsForConfig(config, { pluginCatalog: catalog });
+      expect(
+        discoveredSkills
+          .filter((skill) => skill.plugin?.pluginId === "multi-skill")
+          .map((skill) => skill.name)
+          .sort(),
+      ).toEqual(["multi-skill:alpha", "multi-skill:beta"]);
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

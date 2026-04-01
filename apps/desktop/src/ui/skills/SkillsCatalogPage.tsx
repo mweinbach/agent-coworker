@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { MessageSquareIcon, RefreshCwIcon } from "lucide-react";
+import { RefreshCwIcon } from "lucide-react";
 import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -21,35 +21,6 @@ export function SkillsCatalogPage({
   const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
   const selectSkillInstallation = useAppStore((s) => s.selectSkillInstallation);
   const refreshSkillsCatalog = useAppStore((s) => s.refreshSkillsCatalog);
-  const threads = useAppStore((s) => s.threads);
-  const selectedThreadId = useAppStore((s) => s.selectedThreadId);
-  const selectThread = useAppStore((s) => s.selectThread);
-  const newThread = useAppStore((s) => s.newThread);
-
-  const workspaceThreads = useMemo(
-    () =>
-      threads
-        .filter((thread) => thread.workspaceId === workspaceId)
-        .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt)),
-    [threads, workspaceId],
-  );
-
-  const activeThread = useMemo(() => {
-    if (!selectedThreadId) {
-      return workspaceThreads[0] ?? null;
-    }
-    return workspaceThreads.find((thread) => thread.id === selectedThreadId) ?? workspaceThreads[0] ?? null;
-  }, [selectedThreadId, workspaceThreads]);
-
-  const chatButtonLabel = workspaceThreads.length > 0 ? "Open chat" : "New thread";
-
-  const handleOpenChat = async () => {
-    if (activeThread) {
-      await selectThread(activeThread.id);
-      return;
-    }
-    await newThread({ workspaceId });
-  };
 
   const rt = wsRtById[workspaceId];
   const catalog = rt?.skillsCatalog ?? null;
@@ -93,15 +64,6 @@ export function SkillsCatalogPage({
     <div className="app-skills-view h-full min-h-0 overflow-y-auto px-6 py-4">
       <div className="mx-auto max-w-6xl">
         <div className="mb-4 flex items-center justify-end gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2 text-muted-foreground hover:text-foreground"
-            onClick={() => void handleOpenChat()}
-          >
-            <MessageSquareIcon className="mr-1.5 h-4 w-4" />
-            {chatButtonLabel}
-          </Button>
           <Button
             variant="ghost"
             size="sm"

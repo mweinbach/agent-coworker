@@ -81,7 +81,7 @@ describe("skill store actions", () => {
     await createSkillActions(set as any, get as any).refreshSkillsCatalog();
 
     expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].skillCatalogError).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].skillCatalogError).toBe("Unable to refresh skills catalog.");
     expect(state.notifications).toHaveLength(1);
   });
 

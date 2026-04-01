@@ -1,5 +1,13 @@
 # Task Plan
 
+## Fix Plugin Review Regressions
+
+- [ ] Fix duplicate-scope plugin rendering in the desktop catalog so same-ID workspace/user plugins no longer collide in React state or list identity.
+- [ ] Restore a visible skills catalog error state and wire failed refreshes back into `skillCatalogError`.
+- [ ] Make plugin detail reads fail fast with a terminal validation error for missing or ambiguous plugin selections instead of hanging the JSON-RPC request.
+- [ ] Add/update focused backend and desktop regression tests for the above fixes.
+- [ ] Re-run focused Bun test slices, `bun run typecheck`, and a manual desktop walkthrough before closing the task.
+
 ## Add Plugin Install Flow
 
 - [x] Add backend plugin source preview/install support that materializes Codex-style plugin bundles into workspace or user `.agents/plugins` roots without folding plugins into `skillsDirs`.

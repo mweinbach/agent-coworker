@@ -496,6 +496,7 @@ export function createSkillActions(
             [workspaceId]: {
               ...s.workspaceRuntimeById[workspaceId],
               skillCatalogLoading: false,
+              skillCatalogError: "Unable to refresh skills catalog.",
             },
           },
           notifications: pushNotification(s.notifications, {

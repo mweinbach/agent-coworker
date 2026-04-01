@@ -53,6 +53,7 @@ export function SkillsCatalogPage({
   const rt = wsRtById[workspaceId];
   const catalog = rt?.skillsCatalog ?? null;
   const skillCatalogLoading = rt?.skillCatalogLoading ?? false;
+  const skillCatalogError = rt?.skillCatalogError ?? null;
   const showLoadingState = skillCatalogLoading && catalog === null;
 
   const installations = useMemo(() => {
@@ -138,7 +139,21 @@ export function SkillsCatalogPage({
             </div>
           )}
 
-          {!showLoadingState && installations.length === 0 && (
+          {!showLoadingState && skillCatalogError ? (
+            <div className="flex flex-col items-start gap-3 rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-4 text-left">
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="border-destructive/40 text-destructive">
+                  Connection issue
+                </Badge>
+                <span className="text-sm text-destructive">{skillCatalogError}</span>
+              </div>
+              <Button size="sm" variant="outline" onClick={() => void refreshSkillsCatalog()}>
+                Retry
+              </Button>
+            </div>
+          ) : null}
+
+          {!showLoadingState && !skillCatalogError && installations.length === 0 && (
             <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-muted/10 py-10 text-center">
               <div className="mb-1 text-base font-medium">No skills found</div>
               <div className="text-sm text-muted-foreground">

@@ -111,7 +111,7 @@ export class SkillManager {
   private async emitPluginDetail(pluginId: string, scope?: PluginCatalogEntry["scope"]) {
     const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
     const plugin = this.resolvePluginSelection(catalog, pluginId, scope);
-    if (pluginId && plugin === null) {
+    if (plugin === null) {
       return;
     }
     this.context.emit({

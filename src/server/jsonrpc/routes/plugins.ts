@@ -38,7 +38,7 @@ export function createPluginsRouteHandlers(
         cwd,
         async (session) => await session.getPlugin(pluginId, scope),
         (event): event is Extract<ServerEvent, { type: "plugin_detail" }> =>
-          event.type === "plugin_detail" && event.plugin?.id === pluginId,
+          event.type === "plugin_detail",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);

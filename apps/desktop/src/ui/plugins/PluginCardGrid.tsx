@@ -17,7 +17,7 @@ export function PluginCardGrid({
         const subtitle = plugin.interface?.shortDescription || plugin.description;
         return (
           <Card
-            key={plugin.id}
+            key={`${plugin.scope}:${plugin.id}`}
             className="group relative flex cursor-pointer flex-col overflow-hidden border border-border/55 bg-card/44 p-3.5 transition-colors hover:border-border/75 hover:bg-card/68"
             onClick={() => onSelect(plugin.id, plugin.scope)}
           >

@@ -129,7 +129,12 @@ export function resolvePluginCatalogEntry(opts: {
   }
 
   if (matches.length === 0) {
-    return { plugin: null };
+    return {
+      plugin: null,
+      error: opts.scope !== undefined
+        ? `Plugin "${opts.pluginId}" was not found in the ${opts.scope} scope.`
+        : `Plugin "${opts.pluginId}" was not found.`,
+    };
   }
 
   if (opts.scope !== undefined) {

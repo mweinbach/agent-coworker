@@ -180,6 +180,80 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("plugin detail reads fail fast when the requested plugin is missing or ambiguous", async () => {
+    const tmpDir = await makeTmpProject();
+    const workspacePluginRoot = `${tmpDir}/.agents/plugins/figma-toolkit`;
+    await fs.mkdir(`${workspacePluginRoot}/.codex-plugin`, { recursive: true });
+    await fs.writeFile(
+      `${workspacePluginRoot}/.codex-plugin/plugin.json`,
+      `${JSON.stringify({
+        name: "figma-toolkit",
+        description: "Workspace Figma helpers",
+        interface: {
+          displayName: "Workspace Figma Toolkit",
+        },
+      }, null, 2)}\n`,
+    );
+
+    const homePluginRoot = `${tmpDir}/.agents/plugins-home/figma-toolkit`;
+    await fs.mkdir(`${homePluginRoot}/.codex-plugin`, { recursive: true });
+    await fs.writeFile(
+      `${homePluginRoot}/.codex-plugin/plugin.json`,
+      `${JSON.stringify({
+        name: "figma-toolkit",
+        description: "User Figma helpers",
+        interface: {
+          displayName: "User Figma Toolkit",
+        },
+      }, null, 2)}\n`,
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      env: {
+        AGENT_USER_PLUGINS_DIR: `${tmpDir}/.agents/plugins-home`,
+      },
+    }));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+
+      const ambiguousResponse = await rpc.request("cowork/plugins/read", {
+        cwd: tmpDir,
+        pluginId: "figma-toolkit",
+      });
+      expect(ambiguousResponse.error?.message).toContain("exists in multiple scopes");
+      expect(ambiguousResponse.result).toBeUndefined();
+
+      const missingResponse = await rpc.request("cowork/plugins/read", {
+        cwd: tmpDir,
+        pluginId: "missing-plugin",
+        scope: "workspace",
+      });
+      expect(missingResponse.error?.message).toContain('Plugin "missing-plugin" was not found in the workspace scope.');
+      expect(missingResponse.result).toBeUndefined();
+
+      const scopedResponse = await rpc.request("cowork/plugins/read", {
+        cwd: tmpDir,
+        pluginId: "figma-toolkit",
+        scope: "workspace",
+      });
+      expect(scopedResponse.result.event).toEqual(
+        expect.objectContaining({
+          type: "plugin_detail",
+          plugin: expect.objectContaining({
+            id: "figma-toolkit",
+            scope: "workspace",
+            displayName: "Workspace Figma Toolkit",
+          }),
+        }),
+      );
+
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("plugin install preview and install mutate the workspace plugin catalog", async () => {
     const tmpDir = await makeTmpProject();
     const sourceRoot = `${tmpDir}/plugin-source/figma-toolkit`;

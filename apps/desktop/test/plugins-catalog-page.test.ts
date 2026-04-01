@@ -390,4 +390,79 @@ describe("plugins catalog page", () => {
       harness.restore();
     }
   });
+
+  test("renders duplicate plugin ids from different scopes without collapsing a card", async () => {
+    const previousState = useAppStore.getState();
+    let root: ReturnType<typeof createRoot> | null = null;
+    useAppStore.setState({
+      ...baseWorkspaceState(),
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          pluginsCatalog: {
+            warnings: [],
+            plugins: [
+              {
+                id: "figma-toolkit",
+                name: "figma-toolkit",
+                displayName: "Workspace Figma Toolkit",
+                description: "Workspace helpers",
+                scope: "workspace",
+                discoveryKind: "direct",
+                enabled: true,
+                rootDir: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit",
+                manifestPath: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
+                skillsPath: "/tmp/plugin-workspace/.agents/plugins/figma-toolkit/skills",
+                skills: [],
+                mcpServers: [],
+                apps: [],
+                warnings: [],
+              },
+              {
+                id: "figma-toolkit",
+                name: "figma-toolkit",
+                displayName: "User Figma Toolkit",
+                description: "Global helpers",
+                scope: "user",
+                discoveryKind: "direct",
+                enabled: false,
+                rootDir: "/tmp/home/.agents/plugins/figma-toolkit",
+                manifestPath: "/tmp/home/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
+                skillsPath: "/tmp/home/.agents/plugins/figma-toolkit/skills",
+                skills: [],
+                mcpServers: [],
+                apps: [],
+                warnings: [],
+              },
+            ],
+          },
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PluginsCatalogPage, { workspaceId, searchQuery: "", setSearchQuery: () => {} }));
+      });
+
+      const pageText = container.textContent ?? "";
+      expect(pageText).toContain("Workspace Figma Toolkit");
+      expect(pageText).toContain("User Figma Toolkit");
+      expect(pageText).toContain("Workspace plugin");
+      expect(pageText).toContain("User plugin");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
 });

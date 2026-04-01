@@ -157,4 +157,46 @@ describe("skills catalog page", () => {
       harness.restore();
     }
   });
+
+  test("shows inline error state when the skills catalog refresh fails", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      workspaceRuntimeById: {
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          skillsCatalog: null,
+          skillCatalogLoading: false,
+          skillCatalogError: "Unable to refresh skills catalog.",
+        },
+      },
+      refreshSkillsCatalog: async () => {},
+    } as any);
+
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(SkillsCatalogPage, { workspaceId: "ws-1", searchQuery: "", setSearchQuery: () => {} }));
+      });
+
+      expect(container.textContent).toContain("Connection issue");
+      expect(container.textContent).toContain("Unable to refresh skills catalog.");
+      expect(container.textContent).toContain("Retry");
+      expect(container.textContent).not.toContain("No skills found");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
 });

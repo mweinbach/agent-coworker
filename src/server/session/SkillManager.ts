@@ -80,11 +80,15 @@ export class SkillManager {
     });
   }
 
-  private async emitPluginInstallPreview(preview: import("../../types").PluginInstallPreview) {
+  private async emitPluginInstallPreview(
+    preview: import("../../types").PluginInstallPreview,
+    fromUserPreviewRequest: boolean,
+  ) {
     this.context.emit({
       type: "plugin_install_preview",
       sessionId: this.context.id,
       preview,
+      fromUserPreviewRequest,
     });
   }
 
@@ -412,7 +416,7 @@ export class SkillManager {
         catalog: await buildPluginCatalogSnapshot(this.context.state.config),
         cwd: this.context.state.config.workingDirectory,
       });
-      await this.emitPluginInstallPreview(preview);
+      await this.emitPluginInstallPreview(preview, true);
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to preview plugin install: ${String(err)}`);
     }
@@ -426,7 +430,7 @@ export class SkillManager {
           input: sourceInput,
           targetScope,
         });
-        await this.emitPluginInstallPreview(result.preview);
+        await this.emitPluginInstallPreview(result.preview, false);
         await this.afterSuccessfulMutation({
           clearedMutationPendingKeys: [this.skillMutationPendingKey(`plugin:install:${targetScope}`)],
         });

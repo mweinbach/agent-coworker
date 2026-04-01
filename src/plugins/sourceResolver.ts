@@ -20,7 +20,7 @@ import {
   type FetchLike,
   type ParsedGitHubSource,
 } from "../skills/github";
-import { readPluginManifest } from "./manifest";
+import { readPluginManifest, validatePluginBundledSkills } from "./manifest";
 
 export type MaterializedPluginCandidate = {
   rootDir: string;
@@ -118,12 +118,14 @@ async function loadMaterializedPluginCandidates(
   for (const rootDir of pluginRoots) {
     try {
       const manifest = await readPluginManifest(rootDir);
+      const skillWarnings = await validatePluginBundledSkills(manifest);
       candidates.push({
         rootDir,
         pluginId: manifest.name,
         displayName: manifest.interface?.displayName ?? manifest.name,
         description: manifest.description,
-        diagnostics: [],
+        diagnostics: skillWarnings.map((warning) =>
+          buildDiagnostic("invalid_plugin_skill", "error", warning)),
         relativeRootPath: path.relative(stageRoot, rootDir) || path.basename(rootDir),
       });
     } catch (error) {

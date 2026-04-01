@@ -262,14 +262,53 @@ function resolveRelativePath(pluginRoot: string, relativePath: string | undefine
   return resolveMaybeRelative(selected, pluginRoot);
 }
 
-function assertPathInsidePluginRoot(
+async function canonicalizePathFromExistingAncestor(targetPath: string): Promise<string> {
+  const pendingSegments: string[] = [];
+  let currentPath = path.resolve(targetPath);
+
+  while (true) {
+    try {
+      const canonicalExistingPath = await fs.realpath(currentPath);
+      return pendingSegments.length === 0
+        ? canonicalExistingPath
+        : path.join(canonicalExistingPath, ...pendingSegments.reverse());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+        throw error;
+      }
+      const parentPath = path.dirname(currentPath);
+      if (parentPath === currentPath) {
+        return path.resolve(targetPath);
+      }
+      pendingSegments.push(path.basename(currentPath));
+      currentPath = parentPath;
+    }
+  }
+}
+
+async function canonicalizePathForBoundaryCheck(targetPath: string): Promise<string> {
+  try {
+    return await fs.realpath(targetPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return await canonicalizePathFromExistingAncestor(targetPath);
+    }
+    throw error;
+  }
+}
+
+async function assertPathInsidePluginRoot(
   pluginRoot: string,
   targetPath: string | undefined,
   manifestPath: string,
   label: string,
-): void {
+): Promise<void> {
   if (!targetPath) return;
-  if (!isPathInside(pluginRoot, targetPath)) {
+  const [canonicalPluginRoot, canonicalTargetPath] = await Promise.all([
+    canonicalizePathForBoundaryCheck(pluginRoot),
+    canonicalizePathForBoundaryCheck(targetPath),
+  ]);
+  if (!isPathInside(canonicalPluginRoot, canonicalTargetPath)) {
     throw new Error(`Plugin manifest at ${manifestPath} resolves ${label} outside the plugin root.`);
   }
 }
@@ -287,11 +326,11 @@ export async function readPluginManifest(pluginRoot: string): Promise<PluginMani
   if (!skillsPath) {
     throw new Error(`Plugin manifest at ${manifestPath} is missing a skills path.`);
   }
-  assertPathInsidePluginRoot(pluginRoot, skillsPath, manifestPath, "skills");
+  await assertPathInsidePluginRoot(pluginRoot, skillsPath, manifestPath, "skills");
   const mcpPath = resolveRelativePath(pluginRoot, parsed.mcpServers, "./.mcp.json");
   const appPath = resolveRelativePath(pluginRoot, parsed.apps, "./.app.json");
-  assertPathInsidePluginRoot(pluginRoot, mcpPath, manifestPath, "mcpServers");
-  assertPathInsidePluginRoot(pluginRoot, appPath, manifestPath, "apps");
+  await assertPathInsidePluginRoot(pluginRoot, mcpPath, manifestPath, "mcpServers");
+  await assertPathInsidePluginRoot(pluginRoot, appPath, manifestPath, "apps");
   const authorName = typeof parsed.author === "string" ? parsed.author : parsed.author?.name;
   return {
     name: parsed.name,
@@ -311,17 +350,48 @@ export async function readPluginManifest(pluginRoot: string): Promise<PluginMani
   };
 }
 
-export async function readPluginSkillSummaries(pluginManifest: PluginManifest): Promise<{
-  skills: ParsedPluginSkill[];
-  warnings: string[];
-}> {
+async function readPluginSkillDirents(pluginManifest: PluginManifest): Promise<Array<{ name: string; isDirectory: () => boolean }>> {
   let dirents: Array<{ name: string; isDirectory: () => boolean }> = [];
   try {
     dirents = await fs.readdir(pluginManifest.skillsPath, { withFileTypes: true, encoding: "utf8" });
   } catch {
-    return { skills: [], warnings: [] };
+    return [];
+  }
+  return dirents;
+}
+
+export async function validatePluginBundledSkills(pluginManifest: PluginManifest): Promise<string[]> {
+  const dirents = await readPluginSkillDirents(pluginManifest);
+  const warnings: string[] = [];
+
+  for (const dirent of dirents) {
+    if (!dirent.isDirectory()) continue;
+    const skillPath = path.join(pluginManifest.skillsPath, dirent.name, "SKILL.md");
+    try {
+      const parsed = await parseSkillFrontMatter(skillPath, dirent.name);
+      if (!parsed) {
+        warnings.push(
+          `Ignoring plugin skill "${dirent.name}" from ${skillPath}: invalid or missing frontmatter.`,
+        );
+      }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT") {
+        warnings.push(`Ignoring plugin skill "${dirent.name}" from ${skillPath}: missing SKILL.md.`);
+      } else {
+        warnings.push(`Ignoring plugin skill "${dirent.name}" from ${skillPath}: ${String(error)}`);
+      }
+    }
   }
 
+  return warnings.sort((left, right) => left.localeCompare(right));
+}
+
+export async function readPluginSkillSummaries(pluginManifest: PluginManifest): Promise<{
+  skills: ParsedPluginSkill[];
+  warnings: string[];
+}> {
+  const dirents = await readPluginSkillDirents(pluginManifest);
   const skills: ParsedPluginSkill[] = [];
   const warnings: string[] = [];
   for (const dirent of dirents) {

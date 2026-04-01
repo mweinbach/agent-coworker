@@ -310,23 +310,87 @@ describe("server JSON-RPC control methods", () => {
         sourceInput: sourceRoot,
         targetScope: "workspace",
       });
-      expect(installResponse.result.event).toEqual(
-        expect.objectContaining({
-          type: "plugins_catalog",
-          catalog: expect.objectContaining({
-            plugins: [
-              expect.objectContaining({
-                id: "figma-toolkit",
-                displayName: "Figma Toolkit",
-                scope: "workspace",
-              }),
-            ],
+      expect(Array.isArray(installResponse.result.events)).toBe(true);
+      expect(installResponse.result.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "plugin_install_preview",
+            fromUserPreviewRequest: false,
+            preview: expect.objectContaining({
+              targetScope: "workspace",
+              candidates: [
+                expect.objectContaining({
+                  pluginId: "figma-toolkit",
+                }),
+              ],
+            }),
           }),
-        }),
+          expect.objectContaining({
+            type: "skills_list",
+            skills: expect.arrayContaining([
+              expect.objectContaining({
+                name: "figma-toolkit:import-frame",
+              }),
+            ]),
+          }),
+          expect.objectContaining({
+            type: "skills_catalog",
+            catalog: expect.objectContaining({
+              installations: expect.arrayContaining([
+                expect.objectContaining({
+                  skillName: "figma-toolkit:import-frame",
+                }),
+              ]),
+            }),
+          }),
+          expect.objectContaining({
+            type: "plugins_catalog",
+            catalog: expect.objectContaining({
+              plugins: [
+                expect.objectContaining({
+                  id: "figma-toolkit",
+                  displayName: "Figma Toolkit",
+                  scope: "workspace",
+                }),
+              ],
+            }),
+          }),
+          expect.objectContaining({
+            type: "mcp_servers",
+          }),
+          expect.objectContaining({
+            type: "plugin_detail",
+            plugin: expect.objectContaining({
+              id: "figma-toolkit",
+              scope: "workspace",
+            }),
+          }),
+        ]),
       );
 
       const installedPluginPath = `${tmpDir}/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json`;
       await expect(fs.stat(installedPluginPath)).resolves.toBeDefined();
+
+      const disableResponse = await rpc.request("cowork/plugins/disable", {
+        cwd: tmpDir,
+        pluginId: "figma-toolkit",
+        scope: "workspace",
+      });
+      expect(Array.isArray(disableResponse.result.events)).toBe(true);
+      const disableSkillsList = disableResponse.result.events.find((event: any) => event.type === "skills_list");
+      expect(disableSkillsList?.skills.find((skill: any) => skill.name === "figma-toolkit:import-frame")).toBeUndefined();
+      const disableSkillsCatalog = disableResponse.result.events.find((event: any) => event.type === "skills_catalog");
+      expect(
+        disableSkillsCatalog?.catalog.installations.find(
+          (installation: any) => installation.skillName === "figma-toolkit:import-frame",
+        ),
+      ).toBeUndefined();
+      const disablePluginsCatalog = disableResponse.result.events.find((event: any) => event.type === "plugins_catalog");
+      expect(
+        disablePluginsCatalog?.catalog.plugins.find((plugin: any) => plugin.id === "figma-toolkit"),
+      ).toEqual(expect.objectContaining({ enabled: false, scope: "workspace" }));
+      const disableMcpServers = disableResponse.result.events.find((event: any) => event.type === "mcp_servers");
+      expect(disableMcpServers?.servers.find((server: any) => server.name === "figma")).toBeUndefined();
 
       rpc.close();
     } finally {

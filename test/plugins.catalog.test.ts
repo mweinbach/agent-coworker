@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { loadMCPConfigRegistry } from "../src/mcp/configRegistry/layers";
-import { installPluginsFromSource } from "../src/plugins/operations";
+import { installPluginsFromSource, previewPluginInstall } from "../src/plugins/operations";
 import { buildPluginCatalogSnapshot, resolvePluginCatalogEntry } from "../src/plugins/catalog";
 import { readPluginManifest } from "../src/plugins/manifest";
 import { discoverSkillsForConfig } from "../src/skills";
@@ -191,6 +191,126 @@ describe("plugin catalog and install operations", () => {
       await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves apps outside the plugin root");
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("readPluginManifest rejects symlinked plugin assets that escape the plugin root", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-manifest-symlink-bounds-"));
+    const pluginRoot = path.join(tempRoot, "plugin");
+    const outsideSkillsRoot = path.join(tempRoot, "outside-skills");
+    const outsideFile = path.join(tempRoot, "outside.json");
+
+    try {
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({ name: "demo-plugin" }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      await fs.mkdir(path.join(outsideSkillsRoot, "external-skill"), { recursive: true });
+      await fs.writeFile(
+        path.join(outsideSkillsRoot, "external-skill", "SKILL.md"),
+        [
+          "---",
+          "name: external-skill",
+          "description: Outside plugin root",
+          "---",
+          "",
+          "# External skill",
+        ].join("\n"),
+        "utf-8",
+      );
+      await fs.writeFile(outsideFile, "{}\n", "utf-8");
+
+      await fs.symlink(outsideSkillsRoot, path.join(pluginRoot, "skills"));
+      await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves skills outside the plugin root");
+
+      await fs.rm(path.join(pluginRoot, "skills"), { force: true });
+      await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
+      await fs.symlink(outsideFile, path.join(pluginRoot, ".mcp.json"));
+      await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves mcpServers outside the plugin root");
+
+      await fs.rm(path.join(pluginRoot, ".mcp.json"), { force: true });
+      await fs.symlink(outsideFile, path.join(pluginRoot, ".app.json"));
+      await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves apps outside the plugin root");
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin catalog surfaces warnings for invalid bundled skills", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-skill-catalog-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-skill-catalog-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-skill-catalog-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "figma-toolkit");
+      await writePlugin(pluginRoot, "Broken Figma Toolkit");
+      await fs.writeFile(
+        path.join(pluginRoot, "skills", "import-frame", "SKILL.md"),
+        "# Missing frontmatter\n",
+        "utf-8",
+      );
+
+      const catalog = await buildPluginCatalogSnapshot(config);
+      expect(catalog.plugins).toHaveLength(1);
+      expect(catalog.plugins[0]?.skills).toEqual([]);
+      expect(
+        catalog.plugins[0]?.warnings.some((warning) =>
+          warning.includes("import-frame") && warning.includes("SKILL.md")),
+      ).toBe(true);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin install preview and install reject sources with invalid bundled skills", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-skill-source-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-skill-source-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-skill-source-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const sourceRoot = path.join(workspace, "plugin-source", "figma-toolkit");
+      await writePlugin(sourceRoot, "Broken Figma Toolkit");
+      await fs.writeFile(
+        path.join(sourceRoot, "skills", "import-frame", "SKILL.md"),
+        "# Missing frontmatter\n",
+        "utf-8",
+      );
+
+      const preview = await previewPluginInstall({
+        config,
+        input: sourceRoot,
+        targetScope: "workspace",
+      });
+      expect(preview.warnings).toEqual(["No valid plugin bundles were found in the provided source."]);
+      expect(preview.candidates).toEqual([
+        expect.objectContaining({
+          pluginId: "figma-toolkit",
+          diagnostics: [
+            expect.objectContaining({
+              code: "invalid_plugin_skill",
+              severity: "error",
+              message: expect.stringContaining("invalid or missing frontmatter"),
+            }),
+          ],
+        }),
+      ]);
+
+      await expect(installPluginsFromSource({
+        config,
+        input: sourceRoot,
+        targetScope: "workspace",
+      })).rejects.toThrow("No valid plugin bundles were found in the provided source");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
     }
   });
 

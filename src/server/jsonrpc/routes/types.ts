@@ -100,6 +100,13 @@ export interface JsonRpcRouteContext {
       timeoutMs?: number,
       idleMs?: number,
     ): Promise<T | null>;
+    captureMutationEvents<T extends ServerEvent>(
+      binding: SessionBinding,
+      action: () => Promise<void> | void,
+      predicate: (event: ServerEvent) => event is T,
+      timeoutMs?: number,
+      idleMs?: number,
+    ): Promise<T[]>;
   };
   jsonrpc: {
     send(ws: StartServerSocket, payload: unknown): void;

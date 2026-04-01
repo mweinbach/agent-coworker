@@ -979,6 +979,7 @@ export async function startAgentServer(
     events: {
       capture: sessionEventCapture.capture,
       captureMutationOutcome: sessionEventCapture.captureMutationOutcome,
+      captureMutationEvents: sessionEventCapture.captureMutationEvents,
     },
     jsonrpc: {
       send: (ws, payload) => sendJsonRpc(ws, payload),

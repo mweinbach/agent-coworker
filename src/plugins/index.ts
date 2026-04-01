@@ -10,6 +10,7 @@ export {
   readPluginAppSummaries,
   readPluginManifest,
   readPluginSkillSummaries,
+  validatePluginBundledSkills,
   type ParsedPluginApp,
   type ParsedPluginSkill,
   type PluginManifest,

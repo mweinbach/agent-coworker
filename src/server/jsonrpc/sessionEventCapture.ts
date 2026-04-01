@@ -99,6 +99,77 @@ export function createSessionEventCapture({
           }
           removeBindingSink(binding, sinkId);
           reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  };
+
+  const captureMutationEvents = async <T extends ServerEvent>(
+    binding: SessionBinding,
+    action: () => Promise<void> | void,
+    predicate: (event: ServerEvent) => event is T,
+    timeoutMs = 5_000,
+    idleMs = 25,
+  ): Promise<T[]> => {
+    const sinkId = createSinkId();
+    return await new Promise<T[]>((resolve, reject) => {
+      let actionResolved = false;
+      let settled = false;
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      const events: T[] = [];
+
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+        }
+        removeBindingSink(binding, sinkId);
+        resolve(events);
+      };
+
+      const scheduleIdleSettle = () => {
+        if (!actionResolved || settled) {
+          return;
+        }
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+        }
+        idleTimer = setTimeout(() => {
+          settle();
+        }, idleMs);
+      };
+
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+        }
+        removeBindingSink(binding, sinkId);
+        reject(new Error("Timed out waiting for control event"));
+      }, timeoutMs);
+
+      addBindingSink(binding, sinkId, (event) => {
+        if (!predicate(event)) return;
+        events.push(event);
+        scheduleIdleSettle();
+      });
+
+      void Promise.resolve(action())
+        .then(() => {
+          actionResolved = true;
+          scheduleIdleSettle();
+        })
+        .catch((error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          if (idleTimer) {
+            clearTimeout(idleTimer);
+          }
+          removeBindingSink(binding, sinkId);
+          reject(error instanceof Error ? error : new Error(String(error)));
         });
     });
   };
@@ -106,5 +177,6 @@ export function createSessionEventCapture({
   return {
     capture,
     captureMutationOutcome,
+    captureMutationEvents,
   };
 }

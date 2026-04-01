@@ -702,6 +702,19 @@ export const pluginDetailEventSchema = z.object({
   plugin: pluginCatalogEntrySchema.nullable(),
 }).passthrough();
 
+const pluginMutationResultEventSchema = z.union([
+  skillsListEventSchema,
+  skillsCatalogEventSchema,
+  pluginsCatalogEventSchema,
+  mcpServersEventSchema,
+]);
+
+const pluginInstallResultEventSchema = z.union([
+  pluginInstallPreviewEventSchema,
+  pluginMutationResultEventSchema,
+  pluginDetailEventSchema,
+]);
+
 export const sessionBackupPublicCheckpointSchema = z.object({
   id: nonEmptyTrimmedStringSchema,
   index: z.number().int().positive(),
@@ -1084,10 +1097,10 @@ export const jsonRpcControlResultSchemas = {
   "cowork/skills/installation/checkUpdate": legacyEventEnvelope(skillInstallUpdateCheckEventSchema),
   "cowork/plugins/catalog/read": legacyEventEnvelope(pluginsCatalogEventSchema),
   "cowork/plugins/read": legacyEventEnvelope(pluginDetailEventSchema),
-  "cowork/plugins/enable": legacyEventEnvelope(pluginsCatalogEventSchema),
-  "cowork/plugins/disable": legacyEventEnvelope(pluginsCatalogEventSchema),
+  "cowork/plugins/enable": legacyEventsEnvelope(pluginMutationResultEventSchema),
+  "cowork/plugins/disable": legacyEventsEnvelope(pluginMutationResultEventSchema),
   "cowork/plugins/install/preview": legacyEventEnvelope(pluginInstallPreviewEventSchema),
-  "cowork/plugins/install": legacyEventEnvelope(pluginsCatalogEventSchema),
+  "cowork/plugins/install": legacyEventsEnvelope(pluginInstallResultEventSchema),
   "cowork/memory/list": legacyEventEnvelope(memoryListEventSchema),
   "cowork/memory/upsert": legacyEventEnvelope(memoryListEventSchema),
   "cowork/memory/delete": legacyEventEnvelope(memoryListEventSchema),

@@ -1015,16 +1015,16 @@ export class AgentSession {
     await this.getSkillManager().getPluginsCatalog();
   }
 
-  async getPlugin(pluginId: string) {
-    await this.getSkillManager().getPlugin(pluginId);
+  async getPlugin(pluginId: string, scope?: "workspace" | "user") {
+    await this.getSkillManager().getPlugin(pluginId, scope);
   }
 
-  async enablePlugin(pluginId: string) {
-    await this.getSkillManager().enablePlugin(pluginId);
+  async enablePlugin(pluginId: string, scope?: "workspace" | "user") {
+    await this.getSkillManager().enablePlugin(pluginId, scope);
   }
 
-  async disablePlugin(pluginId: string) {
-    await this.getSkillManager().disablePlugin(pluginId);
+  async disablePlugin(pluginId: string, scope?: "workspace" | "user") {
+    await this.getSkillManager().disablePlugin(pluginId, scope);
   }
 
   async previewPluginInstall(sourceInput: string, targetScope: "workspace" | "user") {

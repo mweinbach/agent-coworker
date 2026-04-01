@@ -26,6 +26,7 @@ import {
   buildPluginCatalogSnapshot,
   buildPluginInstallPreview,
   installPluginsFromSource,
+  resolvePluginCatalogEntry,
 } from "../../plugins";
 import { setPluginEnabled } from "../../plugins/overrides";
 import { createTools } from "../../tools";
@@ -87,9 +88,32 @@ export class SkillManager {
     });
   }
 
-  private async emitPluginDetail(pluginId: string) {
+  private pluginMutationPendingKey(
+    action: string,
+    plugin: Pick<PluginCatalogEntry, "id" | "scope">,
+  ): string {
+    return this.skillMutationPendingKey(`plugin:${action}`, `${plugin.scope}:${plugin.id}`);
+  }
+
+  private resolvePluginSelection(
+    catalog: import("../../types").PluginCatalogSnapshot,
+    pluginId: string,
+    scope?: PluginCatalogEntry["scope"],
+  ): PluginCatalogEntry | null {
+    const resolved = resolvePluginCatalogEntry({ catalog, pluginId, scope });
+    if (resolved.error) {
+      this.context.emitError("validation_failed", "session", resolved.error);
+      return null;
+    }
+    return resolved.plugin;
+  }
+
+  private async emitPluginDetail(pluginId: string, scope?: PluginCatalogEntry["scope"]) {
     const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
-    const plugin = catalog.plugins.find((entry) => entry.id === pluginId) ?? null;
+    const plugin = this.resolvePluginSelection(catalog, pluginId, scope);
+    if (pluginId && plugin === null) {
+      return;
+    }
     this.context.emit({
       type: "plugin_detail",
       sessionId: this.context.id,
@@ -367,14 +391,14 @@ export class SkillManager {
     }
   }
 
-  async getPlugin(pluginIdRaw: string) {
+  async getPlugin(pluginIdRaw: string, scope?: PluginCatalogEntry["scope"]) {
     const pluginId = pluginIdRaw.trim();
     if (!pluginId) {
       this.context.emitError("validation_failed", "session", "Plugin ID is required");
       return;
     }
     try {
-      await this.emitPluginDetail(pluginId);
+      await this.emitPluginDetail(pluginId, scope);
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to read plugin detail: ${String(err)}`);
     }
@@ -406,14 +430,14 @@ export class SkillManager {
         await this.afterSuccessfulMutation({
           clearedMutationPendingKeys: [this.skillMutationPendingKey(`plugin:install:${targetScope}`)],
         });
-        await this.emitPluginDetail(result.pluginIds[0] ?? "");
+        await this.emitPluginDetail(result.pluginIds[0] ?? "", targetScope);
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to install plugins: ${String(err)}`);
       }
     });
   }
 
-  async enablePlugin(pluginIdRaw: string) {
+  async enablePlugin(pluginIdRaw: string, scope?: PluginCatalogEntry["scope"]) {
     const pluginId = pluginIdRaw.trim();
     if (!pluginId) {
       this.context.emitError("validation_failed", "session", "Plugin ID is required");
@@ -422,9 +446,8 @@ export class SkillManager {
     await this.withSkillMutationLock(async () => {
       try {
         const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
-        const plugin = catalog.plugins.find((entry) => entry.id === pluginId);
+        const plugin = this.resolvePluginSelection(catalog, pluginId, scope);
         if (!plugin) {
-          this.context.emitError("validation_failed", "session", `Plugin "${pluginId}" not found.`);
           return;
         }
         await setPluginEnabled({
@@ -434,7 +457,7 @@ export class SkillManager {
           enabled: true,
         });
         await this.afterSuccessfulMutation({
-          clearedMutationPendingKeys: [this.skillMutationPendingKey("plugin:enable", plugin.id)],
+          clearedMutationPendingKeys: [this.pluginMutationPendingKey("enable", plugin)],
         });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to enable plugin: ${String(err)}`);
@@ -442,7 +465,7 @@ export class SkillManager {
     });
   }
 
-  async disablePlugin(pluginIdRaw: string) {
+  async disablePlugin(pluginIdRaw: string, scope?: PluginCatalogEntry["scope"]) {
     const pluginId = pluginIdRaw.trim();
     if (!pluginId) {
       this.context.emitError("validation_failed", "session", "Plugin ID is required");
@@ -451,9 +474,8 @@ export class SkillManager {
     await this.withSkillMutationLock(async () => {
       try {
         const catalog = await buildPluginCatalogSnapshot(this.context.state.config);
-        const plugin = catalog.plugins.find((entry) => entry.id === pluginId);
+        const plugin = this.resolvePluginSelection(catalog, pluginId, scope);
         if (!plugin) {
-          this.context.emitError("validation_failed", "session", `Plugin "${pluginId}" not found.`);
           return;
         }
         await setPluginEnabled({
@@ -463,7 +485,7 @@ export class SkillManager {
           enabled: false,
         });
         await this.afterSuccessfulMutation({
-          clearedMutationPendingKeys: [this.skillMutationPendingKey("plugin:disable", plugin.id)],
+          clearedMutationPendingKeys: [this.pluginMutationPendingKey("disable", plugin)],
         });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to disable plugin: ${String(err)}`);

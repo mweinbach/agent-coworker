@@ -305,6 +305,7 @@ export function createControlSocketHelpers(
                 controlSessionConfig: null,
                 pluginsCatalog: null,
                 selectedPluginId: null,
+                selectedPluginScope: null,
                 selectedPlugin: null,
                 selectedPluginPreview: null,
                 pluginsLoading: false,
@@ -605,10 +606,12 @@ export function createControlSocketHelpers(
     }
 
     const selectedPluginId = get().workspaceRuntimeById[workspaceId]?.selectedPluginId;
+    const selectedPluginScope = get().workspaceRuntimeById[workspaceId]?.selectedPluginScope;
     if (selectedPluginId) {
       await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/read", {
         cwd,
         pluginId: selectedPluginId,
+        ...(selectedPluginScope ? { scope: selectedPluginScope } : {}),
       });
     }
   }
@@ -924,9 +927,12 @@ export function createControlSocketHelpers(
       set((s) => {
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
         const selectedPluginId = workspaceRuntime.selectedPluginId;
+        const selectedPluginScope = workspaceRuntime.selectedPluginScope;
         const selectedPlugin =
           selectedPluginId
-            ? evt.catalog.plugins.find((plugin) => plugin.id === selectedPluginId) ?? null
+            ? evt.catalog.plugins.find((plugin) =>
+              plugin.id === selectedPluginId
+              && (selectedPluginScope === null || plugin.scope === selectedPluginScope)) ?? null
             : null;
         return {
           workspaceRuntimeById: {
@@ -941,6 +947,7 @@ export function createControlSocketHelpers(
                 evt.clearedMutationPendingKeys ?? [],
               ),
               selectedPluginId: selectedPlugin ? selectedPluginId : null,
+              selectedPluginScope: selectedPlugin?.scope ?? null,
               selectedPlugin,
             },
           },
@@ -968,6 +975,7 @@ export function createControlSocketHelpers(
           [workspaceId]: {
             ...s.workspaceRuntimeById[workspaceId],
             selectedPluginId: evt.plugin?.id ?? null,
+            selectedPluginScope: evt.plugin?.scope ?? null,
             selectedPlugin: evt.plugin,
             pluginsLoading: false,
             pluginsError: null,
@@ -995,6 +1003,7 @@ export function createControlSocketHelpers(
               ...rt,
               selectedPluginPreview: nextPreview,
               skillMutationPendingKeys: pendingKeys,
+              pluginsLoading: false,
               pluginsError: null,
             },
           },

@@ -24,6 +24,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
 
   const plugin = runtime?.selectedPlugin ?? null;
   const pluginId = runtime?.selectedPluginId ?? null;
+  const pluginScope = runtime?.selectedPluginScope ?? null;
 
   const skillCount = plugin?.skills.length ?? 0;
   const mcpCount = plugin?.mcpServers.length ?? 0;
@@ -34,8 +35,8 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
     return plugin.marketplace.displayName ?? plugin.marketplace.name;
   }, [plugin]);
   const pluginError = runtime?.pluginsError ?? null;
-  const enablePending = plugin ? actionPending(runtime, "plugin:enable", plugin.id) : false;
-  const disablePending = plugin ? actionPending(runtime, "plugin:disable", plugin.id) : false;
+  const enablePending = plugin ? actionPending(runtime, "plugin:enable", `${plugin.scope}:${plugin.id}`) : false;
+  const disablePending = plugin ? actionPending(runtime, "plugin:disable", `${plugin.scope}:${plugin.id}`) : false;
 
   const handleOpenChange = (open: boolean) => {
     if (!open) {
@@ -45,7 +46,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
 
   if (!pluginId) return null;
 
-  const isLoading = pluginId !== null && plugin === null && pluginError === null;
+  const isLoading = pluginId !== null && pluginScope !== null && plugin === null && pluginError === null;
 
   return (
     <Dialog open={pluginId !== null} onOpenChange={handleOpenChange}>
@@ -198,7 +199,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     variant="outline"
                     size="sm"
                     disabled={disablePending}
-                    onClick={() => void disablePlugin(plugin.id)}
+                    onClick={() => void disablePlugin(plugin.id, plugin.scope)}
                   >
                     {disablePending ? "Disabling..." : "Disable Plugin"}
                   </Button>
@@ -207,7 +208,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                     variant="outline"
                     size="sm"
                     disabled={enablePending}
-                    onClick={() => void enablePlugin(plugin.id)}
+                    onClick={() => void enablePlugin(plugin.id, plugin.scope)}
                   >
                     {enablePending ? "Enabling..." : "Enable Plugin"}
                   </Button>

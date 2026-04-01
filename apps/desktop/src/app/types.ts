@@ -254,6 +254,7 @@ export type WorkspaceRuntime = {
   mcpLastAuthResult: MCPServerAuthResultEvent | null;
   pluginsCatalog: PluginCatalogSnapshot | null;
   selectedPluginId: string | null;
+  selectedPluginScope: PluginCatalogEntry["scope"] | null;
   selectedPlugin: PluginCatalogEntry | null;
   selectedPluginPreview: PluginInstallPreview | null;
   pluginsLoading: boolean;

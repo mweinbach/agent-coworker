@@ -59,11 +59,11 @@ const failedSkillMutationActions = [
 const failedPluginMutationActions = [
   {
     name: "enablePlugin",
-    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.enablePlugin("plugin-1"),
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.enablePlugin("plugin-1", "workspace"),
   },
   {
     name: "disablePlugin",
-    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.disablePlugin("plugin-1"),
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.disablePlugin("plugin-1", "workspace"),
   },
 ] as const;
 
@@ -226,13 +226,22 @@ describe("skill store actions", () => {
     });
     RUNTIME.jsonRpcSockets.set(workspaceId, {
       readyPromise: Promise.resolve(),
-      request: async () => await requestPromise,
+      request: async (method: string, params: any) => {
+        expect(method).toBe("cowork/plugins/read");
+        expect(params).toEqual({
+          cwd: "/tmp/workspace",
+          pluginId: "plugin-1",
+          scope: "workspace",
+        });
+        return await requestPromise;
+      },
       respond: () => true,
       close: () => {},
     } as any);
 
-    const selectPromise = createSkillActions(set as any, get as any).selectPlugin("plugin-1");
+    const selectPromise = createSkillActions(set as any, get as any).selectPlugin("plugin-1", "workspace");
     expect(state.workspaceRuntimeById[workspaceId].selectedPluginId).toBe("plugin-1");
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
     expect(state.workspaceRuntimeById[workspaceId].selectedPlugin).toBeNull();
     expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(true);
 
@@ -246,6 +255,7 @@ describe("skill store actions", () => {
     await selectPromise;
 
     expect(state.workspaceRuntimeById[workspaceId].selectedPluginId).toBe("plugin-1");
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
     expect(state.workspaceRuntimeById[workspaceId].selectedPlugin).toEqual(plugin);
     expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
     expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();

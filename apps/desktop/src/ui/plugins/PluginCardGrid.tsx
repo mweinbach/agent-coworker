@@ -8,7 +8,7 @@ export function PluginCardGrid({
   onSelect,
 }: {
   plugins: PluginCatalogEntry[];
-  onSelect: (pluginId: string) => void;
+  onSelect: (pluginId: string, scope: PluginCatalogEntry["scope"]) => void;
 }) {
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -19,7 +19,7 @@ export function PluginCardGrid({
           <Card
             key={plugin.id}
             className="group relative flex cursor-pointer flex-col overflow-hidden border border-border/55 bg-card/44 p-3.5 transition-colors hover:border-border/75 hover:bg-card/68"
-            onClick={() => onSelect(plugin.id)}
+            onClick={() => onSelect(plugin.id, plugin.scope)}
           >
             <div className="mb-2.5 flex items-start justify-between gap-3">
               <div className="flex items-center gap-3">

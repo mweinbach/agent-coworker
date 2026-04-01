@@ -27,8 +27,8 @@ const MOCK_UPDATE_STATE = {
 };
 
 const revealPathMock = mock(async () => {});
-const enablePluginMock = mock(async (_pluginId: string) => {});
-const disablePluginMock = mock(async (_pluginId: string) => {});
+const enablePluginMock = mock(async (_pluginId: string, _scope?: "workspace" | "user") => {});
+const disablePluginMock = mock(async (_pluginId: string, _scope?: "workspace" | "user") => {});
 
 mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   appendTranscriptBatch: async () => {},
@@ -89,6 +89,7 @@ describe("plugin detail dialog", () => {
         "ws-1": {
           ...defaultWorkspaceRuntime(),
           selectedPluginId: "plugin-1",
+          selectedPluginScope: "workspace",
           selectedPlugin: {
             id: "plugin-1",
             name: "figma-toolkit",
@@ -181,7 +182,7 @@ describe("plugin detail dialog", () => {
       });
 
       expect(enablePluginMock).toHaveBeenCalledTimes(1);
-      expect(enablePluginMock).toHaveBeenCalledWith("plugin-1");
+      expect(enablePluginMock).toHaveBeenCalledWith("plugin-1", "workspace");
       expect(disablePluginMock).not.toHaveBeenCalled();
       const pageText = harness.dom.window.document.body.textContent ?? "";
       expect(pageText).toContain("Bundled Skills");

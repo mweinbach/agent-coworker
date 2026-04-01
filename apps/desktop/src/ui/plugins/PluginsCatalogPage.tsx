@@ -72,14 +72,14 @@ export function PluginsCatalogPage({
           {enabledPlugins.length > 0 ? (
             <section>
               <h2 className="mb-4 text-lg font-semibold">Enabled</h2>
-              <PluginCardGrid plugins={enabledPlugins} onSelect={(pluginId) => void selectPlugin(pluginId)} />
+              <PluginCardGrid plugins={enabledPlugins} onSelect={(pluginId, scope) => void selectPlugin(pluginId, scope)} />
             </section>
           ) : null}
 
           {disabledPlugins.length > 0 ? (
             <section>
               <h2 className="mb-4 text-lg font-semibold text-muted-foreground">Disabled</h2>
-              <PluginCardGrid plugins={disabledPlugins} onSelect={(pluginId) => void selectPlugin(pluginId)} />
+              <PluginCardGrid plugins={disabledPlugins} onSelect={(pluginId, scope) => void selectPlugin(pluginId, scope)} />
             </section>
           ) : null}
 

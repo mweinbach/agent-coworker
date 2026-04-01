@@ -115,3 +115,32 @@ export async function buildPluginCatalogSnapshot(config: AgentConfig): Promise<P
 
   return { plugins, warnings };
 }
+
+export function resolvePluginCatalogEntry(opts: {
+  catalog: PluginCatalogSnapshot;
+  pluginId: string;
+  scope?: PluginScope;
+}): { plugin: PluginCatalogEntry | null; error?: string } {
+  const matches = opts.catalog.plugins.filter((plugin) =>
+    plugin.id === opts.pluginId && (opts.scope === undefined || plugin.scope === opts.scope));
+
+  if (matches.length === 1) {
+    return { plugin: matches[0] ?? null };
+  }
+
+  if (matches.length === 0) {
+    return { plugin: null };
+  }
+
+  if (opts.scope !== undefined) {
+    return {
+      plugin: null,
+      error: `Multiple "${opts.pluginId}" plugins were found in the ${opts.scope} scope. Resolve the duplicate installations before continuing.`,
+    };
+  }
+
+  return {
+    plugin: null,
+    error: `Plugin "${opts.pluginId}" exists in multiple scopes. Specify whether you want the workspace or user copy.`,
+  };
+}

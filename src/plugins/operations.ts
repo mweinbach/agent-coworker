@@ -83,25 +83,8 @@ async function refreshCatalog(config: AgentConfig): Promise<PluginCatalogSnapsho
   return await buildPluginCatalogSnapshot(config);
 }
 
-function candidateScope(
-  config: AgentConfig,
-  candidate: MaterializedPluginCandidate,
-  targetScope: PluginInstallTargetScope,
-): "workspace" | "user" {
-  if (targetScope === "workspace") {
-    return "workspace";
-  }
-  if (config.workspacePluginsDir && candidate.rootDir.startsWith(config.workspacePluginsDir)) {
-    return "workspace";
-  }
-  return "user";
-}
-
 function validateInstallCandidates(
-  config: AgentConfig,
-  catalog: PluginCatalogSnapshot,
   validCandidates: MaterializedPluginCandidate[],
-  targetScope: PluginInstallTargetScope,
 ): void {
   const seenIds = new Set<string>();
   for (const candidate of validCandidates) {
@@ -111,16 +94,6 @@ function validateInstallCandidates(
       );
     }
     seenIds.add(candidate.pluginId);
-  }
-
-  for (const candidate of validCandidates) {
-    const nextScope = candidateScope(config, candidate, targetScope);
-    const conflictingPlugin = catalog.plugins.find((plugin) => plugin.id === candidate.pluginId && plugin.scope !== nextScope);
-    if (conflictingPlugin) {
-      throw new Error(
-        `Plugin "${candidate.pluginId}" already exists in the ${conflictingPlugin.scope} scope. Remove it first before installing the same plugin id into ${nextScope}.`,
-      );
-    }
   }
 }
 
@@ -162,7 +135,7 @@ export async function installPluginsFromSource(opts: {
       throw new Error("No valid plugin bundles were found in the provided source");
     }
 
-    validateInstallCandidates(opts.config, currentCatalog, validCandidates, opts.targetScope);
+    validateInstallCandidates(validCandidates);
 
     const installedPluginIds: string[] = [];
     for (const candidate of validCandidates) {

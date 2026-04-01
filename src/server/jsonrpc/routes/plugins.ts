@@ -32,10 +32,11 @@ export function createPluginsRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const pluginId = typeof params.pluginId === "string" ? params.pluginId.trim() : "";
+      const scope = params.scope === "workspace" || params.scope === "user" ? params.scope : undefined;
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.getPlugin(pluginId),
+        async (session) => await session.getPlugin(pluginId, scope),
         (event): event is Extract<ServerEvent, { type: "plugin_detail" }> =>
           event.type === "plugin_detail" && event.plugin?.id === pluginId,
       );
@@ -87,10 +88,11 @@ export function createPluginsRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const pluginId = typeof params.pluginId === "string" ? params.pluginId.trim() : "";
+      const scope = params.scope === "workspace" || params.scope === "user" ? params.scope : undefined;
       const outcome = await captureWorkspaceControlMutationError(
         context,
         cwd,
-        async (session) => await session.enablePlugin(pluginId),
+        async (session) => await session.enablePlugin(pluginId, scope),
       );
       if (outcome) {
         sendSessionMutationError(context, ws, message.id, outcome);
@@ -113,10 +115,11 @@ export function createPluginsRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const pluginId = typeof params.pluginId === "string" ? params.pluginId.trim() : "";
+      const scope = params.scope === "workspace" || params.scope === "user" ? params.scope : undefined;
       const outcome = await captureWorkspaceControlMutationError(
         context,
         cwd,
-        async (session) => await session.disablePlugin(pluginId),
+        async (session) => await session.disablePlugin(pluginId, scope),
       );
       if (outcome) {
         sendSessionMutationError(context, ws, message.id, outcome);

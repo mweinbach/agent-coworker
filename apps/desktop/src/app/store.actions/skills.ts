@@ -15,7 +15,7 @@ import {
   renamePath,
   trashPath,
 } from "../../lib/desktopCommands";
-import type { ProviderName } from "../../lib/wsProtocol";
+import type { PluginCatalogEntry, ProviderName } from "../../lib/wsProtocol";
 
 import {
   type AppStoreActions,
@@ -47,12 +47,14 @@ import {
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
+type PluginSelection = Pick<PluginCatalogEntry, "id" | "scope">;
+
 function skillPendingKey(action: string, id?: string): string {
   return id ? `${action}:${id}` : action;
 }
 
-function pluginPendingKey(action: string, id?: string): string {
-  return id ? `plugin:${action}:${id}` : `plugin:${action}`;
+function pluginPendingKey(action: string, selection?: PluginSelection): string {
+  return selection ? `plugin:${action}:${selection.scope}:${selection.id}` : `plugin:${action}`;
 }
 
 function clearFailedPluginMutationSend(set: StoreSet, workspaceId: string, key: string, detail: string): void {
@@ -208,7 +210,7 @@ export function createSkillActions(
       }
     },
 
-    selectPlugin: async (pluginId: string | null) => {
+    selectPlugin: async (pluginId: string | null, scope?: PluginSelection["scope"] | null) => {
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
       if (pluginId === null) {
@@ -218,6 +220,7 @@ export function createSkillActions(
             [workspaceId]: {
               ...s.workspaceRuntimeById[workspaceId],
               selectedPluginId: null,
+              selectedPluginScope: null,
               selectedPlugin: null,
             },
           },
@@ -231,13 +234,18 @@ export function createSkillActions(
           [workspaceId]: {
             ...s.workspaceRuntimeById[workspaceId],
             selectedPluginId: pluginId,
+            selectedPluginScope: scope ?? null,
             selectedPlugin: null,
             pluginsLoading: true,
             pluginsError: null,
           },
         },
       }));
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/read", { cwd, pluginId });
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/read", {
+        cwd,
+        pluginId,
+        ...(scope ? { scope } : {}),
+      });
       if (!ok) {
         set((s) => ({
           workspaceRuntimeById: {
@@ -245,6 +253,7 @@ export function createSkillActions(
             [workspaceId]: {
               ...s.workspaceRuntimeById[workspaceId],
               selectedPluginId: null,
+              selectedPluginScope: null,
               pluginsLoading: false,
               pluginsError: "Unable to load plugin details.",
             },
@@ -376,11 +385,12 @@ export function createSkillActions(
       }));
     },
 
-    enablePlugin: async (pluginId: string) => {
+    enablePlugin: async (pluginId: string, scope?: PluginSelection["scope"]) => {
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
-      const key = pluginPendingKey("enable", pluginId);
+      const selection = scope ? { id: pluginId, scope } : undefined;
+      const key = pluginPendingKey("enable", selection);
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
@@ -393,7 +403,11 @@ export function createSkillActions(
           },
         },
       }));
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/enable", { cwd, pluginId });
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/enable", {
+        cwd,
+        pluginId,
+        ...(scope ? { scope } : {}),
+      });
       if (!ok) {
         clearFailedSkillMutationSend(set, workspaceId, key, "Unable to enable plugin.");
       } else {
@@ -413,11 +427,12 @@ export function createSkillActions(
       }
     },
 
-    disablePlugin: async (pluginId: string) => {
+    disablePlugin: async (pluginId: string, scope?: PluginSelection["scope"]) => {
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
-      const key = pluginPendingKey("disable", pluginId);
+      const selection = scope ? { id: pluginId, scope } : undefined;
+      const key = pluginPendingKey("disable", selection);
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
@@ -430,7 +445,11 @@ export function createSkillActions(
           },
         },
       }));
-      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/disable", { cwd, pluginId });
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/disable", {
+        cwd,
+        pluginId,
+        ...(scope ? { scope } : {}),
+      });
       if (!ok) {
         clearFailedSkillMutationSend(set, workspaceId, key, "Unable to disable plugin.");
       } else {

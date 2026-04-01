@@ -892,11 +892,13 @@ export const pluginCatalogReadRequestSchema = z.object({
 export const pluginReadRequestSchema = z.object({
   cwd: optionalNonEmptyTrimmedStringSchema,
   pluginId: nonEmptyTrimmedStringSchema,
+  scope: pluginScopeSchema.optional(),
 }).strict();
 
 export const pluginMutationRequestSchema = z.object({
   cwd: optionalNonEmptyTrimmedStringSchema,
   pluginId: nonEmptyTrimmedStringSchema,
+  scope: pluginScopeSchema.optional(),
 }).strict();
 
 export const pluginsInstallPreviewRequestSchema = z.object({

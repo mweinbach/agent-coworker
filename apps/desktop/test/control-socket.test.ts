@@ -701,8 +701,9 @@ describe("control socket helpers over JSON-RPC", () => {
           serverUrl: "ws://mock",
           pluginsLoading: true,
           selectedPluginId: "plugin-1",
+          selectedPluginScope: "workspace",
           skillMutationPendingKeys: {
-            "plugin:enable:plugin-1": true,
+            "plugin:enable:workspace:plugin-1": true,
             other: true,
           },
         },
@@ -714,7 +715,7 @@ describe("control socket helpers over JSON-RPC", () => {
         event: {
           type: "plugins_catalog",
           sessionId: "jsonrpc-control",
-          clearedMutationPendingKeys: ["plugin:enable:plugin-1"],
+          clearedMutationPendingKeys: ["plugin:enable:workspace:plugin-1"],
           catalog: {
             warnings: [],
             plugins: [
@@ -753,6 +754,7 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
     expect(state.workspaceRuntimeById[workspaceId].pluginsCatalog?.plugins).toHaveLength(1);
     expect(state.workspaceRuntimeById[workspaceId].selectedPlugin?.id).toBe("plugin-1");
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
     expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ other: true });
   });
 
@@ -765,6 +767,7 @@ describe("control socket helpers over JSON-RPC", () => {
           serverUrl: "ws://mock",
           pluginsLoading: true,
           selectedPluginId: "plugin-1",
+          selectedPluginScope: "workspace",
         },
       },
     });
@@ -800,13 +803,64 @@ describe("control socket helpers over JSON-RPC", () => {
       set as any,
       workspaceId,
       "cowork/plugins/read",
-      { cwd: "/tmp/workspace", pluginId: "plugin-1" },
+      { cwd: "/tmp/workspace", pluginId: "plugin-1", scope: "workspace" },
     );
 
     expect(ok).toBe(true);
     expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
     expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
     expect(state.workspaceRuntimeById[workspaceId].selectedPlugin?.displayName).toBe("Figma Toolkit");
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
+  });
+
+  test("requestJsonRpcControlEvent clears plugin loading after install preview success", async () => {
+    const workspaceId = "ws-plugin-preview";
+    const { state, get, set } = createState(workspaceId, {
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          pluginsLoading: true,
+          skillMutationPendingKeys: {
+            "plugin:preview": true,
+          },
+        },
+      },
+    });
+    installFakeSocket(workspaceId, async (method) => {
+      expect(method).toBe("cowork/plugins/install/preview");
+      return {
+        event: {
+          type: "plugin_install_preview",
+          sessionId: "jsonrpc-control",
+          preview: {
+            source: {
+              kind: "github_shorthand",
+              raw: "owner/repo",
+              displaySource: "https://github.com/owner/repo",
+              url: "https://github.com/owner/repo",
+              repo: "owner/repo",
+            },
+            targetScope: "workspace",
+            candidates: [],
+            warnings: [],
+          },
+        },
+      };
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const ok = await helpers.requestJsonRpcControlEvent(
+      get as any,
+      set as any,
+      workspaceId,
+      "cowork/plugins/install/preview",
+      { cwd: "/tmp/workspace", sourceInput: "owner/repo", targetScope: "workspace" },
+    );
+
+    expect(ok).toBe(true);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
   });
 
   test("requestJsonRpcControlEvent applies error events and rejects pending install waiters", async () => {

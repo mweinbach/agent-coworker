@@ -254,6 +254,7 @@ export function defaultWorkspaceRuntime(): WorkspaceRuntime {
     mcpLastAuthResult: null,
     pluginsCatalog: null,
     selectedPluginId: null,
+    selectedPluginScope: null,
     selectedPlugin: null,
     selectedPluginPreview: null,
     pluginsLoading: false,

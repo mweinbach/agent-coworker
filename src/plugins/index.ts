@@ -1,4 +1,4 @@
-export { buildPluginCatalogSnapshot } from "./catalog";
+export { buildPluginCatalogSnapshot, resolvePluginCatalogEntry } from "./catalog";
 export { discoverPlugins } from "./discovery";
 export {
   buildPluginCatalogEntry,

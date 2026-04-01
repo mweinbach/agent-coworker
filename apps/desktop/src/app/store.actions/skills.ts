@@ -145,6 +145,7 @@ export function createSkillActions(
       workspaces: state.workspaces ?? [],
       selectedWorkspaceId: state.selectedWorkspaceId,
       pluginManagementWorkspaceId: state.pluginManagementWorkspaceId,
+      pluginManagementMode: state.pluginManagementMode,
     }).catalogWorkspaceId;
   };
 
@@ -273,6 +274,7 @@ export function createSkillActions(
     setPluginManagementWorkspace: async (workspaceId: string | null) => {
       set({
         pluginManagementWorkspaceId: resolvePluginManagementWorkspaceId(get().workspaces ?? [], workspaceId),
+        pluginManagementMode: workspaceId === null ? "global" : "workspace",
       } as any);
       syncDesktopStateCache(get);
       const targetWorkspaceId = managementWorkspaceId();

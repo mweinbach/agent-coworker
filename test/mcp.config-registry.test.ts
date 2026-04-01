@@ -167,7 +167,7 @@ describe("mcp config registry", () => {
     }
   });
 
-  test("plugin MCP stdio transports rebase relative command and cwd against the plugin root", async () => {
+  test("plugin MCP stdio transports rebase relative command, args, and cwd against the plugin root", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-builtin-"));
@@ -192,7 +192,7 @@ describe("mcp config registry", () => {
             bundledServer: {
               type: "stdio",
               command: "./bin/server.js",
-              args: ["--port", "7337"],
+              args: ["./dist/server.mjs", "--port", "7337"],
               cwd: "./runtime",
             },
             pathServer: {
@@ -210,7 +210,11 @@ describe("mcp config registry", () => {
       if (bundledServer?.transport.type === "stdio") {
         expect(bundledServer.transport.command).toBe(path.join(pluginRoot, "bin", "server.js"));
         expect(bundledServer.transport.cwd).toBe(path.join(pluginRoot, "runtime"));
-        expect(bundledServer.transport.args).toEqual(["--port", "7337"]);
+        expect(bundledServer.transport.args).toEqual([
+          path.join(pluginRoot, "dist", "server.mjs"),
+          "--port",
+          "7337",
+        ]);
       }
 
       const pathServer = snapshot.servers.find((entry) => entry.name === "pathServer");
@@ -219,6 +223,53 @@ describe("mcp config registry", () => {
         expect(pathServer.transport.command).toBe("node");
         expect(pathServer.transport.cwd).toBeUndefined();
       }
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin MCP stdio transports reject relative paths that escape the plugin root", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-escape-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-escape-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-escape-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "escape-toolkit");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "escape-toolkit",
+          description: "Plugin escape helpers",
+          interface: { displayName: "Escape Toolkit" },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".mcp.json"),
+        `${JSON.stringify({
+          mcpServers: {
+            escapedServer: {
+              type: "stdio",
+              command: "node",
+              args: ["../outside/server.mjs"],
+              cwd: "../outside",
+            },
+          },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const snapshot = await loadMCPConfigRegistry(config);
+
+      expect(snapshot.servers.find((entry) => entry.name === "escapedServer")).toBeUndefined();
+      expect(snapshot.warnings).toEqual([
+        expect.stringContaining("Ignoring malformed plugin MCP config"),
+      ]);
+      expect(snapshot.warnings[0]).toContain('resolves argument "../outside/server.mjs" outside the plugin root');
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

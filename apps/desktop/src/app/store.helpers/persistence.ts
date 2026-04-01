@@ -63,6 +63,7 @@ function buildCachedDesktopUiState(state: AppStoreState): CachedDesktopUiState {
   return {
     selectedWorkspaceId: state.selectedWorkspaceId,
     pluginManagementWorkspaceId: resolvePluginManagementWorkspaceId(state.workspaces, state.pluginManagementWorkspaceId),
+    pluginManagementMode: state.pluginManagementMode,
     selectedThreadId,
     view: state.view,
     settingsPage: state.settingsPage,

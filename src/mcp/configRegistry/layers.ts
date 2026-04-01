@@ -9,6 +9,7 @@ import {
   comparePluginCatalogEntries,
   readPluginMcpServers,
 } from "../../plugins";
+import { isPathInside } from "../../utils/paths";
 import { resolveMcpConfigPaths } from "../configPaths";
 import { parseMCPServersDocument } from "./parser";
 import type {
@@ -93,23 +94,41 @@ function isRelativeFilesystemPath(value: string): boolean {
   return !path.isAbsolute(value) && (value.startsWith(".") || value.includes("/") || value.includes("\\"));
 }
 
+function resolvePluginLocalPath(serverName: string, pluginRootDir: string, value: string, label: string): string {
+  const resolved = path.resolve(pluginRootDir, value);
+  if (!isPathInside(pluginRootDir, resolved)) {
+    throw new Error(`Plugin MCP server "${serverName}" resolves ${label} outside the plugin root.`);
+  }
+  return resolved;
+}
+
 function rebasePluginLocalTransport(server: MCPServerConfig, pluginRootDir: string): MCPServerConfig {
   if (server.transport.type !== "stdio") {
     return server;
   }
 
   const command = isRelativeFilesystemPath(server.transport.command)
-    ? path.resolve(pluginRootDir, server.transport.command)
+    ? resolvePluginLocalPath(server.name, pluginRootDir, server.transport.command, "command")
     : server.transport.command;
+  const args = server.transport.args?.map((arg) =>
+    isRelativeFilesystemPath(arg)
+      ? resolvePluginLocalPath(server.name, pluginRootDir, arg, `argument "${arg}"`)
+      : arg);
   const cwd = server.transport.cwd
-    ? (path.isAbsolute(server.transport.cwd) ? server.transport.cwd : path.resolve(pluginRootDir, server.transport.cwd))
+    ? (
+        path.isAbsolute(server.transport.cwd)
+          ? server.transport.cwd
+          : resolvePluginLocalPath(server.name, pluginRootDir, server.transport.cwd, "cwd")
+      )
     : undefined;
 
   return {
     ...server,
     transport: {
-      ...server.transport,
+      type: "stdio",
       command,
+      ...(args ? { args } : {}),
+      ...(server.transport.env ? { env: server.transport.env } : {}),
       ...(cwd ? { cwd } : {}),
     },
   };

@@ -6,6 +6,7 @@ import path from "node:path";
 import { loadMCPConfigRegistry } from "../src/mcp/configRegistry/layers";
 import { installPluginsFromSource, previewPluginInstall } from "../src/plugins/operations";
 import { buildPluginCatalogSnapshot, resolvePluginCatalogEntry } from "../src/plugins/catalog";
+import { discoverPlugins } from "../src/plugins/discovery";
 import { readPluginManifest } from "../src/plugins/manifest";
 import { discoverSkillsForConfig } from "../src/skills";
 import type { AgentConfig, PluginCatalogEntry, PluginCatalogSnapshot } from "../src/types";
@@ -412,6 +413,32 @@ describe("plugin catalog and install operations", () => {
       await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves apps outside the plugin root");
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("direct plugin discovery follows symlinked plugin directories", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-discovery-symlink-workspace-"));
+
+    try {
+      const checkoutRoot = path.join(workspace, "plugin-checkout", "figma-toolkit");
+      await writePlugin(checkoutRoot, "Symlinked Figma Toolkit");
+
+      const pluginsDir = path.join(workspace, ".agents", "plugins");
+      await fs.mkdir(pluginsDir, { recursive: true });
+      const linkedPluginRoot = path.join(pluginsDir, "figma-toolkit");
+      await fs.symlink(checkoutRoot, linkedPluginRoot, process.platform === "win32" ? "junction" : "dir");
+
+      const discovery = await discoverPlugins({ workspacePluginsDir: pluginsDir });
+
+      expect(discovery.plugins).toHaveLength(1);
+      expect(discovery.plugins[0]).toMatchObject({
+        rootDir: linkedPluginRoot,
+        realRootDir: await fs.realpath(checkoutRoot),
+        scope: "workspace",
+        discoveryKind: "direct",
+      });
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
     }
   });
 

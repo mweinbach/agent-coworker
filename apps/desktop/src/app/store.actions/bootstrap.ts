@@ -249,6 +249,7 @@ const persistedUiSchema = z.object({
   selectedWorkspaceId: normalizedNullableSelectionSchema.optional(),
   selectedThreadId: normalizedNullableSelectionSchema.optional(),
   pluginManagementWorkspaceId: normalizedNullableSelectionSchema.optional(),
+  pluginManagementMode: z.enum(["auto", "global", "workspace"]).optional(),
   view: normalizedViewSchema.optional(),
   settingsPage: normalizedSettingsPageSchema.optional(),
   lastNonSettingsView: normalizedViewSchema.optional(),
@@ -261,6 +262,7 @@ const persistedUiSchema = z.object({
   selectedWorkspaceId: ui.selectedWorkspaceId ?? null,
   selectedThreadId: ui.selectedThreadId ?? null,
   pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId ?? null,
+  pluginManagementMode: ui.pluginManagementMode ?? "auto",
   view: ui.view ?? "chat",
   settingsPage: ui.settingsPage ?? "providers",
   lastNonSettingsView: ui.lastNonSettingsView ?? "chat",
@@ -319,9 +321,11 @@ function buildResolvedDesktopUiState(
         ? normalizedUi.selectedWorkspaceId
         : fallbackSelectedWorkspaceId,
     pluginManagementWorkspaceId: normalizedUi.pluginManagementWorkspaceId,
+    pluginManagementMode: normalizedUi.pluginManagementMode,
   });
   const selectedWorkspaceId = selection.selectedWorkspaceId;
   const pluginManagementWorkspaceId = selection.pluginManagementWorkspaceId;
+  const pluginManagementMode = selection.pluginManagementMode;
   const workspaceThreads = selectedWorkspaceId
     ? threads
         .filter((thread) => thread.workspaceId === selectedWorkspaceId)
@@ -350,6 +354,7 @@ function buildResolvedDesktopUiState(
     selectedWorkspaceId,
     selectedThreadId,
     pluginManagementWorkspaceId,
+    pluginManagementMode,
     view: normalizedUi.view ?? "chat",
     settingsPage: normalizeSettingsPageId(normalizedUi.settingsPage),
     lastNonSettingsView,
@@ -457,6 +462,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       selectedWorkspaceId: ui.selectedWorkspaceId,
       selectedThreadId: ui.selectedThreadId,
       pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId,
+      pluginManagementMode: ui.pluginManagementMode,
       providerStatusByName: state.providerState?.statusByName ?? {},
       providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
       providerConnected: connectedProviders,
@@ -499,6 +505,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           selectedWorkspaceId: get().selectedWorkspaceId,
           selectedThreadId: get().selectedThreadId,
           pluginManagementWorkspaceId: get().pluginManagementWorkspaceId,
+          pluginManagementMode: get().pluginManagementMode,
           view: get().view,
           settingsPage: get().settingsPage,
           lastNonSettingsView: get().lastNonSettingsView,
@@ -536,6 +543,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           selectedWorkspaceId: ui.selectedWorkspaceId,
           selectedThreadId: ui.selectedThreadId,
           pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId,
+          pluginManagementMode: ui.pluginManagementMode,
           providerStatusByName: state.providerState?.statusByName ?? {},
           providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
           providerConnected: connectedProviders,
@@ -604,6 +612,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
             if (
               current.selectedWorkspaceId !== ui.selectedWorkspaceId
               || current.pluginManagementWorkspaceId !== ui.pluginManagementWorkspaceId
+              || current.pluginManagementMode !== ui.pluginManagementMode
               || current.view !== "skills"
             ) {
               return;

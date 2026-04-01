@@ -115,7 +115,7 @@ async function discoverDirectPlugins(opts: {
   pluginsDir: string;
   scope: PluginScope;
 }): Promise<DiscoveredPluginCandidate[]> {
-  let dirents: Array<{ name: string; isDirectory: () => boolean }> = [];
+  let dirents: Array<{ name: string; isDirectory: () => boolean; isSymbolicLink: () => boolean }> = [];
   try {
     dirents = await fs.readdir(opts.pluginsDir, { withFileTypes: true, encoding: "utf8" });
   } catch (error) {
@@ -128,7 +128,7 @@ async function discoverDirectPlugins(opts: {
 
   const plugins: DiscoveredPluginCandidate[] = [];
   for (const dirent of dirents) {
-    if (!dirent.isDirectory()) continue;
+    if (!dirent.isDirectory() && !dirent.isSymbolicLink()) continue;
     const rootDir = path.join(opts.pluginsDir, dirent.name);
     const realRootDir = await resolveCanonicalPluginRoot(rootDir);
     if (!realRootDir) continue;

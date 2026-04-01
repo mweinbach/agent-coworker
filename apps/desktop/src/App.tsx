@@ -94,6 +94,7 @@ const ChatShell = memo(function ChatShell({
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
+  const pluginManagementMode = useAppStore((s) => s.pluginManagementMode);
   const setPluginManagementWorkspace = useAppStore((s) => s.setPluginManagementWorkspace);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
@@ -124,10 +125,11 @@ const ChatShell = memo(function ChatShell({
     workspaces,
     selectedWorkspaceId,
     pluginManagementWorkspaceId,
-  }), [pluginManagementWorkspaceId, selectedWorkspaceId, workspaces]);
+    pluginManagementMode,
+  }), [pluginManagementMode, pluginManagementWorkspaceId, selectedWorkspaceId, workspaces]);
   const pluginManagementWorkspace = useMemo(
-    () => workspaces.find((workspace) => workspace.id === pluginSelection.pluginManagementWorkspaceId) ?? null,
-    [pluginSelection.pluginManagementWorkspaceId, workspaces],
+    () => workspaces.find((workspace) => workspace.id === pluginSelection.displayWorkspaceId) ?? null,
+    [pluginSelection.displayWorkspaceId, workspaces],
   );
   const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
   const busy = runtime?.busy === true;
@@ -177,7 +179,7 @@ const ChatShell = memo(function ChatShell({
         title={topBarTitle}
         subtitle={topBarSubtitle}
         managementMode={view === "skills" ? "plugins" : "thread"}
-        managementWorkspaceId={pluginSelection.pluginManagementWorkspaceId}
+        managementWorkspaceId={pluginSelection.displayWorkspaceId}
         managementWorkspaces={workspaces.map((workspace) => ({
           id: workspace.id,
           name: workspace.name,

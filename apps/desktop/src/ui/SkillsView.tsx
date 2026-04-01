@@ -11,10 +11,12 @@ export function SkillsView() {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
+  const pluginManagementMode = useAppStore((s) => s.pluginManagementMode);
   const selection = resolvePluginCatalogWorkspaceSelection({
     workspaces,
     selectedWorkspaceId,
     pluginManagementWorkspaceId,
+    pluginManagementMode,
   });
   const catalogWorkspaceId = selection.catalogWorkspaceId;
   const managementScope = selection.managementScope;

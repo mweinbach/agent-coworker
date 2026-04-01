@@ -8,6 +8,7 @@ import type {
   Notification,
   OnboardingStep,
   PersistedOnboardingState,
+  PluginManagementMode,
   PromptModalState,
   SettingsPageId,
   ThreadRecord,
@@ -161,6 +162,7 @@ export type AppStoreState = {
 
   selectedWorkspaceId: string | null;
   pluginManagementWorkspaceId: string | null;
+  pluginManagementMode: PluginManagementMode;
   selectedThreadId: string | null;
 
   workspaceRuntimeById: Record<string, WorkspaceRuntime>;

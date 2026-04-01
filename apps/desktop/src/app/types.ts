@@ -149,6 +149,7 @@ export type SettingsPageId =
 export type CachedDesktopUiState = {
   selectedWorkspaceId?: string | null;
   pluginManagementWorkspaceId?: string | null;
+  pluginManagementMode?: PluginManagementMode;
   selectedThreadId?: string | null;
   view?: ViewId;
   settingsPage?: SettingsPageId;
@@ -166,6 +167,8 @@ export type DesktopStateCache = {
   ui: CachedDesktopUiState;
   sessionSnapshots?: Record<string, CachedSessionSnapshot>;
 };
+
+export type PluginManagementMode = "auto" | "global" | "workspace";
 
 export type PersistedState = {
   version: number;

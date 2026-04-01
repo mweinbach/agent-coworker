@@ -1,4 +1,4 @@
-import type { WorkspaceRecord } from "./types";
+import type { PluginManagementMode, WorkspaceRecord } from "./types";
 
 function hasWorkspaceId(workspaces: WorkspaceRecord[], workspaceId: string | null | undefined): workspaceId is string {
   return typeof workspaceId === "string" && workspaces.some((workspace) => workspace.id === workspaceId);
@@ -15,9 +15,12 @@ export function resolvePluginCatalogWorkspaceSelection(opts: {
   workspaces: WorkspaceRecord[];
   selectedWorkspaceId: string | null | undefined;
   pluginManagementWorkspaceId: string | null | undefined;
+  pluginManagementMode?: PluginManagementMode | null | undefined;
 }): {
   selectedWorkspaceId: string | null;
   pluginManagementWorkspaceId: string | null;
+  pluginManagementMode: PluginManagementMode;
+  displayWorkspaceId: string | null;
   catalogWorkspaceId: string | null;
   managementScope: "workspace" | "global";
 } {
@@ -28,11 +31,23 @@ export function resolvePluginCatalogWorkspaceSelection(opts: {
     opts.workspaces,
     opts.pluginManagementWorkspaceId,
   );
+  const pluginManagementMode = opts.pluginManagementMode === "global" || opts.pluginManagementMode === "workspace"
+    ? opts.pluginManagementMode
+    : "auto";
+  const catalogWorkspaceId = pluginManagementWorkspaceId ?? selectedWorkspaceId;
+  const managementScope = pluginManagementMode === "global"
+    ? "global"
+    : catalogWorkspaceId ? "workspace" : "global";
+  const displayWorkspaceId = managementScope === "workspace"
+    ? (pluginManagementWorkspaceId ?? selectedWorkspaceId)
+    : null;
 
   return {
     selectedWorkspaceId,
     pluginManagementWorkspaceId,
-    catalogWorkspaceId: pluginManagementWorkspaceId ?? selectedWorkspaceId,
-    managementScope: pluginManagementWorkspaceId ? "workspace" : "global",
+    pluginManagementMode,
+    displayWorkspaceId,
+    catalogWorkspaceId,
+    managementScope,
   };
 }

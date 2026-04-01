@@ -272,4 +272,87 @@ describe("skills catalog page", () => {
       harness.restore();
     }
   });
+
+  test("shows standalone user-scoped skills in the Global view", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      workspaceRuntimeById: {
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          skillsCatalog: {
+            scopes: [],
+            effectiveSkills: [],
+            installations: [
+              {
+                installationId: "user:custom-toolkit",
+                name: "custom-toolkit",
+                description: "Reusable user skill",
+                scope: "user",
+                enabled: true,
+                writable: false,
+                managed: false,
+                effective: true,
+                state: "effective",
+                rootDir: "/tmp/home/.agent/skills/custom-toolkit",
+                skillPath: "/tmp/home/.agent/skills/custom-toolkit/SKILL.md",
+                path: "/tmp/home/.agent/skills/custom-toolkit/SKILL.md",
+                triggers: ["custom-toolkit"],
+                descriptionSource: "frontmatter",
+                diagnostics: [],
+              },
+              {
+                installationId: "project:local-only",
+                name: "local-only",
+                description: "Workspace-only skill",
+                scope: "project",
+                enabled: true,
+                writable: true,
+                managed: false,
+                effective: true,
+                state: "effective",
+                rootDir: "/tmp/workspace/.agent/skills/local-only",
+                skillPath: "/tmp/workspace/.agent/skills/local-only/SKILL.md",
+                path: "/tmp/workspace/.agent/skills/local-only/SKILL.md",
+                triggers: ["local-only"],
+                descriptionSource: "frontmatter",
+                diagnostics: [],
+              },
+            ],
+          },
+          skillCatalogLoading: false,
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(SkillsCatalogPage, {
+          workspaceId: "ws-1",
+          managementScope: "global",
+          searchQuery: "",
+          setSearchQuery: () => {},
+        }));
+      });
+
+      expect(container.textContent).toContain("custom-toolkit");
+      expect(container.textContent).not.toContain("local-only");
+      expect(container.textContent).not.toContain("No skills found");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
 });

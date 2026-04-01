@@ -32,8 +32,7 @@ export function SkillsCatalogPage({
     let items = [...(catalog?.installations ?? [])];
     if (managementScope === "global") {
       items = items.filter((installation) =>
-        installation.scope === "global"
-        || (installation.scope === "user" && installation.plugin !== undefined));
+        installation.scope === "global" || installation.scope === "user");
     }
 
     if (searchQuery.trim()) {

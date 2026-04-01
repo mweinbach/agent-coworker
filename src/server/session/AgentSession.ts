@@ -320,6 +320,8 @@ export class AgentSession {
     getWorkspaceBackupDeltaImpl?: SessionDependencies["getWorkspaceBackupDeltaImpl"];
     getLiveSessionSnapshotImpl?: SessionDependencies["getLiveSessionSnapshotImpl"];
     buildLegacySessionSnapshotImpl?: SessionDependencies["buildLegacySessionSnapshotImpl"];
+    getSkillMutationBlockReasonImpl?: SessionDependencies["getSkillMutationBlockReasonImpl"];
+    refreshSkillsAcrossWorkspaceSessionsImpl?: SessionDependencies["refreshSkillsAcrossWorkspaceSessionsImpl"];
     hydratedState?: HydratedSessionState;
     initialSessionSnapshot?: SessionSnapshot;
     initialLastEventSeq?: number;
@@ -431,6 +433,8 @@ export class AgentSession {
       getWorkspaceBackupDeltaImpl: opts.getWorkspaceBackupDeltaImpl,
       getLiveSessionSnapshotImpl: opts.getLiveSessionSnapshotImpl,
       buildLegacySessionSnapshotImpl: opts.buildLegacySessionSnapshotImpl,
+      getSkillMutationBlockReasonImpl: opts.getSkillMutationBlockReasonImpl,
+      refreshSkillsAcrossWorkspaceSessionsImpl: opts.refreshSkillsAcrossWorkspaceSessionsImpl,
     };
 
     if (seededHarnessContext) {
@@ -479,8 +483,12 @@ export class AgentSession {
       emitMcpServers: async () => await this.getMcpManager().emitMcpServers(),
       getSkillMutationBlockReason: () =>
         this.deps.getSkillMutationBlockReasonImpl?.(this.state.config.workingDirectory) ?? null,
-      refreshSkillsAcrossWorkspaceSessions: async () => {
-        await this.deps.refreshSkillsAcrossWorkspaceSessionsImpl?.(this.state.config.workingDirectory);
+      refreshSkillsAcrossWorkspaceSessions: async (refreshOpts) => {
+        await this.deps.refreshSkillsAcrossWorkspaceSessionsImpl?.({
+          workingDirectory: this.state.config.workingDirectory,
+          sourceSessionId: this.id,
+          ...(refreshOpts?.allWorkspaces ? { allWorkspaces: true } : {}),
+        });
       },
     };
 
@@ -1013,6 +1021,15 @@ export class AgentSession {
 
   async getPluginsCatalog() {
     await this.getSkillManager().getPluginsCatalog();
+  }
+
+  async refreshSkillStateFromExternalMutation(reason = "skills.external_refresh") {
+    await this.refreshSystemPromptWithSkills(reason);
+    await this.listSkills();
+    await this.listCommands();
+    await this.getSkillsCatalog();
+    await this.getPluginsCatalog();
+    await this.emitMcpServers();
   }
 
   async getPlugin(pluginId: string, scope?: "workspace" | "user") {

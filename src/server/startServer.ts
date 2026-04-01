@@ -648,15 +648,28 @@ export async function startAgentServer(
         }
         return "Skill mutations are blocked while another session in this workspace is running.";
       },
-      refreshSkillsAcrossWorkspaceSessionsImpl: async (workingDirectory: string) => {
+      refreshSkillsAcrossWorkspaceSessionsImpl: async ({
+        workingDirectory,
+        sourceSessionId,
+        allWorkspaces = false,
+      }: {
+        workingDirectory: string;
+        sourceSessionId: string;
+        allWorkspaces?: boolean;
+      }) => {
         const sessions = [...sessionBindings.values()]
           .map((candidate) => candidate.session)
           .filter((candidate): candidate is AgentSession =>
-            !!candidate && candidate.getWorkingDirectory() === workingDirectory
+            !!candidate && (allWorkspaces || candidate.getWorkingDirectory() === workingDirectory)
           );
+        const refreshReason = allWorkspaces ? "skills.shared_refresh" : "skills.workspace_refresh";
         await Promise.all(
           sessions.map(async (session) => {
-            await session.refreshSystemPromptWithSkills("skills.workspace_refresh");
+            if (session.id === sourceSessionId) {
+              await session.refreshSystemPromptWithSkills(refreshReason);
+              return;
+            }
+            await session.refreshSkillStateFromExternalMutation(refreshReason);
           }),
         );
       },

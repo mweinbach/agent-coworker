@@ -569,6 +569,48 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
+  test("plugin install preview and install reject sources with malformed bundled MCP config", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-mcp-source-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-mcp-source-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-mcp-source-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const sourceRoot = path.join(workspace, "plugin-source", "figma-toolkit");
+      await writePlugin(sourceRoot, "Broken Figma Toolkit");
+      await fs.writeFile(path.join(sourceRoot, ".mcp.json"), "{\n", "utf-8");
+
+      const preview = await previewPluginInstall({
+        config,
+        input: sourceRoot,
+        targetScope: "workspace",
+      });
+      expect(preview.warnings).toEqual(["No valid plugin bundles were found in the provided source."]);
+      expect(preview.candidates).toEqual([
+        expect.objectContaining({
+          pluginId: "figma-toolkit",
+          diagnostics: [
+            expect.objectContaining({
+              code: "invalid_plugin_mcp",
+              severity: "error",
+              message: expect.stringContaining(".mcp.json"),
+            }),
+          ],
+        }),
+      ]);
+
+      await expect(installPluginsFromSource({
+        config,
+        input: sourceRoot,
+        targetScope: "workspace",
+      })).rejects.toThrow("No valid plugin bundles were found in the provided source");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("resolvePluginCatalogEntry requires scope when the same plugin id exists twice", () => {
     const catalog: PluginCatalogSnapshot = {
       plugins: [

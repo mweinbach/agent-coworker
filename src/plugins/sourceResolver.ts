@@ -21,6 +21,7 @@ import {
   type ParsedGitHubSource,
 } from "../skills/github";
 import { readPluginManifest, validatePluginBundledSkills } from "./manifest";
+import { readPluginMcpServers } from "./mcp";
 
 export type MaterializedPluginCandidate = {
   rootDir: string;
@@ -146,14 +147,31 @@ async function loadMaterializedPluginCandidates(
   for (const rootDir of pluginRoots) {
     try {
       const manifest = await readPluginManifest(rootDir);
+      const diagnostics: SkillInstallationDiagnostic[] = [];
       const skillWarnings = await validatePluginBundledSkills(manifest);
+      diagnostics.push(
+        ...skillWarnings.map((warning) =>
+          buildDiagnostic("invalid_plugin_skill", "error", warning)),
+      );
+      if (manifest.mcpPath) {
+        try {
+          await readPluginMcpServers(manifest.mcpPath);
+        } catch (error) {
+          diagnostics.push(
+            buildDiagnostic(
+              "invalid_plugin_mcp",
+              "error",
+              `Invalid or unreadable bundled MCP config: ${String(error)}`,
+            ),
+          );
+        }
+      }
       candidates.push({
         rootDir,
         pluginId: manifest.name,
         displayName: manifest.interface?.displayName ?? manifest.name,
         description: manifest.description,
-        diagnostics: skillWarnings.map((warning) =>
-          buildDiagnostic("invalid_plugin_skill", "error", warning)),
+        diagnostics,
         relativeRootPath: path.relative(stageRoot, rootDir) || path.basename(rootDir),
       });
     } catch (error) {

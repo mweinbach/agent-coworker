@@ -160,11 +160,13 @@ export class SkillManager {
   private async afterSuccessfulMutation({
     selectedInstallationId,
     clearedMutationPendingKeys = [],
+    refreshAllWorkspaces = false,
   }: {
     selectedInstallationId?: string;
     clearedMutationPendingKeys?: string[];
+    refreshAllWorkspaces?: boolean;
   } = {}) {
-    await this.context.refreshSkillsAcrossWorkspaceSessions();
+    await this.context.refreshSkillsAcrossWorkspaceSessions({ allWorkspaces: refreshAllWorkspaces });
     await this.emitLegacySkillsList();
     await this.listCommands();
     await this.emitSkillsCatalog(clearedMutationPendingKeys);
@@ -186,6 +188,14 @@ export class SkillManager {
       return;
     }
     return await task();
+  }
+
+  private isSharedSkillMutationScope(scope: SkillMutationTargetScope | SkillInstallationEntry["scope"]): boolean {
+    return scope === "global" || scope === "user";
+  }
+
+  private isSharedPluginMutationScope(scope: PluginInstallTargetScope | PluginCatalogEntry["scope"]): boolean {
+    return scope === "user";
   }
 
   listTools() {
@@ -301,7 +311,10 @@ export class SkillManager {
         const nextInstallation = getEffectiveInstallationByName(nextCatalog, installation.name)
           ?? nextCatalog.installations.find((entry) => entry.name === installation.name)
           ?? null;
-        await this.afterSuccessfulMutation({ selectedInstallationId: nextInstallation?.installationId });
+        await this.afterSuccessfulMutation({
+          selectedInstallationId: nextInstallation?.installationId,
+          refreshAllWorkspaces: this.isSharedSkillMutationScope(installation.scope),
+        });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to disable skill: ${String(err)}`);
       }
@@ -339,7 +352,10 @@ export class SkillManager {
         const nextInstallation = getEffectiveInstallationByName(nextCatalog, installation.name)
           ?? nextCatalog.installations.find((entry) => entry.name === installation.name)
           ?? null;
-        await this.afterSuccessfulMutation({ selectedInstallationId: nextInstallation?.installationId });
+        await this.afterSuccessfulMutation({
+          selectedInstallationId: nextInstallation?.installationId,
+          refreshAllWorkspaces: this.isSharedSkillMutationScope(installation.scope),
+        });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to enable skill: ${String(err)}`);
       }
@@ -372,7 +388,9 @@ export class SkillManager {
           config: this.context.state.config,
           installation,
         });
-        await this.afterSuccessfulMutation();
+        await this.afterSuccessfulMutation({
+          refreshAllWorkspaces: this.isSharedSkillMutationScope(installation.scope),
+        });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to delete skill: ${String(err)}`);
       }
@@ -433,6 +451,7 @@ export class SkillManager {
         await this.emitPluginInstallPreview(result.preview, false);
         await this.afterSuccessfulMutation({
           clearedMutationPendingKeys: [this.skillMutationPendingKey(`plugin:install:${targetScope}`)],
+          refreshAllWorkspaces: this.isSharedPluginMutationScope(targetScope),
         });
         await this.emitPluginDetail(result.pluginIds[0] ?? "", targetScope);
       } catch (err) {
@@ -462,6 +481,7 @@ export class SkillManager {
         });
         await this.afterSuccessfulMutation({
           clearedMutationPendingKeys: [this.pluginMutationPendingKey("enable", plugin)],
+          refreshAllWorkspaces: this.isSharedPluginMutationScope(plugin.scope),
         });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to enable plugin: ${String(err)}`);
@@ -490,6 +510,7 @@ export class SkillManager {
         });
         await this.afterSuccessfulMutation({
           clearedMutationPendingKeys: [this.pluginMutationPendingKey("disable", plugin)],
+          refreshAllWorkspaces: this.isSharedPluginMutationScope(plugin.scope),
         });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to disable plugin: ${String(err)}`);
@@ -547,6 +568,7 @@ export class SkillManager {
         await this.afterSuccessfulMutation({
           selectedInstallationId: result.installationIds[0],
           clearedMutationPendingKeys: [this.skillMutationPendingKey(`install:${targetScope}`)],
+          refreshAllWorkspaces: this.isSharedSkillMutationScope(targetScope),
         });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to install skills: ${String(err)}`);
@@ -572,6 +594,7 @@ export class SkillManager {
         await this.afterSuccessfulMutation({
           selectedInstallationId: installationId,
           clearedMutationPendingKeys: [this.skillMutationPendingKey("enable", installationId)],
+          refreshAllWorkspaces: this.isSharedSkillMutationScope(installation.scope),
         });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to enable skill installation: ${String(err)}`);
@@ -597,6 +620,7 @@ export class SkillManager {
         await this.afterSuccessfulMutation({
           selectedInstallationId: installationId,
           clearedMutationPendingKeys: [this.skillMutationPendingKey("disable", installationId)],
+          refreshAllWorkspaces: this.isSharedSkillMutationScope(installation.scope),
         });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to disable skill installation: ${String(err)}`);
@@ -621,6 +645,7 @@ export class SkillManager {
         });
         await this.afterSuccessfulMutation({
           clearedMutationPendingKeys: [this.skillMutationPendingKey("delete", installationId)],
+          refreshAllWorkspaces: this.isSharedSkillMutationScope(installation.scope),
         });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to delete skill installation: ${String(err)}`);
@@ -647,6 +672,7 @@ export class SkillManager {
         await this.afterSuccessfulMutation({
           selectedInstallationId: result.installationId,
           clearedMutationPendingKeys: [this.skillMutationPendingKey(`copy:${targetScope}`, installationId)],
+          refreshAllWorkspaces: this.isSharedSkillMutationScope(targetScope),
         });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to copy skill installation: ${String(err)}`);
@@ -702,6 +728,7 @@ export class SkillManager {
         await this.afterSuccessfulMutation({
           selectedInstallationId: installationId,
           clearedMutationPendingKeys: [this.skillMutationPendingKey("update", installationId)],
+          refreshAllWorkspaces: this.isSharedSkillMutationScope(installation.scope),
         });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to update skill installation: ${String(err)}`);

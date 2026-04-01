@@ -3,8 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { loadMCPConfigRegistry } from "../src/mcp/configRegistry/layers";
 import { installPluginsFromSource } from "../src/plugins/operations";
-import { resolvePluginCatalogEntry } from "../src/plugins/catalog";
+import { buildPluginCatalogSnapshot, resolvePluginCatalogEntry } from "../src/plugins/catalog";
+import { readPluginManifest } from "../src/plugins/manifest";
+import { discoverSkillsForConfig } from "../src/skills";
 import type { AgentConfig, PluginCatalogEntry, PluginCatalogSnapshot } from "../src/types";
 
 function makeConfig(workspaceRoot: string, userHome: string, builtInConfigDir: string): AgentConfig {
@@ -54,6 +57,18 @@ async function writePlugin(rootDir: string, displayName: string, description = "
       "",
       "# Import frame",
     ].join("\n"),
+    "utf-8",
+  );
+  await fs.writeFile(
+    path.join(rootDir, ".mcp.json"),
+    `${JSON.stringify({
+      mcpServers: {
+        figma: {
+          type: "http",
+          url: `https://${displayName.toLowerCase().replace(/\s+/g, "-")}.example.com`,
+        },
+      },
+    }, null, 2)}\n`,
     "utf-8",
   );
 }
@@ -106,6 +121,76 @@ describe("plugin catalog and install operations", () => {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
       await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("workspace plugin copies take precedence over user copies for skills and MCP servers", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-precedence-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-precedence-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-precedence-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      await writePlugin(path.join(home, ".agents", "plugins", "figma-toolkit"), "User Figma Toolkit", "Global plugin");
+      await writePlugin(
+        path.join(workspace, ".agents", "plugins", "figma-toolkit"),
+        "Workspace Figma Toolkit",
+        "Workspace override",
+      );
+
+      const catalog = await buildPluginCatalogSnapshot(config);
+      expect(catalog.plugins.map((plugin) => `${plugin.scope}:${plugin.displayName}`)).toEqual([
+        "workspace:Workspace Figma Toolkit",
+        "user:User Figma Toolkit",
+      ]);
+
+      const skills = await discoverSkillsForConfig(config, { pluginCatalog: catalog });
+      expect(skills.find((skill) => skill.name === "figma-toolkit:import-frame")?.plugin?.displayName)
+        .toBe("Workspace Figma Toolkit");
+
+      const mcpRegistry = await loadMCPConfigRegistry(config);
+      const figmaServer = mcpRegistry.servers.find((server) => server.name === "figma");
+      expect(figmaServer?.pluginScope).toBe("workspace");
+      expect(figmaServer?.transport.type).toBe("http");
+      if (figmaServer?.transport.type === "http") {
+        expect(figmaServer.transport.url).toBe("https://workspace-figma-toolkit.example.com");
+      }
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("readPluginManifest rejects MCP and app paths outside the plugin root", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-manifest-bounds-"));
+    const pluginRoot = path.join(tempRoot, "plugin");
+    const outsidePath = path.join(tempRoot, "outside.json");
+    await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+    await fs.writeFile(outsidePath, "{}\n", "utf-8");
+
+    try {
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "demo-plugin",
+          mcpServers: "../outside.json",
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves mcpServers outside the plugin root");
+
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "demo-plugin",
+          apps: "../outside.json",
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves apps outside the plugin root");
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
 

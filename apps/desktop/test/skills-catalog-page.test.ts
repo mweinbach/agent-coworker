@@ -199,4 +199,77 @@ describe("skills catalog page", () => {
       harness.restore();
     }
   });
+
+  test("shows user-scoped plugin skills in the Global view", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      workspaceRuntimeById: {
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          skillsCatalog: {
+            scopes: [],
+            effectiveSkills: [],
+            installations: [
+              {
+                installationId: "plugin:figma-toolkit:import-frame",
+                name: "figma-toolkit:import-frame",
+                description: "Import a frame",
+                scope: "user",
+                enabled: true,
+                writable: false,
+                managed: false,
+                effective: true,
+                state: "effective",
+                rootDir: "/tmp/home/.agents/plugins/figma-toolkit/skills/import-frame",
+                skillPath: "/tmp/home/.agents/plugins/figma-toolkit/skills/import-frame/SKILL.md",
+                path: "/tmp/home/.agents/plugins/figma-toolkit/skills/import-frame/SKILL.md",
+                triggers: ["import-frame"],
+                descriptionSource: "frontmatter",
+                plugin: {
+                  pluginId: "figma-toolkit",
+                  name: "figma-toolkit",
+                  displayName: "Figma Toolkit",
+                  scope: "user",
+                  discoveryKind: "direct",
+                  rootDir: "/tmp/home/.agents/plugins/figma-toolkit",
+                },
+              },
+            ],
+          },
+          skillCatalogLoading: false,
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(SkillsCatalogPage, {
+          workspaceId: "ws-1",
+          managementScope: "global",
+          searchQuery: "",
+          setSearchQuery: () => {},
+        }));
+      });
+
+      expect(container.textContent).toContain("figma-toolkit:import-frame");
+      expect(container.textContent).toContain("Figma Toolkit");
+      expect(container.textContent).not.toContain("No skills found");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
 });

@@ -60,7 +60,9 @@ export function SkillsCatalogPage({
   const installations = useMemo(() => {
     let items = [...(catalog?.installations ?? [])];
     if (managementScope === "global") {
-      items = items.filter((installation) => installation.scope === "global");
+      items = items.filter((installation) =>
+        installation.scope === "global"
+        || (installation.scope === "user" && installation.plugin !== undefined));
     }
 
     if (searchQuery.trim()) {

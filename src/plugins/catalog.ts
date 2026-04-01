@@ -32,6 +32,21 @@ function entryWarnings(candidate: DiscoveredPluginCandidate, extraWarnings: stri
   return [...extraWarnings].filter((warning) => warning.trim().length > 0);
 }
 
+function pluginScopePriority(scope: PluginScope): number {
+  return scope === "workspace" ? 0 : 1;
+}
+
+export function comparePluginCatalogEntries(
+  left: Pick<PluginCatalogEntry, "scope" | "displayName" | "id">,
+  right: Pick<PluginCatalogEntry, "scope" | "displayName" | "id">,
+): number {
+  const scopeDelta = pluginScopePriority(left.scope) - pluginScopePriority(right.scope);
+  if (scopeDelta !== 0) {
+    return scopeDelta;
+  }
+  return `${left.displayName}:${left.id}`.localeCompare(`${right.displayName}:${right.id}`);
+}
+
 export async function buildPluginCatalogSnapshot(config: AgentConfig): Promise<PluginCatalogSnapshot> {
   const discovery = await discoverPlugins(config);
   const overrides = await readPluginOverrides(config);
@@ -109,9 +124,7 @@ export async function buildPluginCatalogSnapshot(config: AgentConfig): Promise<P
     }
   }
 
-  plugins.sort((left, right) =>
-    `${left.scope}:${left.displayName}:${left.id}`.localeCompare(`${right.scope}:${right.displayName}:${right.id}`),
-  );
+  plugins.sort(comparePluginCatalogEntries);
 
   return { plugins, warnings };
 }

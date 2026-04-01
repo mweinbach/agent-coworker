@@ -262,6 +262,18 @@ function resolveRelativePath(pluginRoot: string, relativePath: string | undefine
   return resolveMaybeRelative(selected, pluginRoot);
 }
 
+function assertPathInsidePluginRoot(
+  pluginRoot: string,
+  targetPath: string | undefined,
+  manifestPath: string,
+  label: string,
+): void {
+  if (!targetPath) return;
+  if (!isPathInside(pluginRoot, targetPath)) {
+    throw new Error(`Plugin manifest at ${manifestPath} resolves ${label} outside the plugin root.`);
+  }
+}
+
 export function manifestPathForPluginRoot(pluginRoot: string): string {
   return path.join(pluginRoot, ".codex-plugin", "plugin.json");
 }
@@ -275,11 +287,11 @@ export async function readPluginManifest(pluginRoot: string): Promise<PluginMani
   if (!skillsPath) {
     throw new Error(`Plugin manifest at ${manifestPath} is missing a skills path.`);
   }
-  if (!isPathInside(pluginRoot, skillsPath)) {
-    throw new Error(`Plugin manifest at ${manifestPath} resolves skills outside the plugin root.`);
-  }
+  assertPathInsidePluginRoot(pluginRoot, skillsPath, manifestPath, "skills");
   const mcpPath = resolveRelativePath(pluginRoot, parsed.mcpServers, "./.mcp.json");
   const appPath = resolveRelativePath(pluginRoot, parsed.apps, "./.app.json");
+  assertPathInsidePluginRoot(pluginRoot, mcpPath, manifestPath, "mcpServers");
+  assertPathInsidePluginRoot(pluginRoot, appPath, manifestPath, "apps");
   const authorName = typeof parsed.author === "string" ? parsed.author : parsed.author?.name;
   return {
     name: parsed.name,

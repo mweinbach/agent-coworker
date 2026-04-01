@@ -4,7 +4,11 @@ import path from "node:path";
 import { z } from "zod";
 
 import type { AgentConfig, MCPServerConfig } from "../../types";
-import { buildPluginCatalogSnapshot, readPluginMcpServers } from "../../plugins";
+import {
+  buildPluginCatalogSnapshot,
+  comparePluginCatalogEntries,
+  readPluginMcpServers,
+} from "../../plugins";
 import { resolveMcpConfigPaths } from "../configPaths";
 import { parseMCPServersDocument } from "./parser";
 import type {
@@ -90,7 +94,7 @@ async function readPluginLayers(config: AgentConfig): Promise<{ layers: MCPConfi
   const layers: MCPConfigLayer[] = [];
   const warnings = [...catalog.warnings];
 
-  for (const plugin of catalog.plugins) {
+  for (const plugin of [...catalog.plugins].sort(comparePluginCatalogEntries)) {
     if (!plugin.mcpPath) continue;
     if (!plugin.enabled) continue;
     const filePath = path.resolve(plugin.mcpPath);

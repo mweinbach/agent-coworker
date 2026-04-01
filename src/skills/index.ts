@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import type { AgentConfig, SkillEntry, SkillScope, SkillScopeDescriptor } from "../types";
-import { buildPluginCatalogSnapshot } from "../plugins";
+import { buildPluginCatalogSnapshot, comparePluginCatalogEntries } from "../plugins";
 import { scanSkillCatalog, scanSkillCatalogFromSources, toLegacySkillEntry, type SkillCatalogSource } from "./catalog";
 
 export { extractTriggers } from "./catalog";
@@ -72,9 +72,10 @@ export async function discoverSkillsForConfig(
   } = {},
 ): Promise<SkillEntry[]> {
   const pluginCatalog = opts.pluginCatalog ?? await buildPluginCatalogSnapshot(config);
+  const orderedPlugins = [...pluginCatalog.plugins].sort(comparePluginCatalogEntries);
   const catalog = await scanSkillCatalogFromSources([
     ...standaloneSources(config.skillsDirs),
-    ...pluginCatalog.plugins.flatMap((plugin) =>
+    ...orderedPlugins.flatMap((plugin) =>
       plugin.skills.map((skill) => ({
         kind: "plugin" as const,
         plugin,

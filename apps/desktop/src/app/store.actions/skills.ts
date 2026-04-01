@@ -45,6 +45,7 @@ import {
   syncDesktopStateCache,
   truncateTitle,
 } from "../store.helpers";
+import { resolvePluginCatalogWorkspaceSelection, resolvePluginManagementWorkspaceId } from "../pluginManagement";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
 type PluginSelection = Pick<PluginCatalogEntry, "id" | "scope">;
@@ -138,8 +139,14 @@ export function createSkillActions(
     ((get() as { workspaces?: Array<{ id: string; path: string }> }).workspaces ?? []).find(
       (workspace) => workspace.id === workspaceId,
     )?.path;
-  const managementWorkspaceId = (): string | null =>
-    get().pluginManagementWorkspaceId ?? get().selectedWorkspaceId;
+  const managementWorkspaceId = (): string | null => {
+    const state = get();
+    return resolvePluginCatalogWorkspaceSelection({
+      workspaces: state.workspaces ?? [],
+      selectedWorkspaceId: state.selectedWorkspaceId,
+      pluginManagementWorkspaceId: state.pluginManagementWorkspaceId,
+    }).catalogWorkspaceId;
+  };
 
   return {
     openSkills: async () => {
@@ -161,7 +168,8 @@ export function createSkillActions(
         }
       }
   
-      const targetWorkspaceId = get().pluginManagementWorkspaceId ?? workspaceId;
+      const targetWorkspaceId = resolvePluginManagementWorkspaceId(get().workspaces ?? [], get().pluginManagementWorkspaceId)
+        ?? workspaceId;
 
       set({ view: "skills", selectedWorkspaceId: workspaceId });
       syncDesktopStateCache(get);
@@ -264,10 +272,10 @@ export function createSkillActions(
 
     setPluginManagementWorkspace: async (workspaceId: string | null) => {
       set({
-        pluginManagementWorkspaceId: workspaceId,
+        pluginManagementWorkspaceId: resolvePluginManagementWorkspaceId(get().workspaces ?? [], workspaceId),
       } as any);
       syncDesktopStateCache(get);
-      const targetWorkspaceId = workspaceId ?? get().selectedWorkspaceId;
+      const targetWorkspaceId = managementWorkspaceId();
       if (!targetWorkspaceId) {
         return;
       }

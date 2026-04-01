@@ -167,6 +167,65 @@ describe("mcp config registry", () => {
     }
   });
 
+  test("plugin MCP stdio transports rebase relative command and cwd against the plugin root", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "stdio-toolkit");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "stdio-toolkit",
+          description: "Plugin stdio helpers",
+          interface: { displayName: "Stdio Toolkit" },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".mcp.json"),
+        `${JSON.stringify({
+          mcpServers: {
+            bundledServer: {
+              type: "stdio",
+              command: "./bin/server.js",
+              args: ["--port", "7337"],
+              cwd: "./runtime",
+            },
+            pathServer: {
+              type: "stdio",
+              command: "node",
+            },
+          },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const snapshot = await loadMCPConfigRegistry(config);
+      const bundledServer = snapshot.servers.find((entry) => entry.name === "bundledServer");
+      expect(bundledServer?.transport.type).toBe("stdio");
+      if (bundledServer?.transport.type === "stdio") {
+        expect(bundledServer.transport.command).toBe(path.join(pluginRoot, "bin", "server.js"));
+        expect(bundledServer.transport.cwd).toBe(path.join(pluginRoot, "runtime"));
+        expect(bundledServer.transport.args).toEqual(["--port", "7337"]);
+      }
+
+      const pathServer = snapshot.servers.find((entry) => entry.name === "pathServer");
+      expect(pathServer?.transport.type).toBe("stdio");
+      if (pathServer?.transport.type === "stdio") {
+        expect(pathServer.transport.command).toBe("node");
+        expect(pathServer.transport.cwd).toBeUndefined();
+      }
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("upsertWorkspaceMCPServer moves workspace credential keys when renaming", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-rename-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-rename-home-"));

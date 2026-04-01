@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { SearchIcon } from "lucide-react";
+import { resolvePluginCatalogWorkspaceSelection } from "../app/pluginManagement";
 import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -7,10 +8,16 @@ import { SkillsCatalogPage } from "./skills";
 import { PluginsCatalogPage } from "./plugins/PluginsCatalogPage";
 
 export function SkillsView() {
+  const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
-  const catalogWorkspaceId = pluginManagementWorkspaceId ?? selectedWorkspaceId;
-  const managementScope = pluginManagementWorkspaceId ? "workspace" : "global";
+  const selection = resolvePluginCatalogWorkspaceSelection({
+    workspaces,
+    selectedWorkspaceId,
+    pluginManagementWorkspaceId,
+  });
+  const catalogWorkspaceId = selection.catalogWorkspaceId;
+  const managementScope = selection.managementScope;
   const pluginViewMode = useAppStore((s) => s.workspaceRuntimeById[catalogWorkspaceId ?? ""]?.pluginViewMode ?? "plugins");
   const setPluginViewMode = useAppStore((s) => s.setPluginViewMode);
   const [searchQuery, setSearchQuery] = useState("");

@@ -12,6 +12,7 @@ const workspaceId = "ws-skills-store-actions";
 function createState() {
   return {
     selectedWorkspaceId: workspaceId,
+    workspaces: [{ id: workspaceId, path: "/tmp/workspace" }],
     workspaceRuntimeById: {
       [workspaceId]: {
         skillCatalogLoading: false,
@@ -423,6 +424,42 @@ describe("skill store actions", () => {
       targetScope: "user",
     });
     expect(RUNTIME.pluginInstallWaiters.has(managementWorkspaceId)).toBe(false);
+  });
+
+  test("refreshPluginsCatalog falls back to the selected workspace when the management workspace no longer exists", async () => {
+    const state = createState();
+    state.pluginManagementWorkspaceId = "ws-stale";
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+      pluginsLoading: false,
+      pluginsError: "stale plugin error",
+    } as any;
+    const { get, set } = createStoreHarness(state);
+
+    const requests: string[] = [];
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string) => {
+        requests.push(method);
+        return {
+          event: {
+            type: "plugins_catalog",
+            sessionId: "jsonrpc-control",
+            catalog: { plugins: [], warnings: [] },
+          },
+        };
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    await createSkillActions(set as any, get as any).refreshPluginsCatalog();
+
+    expect(requests).toEqual(["cowork/plugins/catalog/read"]);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
   });
 
   test("selectSkill preserves loaded content after the JSON-RPC read succeeds", async () => {

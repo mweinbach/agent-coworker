@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 
+import { resolvePluginCatalogWorkspaceSelection } from "./app/pluginManagement";
 import { disposeAllJsonRpcState } from "./app/store.helpers";
 import { useAppStore } from "./app/store";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
@@ -119,14 +120,19 @@ const ChatShell = memo(function ChatShell({
     () => workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null,
     [selectedWorkspaceId, workspaces],
   );
+  const pluginSelection = useMemo(() => resolvePluginCatalogWorkspaceSelection({
+    workspaces,
+    selectedWorkspaceId,
+    pluginManagementWorkspaceId,
+  }), [pluginManagementWorkspaceId, selectedWorkspaceId, workspaces]);
   const pluginManagementWorkspace = useMemo(
-    () => workspaces.find((workspace) => workspace.id === pluginManagementWorkspaceId) ?? null,
-    [pluginManagementWorkspaceId, workspaces],
+    () => workspaces.find((workspace) => workspace.id === pluginSelection.pluginManagementWorkspaceId) ?? null,
+    [pluginSelection.pluginManagementWorkspaceId, workspaces],
   );
   const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
   const busy = runtime?.busy === true;
   const showContextSidebar = view === "chat" && activeThread !== null;
-  const catalogWorkspaceId = pluginManagementWorkspaceId ?? selectedWorkspaceId;
+  const catalogWorkspaceId = pluginSelection.catalogWorkspaceId;
   const pluginViewMode = catalogWorkspaceId
     ? workspaceRuntimeById[catalogWorkspaceId]?.pluginViewMode ?? "plugins"
     : "plugins";
@@ -171,7 +177,7 @@ const ChatShell = memo(function ChatShell({
         title={topBarTitle}
         subtitle={topBarSubtitle}
         managementMode={view === "skills" ? "plugins" : "thread"}
-        managementWorkspaceId={pluginManagementWorkspaceId}
+        managementWorkspaceId={pluginSelection.pluginManagementWorkspaceId}
         managementWorkspaces={workspaces.map((workspace) => ({
           id: workspace.id,
           name: workspace.name,

@@ -89,6 +89,32 @@ function mergeLayers(layers: MCPConfigLayer[]): MCPRegistryServer[] {
   return [...mergedByName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function isRelativeFilesystemPath(value: string): boolean {
+  return !path.isAbsolute(value) && (value.startsWith(".") || value.includes("/") || value.includes("\\"));
+}
+
+function rebasePluginLocalTransport(server: MCPServerConfig, pluginRootDir: string): MCPServerConfig {
+  if (server.transport.type !== "stdio") {
+    return server;
+  }
+
+  const command = isRelativeFilesystemPath(server.transport.command)
+    ? path.resolve(pluginRootDir, server.transport.command)
+    : server.transport.command;
+  const cwd = server.transport.cwd
+    ? (path.isAbsolute(server.transport.cwd) ? server.transport.cwd : path.resolve(pluginRootDir, server.transport.cwd))
+    : undefined;
+
+  return {
+    ...server,
+    transport: {
+      ...server.transport,
+      command,
+      ...(cwd ? { cwd } : {}),
+    },
+  };
+}
+
 async function readPluginLayers(config: AgentConfig): Promise<{ layers: MCPConfigLayer[]; warnings: string[] }> {
   const catalog = await buildPluginCatalogSnapshot(config);
   const layers: MCPConfigLayer[] = [];
@@ -101,7 +127,8 @@ async function readPluginLayers(config: AgentConfig): Promise<{ layers: MCPConfi
     let servers: MCPServerConfig[] = [];
     let parseError: string | undefined;
     try {
-      servers = await readPluginMcpServers(plugin.mcpPath);
+      servers = (await readPluginMcpServers(plugin.mcpPath))
+        .map((server) => rebasePluginLocalTransport(server, plugin.rootDir));
     } catch (error) {
       parseError = String(error);
       warnings.push(`[MCP] Ignoring malformed plugin MCP config at ${filePath}: ${parseError}`);

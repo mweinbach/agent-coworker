@@ -55,6 +55,7 @@ import {
 import { deriveConnectedProviders, normalizePersistedProviderState } from "../persistedProviderState";
 import { deriveDefaultLmStudioUiEnabled, normalizePersistedProviderUiState } from "../providerUiState";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
+import { resolvePluginCatalogWorkspaceSelection, resolvePluginManagementWorkspaceId } from "../pluginManagement";
 import {
   type CachedSessionSnapshot,
   normalizeWorkspaceUserProfile,
@@ -311,14 +312,16 @@ function buildResolvedDesktopUiState(
   const normalizedUi = persistedUiSchema.parse(ui ?? {});
   const workspaceByRecency = [...workspaces].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
   const fallbackSelectedWorkspaceId = workspaceByRecency[0]?.id ?? null;
-  const selectedWorkspaceId =
-    normalizedUi.selectedWorkspaceId && workspaces.some((workspace) => workspace.id === normalizedUi.selectedWorkspaceId)
-      ? normalizedUi.selectedWorkspaceId
-      : fallbackSelectedWorkspaceId;
-  const pluginManagementWorkspaceId =
-    normalizedUi.pluginManagementWorkspaceId && workspaces.some((workspace) => workspace.id === normalizedUi.pluginManagementWorkspaceId)
-      ? normalizedUi.pluginManagementWorkspaceId
-      : null;
+  const selection = resolvePluginCatalogWorkspaceSelection({
+    workspaces,
+    selectedWorkspaceId:
+      normalizedUi.selectedWorkspaceId && workspaces.some((workspace) => workspace.id === normalizedUi.selectedWorkspaceId)
+        ? normalizedUi.selectedWorkspaceId
+        : fallbackSelectedWorkspaceId,
+    pluginManagementWorkspaceId: normalizedUi.pluginManagementWorkspaceId,
+  });
+  const selectedWorkspaceId = selection.selectedWorkspaceId;
+  const pluginManagementWorkspaceId = selection.pluginManagementWorkspaceId;
   const workspaceThreads = selectedWorkspaceId
     ? threads
         .filter((thread) => thread.workspaceId === selectedWorkspaceId)
@@ -453,6 +456,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       threads: state.threads,
       selectedWorkspaceId: ui.selectedWorkspaceId,
       selectedThreadId: ui.selectedThreadId,
+      pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId,
       providerStatusByName: state.providerState?.statusByName ?? {},
       providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
       providerConnected: connectedProviders,
@@ -494,6 +498,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
         const ui = buildResolvedDesktopUiState(state.workspaces, state.threads, {
           selectedWorkspaceId: get().selectedWorkspaceId,
           selectedThreadId: get().selectedThreadId,
+          pluginManagementWorkspaceId: get().pluginManagementWorkspaceId,
           view: get().view,
           settingsPage: get().settingsPage,
           lastNonSettingsView: get().lastNonSettingsView,
@@ -530,6 +535,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           threads: state.threads,
           selectedWorkspaceId: ui.selectedWorkspaceId,
           selectedThreadId: ui.selectedThreadId,
+          pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId,
           providerStatusByName: state.providerState?.statusByName ?? {},
           providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
           providerConnected: connectedProviders,
@@ -580,22 +586,31 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
             void current.selectThread(ui.selectedThreadId);
           });
         } else if (ui.selectedWorkspaceId && ui.view === "chat") {
+          const selectedWorkspaceId = ui.selectedWorkspaceId;
           runAfterInitialPaint(() => {
             const current = get();
-            if (current.selectedWorkspaceId !== ui.selectedWorkspaceId || current.view !== "chat") {
+            if (current.selectedWorkspaceId !== selectedWorkspaceId || current.view !== "chat") {
               return;
             }
-            void current.selectWorkspace(ui.selectedWorkspaceId);
+            void current.selectWorkspace(selectedWorkspaceId);
           });
         } else if (ui.selectedWorkspaceId && ui.view === "skills") {
+          const startupWorkspaceId = resolvePluginManagementWorkspaceId(
+            state.workspaces,
+            ui.pluginManagementWorkspaceId,
+          ) ?? ui.selectedWorkspaceId;
           runAfterInitialPaint(() => {
             const current = get();
-            if (current.selectedWorkspaceId !== ui.selectedWorkspaceId || current.view !== "skills") {
+            if (
+              current.selectedWorkspaceId !== ui.selectedWorkspaceId
+              || current.pluginManagementWorkspaceId !== ui.pluginManagementWorkspaceId
+              || current.view !== "skills"
+            ) {
               return;
             }
-            ensureWorkspaceRuntime(get, set, ui.selectedWorkspaceId);
-            void ensureServerRunning(get, set, ui.selectedWorkspaceId).then(() => {
-              ensureControlSocket(get, set, ui.selectedWorkspaceId);
+            ensureWorkspaceRuntime(get, set, startupWorkspaceId);
+            void ensureServerRunning(get, set, startupWorkspaceId).then(() => {
+              ensureControlSocket(get, set, startupWorkspaceId);
             });
           });
         }

@@ -1,5 +1,6 @@
 import { saveState } from "../../lib/desktopCommands";
 import { saveDesktopStateCache } from "../localStateCache";
+import { resolvePluginManagementWorkspaceId } from "../pluginManagement";
 import { normalizePersistedProviderUiState } from "../providerUiState";
 import { normalizePersistedProviderState } from "../persistedProviderState";
 import type { AppStoreState } from "../store.helpers";
@@ -61,7 +62,7 @@ function buildCachedDesktopUiState(state: AppStoreState): CachedDesktopUiState {
 
   return {
     selectedWorkspaceId: state.selectedWorkspaceId,
-    pluginManagementWorkspaceId: state.pluginManagementWorkspaceId,
+    pluginManagementWorkspaceId: resolvePluginManagementWorkspaceId(state.workspaces, state.pluginManagementWorkspaceId),
     selectedThreadId,
     view: state.view,
     settingsPage: state.settingsPage,

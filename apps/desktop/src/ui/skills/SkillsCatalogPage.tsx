@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { MessageSquareIcon, RefreshCwIcon } from "lucide-react";
 import { useAppStore } from "../../app/store";
+import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { InstallationCardGrid } from "./InstallationCardGrid";
 import { InstallSkillDialog } from "./InstallSkillDialog";

@@ -195,7 +195,7 @@ describe("server JSON-RPC control methods", () => {
       }, null, 2)}\n`,
     );
 
-    const homePluginRoot = `${tmpDir}/.agents/plugins-home/figma-toolkit`;
+      const homePluginRoot = `${tmpDir}/.cowork-home/.agents/plugins/figma-toolkit`;
     await fs.mkdir(`${homePluginRoot}/.codex-plugin`, { recursive: true });
     await fs.writeFile(
       `${homePluginRoot}/.codex-plugin/plugin.json`,
@@ -208,11 +208,9 @@ describe("server JSON-RPC control methods", () => {
       }, null, 2)}\n`,
     );
 
-    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
-      env: {
-        AGENT_USER_PLUGINS_DIR: `${tmpDir}/.agents/plugins-home`,
-      },
-    }));
+      const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+        homedir: `${tmpDir}/.cowork-home`,
+      }));
 
     try {
       const rpc = await connectJsonRpc(url);

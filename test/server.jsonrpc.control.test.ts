@@ -338,7 +338,7 @@ describe("server JSON-RPC control methods", () => {
             catalog: expect.objectContaining({
               installations: expect.arrayContaining([
                 expect.objectContaining({
-                  skillName: "figma-toolkit:import-frame",
+                  name: "figma-toolkit:import-frame",
                 }),
               ]),
             }),
@@ -378,13 +378,15 @@ describe("server JSON-RPC control methods", () => {
       });
       expect(Array.isArray(disableResponse.result.events)).toBe(true);
       const disableSkillsList = disableResponse.result.events.find((event: any) => event.type === "skills_list");
-      expect(disableSkillsList?.skills.find((skill: any) => skill.name === "figma-toolkit:import-frame")).toBeUndefined();
+      const disabledSkill = disableSkillsList?.skills.find((skill: any) => skill.name === "figma-toolkit:import-frame");
+      expect(disabledSkill).toBeDefined();
+      expect(disabledSkill.enabled).toBe(false);
       const disableSkillsCatalog = disableResponse.result.events.find((event: any) => event.type === "skills_catalog");
-      expect(
-        disableSkillsCatalog?.catalog.installations.find(
-          (installation: any) => installation.skillName === "figma-toolkit:import-frame",
-        ),
-      ).toBeUndefined();
+      const disabledInstallation = disableSkillsCatalog?.catalog.installations.find(
+        (installation: any) => installation.name === "figma-toolkit:import-frame",
+      );
+      expect(disabledInstallation).toBeDefined();
+      expect(disabledInstallation.enabled).toBe(false);
       const disablePluginsCatalog = disableResponse.result.events.find((event: any) => event.type === "plugins_catalog");
       expect(
         disablePluginsCatalog?.catalog.plugins.find((plugin: any) => plugin.id === "figma-toolkit"),

@@ -167,7 +167,7 @@ describe("mcp config registry", () => {
     }
   });
 
-  test("plugin MCP stdio transports rebase relative command, args, and cwd against the plugin root", async () => {
+  test("plugin MCP stdio transports rebase only filesystem paths against the plugin root", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-builtin-"));
@@ -176,6 +176,10 @@ describe("mcp config registry", () => {
     try {
       const pluginRoot = path.join(workspace, ".agents", "plugins", "stdio-toolkit");
       await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, "bin"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, "dist"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, "nested"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, "runtime"), { recursive: true });
       await fs.writeFile(
         path.join(pluginRoot, ".codex-plugin", "plugin.json"),
         `${JSON.stringify({
@@ -185,6 +189,9 @@ describe("mcp config registry", () => {
         }, null, 2)}\n`,
         "utf-8",
       );
+      await fs.writeFile(path.join(pluginRoot, "bin", "server.js"), "// server\n", "utf-8");
+      await fs.writeFile(path.join(pluginRoot, "dist", "server.mjs"), "// bundled\n", "utf-8");
+      await fs.writeFile(path.join(pluginRoot, "nested", "server.js"), "// nested\n", "utf-8");
       await fs.writeFile(
         path.join(pluginRoot, ".mcp.json"),
         `${JSON.stringify({
@@ -192,7 +199,14 @@ describe("mcp config registry", () => {
             bundledServer: {
               type: "stdio",
               command: "./bin/server.js",
-              args: ["./dist/server.mjs", "--port", "7337"],
+              args: [
+                "./dist/server.mjs",
+                "nested/server.js",
+                "@modelcontextprotocol/server-filesystem",
+                "https://api.example.com",
+                "--port",
+                "7337",
+              ],
               cwd: "./runtime",
             },
             pathServer: {
@@ -212,6 +226,9 @@ describe("mcp config registry", () => {
         expect(bundledServer.transport.cwd).toBe(path.join(pluginRoot, "runtime"));
         expect(bundledServer.transport.args).toEqual([
           path.join(pluginRoot, "dist", "server.mjs"),
+          path.join(pluginRoot, "nested", "server.js"),
+          "@modelcontextprotocol/server-filesystem",
+          "https://api.example.com",
           "--port",
           "7337",
         ]);

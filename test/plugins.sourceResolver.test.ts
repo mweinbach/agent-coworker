@@ -202,6 +202,33 @@ describe("plugin GitHub source materialization", () => {
     expect(preview.candidates[0]?.diagnostics).toEqual([]);
     expect(requests).toContain(buildContentsUrl(repo, "main", ""));
   });
+
+  test("steps GitHub tree URLs that target .codex-plugin back to the plugin bundle root", async () => {
+    const repo = "owner/repo";
+    const { fetchImpl, requests } = createGitHubPluginFetch({
+      repo,
+      defaultBranch: "main",
+      files: {
+        "packages/demo-plugin/.codex-plugin/plugin.json": pluginManifest("demo-plugin"),
+        "packages/demo-plugin/skills/example/SKILL.md": skillDoc("example", "Example skill."),
+      },
+    });
+
+    const preview = await buildPluginInstallPreview({
+      input: "https://github.com/owner/repo/tree/main/packages/demo-plugin/.codex-plugin",
+      targetScope: "workspace",
+      catalog: emptyCatalog,
+      fetchImpl,
+    });
+
+    expect(preview.source.kind).toBe("github_tree");
+    expect(preview.source.ref).toBe("main");
+    expect(preview.source.subdir).toBe("packages/demo-plugin");
+    expect(preview.candidates).toHaveLength(1);
+    expect(preview.candidates[0]?.pluginId).toBe("demo-plugin");
+    expect(preview.candidates[0]?.diagnostics).toEqual([]);
+    expect(requests[0]).toBe(buildContentsUrl(repo, "main", "packages/demo-plugin"));
+  });
 });
 
 describe("plugin local source materialization", () => {

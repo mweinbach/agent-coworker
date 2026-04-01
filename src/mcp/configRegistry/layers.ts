@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -90,8 +91,30 @@ function mergeLayers(layers: MCPConfigLayer[]): MCPRegistryServer[] {
   return [...mergedByName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function isRelativeFilesystemPath(value: string): boolean {
-  return !path.isAbsolute(value) && (value.startsWith(".") || value.includes("/") || value.includes("\\"));
+const explicitRelativePathPattern = /^\.{1,2}(?:[\\/]|$)/;
+const uriSchemePattern = /^[A-Za-z][A-Za-z\d+.-]*:/;
+
+function isAbsoluteFilesystemPath(value: string): boolean {
+  return path.isAbsolute(value) || path.win32.isAbsolute(value);
+}
+
+function isExplicitRelativeFilesystemPath(value: string): boolean {
+  return explicitRelativePathPattern.test(value);
+}
+
+function isPluginRelativeFilesystemPath(pluginRootDir: string, value: string): boolean {
+  if (isAbsoluteFilesystemPath(value) || uriSchemePattern.test(value)) {
+    return false;
+  }
+  if (isExplicitRelativeFilesystemPath(value)) {
+    return true;
+  }
+  if ((!value.includes("/") && !value.includes("\\")) || value.startsWith("@")) {
+    return false;
+  }
+
+  const resolved = path.resolve(pluginRootDir, value);
+  return isPathInside(pluginRootDir, resolved) && existsSync(resolved);
 }
 
 function resolvePluginLocalPath(serverName: string, pluginRootDir: string, value: string, label: string): string {
@@ -107,16 +130,16 @@ function rebasePluginLocalTransport(server: MCPServerConfig, pluginRootDir: stri
     return server;
   }
 
-  const command = isRelativeFilesystemPath(server.transport.command)
+  const command = isPluginRelativeFilesystemPath(pluginRootDir, server.transport.command)
     ? resolvePluginLocalPath(server.name, pluginRootDir, server.transport.command, "command")
     : server.transport.command;
   const args = server.transport.args?.map((arg) =>
-    isRelativeFilesystemPath(arg)
+    isPluginRelativeFilesystemPath(pluginRootDir, arg)
       ? resolvePluginLocalPath(server.name, pluginRootDir, arg, `argument "${arg}"`)
       : arg);
   const cwd = server.transport.cwd
     ? (
-        path.isAbsolute(server.transport.cwd)
+        isAbsoluteFilesystemPath(server.transport.cwd)
           ? server.transport.cwd
           : resolvePluginLocalPath(server.name, pluginRootDir, server.transport.cwd, "cwd")
       )

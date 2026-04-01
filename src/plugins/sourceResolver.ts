@@ -61,6 +61,20 @@ function normalizePluginGitHubDirectoryPath(filePath: string): string {
   return parentDir === "." ? "" : parentDir;
 }
 
+function normalizePluginGitHubTreePath(directoryPath: string): string {
+  const normalizedDirectoryPath = trimSlashes(directoryPath);
+  if (!normalizedDirectoryPath) {
+    return "";
+  }
+
+  if (path.posix.basename(normalizedDirectoryPath) !== ".codex-plugin") {
+    return normalizedDirectoryPath;
+  }
+
+  const bundleRoot = path.posix.dirname(normalizedDirectoryPath);
+  return bundleRoot === "." ? "" : bundleRoot;
+}
+
 function buildDiagnostic(
   code: string,
   severity: SkillInstallationDiagnostic["severity"],
@@ -261,7 +275,7 @@ function buildGitHubMaterializationAttempts(descriptor: PluginSourceDescriptor):
     const trailingPath = refPathSegments.slice(splitAt).join("/");
     const githubPath =
       descriptor.kind === "github_tree"
-        ? trailingPath
+        ? normalizePluginGitHubTreePath(trailingPath)
         : trailingPath
           ? normalizePluginGitHubDirectoryPath(trailingPath)
           : "";
@@ -331,17 +345,22 @@ async function materializeGitHubSource(
     descriptor.refPath !== undefined
     && (descriptor.kind === "github_blob" || descriptor.kind === "github_raw")
     && isPluginManifestGitHubInput(descriptor.raw);
+  const preferredGitHubPath = descriptor.kind === "github_tree"
+    ? normalizePluginGitHubTreePath(descriptor.subdir ?? "")
+    : descriptor.subdir ?? "";
   const preferredAttempt = descriptor.ref && !shouldSkipPreferredAttempt
     ? [{
         ref: descriptor.ref,
-        githubPath: descriptor.subdir ?? "",
-        descriptor: buildResolvedGitHubDescriptor(descriptor, descriptor.ref, descriptor.subdir ?? ""),
+        githubPath: preferredGitHubPath,
+        descriptor: buildResolvedGitHubDescriptor(descriptor, descriptor.ref, preferredGitHubPath),
       }]
     : [];
   const attempts = buildGitHubMaterializationAttempts(descriptor);
   const fallbackRefs = descriptor.ref ? [descriptor.ref] : await resolveGitHubFallbackRefs(descriptor.repo, fetchImpl);
   const fallbackAttempts = fallbackRefs.map((ref) => {
-    const githubPath = descriptor.subdir ?? "";
+    const githubPath = descriptor.kind === "github_tree"
+      ? normalizePluginGitHubTreePath(descriptor.subdir ?? "")
+      : descriptor.subdir ?? "";
     return {
       ref,
       githubPath,

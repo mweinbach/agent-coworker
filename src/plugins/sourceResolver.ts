@@ -76,6 +76,20 @@ function expandHomeDir(input: string): string {
   return path.join(os.homedir(), input.slice(1));
 }
 
+function normalizeLocalPluginSourceRoot(absolutePath: string, isFile: boolean): string {
+  const candidateRoot = isFile ? path.dirname(absolutePath) : absolutePath;
+  const baseName = path.basename(candidateRoot);
+  const fileName = isFile ? path.basename(absolutePath) : "";
+
+  if (baseName === ".codex-plugin") {
+    if (!isFile || fileName === "plugin.json") {
+      return path.dirname(candidateRoot);
+    }
+  }
+
+  return candidateRoot;
+}
+
 async function discoverPluginRoots(rootDir: string): Promise<string[]> {
   const found = new Set<string>();
 
@@ -169,7 +183,7 @@ async function loadMaterializedPluginCandidates(
 async function materializeLocalPath(localPath: string): Promise<MaterializedPluginSource> {
   const absolutePath = path.resolve(expandHomeDir(localPath));
   const stat = await fs.stat(absolutePath);
-  const candidateRoot = stat.isFile() ? path.dirname(absolutePath) : absolutePath;
+  const candidateRoot = normalizeLocalPluginSourceRoot(absolutePath, stat.isFile());
   const descriptor: PluginSourceDescriptor = {
     kind: "local_path",
     raw: localPath,

@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import { buildPluginInstallPreview } from "../src/plugins/sourceResolver";
 import type { PluginCatalogSnapshot } from "../src/types";
@@ -198,5 +201,37 @@ describe("plugin GitHub source materialization", () => {
     expect(preview.candidates[0]?.pluginId).toBe("demo-plugin");
     expect(preview.candidates[0]?.diagnostics).toEqual([]);
     expect(requests).toContain(buildContentsUrl(repo, "main", ""));
+  });
+});
+
+describe("plugin local source materialization", () => {
+  test("steps local .codex-plugin/plugin.json inputs back to the plugin bundle root", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-local-manifest-source-"));
+
+    try {
+      const pluginRoot = path.join(workspace, "demo-plugin");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, "skills", "example"), { recursive: true });
+      await fs.writeFile(path.join(pluginRoot, ".codex-plugin", "plugin.json"), pluginManifest(), "utf-8");
+      await fs.writeFile(
+        path.join(pluginRoot, "skills", "example", "SKILL.md"),
+        skillDoc("example", "Example skill."),
+        "utf-8",
+      );
+
+      const preview = await buildPluginInstallPreview({
+        input: path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        targetScope: "workspace",
+        catalog: emptyCatalog,
+        cwd: workspace,
+      });
+
+      expect(preview.warnings).toEqual([]);
+      expect(preview.candidates).toHaveLength(1);
+      expect(preview.candidates[0]?.pluginId).toBe("demo-plugin");
+      expect(preview.candidates[0]?.diagnostics).toEqual([]);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
   });
 });

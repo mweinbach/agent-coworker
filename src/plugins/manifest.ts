@@ -262,6 +262,28 @@ function resolveRelativePath(pluginRoot: string, relativePath: string | undefine
   return resolveMaybeRelative(selected, pluginRoot);
 }
 
+async function resolveOptionalRelativePath(
+  pluginRoot: string,
+  relativePath: string | undefined,
+  fallback: string | undefined,
+): Promise<string | undefined> {
+  if (relativePath !== undefined) {
+    return resolveMaybeRelative(relativePath, pluginRoot);
+  }
+  if (!fallback) return undefined;
+  const resolvedFallback = resolveMaybeRelative(fallback, pluginRoot);
+  if (!resolvedFallback) return undefined;
+  try {
+    await fs.access(resolvedFallback);
+    return resolvedFallback;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 async function canonicalizePathFromExistingAncestor(targetPath: string): Promise<string> {
   const pendingSegments: string[] = [];
   let currentPath = path.resolve(targetPath);
@@ -327,8 +349,26 @@ export async function readPluginManifest(pluginRoot: string): Promise<PluginMani
     throw new Error(`Plugin manifest at ${manifestPath} is missing a skills path.`);
   }
   await assertPathInsidePluginRoot(pluginRoot, skillsPath, manifestPath, "skills");
-  const mcpPath = resolveRelativePath(pluginRoot, parsed.mcpServers, "./.mcp.json");
-  const appPath = resolveRelativePath(pluginRoot, parsed.apps, "./.app.json");
+  if (skillsValue !== undefined) {
+    let skillsStat;
+    try {
+      skillsStat = await fs.stat(skillsPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        throw new Error(
+          `Plugin manifest at ${manifestPath} declares skills path ${skillsPath}, but that directory does not exist.`,
+        );
+      }
+      throw error;
+    }
+    if (!skillsStat.isDirectory()) {
+      throw new Error(
+        `Plugin manifest at ${manifestPath} declares skills path ${skillsPath}, but it is not a directory.`,
+      );
+    }
+  }
+  const mcpPath = await resolveOptionalRelativePath(pluginRoot, parsed.mcpServers, "./.mcp.json");
+  const appPath = await resolveOptionalRelativePath(pluginRoot, parsed.apps, "./.app.json");
   await assertPathInsidePluginRoot(pluginRoot, mcpPath, manifestPath, "mcpServers");
   await assertPathInsidePluginRoot(pluginRoot, appPath, manifestPath, "apps");
   const authorName = typeof parsed.author === "string" ? parsed.author : parsed.author?.name;

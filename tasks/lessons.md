@@ -1,5 +1,6 @@
 # Lessons
 
+- For plugin install flows in this repo, only synthesize default `.mcp.json` / `.app.json` paths when the file actually exists, require explicitly declared `skills` directories to exist on disk, and normalize local `.codex-plugin/plugin.json` inputs back to the plugin root before discovery.
 - For provider-facing MCP tool schemas, do not pass tuple-style JSON Schema arrays like `items: [{...}, {...}]` through unchanged; normalize schema-valued keywords to provider-safe object/boolean nodes before registering tools or OpenAI-compatible runtimes will reject the function definition at request build time.
 - For MCP OAuth servers with `oauthMode: "auto"`, do not stop after emitting the browser challenge; the harness must continue the loopback callback through token exchange automatically and persist the result into the correct scope-specific `.cowork/auth/mcp-credentials.json` store.
 - When the user adds or corrects required commit trailers in this repo, carry that requirement forward into the active plan and the eventual commit message instead of treating it as a one-off chat note.

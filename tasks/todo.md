@@ -1,5 +1,23 @@
 # Task Plan
 
+## Fix Plugin Install Review Regressions Follow-up
+
+- [x] Stop inventing default plugin `.mcp.json` / `.app.json` paths when those files are absent.
+- [x] Reject explicitly configured plugin `skills` directories that do not exist.
+- [x] Normalize local `.codex-plugin/plugin.json` install inputs back to the plugin bundle root.
+- [x] Add focused regression coverage and rerun plugin tests, `bun run typecheck`, and the full `bun test` suite.
+
+## Fix Plugin Install Review Regressions Follow-up Review
+
+- `src/plugins/manifest.ts` now only assigns implicit plugin MCP/app config paths when `.mcp.json` / `.app.json` actually exist on disk, so skill-only bundles no longer surface bogus MCP validation noise.
+- `src/plugins/manifest.ts` now treats an explicit `skills` manifest path as a real contract: missing or non-directory paths fail manifest validation instead of silently behaving like an empty skill bundle.
+- `src/plugins/sourceResolver.ts` now normalizes local `.codex-plugin/plugin.json` inputs back to the bundle root before discovery, matching the existing GitHub blob/raw handling.
+- Added focused regressions in `test/plugins.catalog.test.ts` and `test/plugins.sourceResolver.test.ts`.
+- Verification passed with:
+  - `bun test test/plugins.catalog.test.ts test/plugins.sourceResolver.test.ts`
+  - `bun run typecheck`
+  - `bun test` on 2026-04-01 (`2913 pass`, `3 skip`, `0 fail`)
+
 ## Fix Plugin Review Regressions
 
 - [ ] Fix duplicate-scope plugin rendering in the desktop catalog so same-ID workspace/user plugins no longer collide in React state or list identity.

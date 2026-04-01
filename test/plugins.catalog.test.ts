@@ -93,6 +93,72 @@ function pluginEntry(scope: "workspace" | "user", rootDir: string): PluginCatalo
 }
 
 describe("plugin catalog and install operations", () => {
+  test("skill-only plugins do not invent missing default MCP or app config paths", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-skill-only-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-skill-only-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-skill-only-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const sourceRoot = path.join(workspace, "plugin-source", "skill-only");
+      await fs.mkdir(path.join(sourceRoot, ".codex-plugin"), { recursive: true });
+      await fs.mkdir(path.join(sourceRoot, "skills", "example"), { recursive: true });
+      await fs.writeFile(
+        path.join(sourceRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "skill-only",
+          description: "Skills only",
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(sourceRoot, "skills", "example", "SKILL.md"),
+        [
+          "---",
+          "name: example",
+          "description: Example skill",
+          "---",
+          "",
+          "# Example",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const manifest = await readPluginManifest(sourceRoot);
+      expect(manifest.mcpPath).toBeUndefined();
+      expect(manifest.appPath).toBeUndefined();
+
+      const preview = await previewPluginInstall({
+        config,
+        input: sourceRoot,
+        targetScope: "workspace",
+      });
+      expect(preview.warnings).toEqual([]);
+      expect(preview.candidates).toEqual([
+        expect.objectContaining({
+          pluginId: "skill-only",
+          diagnostics: [],
+        }),
+      ]);
+
+      const result = await installPluginsFromSource({
+        config,
+        input: sourceRoot,
+        targetScope: "workspace",
+      });
+      expect(result.pluginIds).toEqual(["skill-only"]);
+
+      const mcpRegistry = await loadMCPConfigRegistry(config);
+      expect(mcpRegistry.servers).toEqual([]);
+      expect(mcpRegistry.warnings).toEqual([]);
+      expect(mcpRegistry.files.some((file) => file.source === "plugin")).toBe(false);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("installPluginsFromSource allows a workspace copy to shadow an existing user plugin", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-home-"));
@@ -236,6 +302,58 @@ describe("plugin catalog and install operations", () => {
       await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves apps outside the plugin root");
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("preview and install reject explicit missing skills directories", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-missing-skills-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-missing-skills-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-missing-skills-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const sourceRoot = path.join(workspace, "plugin-source", "broken-plugin");
+      await fs.mkdir(path.join(sourceRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(sourceRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "broken-plugin",
+          description: "Broken plugin",
+          skills: "./missing-skills",
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      await expect(readPluginManifest(sourceRoot)).rejects.toThrow("declares skills path");
+
+      const preview = await previewPluginInstall({
+        config,
+        input: sourceRoot,
+        targetScope: "workspace",
+      });
+      expect(preview.warnings).toEqual(["No valid plugin bundles were found in the provided source."]);
+      expect(preview.candidates).toEqual([
+        expect.objectContaining({
+          pluginId: "broken-plugin",
+          diagnostics: [
+            expect.objectContaining({
+              code: "invalid_plugin_manifest",
+              severity: "error",
+              message: expect.stringContaining("declares skills path"),
+            }),
+          ],
+        }),
+      ]);
+
+      await expect(installPluginsFromSource({
+        config,
+        input: sourceRoot,
+        targetScope: "workspace",
+      })).rejects.toThrow("No valid plugin bundles were found in the provided source");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
     }
   });
 

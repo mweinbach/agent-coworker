@@ -14,6 +14,7 @@ import type {
 } from "../types";
 import {
   downloadGitHubDirectory,
+  githubHeaders,
   parseGitHubShorthand,
   parseGitHubUrl,
   type FetchLike,
@@ -38,6 +39,26 @@ export type MaterializedPluginSource = {
 
 function trimSlashes(value: string): string {
   return value.replace(/^\/+|\/+$/g, "");
+}
+
+function isPluginManifestGitHubInput(input: string): boolean {
+  return /(?:^|\/)\.codex-plugin\/plugin\.json(?:$|[?#])/.test(input);
+}
+
+function normalizePluginGitHubDirectoryPath(filePath: string): string {
+  const normalizedFilePath = trimSlashes(filePath);
+  if (!normalizedFilePath) {
+    return "";
+  }
+
+  const fileName = path.posix.basename(normalizedFilePath);
+  const parentDir = path.posix.dirname(normalizedFilePath);
+  if (fileName === "plugin.json" && path.posix.basename(parentDir) === ".codex-plugin") {
+    const bundleRoot = path.posix.dirname(parentDir);
+    return bundleRoot === "." ? "" : bundleRoot;
+  }
+
+  return parentDir === "." ? "" : parentDir;
 }
 
 function buildDiagnostic(
@@ -226,7 +247,7 @@ function buildGitHubMaterializationAttempts(descriptor: PluginSourceDescriptor):
       descriptor.kind === "github_tree"
         ? trailingPath
         : trailingPath
-          ? path.posix.dirname(trailingPath)
+          ? normalizePluginGitHubDirectoryPath(trailingPath)
           : "";
     const normalizedPath = githubPath === "." ? "" : githubPath;
 
@@ -290,7 +311,11 @@ async function materializeGitHubSource(
     throw new Error("GitHub source is missing repo information");
   }
 
-  const preferredAttempt = descriptor.ref
+  const shouldSkipPreferredAttempt =
+    descriptor.refPath !== undefined
+    && (descriptor.kind === "github_blob" || descriptor.kind === "github_raw")
+    && isPluginManifestGitHubInput(descriptor.raw);
+  const preferredAttempt = descriptor.ref && !shouldSkipPreferredAttempt
     ? [{
         ref: descriptor.ref,
         githubPath: descriptor.subdir ?? "",
@@ -298,7 +323,7 @@ async function materializeGitHubSource(
       }]
     : [];
   const attempts = buildGitHubMaterializationAttempts(descriptor);
-  const fallbackRefs = descriptor.ref ? [descriptor.ref] : ["main", "master"];
+  const fallbackRefs = descriptor.ref ? [descriptor.ref] : await resolveGitHubFallbackRefs(descriptor.repo, fetchImpl);
   const fallbackAttempts = fallbackRefs.map((ref) => {
     const githubPath = descriptor.subdir ?? "";
     return {
@@ -368,6 +393,46 @@ async function materializeGitHubSource(
     await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
     throw error;
   }
+}
+
+async function readResponseError(response: Response): Promise<string> {
+  try {
+    const text = await response.text();
+    return text.trim() || `${response.status} ${response.statusText}`;
+  } catch {
+    return `${response.status} ${response.statusText}`;
+  }
+}
+
+async function fetchGitHubDefaultBranch(fetchImpl: FetchLike, repo: string): Promise<string | null> {
+  const response = await fetchImpl(`https://api.github.com/repos/${repo}`, {
+    headers: githubHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch GitHub repo metadata for ${repo}: ${await readResponseError(response)}`);
+  }
+
+  const parsed = await response.json() as Record<string, unknown>;
+  return typeof parsed.default_branch === "string" && parsed.default_branch.trim().length > 0
+    ? parsed.default_branch.trim()
+    : null;
+}
+
+async function resolveGitHubFallbackRefs(repo: string | undefined, fetchImpl: FetchLike): Promise<string[]> {
+  const fallbackRefs = new Set<string>();
+  if (repo) {
+    try {
+      const defaultBranch = await fetchGitHubDefaultBranch(fetchImpl, repo);
+      if (defaultBranch) {
+        fallbackRefs.add(defaultBranch);
+      }
+    } catch {
+      // Fall back to conventional default branches when repo metadata is unavailable.
+    }
+  }
+  fallbackRefs.add("main");
+  fallbackRefs.add("master");
+  return [...fallbackRefs];
 }
 
 export async function materializePluginSource(opts: {

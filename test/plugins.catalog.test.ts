@@ -218,4 +218,42 @@ describe("plugin catalog and install operations", () => {
     expect(workspacePlugin.error).toBeUndefined();
     expect(workspacePlugin.plugin?.rootDir).toBe("/tmp/workspace/.agents/plugins/figma-toolkit");
   });
+
+  test("surfaces warnings for malformed bundled plugin skills", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-malformed-skills-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-malformed-skills-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-malformed-skills-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "figma-toolkit");
+      await writePlugin(pluginRoot, "Workspace Figma Toolkit", "Workspace override");
+      await fs.mkdir(path.join(pluginRoot, "skills", "broken-skill"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, "skills", "broken-skill", "SKILL.md"),
+        [
+          "---",
+          "name: broken-skill",
+          "description: [not valid yaml",
+          "---",
+          "",
+          "# Broken skill",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const catalog = await buildPluginCatalogSnapshot(config);
+      const plugin = catalog.plugins.find((entry) => entry.id === "figma-toolkit");
+
+      expect(plugin).toBeDefined();
+      expect(plugin?.skills.map((skill) => skill.rawName)).toEqual(["import-frame"]);
+      expect(plugin?.warnings).toHaveLength(1);
+      expect(plugin?.warnings[0]).toContain("broken-skill");
+      expect(plugin?.warnings[0]).toContain("SKILL.md");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
 });

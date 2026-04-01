@@ -311,22 +311,29 @@ export async function readPluginManifest(pluginRoot: string): Promise<PluginMani
   };
 }
 
-export async function readPluginSkillSummaries(pluginManifest: PluginManifest): Promise<ParsedPluginSkill[]> {
+export async function readPluginSkillSummaries(pluginManifest: PluginManifest): Promise<{
+  skills: ParsedPluginSkill[];
+  warnings: string[];
+}> {
   let dirents: Array<{ name: string; isDirectory: () => boolean }> = [];
   try {
     dirents = await fs.readdir(pluginManifest.skillsPath, { withFileTypes: true, encoding: "utf8" });
   } catch {
-    return [];
+    return { skills: [], warnings: [] };
   }
 
   const skills: ParsedPluginSkill[] = [];
+  const warnings: string[] = [];
   for (const dirent of dirents) {
     if (!dirent.isDirectory()) continue;
     const skillRoot = path.join(pluginManifest.skillsPath, dirent.name);
     const skillPath = path.join(skillRoot, "SKILL.md");
     try {
       const parsed = await parseSkillFrontMatter(skillPath, dirent.name);
-      if (!parsed) continue;
+      if (!parsed) {
+        warnings.push(`[plugins] Ignoring malformed bundled skill "${dirent.name}" at ${skillPath}.`);
+        continue;
+      }
       const interfaceMeta = await readSkillInterface(skillRoot);
       skills.push({
         rawName: parsed.name,
@@ -337,12 +344,15 @@ export async function readPluginSkillSummaries(pluginManifest: PluginManifest): 
         ...(interfaceMeta ? { interface: interfaceMeta } : {}),
         warnings: [],
       });
-    } catch {
-      // Fail open; invalid plugin skills are surfaced later as warnings.
+    } catch (error) {
+      warnings.push(`[plugins] Ignoring malformed bundled skill "${dirent.name}" at ${skillPath}: ${String(error)}`);
     }
   }
 
-  return skills.sort((left, right) => left.rawName.localeCompare(right.rawName));
+  return {
+    skills: skills.sort((left, right) => left.rawName.localeCompare(right.rawName)),
+    warnings,
+  };
 }
 
 export async function readPluginAppSummaries(appPath: string | undefined): Promise<ParsedPluginApp[]> {

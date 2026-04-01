@@ -78,7 +78,7 @@ export async function buildPluginCatalogSnapshot(config: AgentConfig): Promise<P
         },
         overrides,
       );
-      const skills = await readPluginSkillSummaries(manifest);
+      const { skills, warnings: skillWarnings } = await readPluginSkillSummaries(manifest);
       const normalizedSkills = skills.map((skill) => ({
         ...skill,
         warnings: [...skill.warnings],
@@ -95,7 +95,7 @@ export async function buildPluginCatalogSnapshot(config: AgentConfig): Promise<P
         })),
         mcpServers: await readPluginMcpServerNames(manifest.mcpPath),
         apps: await readPluginAppSummaries(manifest.appPath),
-        warnings: entryWarnings(candidate),
+        warnings: entryWarnings(candidate, skillWarnings),
         ...(candidate.marketplace
           ? {
               marketplace: {

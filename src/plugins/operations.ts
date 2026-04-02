@@ -41,12 +41,23 @@ function requireWritablePluginScope(
   };
 }
 
-function conflictingTargetRoots(paths: WritablePluginScopePaths, pluginId: string): string[] {
-  return [path.join(paths.pluginsDir, pluginId)];
+function conflictingTargetRoots(
+  catalog: PluginCatalogSnapshot,
+  paths: WritablePluginScopePaths,
+  pluginId: string,
+): string[] {
+  const roots = new Set<string>();
+  for (const plugin of catalog.plugins) {
+    if (plugin.scope === paths.scope && plugin.id === pluginId) {
+      roots.add(plugin.rootDir);
+    }
+  }
+  roots.add(path.join(paths.pluginsDir, pluginId));
+  return [...roots];
 }
 
-async function removeConflictingTargets(paths: WritablePluginScopePaths, pluginId: string): Promise<void> {
-  for (const targetRoot of conflictingTargetRoots(paths, pluginId)) {
+async function removeConflictingTargets(targetRoots: string[]): Promise<void> {
+  for (const targetRoot of targetRoots) {
     await fs.rm(targetRoot, { recursive: true, force: true });
   }
 }
@@ -218,13 +229,15 @@ export async function installPluginsFromSource(opts: {
     const installedPluginIds: string[] = [];
     for (const candidate of validCandidates) {
       const destinationRoot = path.join(writableScope.pluginsDir, candidate.pluginId);
-      const previousServers = await readBundledPluginMcpServers(destinationRoot);
+      const targetRoots = conflictingTargetRoots(currentCatalog, writableScope, candidate.pluginId);
+      const existingInstallRoot = targetRoots.find((rootDir) => rootDir !== destinationRoot) ?? destinationRoot;
+      const previousServers = await readBundledPluginMcpServers(existingInstallRoot);
       const stagedSource = await stageCopySourceIfNeeded(
         candidate.rootDir,
-        conflictingTargetRoots(writableScope, candidate.pluginId),
+        targetRoots,
       );
       try {
-        await removeConflictingTargets(writableScope, candidate.pluginId);
+        await removeConflictingTargets(targetRoots);
         await copyPluginRoot(stagedSource.sourceRoot, destinationRoot);
         await migrateBundledPluginMcpCredentials({
           config: opts.config,

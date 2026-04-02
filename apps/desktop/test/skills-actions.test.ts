@@ -8,6 +8,7 @@ const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
 
 /** Distinct from control-socket tests (`ws-skills`) so parallel CI runs do not share disposed JSON-RPC state. */
 const workspaceId = "ws-skills-store-actions";
+const secondaryWorkspaceId = "ws-skills-secondary";
 
 function createState() {
   return {
@@ -426,6 +427,94 @@ describe("skill store actions", () => {
     expect(RUNTIME.pluginInstallWaiters.has(managementWorkspaceId)).toBe(false);
   });
 
+  test("installPlugins refreshes other open workspaces after a user-scoped install succeeds", async () => {
+    const state = createState();
+    state.workspaceRuntimeById = {
+      [workspaceId]: {
+        ...defaultWorkspaceRuntime(),
+        serverUrl: "ws://source",
+        controlSessionId: "jsonrpc-control",
+      },
+      [secondaryWorkspaceId]: {
+        ...defaultWorkspaceRuntime(),
+        serverUrl: "ws://secondary",
+        controlSessionId: "jsonrpc-control",
+      },
+    } as any;
+    state.workspaces = [
+      { id: workspaceId, path: "/tmp/workspace" },
+      { id: secondaryWorkspaceId, path: "/tmp/secondary" },
+    ];
+    const { get, set } = createStoreHarness(state);
+
+    const sourceCalls: string[] = [];
+    const secondaryCalls: string[] = [];
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string) => {
+        sourceCalls.push(method);
+        expect(method).toBe("cowork/plugins/install");
+        return {
+          events: [
+            {
+              type: "skills_catalog",
+              sessionId: "jsonrpc-control",
+              catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+              mutationBlocked: false,
+              clearedMutationPendingKeys: ["plugin:install:user"],
+            },
+            {
+              type: "plugins_catalog",
+              sessionId: "jsonrpc-control",
+              catalog: { plugins: [], warnings: [] },
+              clearedMutationPendingKeys: ["plugin:install:user"],
+            },
+          ],
+        };
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+    RUNTIME.jsonRpcSockets.set(secondaryWorkspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string) => {
+        secondaryCalls.push(method);
+        if (method === "cowork/plugins/catalog/read") {
+          return { event: { type: "plugins_catalog", sessionId: "jsonrpc-control", catalog: { plugins: [], warnings: [] } } };
+        }
+        if (method === "cowork/skills/catalog/read") {
+          return {
+            event: {
+              type: "skills_catalog",
+              sessionId: "jsonrpc-control",
+              catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+              mutationBlocked: false,
+            },
+          };
+        }
+        if (method === "cowork/skills/list") {
+          return { event: { type: "skills_list", sessionId: "jsonrpc-control", skills: [] } };
+        }
+        if (method === "cowork/mcp/servers/read") {
+          return { event: { type: "mcp_servers", sessionId: "jsonrpc-control", servers: [], legacy: [], files: [], warnings: [] } };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    await createSkillActions(set as any, get as any).installPlugins("owner/repo", "user");
+
+    expect(sourceCalls).toEqual(["cowork/plugins/install"]);
+    expect(secondaryCalls.sort()).toEqual([
+      "cowork/mcp/servers/read",
+      "cowork/plugins/catalog/read",
+      "cowork/skills/catalog/read",
+      "cowork/skills/list",
+    ]);
+  });
+
   test("refreshPluginsCatalog falls back to the selected workspace when the management workspace no longer exists", async () => {
     const state = createState();
     state.pluginManagementWorkspaceId = "ws-stale";
@@ -504,6 +593,86 @@ describe("skill store actions", () => {
 
     expect(state.workspaceRuntimeById[workspaceId].selectedSkillName).toBe("example-skill");
     expect(state.workspaceRuntimeById[workspaceId].selectedSkillContent).toBe("# Example skill");
+  });
+
+  test("installSkills refreshes other open workspaces after a global install succeeds", async () => {
+    const state = createState();
+    state.workspaceRuntimeById = {
+      [workspaceId]: {
+        ...defaultWorkspaceRuntime(),
+        serverUrl: "ws://source",
+        controlSessionId: "jsonrpc-control",
+      },
+      [secondaryWorkspaceId]: {
+        ...defaultWorkspaceRuntime(),
+        serverUrl: "ws://secondary",
+        controlSessionId: "jsonrpc-control",
+      },
+    } as any;
+    state.workspaces = [
+      { id: workspaceId, path: "/tmp/workspace" },
+      { id: secondaryWorkspaceId, path: "/tmp/secondary" },
+    ];
+    const { get, set } = createStoreHarness(state);
+
+    const sourceCalls: string[] = [];
+    const secondaryCalls: string[] = [];
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string) => {
+        sourceCalls.push(method);
+        expect(method).toBe("cowork/skills/install");
+        return {
+          event: {
+            type: "skills_catalog",
+            sessionId: "jsonrpc-control",
+            catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+            mutationBlocked: false,
+            clearedMutationPendingKeys: ["install:global"],
+          },
+        };
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+    RUNTIME.jsonRpcSockets.set(secondaryWorkspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async (method: string) => {
+        secondaryCalls.push(method);
+        if (method === "cowork/plugins/catalog/read") {
+          return { event: { type: "plugins_catalog", sessionId: "jsonrpc-control", catalog: { plugins: [], warnings: [] } } };
+        }
+        if (method === "cowork/skills/catalog/read") {
+          return {
+            event: {
+              type: "skills_catalog",
+              sessionId: "jsonrpc-control",
+              catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+              mutationBlocked: false,
+            },
+          };
+        }
+        if (method === "cowork/skills/list") {
+          return { event: { type: "skills_list", sessionId: "jsonrpc-control", skills: [] } };
+        }
+        if (method === "cowork/mcp/servers/read") {
+          return { event: { type: "mcp_servers", sessionId: "jsonrpc-control", servers: [], legacy: [], files: [], warnings: [] } };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    await createSkillActions(set as any, get as any).installSkills("owner/repo", "global");
+
+    expect(sourceCalls).toEqual(["cowork/skills/install"]);
+    expect(secondaryCalls.sort()).toEqual([
+      "cowork/mcp/servers/read",
+      "cowork/plugins/catalog/read",
+      "cowork/skills/catalog/read",
+      "cowork/skills/list",
+    ]);
   });
 
   test("selectSkillInstallation enters loading state before the request and preserves loaded detail after success", async () => {

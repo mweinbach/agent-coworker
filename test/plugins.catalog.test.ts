@@ -213,6 +213,69 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
+  test("installPluginsFromSource removes same-scope marketplace copies before installing", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-marketplace-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-marketplace-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-marketplace-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const marketplacePluginRoot = path.join(workspace, ".agents", "plugins", "market", "figma-market");
+      const sourceRoot = path.join(workspace, "plugin-source", "figma-toolkit");
+      await writePlugin(marketplacePluginRoot, "Marketplace Figma Toolkit", "Marketplace plugin");
+      await fs.mkdir(path.join(workspace, ".agents", "plugins"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspace, ".agents", "plugins", "marketplace.json"),
+        `${JSON.stringify({
+          name: "workspace-market",
+          plugins: [
+            {
+              name: "figma-toolkit",
+              source: {
+                source: "local",
+                path: "./market/figma-market",
+              },
+              policy: {
+                installation: "manual",
+                authentication: "optional",
+              },
+              category: "design",
+            },
+          ],
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await writePlugin(sourceRoot, "Installed Figma Toolkit", "Workspace install");
+
+      const result = await installPluginsFromSource({
+        config,
+        input: sourceRoot,
+        targetScope: "workspace",
+      });
+
+      const workspaceMatches = result.catalog.plugins.filter((plugin) => plugin.scope === "workspace" && plugin.id === "figma-toolkit");
+      expect(workspaceMatches).toHaveLength(1);
+      expect(workspaceMatches[0]?.rootDir).toBe(path.join(workspace, ".agents", "plugins", "figma-toolkit"));
+      expect(
+        resolvePluginCatalogEntry({
+          catalog: result.catalog,
+          pluginId: "figma-toolkit",
+          scope: "workspace",
+        }),
+      ).toEqual({
+        plugin: expect.objectContaining({
+          id: "figma-toolkit",
+          scope: "workspace",
+        }),
+      });
+      await expect(fs.access(marketplacePluginRoot)).rejects.toBeDefined();
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("installPluginsFromSource preserves bundled MCP credentials when a plugin renames its server", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-mcp-rename-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-mcp-rename-home-"));

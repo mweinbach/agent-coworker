@@ -148,6 +148,57 @@ export function createSkillActions(
       pluginManagementMode: state.pluginManagementMode,
     }).catalogWorkspaceId;
   };
+  const resolvePluginScopeForMutation = (
+    workspaceId: string,
+    pluginId: string,
+    scope?: PluginSelection["scope"],
+  ): PluginSelection["scope"] | null => {
+    if (scope) {
+      return scope;
+    }
+    const catalog = get().workspaceRuntimeById[workspaceId]?.pluginsCatalog;
+    const matches = catalog?.plugins.filter((plugin) => plugin.id === pluginId) ?? [];
+    if (matches.length !== 1) {
+      return null;
+    }
+    return matches[0]?.scope ?? null;
+  };
+  const resolveInstallationScopeForMutation = (
+    workspaceId: string,
+    installationId: string,
+  ): string | null => {
+    const catalog = get().workspaceRuntimeById[workspaceId]?.skillsCatalog;
+    return catalog?.installations.find((installation) => installation.installationId === installationId)?.scope ?? null;
+  };
+  const refreshSharedWorkspaceState = async (sourceWorkspaceId: string) => {
+    const targetWorkspaceIds = (get().workspaces ?? [])
+      .map((workspace) => workspace.id)
+      .filter((workspaceId) => {
+        if (workspaceId === sourceWorkspaceId) {
+          return false;
+        }
+        const runtime = get().workspaceRuntimeById[workspaceId];
+        return !!runtime?.serverUrl && !runtime.error;
+      });
+
+    await Promise.allSettled(
+      targetWorkspaceIds.map(async (workspaceId) => {
+        const cwd = workspacePath(workspaceId);
+        if (!cwd) {
+          return;
+        }
+        ensureWorkspaceRuntime(get, set, workspaceId);
+        await ensureServerRunning(get, set, workspaceId);
+        ensureControlSocket(get, set, workspaceId);
+        await Promise.allSettled([
+          requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/catalog/read", { cwd }),
+          requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/catalog/read", { cwd }),
+          requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/list", { cwd }),
+          requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/servers/read", { cwd }),
+        ]);
+      }),
+    );
+  };
 
   return {
     openSkills: async () => {
@@ -378,7 +429,11 @@ export function createSkillActions(
         existing.reject(new Error("Another install was started"));
       }
 
-      return await installPromise.promise;
+      const result = await installPromise.promise;
+      if (targetScope === "user") {
+        await refreshSharedWorkspaceState(workspaceId);
+      }
+      return result;
     },
 
     setPluginViewMode: async (mode: "plugins" | "skills") => {
@@ -399,6 +454,7 @@ export function createSkillActions(
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
+      const pluginScope = resolvePluginScopeForMutation(workspaceId, pluginId, scope);
       const selection = scope ? { id: pluginId, scope } : undefined;
       const key = pluginPendingKey("enable", selection);
       set((s) => ({
@@ -434,6 +490,9 @@ export function createSkillActions(
             },
           },
         }));
+        if (pluginScope === "user") {
+          await refreshSharedWorkspaceState(workspaceId);
+        }
       }
     },
 
@@ -441,6 +500,7 @@ export function createSkillActions(
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
+      const pluginScope = resolvePluginScopeForMutation(workspaceId, pluginId, scope);
       const selection = scope ? { id: pluginId, scope } : undefined;
       const key = pluginPendingKey("disable", selection);
       set((s) => ({
@@ -476,6 +536,9 @@ export function createSkillActions(
             },
           },
         }));
+        if (pluginScope === "user") {
+          await refreshSharedWorkspaceState(workspaceId);
+        }
       }
     },
 
@@ -683,7 +746,11 @@ export function createSkillActions(
         existing.reject(new Error("Another skill install was started"));
       }
 
-      return await installPromise.promise;
+      const result = await installPromise.promise;
+      if (targetScope === "global") {
+        await refreshSharedWorkspaceState(workspaceId);
+      }
+      return result;
     },
   
 
@@ -729,6 +796,7 @@ export function createSkillActions(
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
+      const installationScope = resolveInstallationScopeForMutation(workspaceId, installationId);
       const key = skillPendingKey("disable", installationId);
       set((s) => ({
         workspaceRuntimeById: {
@@ -745,6 +813,8 @@ export function createSkillActions(
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/disable", { cwd, installationId });
       if (!ok) {
         clearFailedSkillMutationSend(set, workspaceId, key, "Unable to disable skill installation.");
+      } else if (installationScope === "global") {
+        await refreshSharedWorkspaceState(workspaceId);
       }
     },
 
@@ -752,6 +822,7 @@ export function createSkillActions(
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
+      const installationScope = resolveInstallationScopeForMutation(workspaceId, installationId);
       const key = skillPendingKey("enable", installationId);
       set((s) => ({
         workspaceRuntimeById: {
@@ -768,6 +839,8 @@ export function createSkillActions(
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/enable", { cwd, installationId });
       if (!ok) {
         clearFailedSkillMutationSend(set, workspaceId, key, "Unable to enable skill installation.");
+      } else if (installationScope === "global") {
+        await refreshSharedWorkspaceState(workspaceId);
       }
     },
 
@@ -775,6 +848,7 @@ export function createSkillActions(
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
+      const installationScope = resolveInstallationScopeForMutation(workspaceId, installationId);
       const key = skillPendingKey("delete", installationId);
       set((s) => ({
         workspaceRuntimeById: {
@@ -791,6 +865,8 @@ export function createSkillActions(
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/delete", { cwd, installationId });
       if (!ok) {
         clearFailedSkillMutationSend(set, workspaceId, key, "Unable to delete skill installation.");
+      } else if (installationScope === "global") {
+        await refreshSharedWorkspaceState(workspaceId);
       }
     },
 
@@ -814,6 +890,8 @@ export function createSkillActions(
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/copy", { cwd, installationId, targetScope });
       if (!ok) {
         clearFailedSkillMutationSend(set, workspaceId, key, "Unable to copy skill installation.");
+      } else if (targetScope === "global") {
+        await refreshSharedWorkspaceState(workspaceId);
       }
     },
 
@@ -829,6 +907,7 @@ export function createSkillActions(
       const workspaceId = managementWorkspaceId();
       if (!workspaceId) return;
       const cwd = workspacePath(workspaceId);
+      const installationScope = resolveInstallationScopeForMutation(workspaceId, installationId);
       const key = skillPendingKey("update", installationId);
       set((s) => ({
         workspaceRuntimeById: {
@@ -845,6 +924,8 @@ export function createSkillActions(
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/update", { cwd, installationId });
       if (!ok) {
         clearFailedSkillMutationSend(set, workspaceId, key, "Unable to update skill installation.");
+      } else if (installationScope === "global") {
+        await refreshSharedWorkspaceState(workspaceId);
       }
     },
   

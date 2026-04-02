@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
@@ -28,6 +29,7 @@ import { resolveAuthHomeDir } from "../utils/authHome";
 import type { AgentControl } from "./agents/AgentControl";
 import type { AgentSession } from "./session/AgentSession";
 import { SessionDb, type PersistedSessionRecord } from "./sessionDb";
+import { refreshSessionsForSkillMutation } from "./skillMutationRefresh";
 import type { WorkspaceBackupService } from "./workspaceBackups";
 import {
   type ServerEvent,
@@ -54,6 +56,11 @@ import { createJsonRpcTransportAdapter } from "./jsonrpc/transportAdapter";
 import { type SessionBinding, type StartServerSocketData } from "./startServer/types";
 import type { SeededSessionContext, SessionDependencies, SessionInfoState } from "./session/SessionContext";
 import {
+  readSharedSkillMutationSignal,
+  resolveSharedSkillMutationSignalPath,
+  writeSharedSkillMutationSignal,
+} from "./sharedSkillMutationSignal";
+import {
   parseWsProtocolDefault,
   resolveWsProtocol,
   splitWebSocketSubprotocolHeader,
@@ -63,6 +70,7 @@ const jsonObjectSchema = z.record(z.string(), z.unknown());
 const errorWithCodeSchema = z.object({
   code: z.string().optional(),
 }).passthrough();
+const SHARED_SKILL_MUTATION_POLL_MS = 250;
 let observabilityOtelModulePromise: Promise<typeof import("../observability/otel")> | null = null;
 let promptModulePromise: Promise<typeof import("../prompt")> | null = null;
 let agentSessionModule: typeof import("./session/AgentSession") | null = null;
@@ -357,8 +365,92 @@ export async function startAgentServer(
   const sessionBindings = new Map<string, SessionBinding>();
   const workspaceControlBindings = new Map<string, SessionBinding>();
   const workspaceControlStateIds = new Map<string, string>();
+  const sharedSkillMutationSignalPath = resolveSharedSkillMutationSignalPath(config.userAgentDir);
   let workspaceBackupService: WorkspaceBackupService | null = null;
   let getAgentControl: () => AgentControl;
+  let serverStopped = false;
+  let sharedSkillMutationWatcher: fsSync.FSWatcher | null = null;
+  let sharedSkillMutationPollTimer: ReturnType<typeof setInterval> | null = null;
+  let lastSharedSkillMutationRevision: string | null = null;
+  let sharedSkillMutationRefreshLoop: Promise<void> | null = null;
+  let sharedSkillMutationRefreshQueued = false;
+
+  const refreshLocalSkillState = async ({
+    workingDirectory,
+    sourceSessionId,
+    allWorkspaces = false,
+  }: {
+    workingDirectory: string;
+    sourceSessionId?: string;
+    allWorkspaces?: boolean;
+  }) => {
+    await refreshSessionsForSkillMutation({
+      sessionBindings: sessionBindings.values(),
+      workspaceControlBindings: workspaceControlBindings.values(),
+      workingDirectory,
+      sourceSessionId,
+      allWorkspaces,
+    });
+  };
+
+  const publishSharedSkillMutationSignal = async () => {
+    const signal = {
+      revision: crypto.randomUUID(),
+      pid: process.pid,
+      at: new Date().toISOString(),
+    };
+    lastSharedSkillMutationRevision = signal.revision;
+    await writeSharedSkillMutationSignal(sharedSkillMutationSignalPath, signal);
+  };
+
+  const applySharedSkillMutationSignal = async () => {
+    const signal = await readSharedSkillMutationSignal(sharedSkillMutationSignalPath);
+    if (!signal || signal.revision === lastSharedSkillMutationRevision) {
+      return;
+    }
+    lastSharedSkillMutationRevision = signal.revision;
+    if (signal.pid === process.pid) {
+      return;
+    }
+    await refreshLocalSkillState({
+      workingDirectory: config.workingDirectory,
+      allWorkspaces: true,
+    });
+  };
+
+  const scheduleSharedSkillMutationRefresh = () => {
+    if (serverStopped) {
+      return;
+    }
+    if (sharedSkillMutationRefreshLoop) {
+      sharedSkillMutationRefreshQueued = true;
+      return;
+    }
+    sharedSkillMutationRefreshLoop = (async () => {
+      do {
+        sharedSkillMutationRefreshQueued = false;
+        await applySharedSkillMutationSignal();
+      } while (sharedSkillMutationRefreshQueued && !serverStopped);
+    })().finally(() => {
+      sharedSkillMutationRefreshLoop = null;
+    });
+  };
+
+  await fs.mkdir(config.userAgentDir, { recursive: true });
+  lastSharedSkillMutationRevision = (await readSharedSkillMutationSignal(sharedSkillMutationSignalPath))?.revision ?? null;
+  try {
+    sharedSkillMutationWatcher = fsSync.watch(config.userAgentDir, () => {
+      if (serverStopped) {
+        return;
+      }
+      scheduleSharedSkillMutationRefresh();
+    });
+  } catch {
+    // Cross-process refresh remains best-effort when file watching is unavailable.
+  }
+  sharedSkillMutationPollTimer = setInterval(() => {
+    scheduleSharedSkillMutationRefresh();
+  }, SHARED_SKILL_MUTATION_POLL_MS);
 
   const getWorkspaceBackupService = (): WorkspaceBackupService => {
     if (workspaceBackupService) {
@@ -657,21 +749,14 @@ export async function startAgentServer(
         sourceSessionId: string;
         allWorkspaces?: boolean;
       }) => {
-        const sessions = [...sessionBindings.values()]
-          .map((candidate) => candidate.session)
-          .filter((candidate): candidate is AgentSession =>
-            !!candidate && (allWorkspaces || candidate.getWorkingDirectory() === workingDirectory)
-          );
-        const refreshReason = allWorkspaces ? "skills.shared_refresh" : "skills.workspace_refresh";
-        await Promise.all(
-          sessions.map(async (session) => {
-            if (session.id === sourceSessionId) {
-              await session.refreshSystemPromptWithSkills(refreshReason);
-              return;
-            }
-            await session.refreshSkillStateFromExternalMutation(refreshReason);
-          }),
-        );
+        await refreshLocalSkillState({
+          workingDirectory,
+          sourceSessionId,
+          allWorkspaces,
+        });
+        if (allWorkspaces) {
+          await publishSharedSkillMutationSignal();
+        }
       },
     };
   };
@@ -1113,11 +1198,19 @@ export async function startAgentServer(
 
   const server = serveWithPortFallback(requestedPort);
   const originalStop = server.stop.bind(server) as (closeActiveConnections?: boolean) => Promise<void>;
-  let serverStopped = false;
   const stoppableServer = server as typeof server & { stop: (closeActiveConnections?: boolean) => Promise<void> };
   stoppableServer.stop = async (closeActiveConnections?: boolean) => {
     if (serverStopped) return;
     serverStopped = true;
+    try {
+      sharedSkillMutationWatcher?.close();
+    } catch {
+      // ignore
+    }
+    if (sharedSkillMutationPollTimer) {
+      clearInterval(sharedSkillMutationPollTimer);
+      sharedSkillMutationPollTimer = null;
+    }
     // Dispose all active sessions to abort running turns and close MCP child processes.
     const persistenceFlushes: Promise<void>[] = [];
     for (const [id, binding] of sessionBindings) {

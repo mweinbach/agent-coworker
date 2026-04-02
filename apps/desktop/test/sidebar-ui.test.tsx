@@ -119,7 +119,7 @@ function resetAppStore(overrides: Record<string, unknown> = {}) {
   } as any);
 }
 
-function makeWorkspace() {
+function makeWorkspace(overrides: Record<string, unknown> = {}) {
   return {
     id: "ws-1",
     name: "Agent Coworker",
@@ -132,6 +132,7 @@ function makeWorkspace() {
     defaultEnableMcp: true,
     defaultBackupsEnabled: true,
     yolo: false,
+    ...overrides,
   };
 }
 
@@ -335,6 +336,78 @@ describe("desktop sidebar", () => {
       expect(skillsButton.className).toContain("w-full");
 
       expect(newChatButton.querySelector("svg")?.className.baseVal ?? "").toContain("lucide-square-pen");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("uses the plugin management workspace as the active sidebar target in skills view", async () => {
+    const harness = setupSidebarJsdom();
+    const setPluginManagementWorkspace = mock(async () => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        resetAppStore({
+          view: "skills",
+          workspaces: [
+            makeWorkspace(),
+            makeWorkspace({
+              id: "ws-2",
+              name: "Research Lab",
+              path: "/tmp/research-lab",
+            }),
+          ],
+          threads: [
+            ...makeThreads(2),
+            {
+              id: "thread-3",
+              workspaceId: "ws-2",
+              title: "Thread 3",
+              titleSource: "manual" as const,
+              createdAt: "2026-03-03T09:00:00.000Z",
+              lastMessageAt: "2026-03-03T10:00:00.000Z",
+              status: "active" as const,
+              sessionId: "session-3",
+              messageCount: 3,
+              lastEventSeq: 3,
+              draft: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          pluginManagementWorkspaceId: "ws-2",
+          pluginManagementMode: "workspace",
+          setPluginManagementWorkspace,
+        });
+        root.render(createElement(Sidebar));
+      });
+
+      const workspaceCards = Array.from(container.querySelectorAll(".sidebar-workspace-card"));
+      expect(workspaceCards).toHaveLength(2);
+      expect(workspaceCards[0]?.textContent).not.toContain("viewing plugins");
+      expect(workspaceCards[1]?.textContent).toContain("viewing plugins");
+
+      const firstWorkspaceButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Agent Coworker"),
+      );
+      if (!(firstWorkspaceButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing first workspace button");
+      }
+
+      await act(async () => {
+        firstWorkspaceButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(setPluginManagementWorkspace).toHaveBeenCalledWith("ws-1");
     } finally {
       if (root) {
         await act(async () => {

@@ -400,6 +400,52 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("plugin workspace installs follow the request cwd instead of the server startup cwd", async () => {
+    const serverRoot = await makeTmpProject("agent-harness-server-");
+    const targetWorkspace = await makeTmpProject("agent-harness-target-");
+    const sourceRoot = `${targetWorkspace}/plugin-source/figma-toolkit`;
+    await fs.mkdir(`${sourceRoot}/.codex-plugin`, { recursive: true });
+    await fs.writeFile(
+      `${sourceRoot}/.codex-plugin/plugin.json`,
+      `${JSON.stringify({
+        name: "figma-toolkit",
+        description: "Figma helpers",
+        interface: {
+          displayName: "Figma Toolkit",
+        },
+      }, null, 2)}\n`,
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(serverRoot));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const installResponse = await rpc.request("cowork/plugins/install", {
+        cwd: targetWorkspace,
+        sourceInput: sourceRoot,
+        targetScope: "workspace",
+      });
+
+      expect(Array.isArray(installResponse.result.events)).toBe(true);
+      await expect(fs.stat(`${targetWorkspace}/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json`)).resolves.toBeDefined();
+      await expect(fs.stat(`${serverRoot}/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json`)).rejects.toBeDefined();
+
+      const catalogResponse = await rpc.request("cowork/plugins/catalog/read", {
+        cwd: targetWorkspace,
+      });
+      expect(catalogResponse.result.event.catalog.plugins).toEqual([
+        expect.objectContaining({
+          id: "figma-toolkit",
+          scope: "workspace",
+        }),
+      ]);
+
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("session state read returns the workspace control config bundle", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

@@ -7,7 +7,7 @@ import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../connect";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
 import type { runTurn as runTurnFn } from "../agent";
 import { defaultRuntimeNameForProvider, type AgentConfig } from "../types";
-import { loadConfig } from "../config";
+import { loadConfig, rebaseWorkspaceConfig } from "../config";
 import type { emitObservabilityEvent as emitObservabilityEventFn } from "../observability/otel";
 import type {
   loadAgentPrompt as loadAgentPromptFn,
@@ -511,10 +511,9 @@ export async function startAgentServer(
     return created;
   };
 
-  const buildWorkspaceControlConfig = (cwd: string): AgentConfig => ({
-    ...config,
-    workingDirectory: cwd,
-  });
+  const buildWorkspaceControlConfig = (cwd: string): AgentConfig => (
+    rebaseWorkspaceConfig(config, cwd)
+  );
 
   const buildWorkspaceControlStateEventsFromConfig = (cwd: string): ServerEvent[] => {
     const controlConfig = buildWorkspaceControlConfig(cwd);

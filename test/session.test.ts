@@ -2902,6 +2902,39 @@ describe("AgentSession", () => {
       expect(busyFalseIdxAfter).toBeGreaterThan(busyTrueIdx);
     });
 
+    test("defers external skill refresh until the active turn completes", async () => {
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "Refreshed system prompt",
+        discoveredSkills: [{ name: "refreshed-skill", description: "Refreshed skill" }],
+      }));
+      const { session, events } = makeSession({ loadSystemPromptWithSkillsImpl });
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          }),
+      );
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      await session.refreshSkillStateFromExternalMutation("skills.shared_refresh");
+      expect(loadSystemPromptWithSkillsImpl).not.toHaveBeenCalled();
+      expect(events.some((event) => event.type === "skills_list")).toBe(false);
+
+      resolveRunTurn();
+      await turnPromise;
+      await flushAsyncWork();
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      const busyFalseIdx = events.findIndex((event) => event.type === "session_busy" && (event as any).busy === false);
+      const skillsListIdx = events.findIndex((event) => event.type === "skills_list");
+      expect(busyFalseIdx).toBeGreaterThanOrEqual(0);
+      expect(skillsListIdx).toBeGreaterThan(busyFalseIdx);
+    });
+
     test("accepts steer_message for the active turn without emitting another busy=true", async () => {
       const { session, events } = makeSession();
 

@@ -353,6 +353,7 @@ export class AgentSession {
       currentTurnId: null,
       acceptingSteers: false,
       pendingSteers: [],
+      pendingExternalSkillRefreshReason: null,
       currentTurnOutcome: initialCurrentTurnOutcome(hydrated),
       maxSteps: 100,
       todos: seededTodos,
@@ -585,6 +586,7 @@ export class AgentSession {
         historyManager: this.historyManager,
         metadataManager: this.metadataManager,
         backupController: this.backupController,
+        flushPendingExternalSkillRefresh: async () => await this.flushPendingExternalSkillRefresh(),
       });
     }
     return this.turnExecutionManager;
@@ -1023,13 +1025,30 @@ export class AgentSession {
     await this.getSkillManager().getPluginsCatalog();
   }
 
-  async refreshSkillStateFromExternalMutation(reason = "skills.external_refresh") {
+  private async runExternalSkillRefresh(reason: string) {
     await this.refreshSystemPromptWithSkills(reason);
     await this.listSkills();
     await this.listCommands();
     await this.getSkillsCatalog();
     await this.getPluginsCatalog();
     await this.emitMcpServers();
+  }
+
+  async refreshSkillStateFromExternalMutation(reason = "skills.external_refresh") {
+    if (this.state.running) {
+      this.state.pendingExternalSkillRefreshReason = reason;
+      return;
+    }
+    await this.runExternalSkillRefresh(reason);
+  }
+
+  async flushPendingExternalSkillRefresh() {
+    const reason = this.state.pendingExternalSkillRefreshReason;
+    if (!reason || this.state.running) {
+      return;
+    }
+    this.state.pendingExternalSkillRefreshReason = null;
+    await this.runExternalSkillRefresh(reason);
   }
 
   async getPlugin(pluginId: string, scope?: "workspace" | "user") {

@@ -474,6 +474,55 @@ describe("server JSON-RPC control methods", () => {
     }
   });
 
+  test("workspace control reads and persists the target workspace config", async () => {
+    const serverRoot = await makeTmpProject("agent-harness-server-config-");
+    const targetWorkspace = await makeTmpProject("agent-harness-target-config-");
+    await fs.writeFile(
+      `${targetWorkspace}/.agent/config.json`,
+      `${JSON.stringify({
+        provider: "openai",
+        model: "gpt-5.4",
+        preferredChildModel: "gpt-5.4",
+        enableMcp: false,
+        enableMemory: false,
+      }, null, 2)}\n`,
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(serverRoot, {
+      env: {
+        AGENT_PROVIDER: undefined,
+      },
+    }));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const stateResponse = await rpc.request("cowork/session/state/read", {
+        cwd: targetWorkspace,
+      });
+
+      expect(stateResponse.result.events[0]?.config?.provider).toBe("openai");
+      expect(stateResponse.result.events[0]?.config?.model).toBe("gpt-5.4");
+      expect(stateResponse.result.events[1]?.enableMcp).toBe(false);
+      expect(stateResponse.result.events[2]?.config?.enableMemory).toBe(false);
+
+      const defaultsResponse = await rpc.request("cowork/session/defaults/apply", {
+        cwd: targetWorkspace,
+        config: {
+          enableMemory: true,
+        },
+      });
+      expect(defaultsResponse.result.event.type).toBe("session_config");
+
+      const targetConfig = JSON.parse(await fs.readFile(`${targetWorkspace}/.agent/config.json`, "utf-8"));
+      expect(targetConfig.enableMemory).toBe(true);
+      await expect(fs.readFile(`${serverRoot}/.agent/config.json`, "utf-8")).rejects.toBeDefined();
+
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   test("session state read defaults omitted cwd to the server working directory", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

@@ -7,7 +7,7 @@ import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../connect";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
 import type { runTurn as runTurnFn } from "../agent";
 import { defaultRuntimeNameForProvider, type AgentConfig } from "../types";
-import { loadConfig, rebaseWorkspaceConfig } from "../config";
+import { loadConfig } from "../config";
 import type { emitObservabilityEvent as emitObservabilityEventFn } from "../observability/otel";
 import type {
   loadAgentPrompt as loadAgentPromptFn,
@@ -363,7 +363,6 @@ export async function startAgentServer(
     },
   });
   const sessionBindings = new Map<string, SessionBinding>();
-  const workspaceControlBindings = new Map<string, SessionBinding>();
   const workspaceControlStateIds = new Map<string, string>();
   const sharedSkillMutationSignalPath = resolveSharedSkillMutationSignalPath(config.userAgentDir);
   let workspaceBackupService: WorkspaceBackupService | null = null;
@@ -386,7 +385,7 @@ export async function startAgentServer(
   }) => {
     await refreshSessionsForSkillMutation({
       sessionBindings: sessionBindings.values(),
-      workspaceControlBindings: workspaceControlBindings.values(),
+      workspaceControlBindings: [],
       workingDirectory,
       sourceSessionId,
       allWorkspaces,
@@ -511,13 +510,27 @@ export async function startAgentServer(
     return created;
   };
 
-  const buildWorkspaceControlConfig = (cwd: string): AgentConfig => (
-    rebaseWorkspaceConfig(config, cwd)
-  );
+  const loadWorkspaceControlConfig = async (cwd: string): Promise<AgentConfig> => {
+    const nextConfig = await loadConfig({ cwd, env, homedir: opts.homedir, builtInDir });
+    const providerOptions =
+      isPlainObject(opts.providerOptions) && isPlainObject(nextConfig.providerOptions)
+        ? deepMerge(
+            opts.providerOptions as Record<string, unknown>,
+            nextConfig.providerOptions as Record<string, unknown>
+          )
+        : isPlainObject(nextConfig.providerOptions)
+          ? nextConfig.providerOptions
+          : isPlainObject(opts.providerOptions)
+            ? opts.providerOptions
+            : undefined;
+    if (providerOptions) {
+      nextConfig.providerOptions = providerOptions;
+    }
+    return nextConfig;
+  };
 
-  const buildWorkspaceControlStateEventsFromConfig = (cwd: string): ServerEvent[] => {
-    const controlConfig = buildWorkspaceControlConfig(cwd);
-    const sessionId = getOrCreateWorkspaceControlStateId(cwd);
+  const buildWorkspaceControlStateEventsFromConfig = (controlConfig: AgentConfig): ServerEvent[] => {
+    const sessionId = getOrCreateWorkspaceControlStateId(controlConfig.workingDirectory);
     const providerOptions = pickEditableOpenAiCompatibleProviderOptions(controlConfig.providerOptions);
     const defaultBackupsEnabled = controlConfig.backupsEnabled ?? true;
     const defaultToolOutputOverflowChars = controlConfig.projectConfigOverrides?.toolOutputOverflowChars;
@@ -572,25 +585,14 @@ export async function startAgentServer(
     ];
   };
 
-  const getOrCreateWorkspaceControlBinding = (cwd: string): SessionBinding => {
-    const existing = workspaceControlBindings.get(cwd);
-    if (existing?.session) {
-      return existing;
-    }
-    const binding: SessionBinding = existing ?? {
-      session: null,
-      socket: null,
-      sinks: new Map(),
-    };
-    const built = buildSession(binding, undefined, {
-      config: buildWorkspaceControlConfig(cwd),
-    });
-    binding.session = built.session;
-    workspaceControlBindings.set(cwd, binding);
-    return binding;
-  };
-
-  const buildSessionCommon = (binding: SessionBinding, sessionKind: SessionKind = "root") => {
+  const buildSessionCommon = (
+    binding: SessionBinding,
+    sessionKind: SessionKind = "root",
+    currentConfig: AgentConfig = config,
+    syncConfig: (nextConfig: AgentConfig) => void = (nextConfig) => {
+      config = nextConfig;
+    },
+  ) => {
     const emit = (evt: ServerEvent) => {
       for (const sink of binding.sinks.values()) {
         try {
@@ -616,8 +618,9 @@ export async function startAgentServer(
             preferredChildModelRef?: string;
             allowedChildModelRefs?: string[];
           }) => {
-            await persistProjectConfigPatch(config.projectAgentDir, selection, config.providerOptions);
-            config = mergeConfigPatch(config, selection);
+            await persistProjectConfigPatch(currentConfig.projectAgentDir, selection, currentConfig.providerOptions);
+            currentConfig = mergeConfigPatch(currentConfig, selection);
+            syncConfig(currentConfig);
           }
         : undefined,
       persistProjectConfigPatchImpl: sessionKind === "root"
@@ -643,8 +646,9 @@ export async function startAgentServer(
             providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
           }
         ) => {
-            await persistProjectConfigPatch(config.projectAgentDir, patch, config.providerOptions);
-            config = mergeConfigPatch(config, patch);
+            await persistProjectConfigPatch(currentConfig.projectAgentDir, patch, currentConfig.providerOptions);
+            currentConfig = mergeConfigPatch(currentConfig, patch);
+            syncConfig(currentConfig);
           }
         : undefined,
       sessionDb,
@@ -824,10 +828,13 @@ export async function startAgentServer(
     }
 
     const sessionKind = overrides?.sessionInfoPatch?.sessionKind ?? "root";
-    const common = buildSessionCommon(binding, sessionKind);
+    let sessionConfig = { ...(overrides?.config ?? config) };
+    const common = buildSessionCommon(binding, sessionKind, sessionConfig, (nextConfig) => {
+      sessionConfig = nextConfig;
+    });
     const { AgentSession } = loadAgentSessionModule();
     const session = new AgentSession({
-      config: { ...(overrides?.config ?? config) },
+      config: sessionConfig,
       system: overrides?.system ?? system,
       ...(overrides?.seedContext ? { seedContext: overrides.seedContext } : {}),
       ...(overrides?.sessionInfoPatch ? { sessionInfoPatch: overrides.sessionInfoPatch } : {}),
@@ -1023,24 +1030,37 @@ export async function startAgentServer(
     extractTextInput: extractJsonRpcTextInput,
   });
 
+  const getOrCreateWorkspaceControlBinding = async (cwd: string): Promise<SessionBinding> => {
+    const binding: SessionBinding = {
+      session: null,
+      socket: null,
+      sinks: new Map(),
+    };
+    const built = buildSession(binding, undefined, {
+      config: await loadWorkspaceControlConfig(cwd),
+    });
+    binding.session = built.session;
+    return binding;
+  };
+
   const withWorkspaceControlSession = async <T>(
     cwd: string,
     runner: (binding: SessionBinding, session: AgentSession) => Promise<T>,
   ): Promise<T> => {
-    const binding = getOrCreateWorkspaceControlBinding(cwd);
+    const binding = await getOrCreateWorkspaceControlBinding(cwd);
     if (!binding.session) {
       throw new Error(`Unable to create workspace control session for ${cwd}`);
     }
-    return await runner(binding, binding.session);
+    try {
+      return await runner(binding, binding.session);
+    } finally {
+      disposeBinding(binding, `workspace control request completed for ${cwd}`);
+    }
   };
 
-  const readWorkspaceControlState = (cwd: string): ServerEvent[] => {
-    const existing = workspaceControlBindings.get(cwd)?.session;
-    if (existing) {
-      return buildControlSessionStateEvents(existing);
-    }
-    return buildWorkspaceControlStateEventsFromConfig(cwd);
-  };
+  const readWorkspaceControlState = async (cwd: string): Promise<ServerEvent[]> => (
+    buildWorkspaceControlStateEventsFromConfig(await loadWorkspaceControlConfig(cwd))
+  );
 
   const jsonRpcRequestRouter = createJsonRpcRequestRouter({
     getConfig: () => config,
@@ -1063,9 +1083,9 @@ export async function startAgentServer(
       readSnapshot: (threadId) => readThreadSnapshot(threadId),
     },
     workspaceControl: {
-      getOrCreateBinding: (cwd) => getOrCreateWorkspaceControlBinding(cwd),
+      getOrCreateBinding: async (cwd) => await getOrCreateWorkspaceControlBinding(cwd),
       withSession: async (cwd, runner) => await withWorkspaceControlSession(cwd, runner),
-      readState: (cwd) => readWorkspaceControlState(cwd),
+      readState: async (cwd) => await readWorkspaceControlState(cwd),
     },
     journal: {
       enqueue: async (event) => await enqueueThreadJournalEvent(event),

@@ -44,9 +44,10 @@ function createRouteHarness(
     },
     journal: {} as any,
     workspaceControl: {
-      getOrCreateBinding: () => binding,
+      getOrCreateBinding: async () => binding,
       withSession: async (_cwd: string, runner: (binding: any, activeSession: any) => Promise<unknown>) =>
         await runner(binding, session),
+      readState: async () => [],
     },
     events: {
       capture: async (

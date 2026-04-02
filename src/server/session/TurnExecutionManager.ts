@@ -407,6 +407,7 @@ export class TurnExecutionManager {
       historyManager: HistoryManager;
       metadataManager: SessionMetadataManager;
       backupController: SessionBackupController;
+      flushPendingExternalSkillRefresh: () => Promise<void>;
     }
   ) { }
 
@@ -959,6 +960,9 @@ export class TurnExecutionManager {
       this.context.state.running = false;
       this.context.state.abortController = null;
       this.context.state.currentTurnId = null;
+      void this.deps.flushPendingExternalSkillRefresh().catch(() => {
+        // refresh helper already emits skill refresh errors.
+      });
       void this.deps.backupController.takeAutomaticSessionCheckpoint().catch(() => {
         // takeAutomaticSessionCheckpoint already emits backup errors/telemetry.
       });

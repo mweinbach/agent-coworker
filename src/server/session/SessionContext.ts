@@ -111,6 +111,7 @@ export type SessionRuntimeState = {
   currentTurnId: string | null;
   acceptingSteers: boolean;
   pendingSteers: PendingSteer[];
+  pendingExternalSkillRefreshReason: string | null;
   currentTurnOutcome: "completed" | "cancelled" | "error";
   maxSteps: number;
   todos: TodoItem[];

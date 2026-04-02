@@ -73,12 +73,12 @@ export interface JsonRpcRouteContext {
     readSnapshot(threadId: string): ReturnType<AgentSession["buildSessionSnapshot"]> | null;
   };
   workspaceControl: {
-    getOrCreateBinding(cwd: string): SessionBinding;
+    getOrCreateBinding(cwd: string): Promise<SessionBinding>;
     withSession<T>(
       cwd: string,
       runner: (binding: SessionBinding, session: AgentSession) => Promise<T>,
     ): Promise<T>;
-    readState(cwd: string): ServerEvent[];
+    readState(cwd: string): Promise<ServerEvent[]>;
   };
   journal: {
     enqueue(event: Omit<PersistedThreadJournalEvent, "seq">): Promise<unknown>;

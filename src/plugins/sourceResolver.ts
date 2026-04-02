@@ -13,6 +13,7 @@ import type {
   SkillInstallationDiagnostic,
 } from "../types";
 import {
+  buildGitHubApiUrl,
   downloadGitHubDirectory,
   githubHeaders,
   parseGitHubShorthand,
@@ -309,6 +310,16 @@ function buildGitHubMaterializationAttempts(descriptor: PluginSourceDescriptor):
   return attempts;
 }
 
+function dedupeGitHubMaterializationAttempts(
+  attempts: GitHubMaterializationAttempt[],
+): GitHubMaterializationAttempt[] {
+  return attempts.filter((attempt, index, allAttempts) =>
+    allAttempts.findIndex((candidate) =>
+      candidate.ref === attempt.ref && candidate.githubPath === attempt.githubPath
+    ) === index
+  );
+}
+
 export function resolvePluginSource(input: string, cwd = process.cwd()): PluginSourceDescriptor {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -385,23 +396,20 @@ async function materializeGitHubSource(
       descriptor: buildResolvedGitHubDescriptor(descriptor, ref, githubPath),
     };
   });
-  const materializationAttempts = (attempts.length > 0
-    ? [...preferredAttempt, ...attempts]
-    : [...preferredAttempt, ...fallbackAttempts]
-  ).filter((attempt, index, allAttempts) =>
-    allAttempts.findIndex((candidate) =>
-      candidate.ref === attempt.ref && candidate.githubPath === attempt.githubPath
-    ) === index
-  );
+  const materializationAttempts = dedupeGitHubMaterializationAttempts(attempts.length > 0
+    ? await resolveAmbiguousGitHubMaterializationAttempts(descriptor.repo, attempts, fetchImpl)
+    : [...preferredAttempt, ...fallbackAttempts]);
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-plugin-source-"));
   let resolvedDescriptor: PluginSourceDescriptor | null = null;
-  let stageRoot: string | null = null;
+  let resolvedCandidates: MaterializedPluginCandidate[] | null = null;
   let lastError: unknown = null;
 
   try {
     for (const attempt of materializationAttempts) {
       const repoRoot = path.join(tmpRoot, descriptor.repo.split("/").at(-1) ?? "repo");
       try {
+        await fs.rm(repoRoot, { recursive: true, force: true });
+        let stageRoot: string;
         if (attempt.githubPath) {
           const destination = path.join(repoRoot, path.basename(attempt.githubPath));
           await downloadGitHubDirectory({
@@ -422,6 +430,7 @@ async function materializeGitHubSource(
           });
           stageRoot = repoRoot;
         }
+        resolvedCandidates = await loadMaterializedPluginCandidates(stageRoot);
         resolvedDescriptor = attempt.descriptor;
         break;
       } catch (error) {
@@ -429,15 +438,13 @@ async function materializeGitHubSource(
       }
     }
 
-    if (!stageRoot || !resolvedDescriptor) {
+    if (!resolvedDescriptor || !resolvedCandidates) {
       throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Unable to fetch GitHub source"));
     }
 
-    const candidates = await loadMaterializedPluginCandidates(stageRoot);
-
     return {
       descriptor: resolvedDescriptor,
-      candidates,
+      candidates: resolvedCandidates,
       cleanup: async () => {
         await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
       },
@@ -455,6 +462,41 @@ async function readResponseError(response: Response): Promise<string> {
   } catch {
     return `${response.status} ${response.statusText}`;
   }
+}
+
+async function doesGitHubRefExist(fetchImpl: FetchLike, repo: string, ref: string): Promise<boolean> {
+  const response = await fetchImpl(buildGitHubApiUrl(repo, ref, ""), {
+    headers: githubHeaders(),
+  });
+  if (response.ok) {
+    return true;
+  }
+  if (response.status === 404) {
+    return false;
+  }
+  throw new Error(`Failed to verify GitHub ref ${repo}@${ref}: ${await readResponseError(response)}`);
+}
+
+async function resolveAmbiguousGitHubMaterializationAttempts(
+  repo: string,
+  attempts: GitHubMaterializationAttempt[],
+  fetchImpl: FetchLike,
+): Promise<GitHubMaterializationAttempt[]> {
+  const uniqueAttempts = dedupeGitHubMaterializationAttempts(attempts);
+  const checkedRefs = new Map<string, boolean>();
+
+  for (const attempt of uniqueAttempts) {
+    let refExists = checkedRefs.get(attempt.ref);
+    if (refExists === undefined) {
+      refExists = await doesGitHubRefExist(fetchImpl, repo, attempt.ref);
+      checkedRefs.set(attempt.ref, refExists);
+    }
+    if (refExists) {
+      return [attempt];
+    }
+  }
+
+  return uniqueAttempts;
 }
 
 async function fetchGitHubDefaultBranch(fetchImpl: FetchLike, repo: string): Promise<string | null> {

@@ -4,12 +4,16 @@ import path from "node:path";
 
 import type {
   AgentConfig,
+  MCPServerConfig,
   PluginCatalogSnapshot,
   PluginInstallPreview,
   PluginInstallTargetScope,
 } from "../types";
+import { renameMCPServerCredentials } from "../mcp/authStore";
 import { workspacePathOverlaps } from "../utils/workspacePath";
 import { buildPluginCatalogSnapshot } from "./catalog";
+import { readPluginManifest } from "./manifest";
+import { readPluginMcpServers } from "./mcp";
 import {
   buildPluginInstallPreview,
   materializePluginSource,
@@ -97,6 +101,80 @@ function validateInstallCandidates(
   }
 }
 
+async function readBundledPluginMcpServers(pluginRoot: string): Promise<MCPServerConfig[]> {
+  try {
+    const manifest = await readPluginManifest(pluginRoot);
+    return await readPluginMcpServers(manifest.mcpPath);
+  } catch {
+    return [];
+  }
+}
+
+function buildServerRenameSignature(server: MCPServerConfig): string {
+  return JSON.stringify({
+    transport: server.transport,
+    ...(server.required !== undefined ? { required: server.required } : {}),
+    ...(server.retries !== undefined ? { retries: server.retries } : {}),
+    ...(server.auth ? { auth: server.auth } : {}),
+  });
+}
+
+function inferBundledPluginMcpRenames(
+  previousServers: MCPServerConfig[],
+  nextServers: MCPServerConfig[],
+): Array<{ previousName: string; nextName: string }> {
+  const previousNames = new Set(previousServers.map((server) => server.name));
+  const nextNames = new Set(nextServers.map((server) => server.name));
+  const removedServers = previousServers.filter((server) => !nextNames.has(server.name));
+  const addedServers = nextServers.filter((server) => !previousNames.has(server.name));
+
+  const removedBySignature = new Map<string, MCPServerConfig[]>();
+  for (const server of removedServers) {
+    const signature = buildServerRenameSignature(server);
+    removedBySignature.set(signature, [...(removedBySignature.get(signature) ?? []), server]);
+  }
+
+  const addedBySignature = new Map<string, MCPServerConfig[]>();
+  for (const server of addedServers) {
+    const signature = buildServerRenameSignature(server);
+    addedBySignature.set(signature, [...(addedBySignature.get(signature) ?? []), server]);
+  }
+
+  const renames: Array<{ previousName: string; nextName: string }> = [];
+  for (const [signature, previousMatches] of removedBySignature.entries()) {
+    const nextMatches = addedBySignature.get(signature) ?? [];
+    if (previousMatches.length !== 1 || nextMatches.length !== 1) {
+      continue;
+    }
+    renames.push({
+      previousName: previousMatches[0].name,
+      nextName: nextMatches[0].name,
+    });
+  }
+
+  return renames;
+}
+
+async function migrateBundledPluginMcpCredentials(opts: {
+  config: AgentConfig;
+  targetScope: PluginInstallTargetScope;
+  previousServers: MCPServerConfig[];
+  nextServers: MCPServerConfig[];
+}): Promise<void> {
+  const renames = inferBundledPluginMcpRenames(opts.previousServers, opts.nextServers);
+  for (const rename of renames) {
+    await renameMCPServerCredentials({
+      config: opts.config,
+      source: {
+        source: "plugin",
+        pluginScope: opts.targetScope,
+      },
+      previousName: rename.previousName,
+      nextName: rename.nextName,
+    });
+  }
+}
+
 export async function previewPluginInstall(opts: {
   config: AgentConfig;
   input: string;
@@ -140,6 +218,7 @@ export async function installPluginsFromSource(opts: {
     const installedPluginIds: string[] = [];
     for (const candidate of validCandidates) {
       const destinationRoot = path.join(writableScope.pluginsDir, candidate.pluginId);
+      const previousServers = await readBundledPluginMcpServers(destinationRoot);
       const stagedSource = await stageCopySourceIfNeeded(
         candidate.rootDir,
         conflictingTargetRoots(writableScope, candidate.pluginId),
@@ -147,6 +226,12 @@ export async function installPluginsFromSource(opts: {
       try {
         await removeConflictingTargets(writableScope, candidate.pluginId);
         await copyPluginRoot(stagedSource.sourceRoot, destinationRoot);
+        await migrateBundledPluginMcpCredentials({
+          config: opts.config,
+          targetScope: opts.targetScope,
+          previousServers,
+          nextServers: await readBundledPluginMcpServers(destinationRoot),
+        });
       } finally {
         await stagedSource.cleanup();
       }

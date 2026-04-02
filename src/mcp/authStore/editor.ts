@@ -51,7 +51,7 @@ export async function setMCPServerApiKeyCredential(opts: {
 
 export async function renameMCPServerCredentials(opts: {
   config: AgentConfig;
-  source: MCPServerSource;
+  source: MCPServerSource | { source: MCPServerSource; pluginScope?: MCPRegistryServer["pluginScope"] };
   previousName: string;
   nextName: string;
 }): Promise<{ moved: boolean; scope: MCPAuthScope; storageFile?: string }> {

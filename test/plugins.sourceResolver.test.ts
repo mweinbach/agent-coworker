@@ -41,14 +41,26 @@ function buildContentsUrl(repo: string, ref: string, githubPath: string): string
 function createGitHubPluginFetch(opts: {
   repo: string;
   defaultBranch: string;
-  files: Record<string, string>;
+  files?: Record<string, string>;
+  filesByRef?: Record<string, Record<string, string>>;
 }) {
   const requests: string[] = [];
-  const normalizedFiles = new Map(
-    Object.entries(opts.files).map(([filePath, content]) => [trimSlashes(filePath), content] as const),
-  );
+  const normalizedFilesByRef = new Map<string, Map<string, string>>();
+  const sourceFilesByRef = opts.filesByRef ?? { [opts.defaultBranch]: opts.files ?? {} };
+  for (const [ref, files] of Object.entries(sourceFilesByRef)) {
+    normalizedFilesByRef.set(ref, new Map(
+      Object.entries(files).map(([filePath, content]) => [trimSlashes(filePath), content] as const),
+    ));
+  }
+  if (!normalizedFilesByRef.has("main") && opts.files && opts.defaultBranch !== "main") {
+    normalizedFilesByRef.set("main", new Map(normalizedFilesByRef.get(opts.defaultBranch) ?? []));
+  }
 
-  function listDirectory(githubPath: string) {
+  function listDirectory(ref: string, githubPath: string) {
+    const normalizedFiles = normalizedFilesByRef.get(ref);
+    if (!normalizedFiles) {
+      return null;
+    }
     const normalizedDir = trimSlashes(githubPath);
     const prefix = normalizedDir ? `${normalizedDir}/` : "";
     const entries = new Map<string, Record<string, unknown>>();
@@ -71,8 +83,8 @@ function createGitHubPluginFetch(opts: {
           type: "file",
           name: segment,
           path: entryPath,
-          url: `${buildContentsUrl(opts.repo, opts.defaultBranch, entryPath)}`,
-          download_url: `https://downloads.example/${encodeGitHubPath(entryPath)}`,
+          url: `${buildContentsUrl(opts.repo, ref, entryPath)}`,
+          download_url: `https://downloads.example/${encodeURIComponent(ref)}/${encodeGitHubPath(entryPath)}`,
         });
         continue;
       }
@@ -81,7 +93,7 @@ function createGitHubPluginFetch(opts: {
           type: "dir",
           name: segment,
           path: entryPath,
-          url: `${buildContentsUrl(opts.repo, opts.defaultBranch, entryPath)}`,
+          url: `${buildContentsUrl(opts.repo, ref, entryPath)}`,
           download_url: null,
         });
       }
@@ -115,13 +127,13 @@ function createGitHubPluginFetch(opts: {
       }
 
       const ref = parsedUrl.searchParams.get("ref");
-      if (ref !== opts.defaultBranch && ref !== "main") {
+      if (!ref) {
         return new Response(`Missing ref ${ref}`, { status: 404 });
       }
 
       const githubPath = decodeURIComponent(parsedUrl.pathname.slice(rootPrefix.length));
-      const entries = listDirectory(githubPath);
-      if (entries.length === 0) {
+      const entries = listDirectory(ref, githubPath);
+      if (!entries || entries.length === 0) {
         return new Response(`Missing path ${githubPath}`, { status: 404 });
       }
 
@@ -132,8 +144,9 @@ function createGitHubPluginFetch(opts: {
     }
 
     if (parsedUrl.origin === "https://downloads.example") {
-      const filePath = decodeURIComponent(trimSlashes(parsedUrl.pathname));
-      const content = normalizedFiles.get(filePath);
+      const [ref, ...pathSegments] = trimSlashes(parsedUrl.pathname).split("/");
+      const filePath = decodeURIComponent(pathSegments.join("/"));
+      const content = normalizedFilesByRef.get(decodeURIComponent(ref ?? ""))?.get(filePath);
       if (content === undefined) {
         return new Response(`Missing file ${filePath}`, { status: 404 });
       }
@@ -227,7 +240,40 @@ describe("plugin GitHub source materialization", () => {
     expect(preview.candidates).toHaveLength(1);
     expect(preview.candidates[0]?.pluginId).toBe("demo-plugin");
     expect(preview.candidates[0]?.diagnostics).toEqual([]);
-    expect(requests[0]).toBe(buildContentsUrl(repo, "main", "packages/demo-plugin"));
+    expect(requests).toContain(buildContentsUrl(repo, "main", "packages/demo-plugin"));
+  });
+
+  test("prefers the longest matching GitHub ref before materializing the plugin path", async () => {
+    const repo = "owner/repo";
+    const { fetchImpl, requests } = createGitHubPluginFetch({
+      repo,
+      defaultBranch: "main",
+      filesByRef: {
+        feature: {
+          "foo/packages/demo-plugin/.codex-plugin/plugin.json": pluginManifest("short-ref-plugin"),
+          "foo/packages/demo-plugin/skills/example/SKILL.md": skillDoc("example", "Short ref plugin."),
+        },
+        "feature/foo": {
+          "packages/demo-plugin/.codex-plugin/plugin.json": pluginManifest("long-ref-plugin"),
+          "packages/demo-plugin/skills/example/SKILL.md": skillDoc("example", "Long ref plugin."),
+        },
+      },
+    });
+
+    const preview = await buildPluginInstallPreview({
+      input: "https://github.com/owner/repo/tree/feature/foo/packages/demo-plugin",
+      targetScope: "workspace",
+      catalog: emptyCatalog,
+      fetchImpl,
+    });
+
+    expect(preview.source.ref).toBe("feature/foo");
+    expect(preview.source.subdir).toBe("packages/demo-plugin");
+    expect(preview.candidates).toHaveLength(1);
+    expect(preview.candidates[0]?.pluginId).toBe("long-ref-plugin");
+    expect(requests).toContain(buildContentsUrl(repo, "feature/foo", ""));
+    expect(requests).toContain(buildContentsUrl(repo, "feature/foo", "packages/demo-plugin"));
+    expect(requests).not.toContain(buildContentsUrl(repo, "feature", "foo/packages/demo-plugin"));
   });
 });
 

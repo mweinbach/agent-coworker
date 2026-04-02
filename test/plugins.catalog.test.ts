@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { readMCPAuthFiles, setMCPServerApiKeyCredential } from "../src/mcp/authStore";
 import { loadMCPConfigRegistry } from "../src/mcp/configRegistry/layers";
 import { installPluginsFromSource, previewPluginInstall } from "../src/plugins/operations";
 import { buildPluginCatalogSnapshot, resolvePluginCatalogEntry } from "../src/plugins/catalog";
@@ -36,7 +37,12 @@ function makeConfig(workspaceRoot: string, userHome: string, builtInConfigDir: s
   };
 }
 
-async function writePlugin(rootDir: string, displayName: string, description = "Plugin helpers") {
+async function writePlugin(
+  rootDir: string,
+  displayName: string,
+  description = "Plugin helpers",
+  mcpServerName = "figma",
+) {
   await fs.mkdir(path.join(rootDir, ".codex-plugin"), { recursive: true });
   await fs.mkdir(path.join(rootDir, "skills", "import-frame"), { recursive: true });
   await fs.writeFile(
@@ -64,7 +70,7 @@ async function writePlugin(rootDir: string, displayName: string, description = "
     path.join(rootDir, ".mcp.json"),
     `${JSON.stringify({
       mcpServers: {
-        figma: {
+        [mcpServerName]: {
           type: "http",
           url: `https://${displayName.toLowerCase().replace(/\s+/g, "-")}.example.com`,
         },
@@ -200,6 +206,50 @@ describe("plugin catalog and install operations", () => {
 
       const matchingPlugins = result.catalog.plugins.filter((plugin) => plugin.id === "figma-toolkit");
       expect(matchingPlugins.map((plugin) => plugin.scope).sort()).toEqual(["user", "workspace"]);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("installPluginsFromSource preserves bundled MCP credentials when a plugin renames its server", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-mcp-rename-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-mcp-rename-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-mcp-rename-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const installedPluginRoot = path.join(workspace, ".agents", "plugins", "figma-toolkit");
+      const updatedPluginRoot = path.join(workspace, "plugin-source", "figma-toolkit");
+      await writePlugin(installedPluginRoot, "Workspace Figma Toolkit", "Workspace plugin", "figma");
+      await writePlugin(updatedPluginRoot, "Workspace Figma Toolkit", "Workspace plugin", "figma-renamed");
+
+      await setMCPServerApiKeyCredential({
+        config,
+        server: {
+          name: "figma",
+          source: "plugin",
+          inherited: false,
+          pluginId: "figma-toolkit",
+          pluginName: "figma-toolkit",
+          pluginDisplayName: "Workspace Figma Toolkit",
+          pluginScope: "workspace",
+          transport: { type: "http", url: "https://workspace-figma-toolkit.example.com" },
+          auth: { type: "api_key", headerName: "Authorization", prefix: "Bearer" },
+        },
+        apiKey: "workspace-secret",
+      });
+
+      await installPluginsFromSource({
+        config,
+        input: updatedPluginRoot,
+        targetScope: "workspace",
+      });
+
+      const authFiles = await readMCPAuthFiles(config);
+      expect(authFiles.workspace.doc.servers.figma).toBeUndefined();
+      expect(authFiles.workspace.doc.servers["figma-renamed"]?.apiKey?.value).toBe("workspace-secret");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

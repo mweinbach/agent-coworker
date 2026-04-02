@@ -1,7 +1,7 @@
 import path from "node:path";
 import { z } from "zod";
 
-import { isPathInside, resolveMaybeRelative } from "../utils/paths";
+import { canonicalizePathForBoundaryCheckSync, isPathInside, resolveMaybeRelative } from "../utils/paths";
 
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 
@@ -75,6 +75,7 @@ export function parsePluginMarketplace(rawJson: string, marketplacePath: string)
   }
 
   const marketplaceRootDir = path.dirname(path.resolve(marketplacePath));
+  const canonicalMarketplaceRootDir = canonicalizePathForBoundaryCheckSync(marketplaceRootDir);
   const plugins = validated.data.plugins.map((plugin) => {
     const sourcePathRaw = plugin.source.path;
     if (!sourcePathRaw.startsWith("./")) {
@@ -83,7 +84,8 @@ export function parsePluginMarketplace(rawJson: string, marketplacePath: string)
       );
     }
     const sourcePath = resolveMaybeRelative(sourcePathRaw, marketplaceRootDir);
-    if (!isPathInside(marketplaceRootDir, sourcePath)) {
+    const canonicalSourcePath = canonicalizePathForBoundaryCheckSync(sourcePath);
+    if (!isPathInside(canonicalMarketplaceRootDir, canonicalSourcePath)) {
       throw new Error(
         `marketplace.json: plugins.${plugin.name}.source.path resolves outside marketplace root in ${marketplacePath}`,
       );

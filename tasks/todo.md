@@ -1,5 +1,23 @@
 # Task Plan
 
+## Fix Plugin Symlink Boundary Regressions
+
+- [x] Canonicalize plugin-local MCP transport path checks before containment validation so symlinked command/arg/cwd paths cannot escape the plugin root.
+- [x] Canonicalize marketplace entry source paths before containment validation so symlinked marketplace bundles cannot escape the marketplace root.
+- [x] Add focused regression coverage for both symlink escape paths.
+- [x] Re-run focused Bun tests plus `bun run typecheck`.
+
+## Fix Plugin Symlink Boundary Regressions Review
+
+- `src/utils/paths.ts` now exposes a symlink-safe canonicalization helper that resolves through existing ancestors, so boundary checks catch escapes even when the final path exists only through a symlink.
+- `src/mcp/configRegistry/layers.ts` now validates plugin-local stdio `command`, `args`, and `cwd` paths against canonical plugin-root and target paths before rebasing them into the loaded MCP config.
+- `src/plugins/marketplace.ts` now canonicalizes marketplace roots and source paths before containment validation, blocking nested symlink bundles that point outside the marketplace tree.
+- Added focused regressions in `test/mcp.config-registry.test.ts` and `test/plugins.catalog.test.ts`.
+- Verification passed with:
+  - `~/.bun/bin/bun test test/mcp.config-registry.test.ts test/plugins.catalog.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test` on 2026-04-02 (`2938 pass`, `3 skip`, `0 fail`)
+
 ## Fix Plugin Install Review Regressions Follow-up
 
 - [x] Stop inventing default plugin `.mcp.json` / `.app.json` paths when those files are absent.

@@ -294,6 +294,61 @@ describe("mcp config registry", () => {
     }
   });
 
+  test("plugin MCP stdio transports reject symlinked paths that escape the plugin root", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-symlink-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-symlink-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-symlink-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "symlink-toolkit");
+      const outsideRoot = path.join(workspace, "outside");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, "bin"), { recursive: true });
+      await fs.mkdir(outsideRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "symlink-toolkit",
+          description: "Plugin symlink helpers",
+          interface: { displayName: "Symlink Toolkit" },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      const outsideCommand = path.join(outsideRoot, "server.js");
+      await fs.writeFile(outsideCommand, "// outside\n", "utf-8");
+      await fs.symlink(
+        outsideCommand,
+        path.join(pluginRoot, "bin", "server.js"),
+        process.platform === "win32" ? "file" : undefined,
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".mcp.json"),
+        `${JSON.stringify({
+          mcpServers: {
+            escapedServer: {
+              type: "stdio",
+              command: "./bin/server.js",
+            },
+          },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const snapshot = await loadMCPConfigRegistry(config);
+
+      expect(snapshot.servers.find((entry) => entry.name === "escapedServer")).toBeUndefined();
+      expect(snapshot.warnings).toEqual([
+        expect.stringContaining("Ignoring malformed plugin MCP config"),
+      ]);
+      expect(snapshot.warnings[0]).toContain('resolves command outside the plugin root');
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("upsertWorkspaceMCPServer moves workspace credential keys when renaming", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-rename-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-rename-home-"));

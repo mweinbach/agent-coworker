@@ -555,6 +555,55 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
+  test("marketplace discovery rejects symlinked source paths that escape the marketplace root", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-marketplace-symlink-workspace-"));
+
+    try {
+      const outsidePluginRoot = path.join(workspace, "external-plugin", "figma-toolkit");
+      await writePlugin(outsidePluginRoot, "External Figma Toolkit");
+
+      const pluginsDir = path.join(workspace, ".agents", "plugins");
+      const linkedPluginRoot = path.join(pluginsDir, "market", "bundle-link");
+      await fs.mkdir(path.dirname(linkedPluginRoot), { recursive: true });
+      await fs.symlink(
+        outsidePluginRoot,
+        linkedPluginRoot,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      await fs.writeFile(
+        path.join(pluginsDir, "marketplace.json"),
+        `${JSON.stringify({
+          name: "workspace-market",
+          plugins: [
+            {
+              name: "figma-toolkit",
+              source: {
+                source: "local",
+                path: "./market/bundle-link",
+              },
+              policy: {
+                installation: "manual",
+                authentication: "optional",
+              },
+              category: "design",
+            },
+          ],
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const discovery = await discoverPlugins({ workspacePluginsDir: pluginsDir });
+
+      expect(discovery.plugins).toEqual([]);
+      expect(discovery.warnings).toEqual([
+        expect.stringContaining("Ignoring malformed marketplace"),
+      ]);
+      expect(discovery.warnings[0]).toContain("resolves outside marketplace root");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("preview and install reject explicit missing skills directories", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-missing-skills-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-missing-skills-home-"));

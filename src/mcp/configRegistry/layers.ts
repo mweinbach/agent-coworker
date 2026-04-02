@@ -10,7 +10,7 @@ import {
   comparePluginCatalogEntries,
   readPluginMcpServers,
 } from "../../plugins";
-import { isPathInside } from "../../utils/paths";
+import { canonicalizePathForBoundaryCheckSync, isPathInside } from "../../utils/paths";
 import { resolveMcpConfigPaths } from "../configPaths";
 import { parseMCPServersDocument } from "./parser";
 import type {
@@ -119,7 +119,9 @@ function isPluginRelativeFilesystemPath(pluginRootDir: string, value: string): b
 
 function resolvePluginLocalPath(serverName: string, pluginRootDir: string, value: string, label: string): string {
   const resolved = path.resolve(pluginRootDir, value);
-  if (!isPathInside(pluginRootDir, resolved)) {
+  const canonicalPluginRoot = canonicalizePathForBoundaryCheckSync(pluginRootDir);
+  const canonicalResolved = canonicalizePathForBoundaryCheckSync(resolved);
+  if (!isPathInside(canonicalPluginRoot, canonicalResolved)) {
     throw new Error(`Plugin MCP server "${serverName}" resolves ${label} outside the plugin root.`);
   }
   return resolved;

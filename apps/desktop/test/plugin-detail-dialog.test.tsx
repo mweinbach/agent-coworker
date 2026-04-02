@@ -199,4 +199,64 @@ describe("plugin detail dialog", () => {
       harness.restore();
     }
   });
+
+  test("shows plugin mutation errors even when they arrive via skillMutationError", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      ...previousState,
+      workspaceRuntimeById: {
+        ...previousState.workspaceRuntimeById,
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          selectedPluginId: "plugin-1",
+          selectedPluginScope: "workspace",
+          skillMutationError: "Plugin is shadowed by a global install.",
+          selectedPlugin: {
+            id: "plugin-1",
+            name: "figma-toolkit",
+            displayName: "Figma Toolkit",
+            description: "Bring Figma bundles into Cowork.",
+            scope: "workspace",
+            discoveryKind: "marketplace",
+            enabled: true,
+            rootDir: "/tmp/workspace/.agents/plugins/figma-toolkit",
+            manifestPath: "/tmp/workspace/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
+            skillsPath: "/tmp/workspace/.agents/plugins/figma-toolkit/skills",
+            skills: [],
+            mcpServers: [],
+            apps: [],
+            warnings: [],
+          },
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PluginDetailDialog, { workspaceId: "ws-1" }));
+      });
+
+      expect(harness.dom.window.document.body.textContent ?? "").toContain(
+        "Plugin is shadowed by a global install.",
+      );
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
 });

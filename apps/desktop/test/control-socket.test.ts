@@ -12,7 +12,12 @@ class MockJsonRpcSocket {
   closed = false;
   private closeDeferred = false;
 
-  constructor(public readonly opts: { url?: string; onOpen?: () => void; onClose?: () => void }) {
+  constructor(public readonly opts: {
+    url?: string;
+    onOpen?: () => void;
+    onClose?: () => void;
+    onNotification?: (message: { method: string; params?: unknown }) => void;
+  }) {
     MockJsonRpcSocket.instances.push(this);
   }
 
@@ -507,6 +512,7 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(helpers.__internal.getWorkspaceStateSnapshot(workspaceId)).toEqual({
       isDisposed: false,
       hasLifecycleCleanup: true,
+      hasRouterCleanup: true,
       hasBootstrapPromise: true,
       hasStoreGetter: true,
       hasStoreSetter: true,
@@ -517,6 +523,7 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(helpers.__internal.getWorkspaceStateSnapshot(workspaceId)).toEqual({
       isDisposed: true,
       hasLifecycleCleanup: false,
+      hasRouterCleanup: false,
       hasBootstrapPromise: false,
       hasStoreGetter: false,
       hasStoreSetter: false,
@@ -811,6 +818,62 @@ describe("control socket helpers over JSON-RPC", () => {
     expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
     expect(state.workspaceRuntimeById[workspaceId].selectedPlugin?.displayName).toBe("Figma Toolkit");
     expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
+  });
+
+  test("control notifications apply background plugin refresh events", async () => {
+    const workspaceId = "ws-control-notification";
+    const { state, get, set } = createState(workspaceId, {
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          pluginsCatalog: null,
+        },
+      },
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+    await flushAsyncWork();
+
+    const socket = MockJsonRpcSocket.instances.at(-1);
+    if (!socket?.opts.onNotification) {
+      throw new Error("missing JSON-RPC notification handler");
+    }
+
+    socket.opts.onNotification({
+      method: "cowork/control/event",
+      params: {
+        type: "plugins_catalog",
+        sessionId: "jsonrpc-control",
+        catalog: {
+          warnings: [],
+          plugins: [{
+            id: "plugin-1",
+            name: "figma-toolkit",
+            displayName: "Figma Toolkit",
+            description: "Figma helpers",
+            scope: "user",
+            discoveryKind: "direct",
+            enabled: true,
+            rootDir: "/tmp/home/.agents/plugins/figma-toolkit",
+            manifestPath: "/tmp/home/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json",
+            skillsPath: "/tmp/home/.agents/plugins/figma-toolkit/skills",
+            skills: [],
+            mcpServers: [],
+            apps: [],
+            warnings: [],
+          }],
+        },
+      },
+    });
+
+    expect(state.workspaceRuntimeById[workspaceId].pluginsCatalog?.plugins).toEqual([
+      expect.objectContaining({
+        id: "plugin-1",
+        scope: "user",
+      }),
+    ]);
   });
 
   test("requestJsonRpcControlEvent clears plugin loading after install preview success", async () => {

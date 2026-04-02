@@ -70,6 +70,7 @@ mock.module("../src/lib/agentSocket", () => ({
 
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
+const { shouldRequireFreshPluginPreviewForScope } = await import("../src/ui/plugins/InstallPluginDialog");
 const { PluginsCatalogPage } = await import("../src/ui/plugins/PluginsCatalogPage");
 mock.restore();
 
@@ -126,6 +127,8 @@ describe("plugins catalog page", () => {
 
     const harness = setupJsdom();
     try {
+      (harness.dom.window.HTMLElement.prototype as { attachEvent?: () => void; detachEvent?: () => void }).attachEvent = () => {};
+      (harness.dom.window.HTMLElement.prototype as { attachEvent?: () => void; detachEvent?: () => void }).detachEvent = () => {};
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       root = createRoot(container);
@@ -309,6 +312,37 @@ describe("plugins catalog page", () => {
       useAppStore.setState(previousState);
       harness.restore();
     }
+  });
+
+  test("install dialog requires a fresh preview when switching install scope", () => {
+    const preview = {
+      source: {
+        kind: "github_shorthand" as const,
+        raw: "owner/repo",
+        displaySource: "https://github.com/owner/repo",
+        url: "https://github.com/owner/repo",
+        repo: "owner/repo",
+      },
+      targetScope: "workspace" as const,
+      candidates: [],
+      warnings: [],
+    };
+
+    expect(shouldRequireFreshPluginPreviewForScope({
+      normalizedSourceInput: "owner/repo",
+      lastPreviewSourceInput: "owner/repo",
+      lastPreviewTargetScope: "workspace",
+      pluginPreview: preview,
+      targetScope: "workspace",
+    })).toBe(false);
+
+    expect(shouldRequireFreshPluginPreviewForScope({
+      normalizedSourceInput: "owner/repo",
+      lastPreviewSourceInput: "owner/repo",
+      lastPreviewTargetScope: "workspace",
+      pluginPreview: preview,
+      targetScope: "user",
+    })).toBe(true);
   });
 
   test("renders enabled and disabled plugin sections with counts", async () => {

@@ -70,6 +70,7 @@ function clearFailedPluginMutationSend(set: StoreSet, workspaceId: string, key: 
           return pendingKeys;
         })(),
         pluginsLoading: false,
+        pluginsError: detail,
         skillMutationError: detail,
       },
     },
@@ -412,19 +413,21 @@ export function createSkillActions(
         reject: installPromise.reject,
       });
 
+      const rpcError: { message?: string } = {};
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/install", {
         cwd,
         sourceInput,
         targetScope,
-      });
+      }, rpcError);
       if (!ok) {
+        const detail = rpcError.message?.trim() || "Unable to install plugins.";
         if (existing) {
           RUNTIME.pluginInstallWaiters.set(workspaceId, existing);
         } else {
           RUNTIME.pluginInstallWaiters.delete(workspaceId);
         }
-        clearFailedPluginMutationSend(set, workspaceId, key, "Unable to install plugins.");
-        installPromise.reject(new Error("Unable to install plugins."));
+        clearFailedPluginMutationSend(set, workspaceId, key, detail);
+        installPromise.reject(new Error(detail));
       } else if (existing) {
         existing.reject(new Error("Another install was started"));
       }
@@ -469,13 +472,14 @@ export function createSkillActions(
           },
         },
       }));
+      const rpcError: { message?: string } = {};
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/enable", {
         cwd,
         pluginId,
         ...(scope ? { scope } : {}),
-      });
+      }, rpcError);
       if (!ok) {
-        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to enable plugin.");
+        clearFailedPluginMutationSend(set, workspaceId, key, rpcError.message?.trim() || "Unable to enable plugin.");
       } else {
         set((s) => ({
           workspaceRuntimeById: {
@@ -515,13 +519,14 @@ export function createSkillActions(
           },
         },
       }));
+      const rpcError: { message?: string } = {};
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/disable", {
         cwd,
         pluginId,
         ...(scope ? { scope } : {}),
-      });
+      }, rpcError);
       if (!ok) {
-        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to disable plugin.");
+        clearFailedPluginMutationSend(set, workspaceId, key, rpcError.message?.trim() || "Unable to disable plugin.");
       } else {
         set((s) => ({
           workspaceRuntimeById: {

@@ -416,7 +416,7 @@ describe("skill store actions", () => {
 
     await expect(
       createSkillActions(set as any, get as any).installPlugins("owner/repo", "user"),
-    ).rejects.toThrow("Unable to install plugins.");
+    ).rejects.toThrow("request failed");
 
     expect(waiterPendingKey).toBe("plugin:install:user");
     expect(requestedParams).toEqual({
@@ -425,6 +425,57 @@ describe("skill store actions", () => {
       targetScope: "user",
     });
     expect(RUNTIME.pluginInstallWaiters.has(managementWorkspaceId)).toBe(false);
+  });
+
+  test("installPlugins preserves server-side error details", async () => {
+    const state = createState();
+    const managementWorkspaceId = "ws-plugin-management";
+    state.selectedWorkspaceId = workspaceId;
+    state.pluginManagementWorkspaceId = managementWorkspaceId;
+    state.workspaceRuntimeById = {
+      [workspaceId]: {
+        ...defaultWorkspaceRuntime(),
+      },
+      [managementWorkspaceId]: {
+        ...defaultWorkspaceRuntime(),
+        serverUrl: "ws://management",
+        controlSessionId: "jsonrpc-control",
+      },
+    } as any;
+    state.workspaces = [
+      { id: workspaceId, path: "/tmp/workspace" },
+      { id: managementWorkspaceId, path: "/tmp/management" },
+    ];
+    const { get, set } = createStoreHarness(state);
+
+    RUNTIME.jsonRpcSockets.set(managementWorkspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => ({
+        events: [{
+          type: "error",
+          sessionId: "jsonrpc-control",
+          message: "Ambiguous plugin source; choose workspace or global explicitly.",
+          code: "validation_failed",
+          source: "session",
+        }],
+      }),
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    await expect(
+      createSkillActions(set as any, get as any).installPlugins("owner/repo", "user"),
+    ).rejects.toThrow("Ambiguous plugin source; choose workspace or global explicitly.");
+
+    expect(state.workspaceRuntimeById[managementWorkspaceId].skillMutationError).toBe(
+      "Ambiguous plugin source; choose workspace or global explicitly.",
+    );
+    expect(state.workspaceRuntimeById[managementWorkspaceId].pluginsError).toBe(
+      "Ambiguous plugin source; choose workspace or global explicitly.",
+    );
+    expect(state.notifications.at(-1)?.detail).toBe(
+      "Ambiguous plugin source; choose workspace or global explicitly.",
+    );
   });
 
   test("installPlugins refreshes other open workspaces after a user-scoped install succeeds", async () => {
@@ -549,6 +600,50 @@ describe("skill store actions", () => {
     expect(requests).toEqual(["cowork/plugins/catalog/read"]);
     expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
     expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
+  });
+
+  test("enablePlugin and disablePlugin preserve server-side error details", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+    } as any;
+    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
+    const { get, set } = createStoreHarness(state);
+
+    let requestCount = 0;
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => {
+        requestCount += 1;
+        return {
+          events: [{
+            type: "error",
+            sessionId: "jsonrpc-control",
+            message: requestCount === 1
+              ? "Plugin is shadowed by a global install."
+              : "Plugin is already disabled.",
+            code: "validation_failed",
+            source: "session",
+          }],
+        };
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    await createSkillActions(set as any, get as any).enablePlugin("plugin-1", "workspace");
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
+      "Plugin is shadowed by a global install.",
+    );
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe("Plugin is shadowed by a global install.");
+    expect(state.notifications.at(-1)?.detail).toBe("Plugin is shadowed by a global install.");
+
+    await createSkillActions(set as any, get as any).disablePlugin("plugin-1", "workspace");
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe("Plugin is already disabled.");
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe("Plugin is already disabled.");
+    expect(state.notifications.at(-1)?.detail).toBe("Plugin is already disabled.");
   });
 
   test("selectSkill preserves loaded content after the JSON-RPC read succeeds", async () => {

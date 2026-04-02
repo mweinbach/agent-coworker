@@ -364,6 +364,7 @@ export async function startAgentServer(
   });
   const sessionBindings = new Map<string, SessionBinding>();
   const workspaceControlStateIds = new Map<string, string>();
+  const workspaceControlSubscribers = new Map<string, Map<string, Bun.ServerWebSocket<StartServerSocketData>>>();
   const sharedSkillMutationSignalPath = resolveSharedSkillMutationSignalPath(config.userAgentDir);
   let workspaceBackupService: WorkspaceBackupService | null = null;
   let getAgentControl: () => AgentControl;
@@ -390,6 +391,14 @@ export async function startAgentServer(
       sourceSessionId,
       allWorkspaces,
     });
+    try {
+      await emitWorkspaceControlRefreshNotifications({
+        workingDirectory,
+        allWorkspaces,
+      });
+    } catch {
+      // Best-effort only; explicit control refreshes remain available on demand.
+    }
   };
 
   const publishSharedSkillMutationSignal = async () => {
@@ -910,6 +919,124 @@ export async function startAgentServer(
     !ws.data.rpc?.capabilities.optOutNotificationMethods.includes(method)
   );
 
+  const registerWorkspaceControlSubscriber = (
+    ws: Bun.ServerWebSocket<StartServerSocketData>,
+    cwd: string,
+  ) => {
+    const connectionId = ws.data.connectionId;
+    if (!connectionId) {
+      return;
+    }
+    const subscribers = workspaceControlSubscribers.get(cwd) ?? new Map<string, Bun.ServerWebSocket<StartServerSocketData>>();
+    subscribers.set(connectionId, ws);
+    workspaceControlSubscribers.set(cwd, subscribers);
+  };
+
+  const removeWorkspaceControlSubscriber = (
+    ws: Bun.ServerWebSocket<StartServerSocketData>,
+  ) => {
+    const connectionId = ws.data.connectionId;
+    if (!connectionId) {
+      return;
+    }
+    for (const [cwd, subscribers] of workspaceControlSubscribers) {
+      subscribers.delete(connectionId);
+      if (subscribers.size === 0) {
+        workspaceControlSubscribers.delete(cwd);
+      }
+    }
+  };
+
+  const notifyWorkspaceControlSubscribers = (
+    cwd: string,
+    event: Extract<ServerEvent, { type: "skills_list" | "skills_catalog" | "plugins_catalog" | "mcp_servers" }>,
+  ) => {
+    const subscribers = workspaceControlSubscribers.get(cwd);
+    if (!subscribers || subscribers.size === 0) {
+      return;
+    }
+    for (const ws of subscribers.values()) {
+      if (!shouldSendJsonRpcNotification(ws, "cowork/control/event")) {
+        continue;
+      }
+      sendJsonRpc(ws, {
+        method: "cowork/control/event",
+        params: event,
+      });
+    }
+  };
+
+  const readWorkspaceControlRefreshEvents = async (
+    cwd: string,
+  ): Promise<Array<Extract<ServerEvent, { type: "skills_list" | "skills_catalog" | "plugins_catalog" | "mcp_servers" }>>> => {
+    const subscribers = workspaceControlSubscribers.get(cwd);
+    if (!subscribers || subscribers.size === 0) {
+      return [];
+    }
+    const binding = await getOrCreateWorkspaceControlBinding(cwd);
+    if (!binding.session) {
+      return [];
+    }
+    const captureRefreshEvent = async <T extends ServerEvent>(
+      action: () => Promise<void>,
+      predicate: (event: ServerEvent) => event is T,
+    ): Promise<T | null> => {
+      try {
+        return await sessionEventCapture.capture(binding, action, predicate);
+      } catch {
+        return null;
+      }
+    };
+    try {
+      const session = binding.session;
+      const events = [
+        await captureRefreshEvent(
+          async () => await session.listSkills(),
+          (event): event is Extract<ServerEvent, { type: "skills_list" }> => event.type === "skills_list",
+        ),
+        await captureRefreshEvent(
+          async () => await session.getSkillsCatalog(),
+          (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+        ),
+        await captureRefreshEvent(
+          async () => await session.getPluginsCatalog(),
+          (event): event is Extract<ServerEvent, { type: "plugins_catalog" }> => event.type === "plugins_catalog",
+        ),
+        await captureRefreshEvent(
+          async () => await session.emitMcpServers(),
+          (event): event is Extract<ServerEvent, { type: "mcp_servers" }> => event.type === "mcp_servers",
+        ),
+      ];
+      return events.filter(
+        (
+          event,
+        ): event is Extract<ServerEvent, { type: "skills_list" | "skills_catalog" | "plugins_catalog" | "mcp_servers" }> => (
+          event !== null
+        ),
+      );
+    } finally {
+      disposeBinding(binding, `workspace control refresh capture completed for ${cwd}`);
+    }
+  };
+
+  const emitWorkspaceControlRefreshNotifications = async ({
+    workingDirectory,
+    allWorkspaces = false,
+  }: {
+    workingDirectory: string;
+    allWorkspaces?: boolean;
+  }) => {
+    const targetWorkspaces = allWorkspaces
+      ? [...workspaceControlSubscribers.keys()]
+      : [workingDirectory];
+    for (const cwd of targetWorkspaces) {
+      const events = await readWorkspaceControlRefreshEvents(cwd);
+      for (const event of events) {
+        notifyWorkspaceControlSubscribers(cwd, event);
+      }
+    }
+  };
+
   const enqueueThreadJournalEvent = (event: {
     threadId: string;
     ts: string;
@@ -1119,6 +1246,14 @@ export async function startAgentServer(
     ws: Bun.ServerWebSocket<StartServerSocketData>,
     message: { id: string | number; method: string; params?: unknown },
   ) => {
+    const params = isPlainObject(message.params) ? message.params : undefined;
+    if (params) {
+      try {
+        registerWorkspaceControlSubscriber(ws, requireWorkspacePath(params, message.method, config.workingDirectory));
+      } catch {
+        // Ignore non-workspace-control requests that do not resolve a cwd.
+      }
+    }
     await jsonRpcRequestRouter(ws, message);
   };
 
@@ -1174,6 +1309,7 @@ export async function startAgentServer(
           );
         },
         close(ws) {
+          removeWorkspaceControlSubscriber(ws);
           jsonRpcTransport.closeConnection(ws);
         },
       },
@@ -1230,6 +1366,7 @@ export async function startAgentServer(
       clearInterval(sharedSkillMutationPollTimer);
       sharedSkillMutationPollTimer = null;
     }
+    workspaceControlSubscribers.clear();
     // Dispose all active sessions to abort running turns and close MCP child processes.
     const persistenceFlushes: Promise<void>[] = [];
     for (const [id, binding] of sessionBindings) {

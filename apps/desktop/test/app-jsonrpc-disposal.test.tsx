@@ -307,6 +307,7 @@ describe("App JSON-RPC shutdown disposal", () => {
       });
       expect(__controlSocketInternal.getWorkspaceStateSnapshot(workspaceId)).toEqual({
         isDisposed: true,
+        hasRouterCleanup: false,
         hasLifecycleCleanup: false,
         hasBootstrapPromise: false,
         hasStoreGetter: false,

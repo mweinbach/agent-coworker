@@ -7,6 +7,7 @@ import { RUNTIME } from "./runtimeState";
 import {
   ensureWorkspaceJsonRpcSocket,
   registerWorkspaceJsonRpcLifecycle,
+  registerWorkspaceJsonRpcRouter,
   requestJsonRpc,
   requestJsonRpcThreadList,
   requestJsonRpcThreadRead,
@@ -50,6 +51,7 @@ export function createControlSocketHelpers(
 ) {
   const requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   const jsonRpcLifecycleCleanupByWorkspace = new Map<string, () => void>();
+  const jsonRpcRouterCleanupByWorkspace = new Map<string, () => void>();
   const jsonRpcBootstrapPromises = new Map<string, Promise<void>>();
   const jsonRpcBootstrapQueuedByWorkspace = new Set<string>();
   const controlStoreGettersByWorkspace = new Map<string, StoreGet>();
@@ -380,7 +382,7 @@ export function createControlSocketHelpers(
     }
     rememberControlStoreGet(workspaceId, get);
     rememberControlStoreSet(workspaceId, set);
-    if (jsonRpcLifecycleCleanupByWorkspace.has(workspaceId)) {
+    if (jsonRpcLifecycleCleanupByWorkspace.has(workspaceId) && jsonRpcRouterCleanupByWorkspace.has(workspaceId)) {
       return;
     }
     const cleanup = registerWorkspaceJsonRpcLifecycle(workspaceId, {
@@ -398,6 +400,22 @@ export function createControlSocketHelpers(
       },
     });
     jsonRpcLifecycleCleanupByWorkspace.set(workspaceId, cleanup);
+    const routerCleanup = registerWorkspaceJsonRpcRouter(workspaceId, (message) => {
+      if (message.kind !== "notification" || message.method !== "cowork/control/event") {
+        return;
+      }
+      const currentGet = getControlStoreGet(workspaceId);
+      const currentSet = getControlStoreSet(workspaceId);
+      if (!currentGet || !currentSet) {
+        return;
+      }
+      const evt = message.params as ServerEvent | undefined;
+      if (!evt || typeof evt !== "object" || typeof evt.type !== "string") {
+        return;
+      }
+      applyJsonRpcControlEvent(currentGet, currentSet, workspaceId, evt);
+    });
+    jsonRpcRouterCleanupByWorkspace.set(workspaceId, routerCleanup);
   }
 
   function ensureControlSocket(get: StoreGet, set: StoreSet, workspaceId: string) {
@@ -1244,9 +1262,12 @@ export function createControlSocketHelpers(
       set((s) => {
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
         const hasPendingMemories = workspaceRuntime.memoriesLoading;
+        const pendingSkillMutationKeys = Object.keys(workspaceRuntime.skillMutationPendingKeys);
+        const hasPendingPluginMutation = pendingSkillMutationKeys.some((key) => key.startsWith("plugin:"));
         const hasPendingSkillState =
           workspaceRuntime.skillCatalogLoading
-          || Object.keys(workspaceRuntime.skillMutationPendingKeys).length > 0;
+          || pendingSkillMutationKeys.some((key) => !key.startsWith("plugin:"));
+        const hasPendingAnyMutation = hasPendingSkillState || hasPendingPluginMutation;
         const hasPendingBackupState =
           workspaceRuntime.workspaceBackupsLoading
           || Object.keys(workspaceRuntime.workspaceBackupPendingActionKeys).length > 0;
@@ -1264,15 +1285,19 @@ export function createControlSocketHelpers(
             [workspaceId]: {
               ...workspaceRuntime,
               memoriesLoading: hasPendingMemories ? false : workspaceRuntime.memoriesLoading,
-              ...(hasPendingSkillState
+              ...(hasPendingAnyMutation
                 ? {
-                    skillCatalogLoading: false,
-                    skillCatalogError: evt.message,
                     skillMutationPendingKeys: {},
                     skillMutationError: evt.message,
                   }
                 : {}),
-              ...(workspaceRuntime.pluginsLoading
+              ...(hasPendingSkillState
+                ? {
+                    skillCatalogLoading: false,
+                    skillCatalogError: evt.message,
+                  }
+                : {}),
+              ...(workspaceRuntime.pluginsLoading || hasPendingPluginMutation
                 ? {
                     pluginsLoading: false,
                     pluginsError: evt.message,
@@ -1392,6 +1417,9 @@ export function createControlSocketHelpers(
     const cleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
     cleanup?.();
     jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
+    const routerCleanup = jsonRpcRouterCleanupByWorkspace.get(workspaceId);
+    routerCleanup?.();
+    jsonRpcRouterCleanupByWorkspace.delete(workspaceId);
     jsonRpcBootstrapPromises.delete(workspaceId);
     jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
     controlStoreGettersByWorkspace.delete(workspaceId);
@@ -1417,6 +1445,7 @@ export function createControlSocketHelpers(
       getWorkspaceStateSnapshot: (workspaceId: string) => ({
         isDisposed: isWorkspaceDisposed(workspaceId),
         hasLifecycleCleanup: jsonRpcLifecycleCleanupByWorkspace.has(workspaceId),
+        hasRouterCleanup: jsonRpcRouterCleanupByWorkspace.has(workspaceId),
         hasBootstrapPromise: jsonRpcBootstrapPromises.has(workspaceId),
         hasStoreGetter: controlStoreGettersByWorkspace.has(workspaceId),
         hasStoreSetter: controlStoreSettersByWorkspace.has(workspaceId),
@@ -1432,6 +1461,9 @@ export function createControlSocketHelpers(
           const cleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
           cleanup?.();
           jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
+          const routerCleanup = jsonRpcRouterCleanupByWorkspace.get(workspaceId);
+          routerCleanup?.();
+          jsonRpcRouterCleanupByWorkspace.delete(workspaceId);
           jsonRpcBootstrapPromises.delete(workspaceId);
           jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
           controlStoreGettersByWorkspace.delete(workspaceId);
@@ -1442,6 +1474,10 @@ export function createControlSocketHelpers(
           cleanup();
         }
         jsonRpcLifecycleCleanupByWorkspace.clear();
+        for (const cleanup of jsonRpcRouterCleanupByWorkspace.values()) {
+          cleanup();
+        }
+        jsonRpcRouterCleanupByWorkspace.clear();
         jsonRpcBootstrapPromises.clear();
         jsonRpcBootstrapQueuedByWorkspace.clear();
         controlStoreGettersByWorkspace.clear();

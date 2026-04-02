@@ -5,12 +5,46 @@ import { Button } from "../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Textarea } from "../../components/ui/textarea";
 
+type PluginPreviewScope = "workspace" | "user";
+type PluginPreviewState = NonNullable<
+  ReturnType<typeof useAppStore.getState>["workspaceRuntimeById"][string]["selectedPluginPreview"]
+>;
+
 function previewSummary(preview: NonNullable<ReturnType<typeof useAppStore.getState>["workspaceRuntimeById"][string]["selectedPluginPreview"]>) {
   const validCount = preview.candidates.filter((candidate) => candidate.diagnostics.length === 0).length;
   if (validCount === 0) {
     return "No valid plugins found";
   }
   return validCount === 1 ? "1 plugin ready" : `${validCount} plugins ready`;
+}
+
+export function isPluginPreviewVisibleForInput(opts: {
+  normalizedSourceInput: string;
+  lastPreviewSourceInput: string | null;
+  lastPreviewTargetScope: PluginPreviewScope | null;
+  pluginPreview: PluginPreviewState | null;
+}): boolean {
+  const previewMatchesCurrentInput = opts.lastPreviewSourceInput !== null
+    && opts.normalizedSourceInput.length > 0
+    && opts.normalizedSourceInput === opts.lastPreviewSourceInput;
+  return Boolean(
+    opts.pluginPreview
+    && previewMatchesCurrentInput
+    && opts.lastPreviewTargetScope !== null
+    && opts.pluginPreview.targetScope === opts.lastPreviewTargetScope,
+  );
+}
+
+export function shouldRequireFreshPluginPreviewForScope(opts: {
+  normalizedSourceInput: string;
+  lastPreviewSourceInput: string | null;
+  lastPreviewTargetScope: PluginPreviewScope | null;
+  pluginPreview: PluginPreviewState | null;
+  targetScope: PluginPreviewScope;
+}): boolean {
+  return isPluginPreviewVisibleForInput(opts)
+    && opts.lastPreviewTargetScope !== null
+    && opts.lastPreviewTargetScope !== opts.targetScope;
 }
 
 export function InstallPluginDialog({
@@ -21,7 +55,9 @@ export function InstallPluginDialog({
   const [open, setOpen] = useState(false);
   const [sourceInput, setSourceInput] = useState("");
   const [lastPreviewSourceInput, setLastPreviewSourceInput] = useState<string | null>(null);
+  const [lastPreviewTargetScope, setLastPreviewTargetScope] = useState<"workspace" | "user" | null>(null);
   const [lastMutationSourceInput, setLastMutationSourceInput] = useState<string | null>(null);
+  const [lastMutationTargetScope, setLastMutationTargetScope] = useState<"workspace" | "user" | null>(null);
 
   const runtime = useAppStore((state) => state.workspaceRuntimeById[workspaceId]);
   const previewPluginInstall = useAppStore((state) => state.previewPluginInstall);
@@ -31,10 +67,12 @@ export function InstallPluginDialog({
   const pluginInstallInFlight = Object.keys(runtime?.skillMutationPendingKeys ?? {}).some((key) => key.startsWith("plugin:install:"));
   const pluginPreviewPending = runtime?.skillMutationPendingKeys["plugin:preview"] === true;
   const normalizedSourceInput = sourceInput.trim();
-  const showPreview = pluginPreview !== null
-    && lastPreviewSourceInput !== null
-    && normalizedSourceInput.length > 0
-    && normalizedSourceInput === lastPreviewSourceInput;
+  const showPreview = isPluginPreviewVisibleForInput({
+    normalizedSourceInput,
+    lastPreviewSourceInput,
+    lastPreviewTargetScope,
+    pluginPreview,
+  });
   const showPreviewPending = pluginPreviewPending
     && lastPreviewSourceInput !== null
     && normalizedSourceInput.length > 0
@@ -47,6 +85,13 @@ export function InstallPluginDialog({
     && lastMutationSourceInput !== null
     && normalizedSourceInput.length > 0
     && normalizedSourceInput === lastMutationSourceInput;
+  const requiresFreshPreviewForScope = (targetScope: PluginPreviewScope) => shouldRequireFreshPluginPreviewForScope({
+    normalizedSourceInput,
+    lastPreviewSourceInput,
+    lastPreviewTargetScope,
+    pluginPreview,
+    targetScope,
+  });
 
   const validPreviewCandidates = useMemo(
     () => showPreview ? pluginPreview?.candidates.filter((candidate) => candidate.diagnostics.length === 0) ?? [] : [],
@@ -56,7 +101,9 @@ export function InstallPluginDialog({
   const resetDialogState = () => {
     setSourceInput("");
     setLastPreviewSourceInput(null);
+    setLastPreviewTargetScope(null);
     setLastMutationSourceInput(null);
+    setLastMutationTargetScope(null);
   };
 
   const openDialog = () => {
@@ -74,13 +121,16 @@ export function InstallPluginDialog({
   const handlePreview = async (targetScope: "workspace" | "user") => {
     if (!normalizedSourceInput) return;
     setLastMutationSourceInput(normalizedSourceInput);
+    setLastMutationTargetScope(targetScope);
     setLastPreviewSourceInput(normalizedSourceInput);
+    setLastPreviewTargetScope(targetScope);
     await previewPluginInstall(normalizedSourceInput, targetScope);
   };
 
   const handleInstall = async (targetScope: "workspace" | "user") => {
     if (!normalizedSourceInput) return;
     setLastMutationSourceInput(normalizedSourceInput);
+    setLastMutationTargetScope(targetScope);
     try {
       await installPlugins(normalizedSourceInput, targetScope);
       handleOpenChange(false);
@@ -110,7 +160,9 @@ export function InstallPluginDialog({
               onChange={(event) => {
                 setSourceInput(event.target.value);
                 setLastPreviewSourceInput(null);
+                setLastPreviewTargetScope(null);
                 setLastMutationSourceInput(null);
+                setLastMutationTargetScope(null);
               }}
             />
             <div className="flex flex-col gap-2">
@@ -125,7 +177,7 @@ export function InstallPluginDialog({
               <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"
-                  disabled={pluginInstallInFlight}
+                  disabled={pluginInstallInFlight || requiresFreshPreviewForScope("workspace")}
                   onClick={() => void handleInstall("workspace")}
                   type="button"
                 >
@@ -134,7 +186,7 @@ export function InstallPluginDialog({
                 <Button
                   size="sm"
                   variant="secondary"
-                  disabled={pluginInstallInFlight}
+                  disabled={pluginInstallInFlight || requiresFreshPreviewForScope("user")}
                   onClick={() => void handleInstall("user")}
                   type="button"
                 >
@@ -152,6 +204,9 @@ export function InstallPluginDialog({
             {showPreview ? (
               <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-3 text-xs text-muted-foreground">
                 <div className="font-medium text-foreground">{previewSummary(pluginPreview!)}</div>
+                <div className="mt-1 text-[11px] text-muted-foreground">
+                  Previewed for {pluginPreview!.targetScope === "workspace" ? "workspace" : "global"} install.
+                </div>
                 <div className="mt-2 space-y-1.5">
                   {pluginPreview!.candidates.map((candidate) => (
                     <div key={`${candidate.pluginId}:${candidate.relativeRootPath}`} className="rounded border border-border/60 bg-background/40 px-2.5 py-2">
@@ -199,6 +254,16 @@ export function InstallPluginDialog({
             {showPluginsError ? (
               <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                 {runtime.pluginsError}
+              </div>
+            ) : null}
+            {(showMutationError || showPluginsError) && lastMutationTargetScope ? (
+              <div className="text-[11px] text-muted-foreground">
+                Last attempted target: {lastMutationTargetScope === "workspace" ? "workspace" : "global"}.
+              </div>
+            ) : null}
+            {showPreview && lastPreviewTargetScope !== null ? (
+              <div className="text-[11px] text-muted-foreground">
+                Run a new preview before installing to {lastPreviewTargetScope === "workspace" ? "global" : "workspace"}.
               </div>
             ) : null}
             {showPreview && validPreviewCandidates.length === 0 ? (

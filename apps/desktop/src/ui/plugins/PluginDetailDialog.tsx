@@ -34,7 +34,7 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
     if (!plugin?.marketplace) return null;
     return plugin.marketplace.displayName ?? plugin.marketplace.name;
   }, [plugin]);
-  const pluginError = runtime?.pluginsError ?? null;
+  const pluginError = runtime?.pluginsError ?? runtime?.skillMutationError ?? null;
   const enablePending = plugin ? actionPending(runtime, "plugin:enable", `${plugin.scope}:${plugin.id}`) : false;
   const disablePending = plugin ? actionPending(runtime, "plugin:disable", `${plugin.scope}:${plugin.id}`) : false;
 

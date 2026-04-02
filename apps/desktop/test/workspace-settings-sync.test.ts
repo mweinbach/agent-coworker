@@ -1381,6 +1381,7 @@ describe("workspace settings sync", () => {
     expect(helperStateBefore.socket.lifecycleListenerCount).toBeGreaterThan(0);
     expect(helperStateBefore.control).toEqual({
       isDisposed: false,
+      hasRouterCleanup: true,
       hasLifecycleCleanup: true,
       hasBootstrapPromise: true,
       hasStoreGetter: true,
@@ -1430,6 +1431,7 @@ describe("workspace settings sync", () => {
     });
     expect(helperStateAfter.control).toEqual({
       isDisposed: true,
+      hasRouterCleanup: false,
       hasLifecycleCleanup: false,
       hasBootstrapPromise: false,
       hasStoreGetter: false,
@@ -1516,6 +1518,7 @@ describe("workspace settings sync", () => {
       },
       control: {
         isDisposed: true,
+        hasRouterCleanup: false,
         hasLifecycleCleanup: false,
         hasBootstrapPromise: false,
         hasStoreGetter: false,
@@ -1542,6 +1545,7 @@ describe("workspace settings sync", () => {
     expect(helperStateAfter.socket.lifecycleListenerCount).toBeGreaterThan(0);
     expect(helperStateAfter.control).toMatchObject({
       isDisposed: false,
+      hasRouterCleanup: true,
       hasLifecycleCleanup: true,
       hasStoreGetter: true,
       hasStoreSetter: true,

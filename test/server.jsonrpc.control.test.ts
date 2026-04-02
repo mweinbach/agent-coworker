@@ -73,6 +73,7 @@ async function connectJsonRpc(url: string) {
   return {
     ws,
     request,
+    waitFor,
     close: () => ws.close(),
   };
 }
@@ -441,6 +442,63 @@ describe("server JSON-RPC control methods", () => {
       ]);
 
       rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("shared skill installs notify subscribed control clients with refreshed catalog state", async () => {
+    const tmpDir = await makeTmpProject("agent-harness-plugin-notify-");
+    const sourceRoot = `${tmpDir}/skill-source/example-skill`;
+    await fs.mkdir(sourceRoot, { recursive: true });
+    await fs.writeFile(
+      `${sourceRoot}/SKILL.md`,
+      [
+        "---",
+        "name: example-skill",
+        "description: Example skill",
+        "---",
+        "",
+        "# Example skill",
+      ].join("\n"),
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const subscriber = await connectJsonRpc(url);
+      const mutator = await connectJsonRpc(url);
+
+      await subscriber.request("cowork/plugins/catalog/read", {
+        cwd: tmpDir,
+      });
+
+      const installResponse = await mutator.request("cowork/skills/install", {
+        cwd: tmpDir,
+        sourceInput: sourceRoot,
+        targetScope: "global",
+      });
+      expect(installResponse.error).toBeUndefined();
+      expect(installResponse.result.event).toEqual(
+        expect.objectContaining({
+          type: "skills_catalog",
+        }),
+      );
+
+      const notification = await subscriber.waitFor(
+        (message) => message.method === "cowork/control/event" && message.params?.type === "skills_catalog",
+      );
+      expect(notification.params.catalog.installations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "example-skill",
+            scope: "global",
+          }),
+        ]),
+      );
+
+      subscriber.close();
+      mutator.close();
     } finally {
       await stopTestServer(server);
     }

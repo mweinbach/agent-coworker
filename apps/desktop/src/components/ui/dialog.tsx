@@ -223,7 +223,7 @@ const DialogOverlay = React.forwardRef<HTMLDivElement, React.ComponentProps<"div
     <div
       ref={ref}
       data-slot="dialog-overlay"
-      className={cn("fixed inset-0 bg-foreground/18", className)}
+      className={cn("fixed inset-0 z-0 bg-foreground/40", className)}
       {...props}
     />
   );

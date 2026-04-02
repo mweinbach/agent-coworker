@@ -63,6 +63,19 @@ export async function captureBindingMutationError(
   );
 }
 
+export async function captureBindingMutationEvents<T extends ServerEvent>(
+  context: JsonRpcRouteContext,
+  binding: SessionBinding,
+  action: () => Promise<void> | void,
+  predicate: (event: ServerEvent) => event is T,
+): Promise<JsonRpcSessionOutcome<T>[]> {
+  return await context.events.captureMutationEvents(
+    binding,
+    async () => await action(),
+    isOutcomeEvent(context, predicate),
+  );
+}
+
 export async function captureWorkspaceControlEvent<T extends ServerEvent>(
   context: JsonRpcRouteContext,
   cwd: string,
@@ -103,6 +116,17 @@ export async function captureWorkspaceControlMutationError(
 ): Promise<JsonRpcSessionError | null> {
   return await context.workspaceControl.withSession(cwd, async (binding, session) =>
     await captureBindingMutationError(context, binding, async () => await action(session))
+  );
+}
+
+export async function captureWorkspaceControlMutationEvents<T extends ServerEvent>(
+  context: JsonRpcRouteContext,
+  cwd: string,
+  action: (session: AgentSession) => Promise<void> | void,
+  predicate: (event: ServerEvent) => event is T,
+): Promise<JsonRpcSessionOutcome<T>[]> {
+  return await context.workspaceControl.withSession(cwd, async (binding, session) =>
+    await captureBindingMutationEvents(context, binding, async () => await action(session), predicate)
   );
 }
 

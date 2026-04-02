@@ -6,6 +6,9 @@ import type {
   HarnessContextPayload,
   MCPServerConfig,
   ObservabilityHealth,
+  PluginCatalogEntry,
+  PluginCatalogSnapshot,
+  PluginInstallPreview,
   SkillCatalogSnapshot,
   ServerErrorCode,
   ServerErrorSource,
@@ -38,7 +41,7 @@ import type {
 } from "../shared/agents";
 export { ASK_SKIP_TOKEN } from "../shared/ask";
 
-export type MCPServerEventSource = "workspace" | "user" | "system" | "workspace_legacy" | "user_legacy";
+export type MCPServerEventSource = "workspace" | "user" | "system" | "workspace_legacy" | "user_legacy" | "plugin";
 export type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pending" | "error";
 
 // Keep the legacy websocket version string exported for docs/tests that still
@@ -150,6 +153,10 @@ export type ServerEvent =
       MCPServerConfig & {
         source: MCPServerEventSource;
         inherited: boolean;
+        pluginId?: string;
+        pluginName?: string;
+        pluginDisplayName?: string;
+        pluginScope?: "workspace" | "user";
         authMode: MCPServerAuthMode;
         authScope: "workspace" | "user";
         authMessage: string;
@@ -165,6 +172,10 @@ export type ServerEvent =
       exists: boolean;
       editable: boolean;
       legacy: boolean;
+      pluginId?: string;
+      pluginName?: string;
+      pluginDisplayName?: string;
+      pluginScope?: "workspace" | "user";
       parseError?: string;
       serverCount: number;
     }>;
@@ -307,6 +318,23 @@ export type ServerEvent =
     type: "skill_installation_update_check";
     sessionId: string;
     result: SkillUpdateCheckResult;
+  }
+  | {
+    type: "plugins_catalog";
+    sessionId: string;
+    catalog: PluginCatalogSnapshot;
+    clearedMutationPendingKeys?: string[];
+  }
+  | {
+    type: "plugin_detail";
+    sessionId: string;
+    plugin: PluginCatalogEntry | null;
+  }
+  | {
+    type: "plugin_install_preview";
+    sessionId: string;
+    preview: PluginInstallPreview;
+    fromUserPreviewRequest?: boolean;
   }
   | {
     type: "session_backup_state";

@@ -111,6 +111,7 @@ export type SessionRuntimeState = {
   currentTurnId: string | null;
   acceptingSteers: boolean;
   pendingSteers: PendingSteer[];
+  pendingExternalSkillRefreshReason: string | null;
   currentTurnOutcome: "completed" | "cancelled" | "error";
   maxSteps: number;
   todos: TodoItem[];
@@ -211,7 +212,11 @@ export type SessionDependencies = {
   getLiveSessionWorkingDirectoryImpl?: (sessionId: string) => string | null;
   buildLegacySessionSnapshotImpl?: (record: import("../sessionDb").PersistedSessionRecord) => SessionSnapshot;
   getSkillMutationBlockReasonImpl?: (workingDirectory: string) => string | null;
-  refreshSkillsAcrossWorkspaceSessionsImpl?: (workingDirectory: string) => Promise<void>;
+  refreshSkillsAcrossWorkspaceSessionsImpl?: (opts: {
+    workingDirectory: string;
+    sourceSessionId: string;
+    allWorkspaces?: boolean;
+  }) => Promise<void>;
 };
 
 export type SessionContext = {
@@ -240,6 +245,7 @@ export type SessionContext = {
   syncSessionBackupAvailability: () => Promise<void>;
   refreshProviderStatus: () => Promise<void>;
   emitProviderCatalog: () => Promise<void>;
+  emitMcpServers?: () => Promise<void>;
   getSkillMutationBlockReason: () => string | null;
-  refreshSkillsAcrossWorkspaceSessions: () => Promise<void>;
+  refreshSkillsAcrossWorkspaceSessions: (opts?: { allWorkspaces?: boolean }) => Promise<void>;
 };

@@ -7,7 +7,9 @@ import { fileURLToPath } from "node:url";
 
 import { startAgentServer, type StartAgentServerOptions } from "../src/server/startServer";
 import { getAiCoworkerPaths } from "../src/connect";
+import type { AgentSession } from "../src/server/session/AgentSession";
 import { SessionDb } from "../src/server/sessionDb";
+import { refreshSessionsForSkillMutation } from "../src/server/skillMutationRefresh";
 import {
   ASK_SKIP_TOKEN,
 } from "../src/server/protocol";
@@ -530,6 +532,43 @@ describe("Server Startup", () => {
     } finally {
       await stopTestServer(server);
     }
+  });
+
+  test("shared skill refresh includes workspace control sessions and preserves source-session behavior", async () => {
+    const calls: string[] = [];
+    const makeSession = (id: string, cwd: string) => ({
+      id,
+      getWorkingDirectory: () => cwd,
+      refreshSystemPromptWithSkills: async (reason: string) => {
+        calls.push(`${id}:system:${reason}`);
+      },
+      refreshSkillStateFromExternalMutation: async (reason: string) => {
+        calls.push(`${id}:external:${reason}`);
+      },
+    }) as unknown as AgentSession;
+    const sourceSession = makeSession("source", "/tmp/workspace-a");
+    const workspacePeer = makeSession("workspace-peer", "/tmp/workspace-a");
+    const controlPeer = makeSession("control-peer", "/tmp/workspace-a");
+    const otherWorkspace = makeSession("other-workspace", "/tmp/workspace-b");
+
+    const bindingFor = (session: AgentSession) => ({
+      session,
+      socket: null,
+      sinks: new Map(),
+    });
+
+    await refreshSessionsForSkillMutation({
+      sessionBindings: [bindingFor(sourceSession), bindingFor(workspacePeer), bindingFor(otherWorkspace)],
+      workspaceControlBindings: [bindingFor(controlPeer)],
+      workingDirectory: "/tmp/workspace-a",
+      sourceSessionId: "source",
+    });
+
+    expect(calls.sort()).toEqual([
+      "control-peer:external:skills.workspace_refresh",
+      "source:system:skills.workspace_refresh",
+      "workspace-peer:external:skills.workspace_refresh",
+    ]);
   });
 });
 

@@ -8,6 +8,7 @@ import type {
   Notification,
   OnboardingStep,
   PersistedOnboardingState,
+  PluginManagementMode,
   PromptModalState,
   SettingsPageId,
   ThreadRecord,
@@ -160,6 +161,8 @@ export type AppStoreState = {
   threads: ThreadRecord[];
 
   selectedWorkspaceId: string | null;
+  pluginManagementWorkspaceId: string | null;
+  pluginManagementMode: PluginManagementMode;
   selectedThreadId: string | null;
 
   workspaceRuntimeById: Record<string, WorkspaceRuntime>;
@@ -232,6 +235,14 @@ export type AppStoreState = {
 
   openSkills: () => Promise<void>;
   refreshSkillsCatalog: () => Promise<void>;
+  refreshPluginsCatalog: () => Promise<void>;
+  selectPlugin: (pluginId: string | null, scope?: "workspace" | "user" | null) => Promise<void>;
+  setPluginManagementWorkspace: (workspaceId: string | null) => Promise<void>;
+  previewPluginInstall: (sourceInput: string, targetScope: "workspace" | "user") => Promise<void>;
+  installPlugins: (sourceInput: string, targetScope: "workspace" | "user") => Promise<void>;
+  enablePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
+  disablePlugin: (pluginId: string, scope?: "workspace" | "user") => Promise<void>;
+  setPluginViewMode: (mode: "plugins" | "skills") => void;
   selectSkill: (skillName: string) => Promise<void>;
   selectSkillInstallation: (installationId: string | null) => Promise<void>;
   previewSkillInstall: (sourceInput: string, targetScope: "project" | "global") => Promise<void>;

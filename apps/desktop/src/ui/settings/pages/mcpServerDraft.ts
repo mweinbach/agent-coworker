@@ -136,6 +136,7 @@ export function sourceLabel(source: string): string {
   if (source === "system") return "system";
   if (source === "workspace_legacy") return "workspace legacy";
   if (source === "user_legacy") return "user legacy";
+  if (source === "plugin") return "plugin";
   return source;
 }
 

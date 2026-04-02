@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { scanSkillCatalog } from "../src/skills/catalog";
+import { getInstallationById, scanSkillCatalog, scanSkillCatalogFromSources } from "../src/skills/catalog";
+import type { PluginCatalogEntry } from "../src/types";
 
 async function makeTmpDir(prefix = "skills-catalog-test-"): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -17,6 +18,41 @@ async function createSkill(parentDir: string, name: string, description: string)
   const skillDir = path.join(parentDir, name);
   await fs.mkdir(skillDir, { recursive: true });
   await fs.writeFile(path.join(skillDir, "SKILL.md"), skillDoc(name, description), "utf-8");
+}
+
+function pluginEntry(opts: {
+  scope: "workspace" | "user";
+  rootDir: string;
+  displayName: string;
+  skillName: string;
+  description: string;
+}): PluginCatalogEntry {
+  return {
+    id: "figma-toolkit",
+    name: "figma-toolkit",
+    displayName: opts.displayName,
+    description: "Figma helpers",
+    scope: opts.scope,
+    discoveryKind: "direct",
+    enabled: true,
+    rootDir: opts.rootDir,
+    manifestPath: path.join(opts.rootDir, ".codex-plugin", "plugin.json"),
+    skillsPath: path.join(opts.rootDir, "skills"),
+    skills: [
+      {
+        name: `figma-toolkit:${opts.skillName}`,
+        rawName: opts.skillName,
+        description: opts.description,
+        enabled: true,
+        rootDir: path.join(opts.rootDir, "skills", opts.skillName),
+        skillPath: path.join(opts.rootDir, "skills", opts.skillName, "SKILL.md"),
+        triggers: [opts.skillName],
+      },
+    ],
+    mcpServers: [],
+    apps: [],
+    warnings: [],
+  };
 }
 
 describe("scanSkillCatalog", () => {
@@ -133,5 +169,54 @@ describe("scanSkillCatalog", () => {
     expect(alpha?.interface?.displayName).toBe("Alpha");
     expect(alpha?.interface?.iconSmall).toBe(`data:image/png;base64,${Buffer.from("icon-small").toString("base64")}`);
     expect(alpha?.interface?.iconLarge).toBeUndefined();
+  });
+
+  test("assigns distinct installation ids to plugin skills across scopes", async () => {
+    const workspacePluginRoot = path.join(root, "workspace-plugin");
+    const userPluginRoot = path.join(root, "user-plugin");
+    await createSkill(path.join(workspacePluginRoot, "skills"), "import-frame", "Workspace import.");
+    await createSkill(path.join(userPluginRoot, "skills"), "import-frame", "User import.");
+
+    const workspacePlugin = pluginEntry({
+      scope: "workspace",
+      rootDir: workspacePluginRoot,
+      displayName: "Workspace Figma Toolkit",
+      skillName: "import-frame",
+      description: "Workspace import.",
+    });
+    const userPlugin = pluginEntry({
+      scope: "user",
+      rootDir: userPluginRoot,
+      displayName: "User Figma Toolkit",
+      skillName: "import-frame",
+      description: "User import.",
+    });
+
+    const catalog = await scanSkillCatalogFromSources([
+      {
+        kind: "plugin",
+        plugin: workspacePlugin,
+        skill: workspacePlugin.skills[0]!,
+        enabled: true,
+      },
+      {
+        kind: "plugin",
+        plugin: userPlugin,
+        skill: userPlugin.skills[0]!,
+        enabled: true,
+      },
+    ], { includeDisabled: true });
+
+    const workspaceInstallation = catalog.installations.find((entry) => entry.plugin?.scope === "workspace");
+    const userInstallation = catalog.installations.find((entry) => entry.plugin?.scope === "user");
+
+    expect(workspaceInstallation).toBeDefined();
+    expect(userInstallation).toBeDefined();
+    expect(workspaceInstallation?.installationId).not.toBe(userInstallation?.installationId);
+    expect(workspaceInstallation?.state).toBe("effective");
+    expect(userInstallation?.state).toBe("shadowed");
+    expect(userInstallation?.shadowedByInstallationId).toBe(workspaceInstallation?.installationId);
+    expect(getInstallationById(catalog, workspaceInstallation!.installationId)?.plugin?.scope).toBe("workspace");
+    expect(getInstallationById(catalog, userInstallation!.installationId)?.plugin?.scope).toBe("user");
   });
 });

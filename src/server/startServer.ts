@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
@@ -28,6 +29,7 @@ import { resolveAuthHomeDir } from "../utils/authHome";
 import type { AgentControl } from "./agents/AgentControl";
 import type { AgentSession } from "./session/AgentSession";
 import { SessionDb, type PersistedSessionRecord } from "./sessionDb";
+import { refreshSessionsForSkillMutation } from "./skillMutationRefresh";
 import type { WorkspaceBackupService } from "./workspaceBackups";
 import {
   type ServerEvent,
@@ -54,6 +56,11 @@ import { createJsonRpcTransportAdapter } from "./jsonrpc/transportAdapter";
 import { type SessionBinding, type StartServerSocketData } from "./startServer/types";
 import type { SeededSessionContext, SessionDependencies, SessionInfoState } from "./session/SessionContext";
 import {
+  readSharedSkillMutationSignal,
+  resolveSharedSkillMutationSignalPath,
+  writeSharedSkillMutationSignal,
+} from "./sharedSkillMutationSignal";
+import {
   parseWsProtocolDefault,
   resolveWsProtocol,
   splitWebSocketSubprotocolHeader,
@@ -63,6 +70,7 @@ const jsonObjectSchema = z.record(z.string(), z.unknown());
 const errorWithCodeSchema = z.object({
   code: z.string().optional(),
 }).passthrough();
+const SHARED_SKILL_MUTATION_POLL_MS = 250;
 let observabilityOtelModulePromise: Promise<typeof import("../observability/otel")> | null = null;
 let promptModulePromise: Promise<typeof import("../prompt")> | null = null;
 let agentSessionModule: typeof import("./session/AgentSession") | null = null;
@@ -355,10 +363,102 @@ export async function startAgentServer(
     },
   });
   const sessionBindings = new Map<string, SessionBinding>();
-  const workspaceControlBindings = new Map<string, SessionBinding>();
   const workspaceControlStateIds = new Map<string, string>();
+  const workspaceControlSubscribers = new Map<string, Map<string, Bun.ServerWebSocket<StartServerSocketData>>>();
+  const sharedSkillMutationSignalPath = resolveSharedSkillMutationSignalPath(config.userAgentDir);
   let workspaceBackupService: WorkspaceBackupService | null = null;
   let getAgentControl: () => AgentControl;
+  let serverStopped = false;
+  let sharedSkillMutationWatcher: fsSync.FSWatcher | null = null;
+  let sharedSkillMutationPollTimer: ReturnType<typeof setInterval> | null = null;
+  let lastSharedSkillMutationRevision: string | null = null;
+  let sharedSkillMutationRefreshLoop: Promise<void> | null = null;
+  let sharedSkillMutationRefreshQueued = false;
+
+  const refreshLocalSkillState = async ({
+    workingDirectory,
+    sourceSessionId,
+    allWorkspaces = false,
+  }: {
+    workingDirectory: string;
+    sourceSessionId?: string;
+    allWorkspaces?: boolean;
+  }) => {
+    await refreshSessionsForSkillMutation({
+      sessionBindings: sessionBindings.values(),
+      workspaceControlBindings: [],
+      workingDirectory,
+      sourceSessionId,
+      allWorkspaces,
+    });
+    try {
+      await emitWorkspaceControlRefreshNotifications({
+        workingDirectory,
+        allWorkspaces,
+      });
+    } catch {
+      // Best-effort only; explicit control refreshes remain available on demand.
+    }
+  };
+
+  const publishSharedSkillMutationSignal = async () => {
+    const signal = {
+      revision: crypto.randomUUID(),
+      pid: process.pid,
+      at: new Date().toISOString(),
+    };
+    lastSharedSkillMutationRevision = signal.revision;
+    await writeSharedSkillMutationSignal(sharedSkillMutationSignalPath, signal);
+  };
+
+  const applySharedSkillMutationSignal = async () => {
+    const signal = await readSharedSkillMutationSignal(sharedSkillMutationSignalPath);
+    if (!signal || signal.revision === lastSharedSkillMutationRevision) {
+      return;
+    }
+    lastSharedSkillMutationRevision = signal.revision;
+    if (signal.pid === process.pid) {
+      return;
+    }
+    await refreshLocalSkillState({
+      workingDirectory: config.workingDirectory,
+      allWorkspaces: true,
+    });
+  };
+
+  const scheduleSharedSkillMutationRefresh = () => {
+    if (serverStopped) {
+      return;
+    }
+    if (sharedSkillMutationRefreshLoop) {
+      sharedSkillMutationRefreshQueued = true;
+      return;
+    }
+    sharedSkillMutationRefreshLoop = (async () => {
+      do {
+        sharedSkillMutationRefreshQueued = false;
+        await applySharedSkillMutationSignal();
+      } while (sharedSkillMutationRefreshQueued && !serverStopped);
+    })().finally(() => {
+      sharedSkillMutationRefreshLoop = null;
+    });
+  };
+
+  await fs.mkdir(config.userAgentDir, { recursive: true });
+  lastSharedSkillMutationRevision = (await readSharedSkillMutationSignal(sharedSkillMutationSignalPath))?.revision ?? null;
+  try {
+    sharedSkillMutationWatcher = fsSync.watch(config.userAgentDir, () => {
+      if (serverStopped) {
+        return;
+      }
+      scheduleSharedSkillMutationRefresh();
+    });
+  } catch {
+    // Cross-process refresh remains best-effort when file watching is unavailable.
+  }
+  sharedSkillMutationPollTimer = setInterval(() => {
+    scheduleSharedSkillMutationRefresh();
+  }, SHARED_SKILL_MUTATION_POLL_MS);
 
   const getWorkspaceBackupService = (): WorkspaceBackupService => {
     if (workspaceBackupService) {
@@ -419,14 +519,27 @@ export async function startAgentServer(
     return created;
   };
 
-  const buildWorkspaceControlConfig = (cwd: string): AgentConfig => ({
-    ...config,
-    workingDirectory: cwd,
-  });
+  const loadWorkspaceControlConfig = async (cwd: string): Promise<AgentConfig> => {
+    const nextConfig = await loadConfig({ cwd, env, homedir: opts.homedir, builtInDir });
+    const providerOptions =
+      isPlainObject(opts.providerOptions) && isPlainObject(nextConfig.providerOptions)
+        ? deepMerge(
+            opts.providerOptions as Record<string, unknown>,
+            nextConfig.providerOptions as Record<string, unknown>
+          )
+        : isPlainObject(nextConfig.providerOptions)
+          ? nextConfig.providerOptions
+          : isPlainObject(opts.providerOptions)
+            ? opts.providerOptions
+            : undefined;
+    if (providerOptions) {
+      nextConfig.providerOptions = providerOptions;
+    }
+    return nextConfig;
+  };
 
-  const buildWorkspaceControlStateEventsFromConfig = (cwd: string): ServerEvent[] => {
-    const controlConfig = buildWorkspaceControlConfig(cwd);
-    const sessionId = getOrCreateWorkspaceControlStateId(cwd);
+  const buildWorkspaceControlStateEventsFromConfig = (controlConfig: AgentConfig): ServerEvent[] => {
+    const sessionId = getOrCreateWorkspaceControlStateId(controlConfig.workingDirectory);
     const providerOptions = pickEditableOpenAiCompatibleProviderOptions(controlConfig.providerOptions);
     const defaultBackupsEnabled = controlConfig.backupsEnabled ?? true;
     const defaultToolOutputOverflowChars = controlConfig.projectConfigOverrides?.toolOutputOverflowChars;
@@ -481,25 +594,14 @@ export async function startAgentServer(
     ];
   };
 
-  const getOrCreateWorkspaceControlBinding = (cwd: string): SessionBinding => {
-    const existing = workspaceControlBindings.get(cwd);
-    if (existing?.session) {
-      return existing;
-    }
-    const binding: SessionBinding = existing ?? {
-      session: null,
-      socket: null,
-      sinks: new Map(),
-    };
-    const built = buildSession(binding, undefined, {
-      config: buildWorkspaceControlConfig(cwd),
-    });
-    binding.session = built.session;
-    workspaceControlBindings.set(cwd, binding);
-    return binding;
-  };
-
-  const buildSessionCommon = (binding: SessionBinding, sessionKind: SessionKind = "root") => {
+  const buildSessionCommon = (
+    binding: SessionBinding,
+    sessionKind: SessionKind = "root",
+    currentConfig: AgentConfig = config,
+    syncConfig: (nextConfig: AgentConfig) => void = (nextConfig) => {
+      config = nextConfig;
+    },
+  ) => {
     const emit = (evt: ServerEvent) => {
       for (const sink of binding.sinks.values()) {
         try {
@@ -525,8 +627,9 @@ export async function startAgentServer(
             preferredChildModelRef?: string;
             allowedChildModelRefs?: string[];
           }) => {
-            await persistProjectConfigPatch(config.projectAgentDir, selection, config.providerOptions);
-            config = mergeConfigPatch(config, selection);
+            await persistProjectConfigPatch(currentConfig.projectAgentDir, selection, currentConfig.providerOptions);
+            currentConfig = mergeConfigPatch(currentConfig, selection);
+            syncConfig(currentConfig);
           }
         : undefined,
       persistProjectConfigPatchImpl: sessionKind === "root"
@@ -552,8 +655,9 @@ export async function startAgentServer(
             providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
           }
         ) => {
-            await persistProjectConfigPatch(config.projectAgentDir, patch, config.providerOptions);
-            config = mergeConfigPatch(config, patch);
+            await persistProjectConfigPatch(currentConfig.projectAgentDir, patch, currentConfig.providerOptions);
+            currentConfig = mergeConfigPatch(currentConfig, patch);
+            syncConfig(currentConfig);
           }
         : undefined,
       sessionDb,
@@ -648,17 +752,23 @@ export async function startAgentServer(
         }
         return "Skill mutations are blocked while another session in this workspace is running.";
       },
-      refreshSkillsAcrossWorkspaceSessionsImpl: async (workingDirectory: string) => {
-        const sessions = [...sessionBindings.values()]
-          .map((candidate) => candidate.session)
-          .filter((candidate): candidate is AgentSession =>
-            !!candidate && candidate.getWorkingDirectory() === workingDirectory
-          );
-        await Promise.all(
-          sessions.map(async (session) => {
-            await session.refreshSystemPromptWithSkills("skills.workspace_refresh");
-          }),
-        );
+      refreshSkillsAcrossWorkspaceSessionsImpl: async ({
+        workingDirectory,
+        sourceSessionId,
+        allWorkspaces = false,
+      }: {
+        workingDirectory: string;
+        sourceSessionId: string;
+        allWorkspaces?: boolean;
+      }) => {
+        await refreshLocalSkillState({
+          workingDirectory,
+          sourceSessionId,
+          allWorkspaces,
+        });
+        if (allWorkspaces) {
+          await publishSharedSkillMutationSignal();
+        }
       },
     };
   };
@@ -727,10 +837,13 @@ export async function startAgentServer(
     }
 
     const sessionKind = overrides?.sessionInfoPatch?.sessionKind ?? "root";
-    const common = buildSessionCommon(binding, sessionKind);
+    let sessionConfig = { ...(overrides?.config ?? config) };
+    const common = buildSessionCommon(binding, sessionKind, sessionConfig, (nextConfig) => {
+      sessionConfig = nextConfig;
+    });
     const { AgentSession } = loadAgentSessionModule();
     const session = new AgentSession({
-      config: { ...(overrides?.config ?? config) },
+      config: sessionConfig,
       system: overrides?.system ?? system,
       ...(overrides?.seedContext ? { seedContext: overrides.seedContext } : {}),
       ...(overrides?.sessionInfoPatch ? { sessionInfoPatch: overrides.sessionInfoPatch } : {}),
@@ -805,6 +918,124 @@ export async function startAgentServer(
   const shouldSendJsonRpcNotification = (ws: Bun.ServerWebSocket<StartServerSocketData>, method: string) => (
     !ws.data.rpc?.capabilities.optOutNotificationMethods.includes(method)
   );
+
+  const registerWorkspaceControlSubscriber = (
+    ws: Bun.ServerWebSocket<StartServerSocketData>,
+    cwd: string,
+  ) => {
+    const connectionId = ws.data.connectionId;
+    if (!connectionId) {
+      return;
+    }
+    const subscribers = workspaceControlSubscribers.get(cwd) ?? new Map<string, Bun.ServerWebSocket<StartServerSocketData>>();
+    subscribers.set(connectionId, ws);
+    workspaceControlSubscribers.set(cwd, subscribers);
+  };
+
+  const removeWorkspaceControlSubscriber = (
+    ws: Bun.ServerWebSocket<StartServerSocketData>,
+  ) => {
+    const connectionId = ws.data.connectionId;
+    if (!connectionId) {
+      return;
+    }
+    for (const [cwd, subscribers] of workspaceControlSubscribers) {
+      subscribers.delete(connectionId);
+      if (subscribers.size === 0) {
+        workspaceControlSubscribers.delete(cwd);
+      }
+    }
+  };
+
+  const notifyWorkspaceControlSubscribers = (
+    cwd: string,
+    event: Extract<ServerEvent, { type: "skills_list" | "skills_catalog" | "plugins_catalog" | "mcp_servers" }>,
+  ) => {
+    const subscribers = workspaceControlSubscribers.get(cwd);
+    if (!subscribers || subscribers.size === 0) {
+      return;
+    }
+    for (const ws of subscribers.values()) {
+      if (!shouldSendJsonRpcNotification(ws, "cowork/control/event")) {
+        continue;
+      }
+      sendJsonRpc(ws, {
+        method: "cowork/control/event",
+        params: event,
+      });
+    }
+  };
+
+  const readWorkspaceControlRefreshEvents = async (
+    cwd: string,
+  ): Promise<Array<Extract<ServerEvent, { type: "skills_list" | "skills_catalog" | "plugins_catalog" | "mcp_servers" }>>> => {
+    const subscribers = workspaceControlSubscribers.get(cwd);
+    if (!subscribers || subscribers.size === 0) {
+      return [];
+    }
+    const binding = await getOrCreateWorkspaceControlBinding(cwd);
+    if (!binding.session) {
+      return [];
+    }
+    const captureRefreshEvent = async <T extends ServerEvent>(
+      action: () => Promise<void>,
+      predicate: (event: ServerEvent) => event is T,
+    ): Promise<T | null> => {
+      try {
+        return await sessionEventCapture.capture(binding, action, predicate);
+      } catch {
+        return null;
+      }
+    };
+    try {
+      const session = binding.session;
+      const events = [
+        await captureRefreshEvent(
+          async () => await session.listSkills(),
+          (event): event is Extract<ServerEvent, { type: "skills_list" }> => event.type === "skills_list",
+        ),
+        await captureRefreshEvent(
+          async () => await session.getSkillsCatalog(),
+          (event): event is Extract<ServerEvent, { type: "skills_catalog" }> => event.type === "skills_catalog",
+        ),
+        await captureRefreshEvent(
+          async () => await session.getPluginsCatalog(),
+          (event): event is Extract<ServerEvent, { type: "plugins_catalog" }> => event.type === "plugins_catalog",
+        ),
+        await captureRefreshEvent(
+          async () => await session.emitMcpServers(),
+          (event): event is Extract<ServerEvent, { type: "mcp_servers" }> => event.type === "mcp_servers",
+        ),
+      ];
+      return events.filter(
+        (
+          event,
+        ): event is Extract<ServerEvent, { type: "skills_list" | "skills_catalog" | "plugins_catalog" | "mcp_servers" }> => (
+          event !== null
+        ),
+      );
+    } finally {
+      disposeBinding(binding, `workspace control refresh capture completed for ${cwd}`);
+    }
+  };
+
+  const emitWorkspaceControlRefreshNotifications = async ({
+    workingDirectory,
+    allWorkspaces = false,
+  }: {
+    workingDirectory: string;
+    allWorkspaces?: boolean;
+  }) => {
+    const targetWorkspaces = allWorkspaces
+      ? [...workspaceControlSubscribers.keys()]
+      : [workingDirectory];
+    for (const cwd of targetWorkspaces) {
+      const events = await readWorkspaceControlRefreshEvents(cwd);
+      for (const event of events) {
+        notifyWorkspaceControlSubscribers(cwd, event);
+      }
+    }
+  };
 
   const enqueueThreadJournalEvent = (event: {
     threadId: string;
@@ -926,24 +1157,37 @@ export async function startAgentServer(
     extractTextInput: extractJsonRpcTextInput,
   });
 
+  const getOrCreateWorkspaceControlBinding = async (cwd: string): Promise<SessionBinding> => {
+    const binding: SessionBinding = {
+      session: null,
+      socket: null,
+      sinks: new Map(),
+    };
+    const built = buildSession(binding, undefined, {
+      config: await loadWorkspaceControlConfig(cwd),
+    });
+    binding.session = built.session;
+    return binding;
+  };
+
   const withWorkspaceControlSession = async <T>(
     cwd: string,
     runner: (binding: SessionBinding, session: AgentSession) => Promise<T>,
   ): Promise<T> => {
-    const binding = getOrCreateWorkspaceControlBinding(cwd);
+    const binding = await getOrCreateWorkspaceControlBinding(cwd);
     if (!binding.session) {
       throw new Error(`Unable to create workspace control session for ${cwd}`);
     }
-    return await runner(binding, binding.session);
+    try {
+      return await runner(binding, binding.session);
+    } finally {
+      disposeBinding(binding, `workspace control request completed for ${cwd}`);
+    }
   };
 
-  const readWorkspaceControlState = (cwd: string): ServerEvent[] => {
-    const existing = workspaceControlBindings.get(cwd)?.session;
-    if (existing) {
-      return buildControlSessionStateEvents(existing);
-    }
-    return buildWorkspaceControlStateEventsFromConfig(cwd);
-  };
+  const readWorkspaceControlState = async (cwd: string): Promise<ServerEvent[]> => (
+    buildWorkspaceControlStateEventsFromConfig(await loadWorkspaceControlConfig(cwd))
+  );
 
   const jsonRpcRequestRouter = createJsonRpcRequestRouter({
     getConfig: () => config,
@@ -966,9 +1210,9 @@ export async function startAgentServer(
       readSnapshot: (threadId) => readThreadSnapshot(threadId),
     },
     workspaceControl: {
-      getOrCreateBinding: (cwd) => getOrCreateWorkspaceControlBinding(cwd),
+      getOrCreateBinding: async (cwd) => await getOrCreateWorkspaceControlBinding(cwd),
       withSession: async (cwd, runner) => await withWorkspaceControlSession(cwd, runner),
-      readState: (cwd) => readWorkspaceControlState(cwd),
+      readState: async (cwd) => await readWorkspaceControlState(cwd),
     },
     journal: {
       enqueue: async (event) => await enqueueThreadJournalEvent(event),
@@ -979,6 +1223,7 @@ export async function startAgentServer(
     events: {
       capture: sessionEventCapture.capture,
       captureMutationOutcome: sessionEventCapture.captureMutationOutcome,
+      captureMutationEvents: sessionEventCapture.captureMutationEvents,
     },
     jsonrpc: {
       send: (ws, payload) => sendJsonRpc(ws, payload),
@@ -1001,6 +1246,14 @@ export async function startAgentServer(
     ws: Bun.ServerWebSocket<StartServerSocketData>,
     message: { id: string | number; method: string; params?: unknown },
   ) => {
+    const params = isPlainObject(message.params) ? message.params : undefined;
+    if (params) {
+      try {
+        registerWorkspaceControlSubscriber(ws, requireWorkspacePath(params, message.method, config.workingDirectory));
+      } catch {
+        // Ignore non-workspace-control requests that do not resolve a cwd.
+      }
+    }
     await jsonRpcRequestRouter(ws, message);
   };
 
@@ -1056,6 +1309,7 @@ export async function startAgentServer(
           );
         },
         close(ws) {
+          removeWorkspaceControlSubscriber(ws);
           jsonRpcTransport.closeConnection(ws);
         },
       },
@@ -1099,11 +1353,20 @@ export async function startAgentServer(
 
   const server = serveWithPortFallback(requestedPort);
   const originalStop = server.stop.bind(server) as (closeActiveConnections?: boolean) => Promise<void>;
-  let serverStopped = false;
   const stoppableServer = server as typeof server & { stop: (closeActiveConnections?: boolean) => Promise<void> };
   stoppableServer.stop = async (closeActiveConnections?: boolean) => {
     if (serverStopped) return;
     serverStopped = true;
+    try {
+      sharedSkillMutationWatcher?.close();
+    } catch {
+      // ignore
+    }
+    if (sharedSkillMutationPollTimer) {
+      clearInterval(sharedSkillMutationPollTimer);
+      sharedSkillMutationPollTimer = null;
+    }
+    workspaceControlSubscribers.clear();
     // Dispose all active sessions to abort running turns and close MCP child processes.
     const persistenceFlushes: Promise<void>[] = [];
     for (const [id, binding] of sessionBindings) {

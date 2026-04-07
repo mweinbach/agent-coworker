@@ -520,7 +520,15 @@ export async function startAgentServer(
   };
 
   const loadWorkspaceControlConfig = async (cwd: string): Promise<AgentConfig> => {
-    const nextConfig = await loadConfig({ cwd, env, homedir: opts.homedir, builtInDir });
+    const nextConfig = await loadConfig({
+      cwd,
+      env: {
+        ...env,
+        AGENT_WORKING_DIR: cwd,
+      },
+      homedir: opts.homedir,
+      builtInDir,
+    });
     const providerOptions =
       isPlainObject(opts.providerOptions) && isPlainObject(nextConfig.providerOptions)
         ? deepMerge(

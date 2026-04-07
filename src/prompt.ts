@@ -39,6 +39,10 @@ type PromptTemplateOverlaySpec = {
   replacements?: Array<{ old: string; new: string }>;
 };
 
+function normalizePromptTemplateNewlines(value: string): string {
+  return value.replace(/\r\n?/g, "\n");
+}
+
 function countOccurrences(haystack: string, needle: string): number {
   if (!needle) return 0;
   let count = 0;
@@ -92,7 +96,7 @@ async function loadPromptTemplate(templatePath: string, ancestors = new Set<stri
     throw new Error(`Prompt template overlay cycle detected at ${resolvedTemplatePath}`);
   }
 
-  const raw = await fs.readFile(resolvedTemplatePath, "utf-8");
+  const raw = normalizePromptTemplateNewlines(await fs.readFile(resolvedTemplatePath, "utf-8"));
   if (!resolvedTemplatePath.endsWith(".json")) {
     return raw;
   }

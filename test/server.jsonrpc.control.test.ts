@@ -560,6 +560,7 @@ describe("server JSON-RPC control methods", () => {
 
       expect(stateResponse.result.events[0]?.config?.provider).toBe("openai");
       expect(stateResponse.result.events[0]?.config?.model).toBe("gpt-5.4");
+      expect(stateResponse.result.events[0]?.config?.workingDirectory).toBe(targetWorkspace);
       expect(stateResponse.result.events[1]?.enableMcp).toBe(false);
       expect(stateResponse.result.events[2]?.config?.enableMemory).toBe(false);
 
@@ -574,6 +575,55 @@ describe("server JSON-RPC control methods", () => {
       const targetConfig = JSON.parse(await fs.readFile(`${targetWorkspace}/.agent/config.json`, "utf-8"));
       expect(targetConfig.enableMemory).toBe(true);
       await expect(fs.readFile(`${serverRoot}/.agent/config.json`, "utf-8")).rejects.toBeDefined();
+
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("workspace control skill installs resolve relative sources from the request cwd", async () => {
+    const serverRoot = await makeTmpProject("agent-harness-server-skill-root-");
+    const targetWorkspace = await makeTmpProject("agent-harness-target-skill-root-");
+    const sourceRoot = `${targetWorkspace}/skill-source/example-skill`;
+    await fs.mkdir(sourceRoot, { recursive: true });
+    await fs.writeFile(
+      `${sourceRoot}/SKILL.md`,
+      [
+        "---",
+        "name: example-skill",
+        "description: Example skill",
+        "---",
+        "",
+        "# Example skill",
+      ].join("\n"),
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(serverRoot));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const response = await rpc.request("cowork/skills/install", {
+        cwd: targetWorkspace,
+        sourceInput: "skill-source/example-skill",
+        targetScope: "project",
+      });
+
+      expect(response.result.event).toEqual(
+        expect.objectContaining({
+          type: "skills_catalog",
+          catalog: expect.objectContaining({
+            installations: expect.arrayContaining([
+              expect.objectContaining({
+                name: "example-skill",
+                scope: "project",
+              }),
+            ]),
+          }),
+        }),
+      );
+      await expect(fs.stat(`${targetWorkspace}/.agent/skills/example-skill/SKILL.md`)).resolves.toBeDefined();
+      await expect(fs.stat(`${serverRoot}/.agent/skills/example-skill/SKILL.md`)).rejects.toBeDefined();
 
       rpc.close();
     } finally {

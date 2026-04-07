@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-
 import type { AgentConfig, PluginCatalogEntry, PluginCatalogSnapshot, PluginScope } from "../types";
 import { discoverPlugins, type DiscoveredPluginCandidate } from "./discovery";
 import {
@@ -8,7 +6,7 @@ import {
   readPluginManifest,
   readPluginSkillSummaries,
 } from "./manifest";
-import { parsePluginMcpDocument } from "./mcp";
+import { readPluginMcpServers } from "./mcp";
 import { isPluginEnabled, isPluginSkillEnabled, readPluginOverrides } from "./overrides";
 
 function resolvePluginScope(config: AgentConfig, pluginRoot: string): PluginScope {
@@ -18,13 +16,21 @@ function resolvePluginScope(config: AgentConfig, pluginRoot: string): PluginScop
   return "user";
 }
 
-async function readPluginMcpServerNames(mcpPath: string | undefined): Promise<string[]> {
-  if (!mcpPath) return [];
+async function readPluginMcpSummary(
+  mcpPath: string | undefined,
+): Promise<{ serverNames: string[]; warning?: string }> {
+  if (!mcpPath) {
+    return { serverNames: [] };
+  }
   try {
-    const raw = await fs.readFile(mcpPath, "utf-8");
-    return parsePluginMcpDocument(raw, mcpPath).servers.map((server) => server.name);
-  } catch {
-    return [];
+    return {
+      serverNames: (await readPluginMcpServers(mcpPath)).map((server) => server.name),
+    };
+  } catch (error) {
+    return {
+      serverNames: [],
+      warning: `[plugins] Invalid or unreadable bundled MCP config at ${mcpPath}: ${String(error)}`,
+    };
   }
 }
 
@@ -83,6 +89,7 @@ export async function buildPluginCatalogSnapshot(config: AgentConfig): Promise<P
         ...skill,
         warnings: [...skill.warnings],
       }));
+      const mcpSummary = await readPluginMcpSummary(manifest.mcpPath);
       const entry = buildPluginCatalogEntry({
         pluginId: manifest.name,
         pluginManifest: manifest,
@@ -93,9 +100,12 @@ export async function buildPluginCatalogSnapshot(config: AgentConfig): Promise<P
           ...skill,
           warnings: [...skill.warnings],
         })),
-        mcpServers: await readPluginMcpServerNames(manifest.mcpPath),
+        mcpServers: mcpSummary.serverNames,
         apps: await readPluginAppSummaries(manifest.appPath),
-        warnings: entryWarnings(candidate, skillWarnings),
+        warnings: entryWarnings(candidate, [
+          ...skillWarnings,
+          ...(mcpSummary.warning ? [mcpSummary.warning] : []),
+        ]),
         ...(candidate.marketplace
           ? {
               marketplace: {

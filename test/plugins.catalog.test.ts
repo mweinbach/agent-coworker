@@ -685,6 +685,39 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
+  test("plugin catalog surfaces warnings for invalid bundled MCP manifests on installed plugins", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-installed-mcp-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-installed-mcp-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-installed-mcp-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "figma-toolkit");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "figma-toolkit",
+          description: "Broken MCP plugin",
+          mcpServers: "./missing.mcp.json",
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const catalog = await buildPluginCatalogSnapshot(config);
+      expect(catalog.plugins).toHaveLength(1);
+      expect(catalog.plugins[0]?.mcpServers).toEqual([]);
+      expect(catalog.plugins[0]?.warnings).toEqual([
+        expect.stringContaining("Invalid or unreadable bundled MCP config"),
+      ]);
+      expect(catalog.plugins[0]?.warnings[0]).toContain("missing.mcp.json");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("plugin install preview and install reject sources with invalid bundled skills", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-skill-source-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-skill-source-home-"));

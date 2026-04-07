@@ -969,7 +969,10 @@ export async function startAgentServer(
       }
       sendJsonRpc(ws, {
         method: "cowork/control/event",
-        params: event,
+        params: {
+          cwd,
+          ...event,
+        },
       });
     }
   };

@@ -488,6 +488,7 @@ describe("server JSON-RPC control methods", () => {
       const notification = await subscriber.waitFor(
         (message) => message.method === "cowork/control/event" && message.params?.type === "skills_catalog",
       );
+      expect(notification.params.cwd).toBe(tmpDir);
       expect(notification.params.catalog.installations).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -577,6 +578,66 @@ describe("server JSON-RPC control methods", () => {
       await expect(fs.readFile(`${serverRoot}/.agent/config.json`, "utf-8")).rejects.toBeDefined();
 
       rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("shared control notifications include the workspace cwd for sockets subscribed to multiple workspaces", async () => {
+    const workspaceA = await makeTmpProject("agent-harness-plugin-notify-a-");
+    const workspaceB = await makeTmpProject("agent-harness-plugin-notify-b-");
+    const sourceRoot = `${workspaceB}/skill-source/example-skill`;
+    await fs.mkdir(sourceRoot, { recursive: true });
+    await fs.writeFile(
+      `${sourceRoot}/SKILL.md`,
+      [
+        "---",
+        "name: example-skill",
+        "description: Example skill",
+        "---",
+        "",
+        "# Example skill",
+      ].join("\n"),
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(workspaceA));
+
+    try {
+      const subscriber = await connectJsonRpc(url);
+      const mutator = await connectJsonRpc(url);
+
+      await subscriber.request("cowork/plugins/catalog/read", {
+        cwd: workspaceA,
+      });
+      await subscriber.request("cowork/plugins/catalog/read", {
+        cwd: workspaceB,
+      });
+
+      const installResponse = await mutator.request("cowork/skills/install", {
+        cwd: workspaceB,
+        sourceInput: sourceRoot,
+        targetScope: "global",
+      });
+      expect(installResponse.error).toBeUndefined();
+
+      const workspaceANotification = await subscriber.waitFor(
+        (message) =>
+          message.method === "cowork/control/event"
+          && message.params?.type === "skills_catalog"
+          && message.params?.cwd === workspaceA,
+      );
+      expect(workspaceANotification.params.cwd).toBe(workspaceA);
+
+      const workspaceBNotification = await subscriber.waitFor(
+        (message) =>
+          message.method === "cowork/control/event"
+          && message.params?.type === "skills_catalog"
+          && message.params?.cwd === workspaceB,
+      );
+      expect(workspaceBNotification.params.cwd).toBe(workspaceB);
+
+      subscriber.close();
+      mutator.close();
     } finally {
       await stopTestServer(server);
     }

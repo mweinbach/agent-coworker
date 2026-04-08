@@ -108,9 +108,21 @@ function normalizeLocalPluginSourceRoot(absolutePath: string, isFile: boolean): 
 
 async function discoverPluginRoots(rootDir: string): Promise<string[]> {
   const found = new Set<string>();
+  const visited = new Set<string>();
 
   async function visit(dir: string): Promise<void> {
-    let dirents: Array<{ name: string; isDirectory: () => boolean }>;
+    let canonicalDir: string;
+    try {
+      canonicalDir = await fs.realpath(dir);
+    } catch {
+      canonicalDir = path.resolve(dir);
+    }
+    if (visited.has(canonicalDir)) {
+      return;
+    }
+    visited.add(canonicalDir);
+
+    let dirents: Array<import("node:fs").Dirent>;
     try {
       dirents = await fs.readdir(dir, { withFileTypes: true, encoding: "utf8" });
     } catch {
@@ -128,10 +140,23 @@ async function discoverPluginRoots(rootDir: string): Promise<string[]> {
     }
 
     for (const dirent of dirents) {
-      if (!dirent.isDirectory()) {
+      const childPath = path.join(dir, dirent.name);
+      if (dirent.isDirectory()) {
+        await visit(childPath);
         continue;
       }
-      await visit(path.join(dir, dirent.name));
+      if (!dirent.isSymbolicLink()) {
+        continue;
+      }
+      try {
+        const stat = await fs.stat(childPath);
+        if (!stat.isDirectory()) {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      await visit(childPath);
     }
   }
 

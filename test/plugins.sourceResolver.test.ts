@@ -350,4 +350,43 @@ describe("plugin local source materialization", () => {
       await fs.rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test("follows symlinked plugin bundles from the same local source", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-local-symlink-source-"));
+
+    try {
+      const linkedSourceRoot = path.join(workspace, "bundle");
+      const realPluginRoot = path.join(workspace, "linked-plugin-target");
+      const linkedPluginRoot = path.join(linkedSourceRoot, "plugins", "demo-plugin");
+
+      await fs.mkdir(path.join(realPluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.mkdir(path.join(realPluginRoot, "skills", "demo"), { recursive: true });
+      await fs.writeFile(path.join(realPluginRoot, ".codex-plugin", "plugin.json"), pluginManifest(), "utf-8");
+      await fs.writeFile(
+        path.join(realPluginRoot, "skills", "demo", "SKILL.md"),
+        skillDoc("demo", "Demo skill."),
+        "utf-8",
+      );
+
+      await fs.mkdir(path.dirname(linkedPluginRoot), { recursive: true });
+      await fs.symlink(
+        realPluginRoot,
+        linkedPluginRoot,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+
+      const preview = await buildPluginInstallPreview({
+        input: linkedSourceRoot,
+        targetScope: "workspace",
+        catalog: emptyCatalog,
+      });
+
+      expect(preview.warnings).toEqual([]);
+      expect(preview.candidates).toHaveLength(1);
+      expect(preview.candidates[0]?.pluginId).toBe("demo-plugin");
+      expect(preview.candidates[0]?.diagnostics).toEqual([]);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
 });

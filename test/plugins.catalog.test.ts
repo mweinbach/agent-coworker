@@ -554,6 +554,59 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
+  test("plugin catalogs and discovers bundled skill directories through in-root symlinks", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-symlink-skills-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-symlink-skills-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-symlink-skills-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "symlink-skills");
+      const actualSkillRoot = path.join(pluginRoot, "shared", "import-frame");
+      const linkedSkillsDir = path.join(pluginRoot, "skills");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.mkdir(actualSkillRoot, { recursive: true });
+      await fs.mkdir(linkedSkillsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "symlink-skills",
+          description: "Plugin with symlinked bundled skills",
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(actualSkillRoot, "SKILL.md"),
+        [
+          "---",
+          "name: import-frame",
+          "description: Import a frame",
+          "---",
+          "",
+          "# Import frame",
+        ].join("\n"),
+        "utf-8",
+      );
+      await fs.symlink(
+        actualSkillRoot,
+        path.join(linkedSkillsDir, "import-frame"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+
+      const catalog = await buildPluginCatalogSnapshot(config);
+      const plugin = catalog.plugins.find((entry) => entry.id === "symlink-skills");
+      expect(plugin?.warnings).toEqual([]);
+      expect(plugin?.skills.map((skill) => skill.name)).toEqual(["symlink-skills:import-frame"]);
+
+      const discoveredSkills = await discoverSkillsForConfig(config);
+      expect(discoveredSkills.map((skill) => skill.name)).toContain("symlink-skills:import-frame");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("readPluginManifest rejects MCP and app paths outside the plugin root", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-manifest-bounds-"));
     const pluginRoot = path.join(tempRoot, "plugin");

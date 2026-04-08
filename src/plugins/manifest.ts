@@ -421,9 +421,10 @@ export async function readPluginManifest(pluginRoot: string): Promise<PluginMani
 
 async function readPluginSkillDirents(pluginManifest: PluginManifest): Promise<Array<{ skillsPath: string; name: string }>> {
   const dirents: Array<{ skillsPath: string; name: string }> = [];
+  const canonicalPluginRoot = await canonicalizePathForBoundaryCheck(pluginManifest.rootDir);
 
   for (const skillsPath of pluginManifest.skillsPaths) {
-    let entries: Array<{ name: string; isDirectory: () => boolean }> = [];
+    let entries: Array<import("node:fs").Dirent> = [];
     try {
       entries = await fs.readdir(skillsPath, { withFileTypes: true, encoding: "utf8" });
     } catch {
@@ -431,7 +432,20 @@ async function readPluginSkillDirents(pluginManifest: PluginManifest): Promise<A
     }
 
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      if (entry.isDirectory()) {
+        dirents.push({ skillsPath, name: entry.name });
+        continue;
+      }
+      if (!entry.isSymbolicLink()) continue;
+      const skillRoot = path.join(skillsPath, entry.name);
+      try {
+        const stat = await fs.stat(skillRoot);
+        if (!stat.isDirectory()) continue;
+        const canonicalSkillRoot = await canonicalizePathForBoundaryCheck(skillRoot);
+        if (!isPathInside(canonicalPluginRoot, canonicalSkillRoot)) continue;
+      } catch {
+        continue;
+      }
       dirents.push({ skillsPath, name: entry.name });
     }
   }

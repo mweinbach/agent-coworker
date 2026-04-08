@@ -294,6 +294,52 @@ describe("mcp config registry", () => {
     }
   });
 
+  test("plugin MCP stdio transports reject absolute cwd paths outside the plugin root", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-absolute-cwd-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-absolute-cwd-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-absolute-cwd-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "absolute-cwd-toolkit");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "absolute-cwd-toolkit",
+          description: "Plugin absolute cwd helpers",
+          interface: { displayName: "Absolute Cwd Toolkit" },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".mcp.json"),
+        `${JSON.stringify({
+          mcpServers: {
+            escapedServer: {
+              type: "stdio",
+              command: "node",
+              cwd: os.tmpdir(),
+            },
+          },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const snapshot = await loadMCPConfigRegistry(config);
+
+      expect(snapshot.servers.find((entry) => entry.name === "escapedServer")).toBeUndefined();
+      expect(snapshot.warnings).toEqual([
+        expect.stringContaining("Ignoring malformed plugin MCP config"),
+      ]);
+      expect(snapshot.warnings[0]).toContain("resolves cwd outside the plugin root");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("plugin MCP stdio transports reject symlinked paths that escape the plugin root", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-symlink-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-symlink-home-"));

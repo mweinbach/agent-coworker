@@ -62,6 +62,15 @@ async function removeConflictingTargets(targetRoots: string[]): Promise<void> {
   }
 }
 
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.stat(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function copyPluginRoot(sourceRoot: string, destinationRoot: string): Promise<void> {
   await fs.mkdir(path.dirname(destinationRoot), { recursive: true });
   await fs.cp(sourceRoot, destinationRoot, {
@@ -92,6 +101,70 @@ async function stageCopySourceIfNeeded(
       await fs.rm(stageDir, { recursive: true, force: true });
     },
   };
+}
+
+async function stagePluginInstallCopy(
+  sourceRoot: string,
+  destinationRoot: string,
+): Promise<{ stagedRoot: string; cleanup: () => Promise<void> }> {
+  const parentDir = path.dirname(destinationRoot);
+  const destinationName = path.basename(destinationRoot);
+  await fs.mkdir(parentDir, { recursive: true });
+  const stageDir = await fs.mkdtemp(path.join(parentDir, `${destinationName}.incoming-`));
+  const stagedRoot = path.join(stageDir, destinationName);
+  try {
+    await copyPluginRoot(sourceRoot, stagedRoot);
+  } catch (error) {
+    await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+  return {
+    stagedRoot,
+    cleanup: async () => {
+      await fs.rm(stageDir, { recursive: true, force: true });
+    },
+  };
+}
+
+async function replaceInstalledPlugin(opts: {
+  sourceRoot: string;
+  destinationRoot: string;
+  conflictingRoots: string[];
+  onInstalled: () => Promise<void>;
+}): Promise<void> {
+  const stagedInstall = await stagePluginInstallCopy(opts.sourceRoot, opts.destinationRoot);
+  let backupRoot: string | null = null;
+  let destinationActivated = false;
+
+  try {
+    if (await pathExists(opts.destinationRoot)) {
+      backupRoot = `${opts.destinationRoot}.backup-${crypto.randomUUID()}`;
+      await fs.rename(opts.destinationRoot, backupRoot);
+    }
+
+    await fs.rename(stagedInstall.stagedRoot, opts.destinationRoot);
+    destinationActivated = true;
+
+    await opts.onInstalled();
+    await removeConflictingTargets(
+      opts.conflictingRoots.filter((targetRoot) => targetRoot !== opts.destinationRoot),
+    );
+
+    if (backupRoot) {
+      await fs.rm(backupRoot, { recursive: true, force: true });
+      backupRoot = null;
+    }
+  } catch (error) {
+    if (destinationActivated) {
+      await fs.rm(opts.destinationRoot, { recursive: true, force: true }).catch(() => {});
+    }
+    if (backupRoot) {
+      await fs.rename(backupRoot, opts.destinationRoot).catch(() => {});
+    }
+    throw error;
+  } finally {
+    await stagedInstall.cleanup().catch(() => {});
+  }
 }
 
 async function refreshCatalog(config: AgentConfig): Promise<PluginCatalogSnapshot> {
@@ -253,13 +326,18 @@ export async function installPluginsFromSource(opts: {
         targetRoots,
       );
       try {
-        await removeConflictingTargets(targetRoots);
-        await copyPluginRoot(stagedSource.sourceRoot, destinationRoot);
-        await migrateBundledPluginMcpCredentials({
-          config: opts.config,
-          targetScope: opts.targetScope,
-          previousServers,
-          nextServers: await readBundledPluginMcpServers(destinationRoot),
+        await replaceInstalledPlugin({
+          sourceRoot: stagedSource.sourceRoot,
+          destinationRoot,
+          conflictingRoots: targetRoots,
+          onInstalled: async () => {
+            await migrateBundledPluginMcpCredentials({
+              config: opts.config,
+              targetScope: opts.targetScope,
+              previousServers,
+              nextServers: await readBundledPluginMcpServers(destinationRoot),
+            });
+          },
         });
       } finally {
         await stagedSource.cleanup();

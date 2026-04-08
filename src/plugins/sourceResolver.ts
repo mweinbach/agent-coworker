@@ -122,7 +122,6 @@ async function discoverPluginRoots(rootDir: string): Promise<string[]> {
       const stat = await fs.stat(manifestPath);
       if (stat.isFile()) {
         found.add(dir);
-        return;
       }
     } catch {
       // continue searching descendants

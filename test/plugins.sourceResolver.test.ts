@@ -307,4 +307,47 @@ describe("plugin local source materialization", () => {
       await fs.rm(workspace, { recursive: true, force: true });
     }
   });
+
+  test("surfaces nested plugin bundles from the same local source", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-local-nested-source-"));
+
+    try {
+      const sourceRoot = path.join(workspace, "bundle");
+      const outerPluginRoot = sourceRoot;
+      const innerPluginRoot = path.join(sourceRoot, "packages", "inner-plugin");
+
+      await fs.mkdir(path.join(outerPluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.mkdir(path.join(outerPluginRoot, "skills", "outer"), { recursive: true });
+      await fs.writeFile(path.join(outerPluginRoot, ".codex-plugin", "plugin.json"), pluginManifest("outer-plugin"), "utf-8");
+      await fs.writeFile(
+        path.join(outerPluginRoot, "skills", "outer", "SKILL.md"),
+        skillDoc("outer", "Outer skill."),
+        "utf-8",
+      );
+
+      await fs.mkdir(path.join(innerPluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.mkdir(path.join(innerPluginRoot, "skills", "inner"), { recursive: true });
+      await fs.writeFile(path.join(innerPluginRoot, ".codex-plugin", "plugin.json"), pluginManifest("inner-plugin"), "utf-8");
+      await fs.writeFile(
+        path.join(innerPluginRoot, "skills", "inner", "SKILL.md"),
+        skillDoc("inner", "Inner skill."),
+        "utf-8",
+      );
+
+      const preview = await buildPluginInstallPreview({
+        input: sourceRoot,
+        targetScope: "workspace",
+        catalog: emptyCatalog,
+        cwd: workspace,
+      });
+
+      expect(preview.warnings).toEqual([]);
+      expect(preview.candidates.map((candidate) => candidate.pluginId)).toEqual([
+        "outer-plugin",
+        "inner-plugin",
+      ]);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
 });

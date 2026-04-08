@@ -140,11 +140,7 @@ function rebasePluginLocalTransport(server: MCPServerConfig, pluginRootDir: stri
       ? resolvePluginLocalPath(server.name, pluginRootDir, arg, `argument "${arg}"`)
       : arg);
   const cwd = server.transport.cwd
-    ? (
-        isAbsoluteFilesystemPath(server.transport.cwd)
-          ? server.transport.cwd
-          : resolvePluginLocalPath(server.name, pluginRootDir, server.transport.cwd, "cwd")
-      )
+    ? resolvePluginLocalPath(server.name, pluginRootDir, server.transport.cwd, "cwd")
     : undefined;
 
   return {

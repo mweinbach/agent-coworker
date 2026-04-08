@@ -213,6 +213,40 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
+  test("installPluginsFromSource preserves the existing install when the replacement copy fails", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-atomic-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-atomic-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-atomic-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+    const unreadablePath = path.join(workspace, "plugin-source", "figma-toolkit", "secret.bin");
+
+    try {
+      const installedPluginRoot = path.join(workspace, ".agents", "plugins", "figma-toolkit");
+      const sourceRoot = path.join(workspace, "plugin-source", "figma-toolkit");
+      await writePlugin(installedPluginRoot, "Existing Figma Toolkit", "Existing plugin");
+      await writePlugin(sourceRoot, "Replacement Figma Toolkit", "Replacement plugin");
+      await fs.writeFile(unreadablePath, "secret\n", "utf-8");
+      await fs.chmod(unreadablePath, 0o000);
+
+      await expect(installPluginsFromSource({
+        config,
+        input: sourceRoot,
+        targetScope: "workspace",
+      })).rejects.toThrow();
+
+      const installedManifest = JSON.parse(
+        await fs.readFile(path.join(installedPluginRoot, ".codex-plugin", "plugin.json"), "utf-8"),
+      ) as { description?: string; interface?: { displayName?: string } };
+      expect(installedManifest.description).toBe("Existing plugin");
+      expect(installedManifest.interface?.displayName).toBe("Existing Figma Toolkit");
+    } finally {
+      await fs.chmod(unreadablePath, 0o644).catch(() => {});
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("installPluginsFromSource removes same-scope marketplace copies before installing", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-marketplace-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-marketplace-home-"));

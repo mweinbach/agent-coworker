@@ -326,6 +326,10 @@ export const mcpServersEventSchema = z.object({
     legacy: z.boolean(),
     parseError: z.string().optional(),
     serverCount: z.number().int().nonnegative(),
+    pluginId: z.string().optional(),
+    pluginName: z.string().optional(),
+    pluginDisplayName: z.string().optional(),
+    pluginScope: z.enum(["workspace", "user"]).optional(),
   }).strict()),
   warnings: z.array(z.string()).optional(),
 }).passthrough();

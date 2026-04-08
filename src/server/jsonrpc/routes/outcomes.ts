@@ -7,6 +7,10 @@ import type { JsonRpcRouteContext } from "./types";
 
 export type JsonRpcSessionError = Extract<ServerEvent, { type: "error" }>;
 export type JsonRpcSessionOutcome<T extends ServerEvent> = T | JsonRpcSessionError;
+export type MutationEventCaptureOptions = {
+  timeoutMs?: number;
+  idleMs?: number;
+};
 
 function isOutcomeEvent<T extends ServerEvent>(
   context: JsonRpcRouteContext,
@@ -68,11 +72,14 @@ export async function captureBindingMutationEvents<T extends ServerEvent>(
   binding: SessionBinding,
   action: () => Promise<void> | void,
   predicate: (event: ServerEvent) => event is T,
+  options?: MutationEventCaptureOptions,
 ): Promise<JsonRpcSessionOutcome<T>[]> {
   return await context.events.captureMutationEvents(
     binding,
     async () => await action(),
     isOutcomeEvent(context, predicate),
+    options?.timeoutMs,
+    options?.idleMs,
   );
 }
 
@@ -124,9 +131,10 @@ export async function captureWorkspaceControlMutationEvents<T extends ServerEven
   cwd: string,
   action: (session: AgentSession) => Promise<void> | void,
   predicate: (event: ServerEvent) => event is T,
+  options?: MutationEventCaptureOptions,
 ): Promise<JsonRpcSessionOutcome<T>[]> {
   return await context.workspaceControl.withSession(cwd, async (binding, session) =>
-    await captureBindingMutationEvents(context, binding, async () => await action(session), predicate)
+    await captureBindingMutationEvents(context, binding, async () => await action(session), predicate, options)
   );
 }
 

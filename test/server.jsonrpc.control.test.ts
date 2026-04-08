@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 
 import { MemoryStore } from "../src/memoryStore";
 import { startAgentServer } from "../src/server/startServer";
+import { AgentSession } from "../src/server/session/AgentSession";
 import { WorkspaceBackupService } from "../src/server/workspaceBackups";
 import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
 
@@ -57,10 +58,10 @@ async function connectJsonRpc(url: string) {
   };
 
   let nextId = 0;
-  const request = async (method: string, params?: unknown) => {
+  const request = async (method: string, params?: unknown, timeoutMs = 5_000) => {
     const id = ++nextId;
     ws.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
-    return await waitFor((message) => message.id === id);
+    return await waitFor((message) => message.id === id, timeoutMs);
   };
 
   await request("initialize", {
@@ -397,6 +398,56 @@ describe("server JSON-RPC control methods", () => {
 
       rpc.close();
     } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("plugin installs allow enough time for slower mutation event streams", async () => {
+    const tmpDir = await makeTmpProject();
+    const sourceRoot = `${tmpDir}/plugin-source/figma-toolkit`;
+    await fs.mkdir(`${sourceRoot}/.codex-plugin`, { recursive: true });
+    await fs.writeFile(
+      `${sourceRoot}/.codex-plugin/plugin.json`,
+      `${JSON.stringify({
+        name: "figma-toolkit",
+        description: "Figma helpers",
+        interface: {
+          displayName: "Figma Toolkit",
+        },
+      }, null, 2)}\n`,
+    );
+
+    const originalInstallPlugins = AgentSession.prototype.installPlugins;
+    AgentSession.prototype.installPlugins = async function (sourceInput: string, targetScope: "workspace" | "user") {
+      await new Promise((resolve) => setTimeout(resolve, 5_250));
+      await originalInstallPlugins.call(this, sourceInput, targetScope);
+    };
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const installResponse = await rpc.request("cowork/plugins/install", {
+        cwd: tmpDir,
+        sourceInput: sourceRoot,
+        targetScope: "workspace",
+      }, 15_000);
+
+      expect(Array.isArray(installResponse.result.events)).toBe(true);
+      expect(installResponse.result.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "plugin_install_preview",
+          }),
+          expect.objectContaining({
+            type: "plugins_catalog",
+          }),
+        ]),
+      );
+
+      rpc.close();
+    } finally {
+      AgentSession.prototype.installPlugins = originalInstallPlugins;
       await stopTestServer(server);
     }
   });

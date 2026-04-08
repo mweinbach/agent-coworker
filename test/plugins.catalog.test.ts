@@ -320,6 +320,74 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
+  test("installPluginsFromSource prefers the installed plugin copy when migrating renamed MCP credentials", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-mcp-installed-precedence-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-mcp-installed-precedence-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-mcp-installed-precedence-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const installedPluginRoot = path.join(workspace, ".agents", "plugins", "figma-toolkit");
+      const marketplacePluginRoot = path.join(workspace, ".agents", "plugins", "market", "figma-market");
+      const updatedPluginRoot = path.join(workspace, "plugin-source", "figma-toolkit");
+      await writePlugin(installedPluginRoot, "Workspace Figma Toolkit", "Workspace plugin", "figma");
+      await writePlugin(marketplacePluginRoot, "Marketplace Figma Toolkit", "Marketplace plugin", "figma-market");
+      await fs.mkdir(path.join(workspace, ".agents", "plugins"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspace, ".agents", "plugins", "marketplace.json"),
+        `${JSON.stringify({
+          name: "workspace-market",
+          plugins: [
+            {
+              name: "figma-toolkit",
+              source: {
+                source: "local",
+                path: "./market/figma-market",
+              },
+              policy: {
+                installation: "manual",
+                authentication: "optional",
+              },
+              category: "design",
+            },
+          ],
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await writePlugin(updatedPluginRoot, "Workspace Figma Toolkit", "Workspace plugin", "figma-renamed");
+
+      await setMCPServerApiKeyCredential({
+        config,
+        server: {
+          name: "figma",
+          source: "plugin",
+          inherited: false,
+          pluginId: "figma-toolkit",
+          pluginName: "figma-toolkit",
+          pluginDisplayName: "Workspace Figma Toolkit",
+          pluginScope: "workspace",
+          transport: { type: "http", url: "https://workspace-figma-toolkit.example.com" },
+          auth: { type: "api_key", headerName: "Authorization", prefix: "Bearer" },
+        },
+        apiKey: "workspace-secret",
+      });
+
+      await installPluginsFromSource({
+        config,
+        input: updatedPluginRoot,
+        targetScope: "workspace",
+      });
+
+      const authFiles = await readMCPAuthFiles(config);
+      expect(authFiles.workspace.doc.servers.figma).toBeUndefined();
+      expect(authFiles.workspace.doc.servers["figma-renamed"]?.apiKey?.value).toBe("workspace-secret");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("workspace plugin copies take precedence over user copies for skills and MCP servers", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-precedence-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-precedence-home-"));

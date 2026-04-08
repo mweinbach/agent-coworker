@@ -89,6 +89,17 @@ describe("shared JSON-RPC control schemas", () => {
           editable: true,
           legacy: false,
           serverCount: 1,
+        }, {
+          source: "plugin",
+          path: "/tmp/project/.agents/plugins/figma-toolkit/.mcp.json",
+          exists: true,
+          editable: false,
+          legacy: false,
+          serverCount: 1,
+          pluginId: "figma-toolkit",
+          pluginName: "figma-toolkit",
+          pluginDisplayName: "Figma Toolkit",
+          pluginScope: "workspace",
         }],
         warnings: ["oauth pending"],
       },
@@ -96,6 +107,7 @@ describe("shared JSON-RPC control schemas", () => {
 
     expect(parsed.event.servers[0]?.authMode).toBe("oauth_pending");
     expect(parsed.event.files[0]?.editable).toBe(true);
+    expect(parsed.event.files[1]?.pluginId).toBe("figma-toolkit");
   });
 
   test("parses memory list envelopes", () => {

@@ -16,6 +16,7 @@ type PluginInstallResponseEvent = PluginMutationResponseEvent | Extract<
   ServerEvent,
   { type: "plugin_install_preview" | "plugin_detail" }
 >;
+const PLUGIN_INSTALL_EVENTS_TIMEOUT_MS = 60_000;
 
 function isPluginMutationResponseEvent(event: ServerEvent): event is PluginMutationResponseEvent {
   return (
@@ -102,6 +103,7 @@ export function createPluginsRouteHandlers(
         cwd,
         async (session) => await session.installPlugins(sourceInput, targetScope),
         isPluginInstallResponseEvent,
+        { timeoutMs: PLUGIN_INSTALL_EVENTS_TIMEOUT_MS },
       );
       const error = events.find(context.utils.isSessionError);
       if (error) {

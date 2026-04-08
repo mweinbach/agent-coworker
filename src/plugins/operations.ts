@@ -121,6 +121,22 @@ async function readBundledPluginMcpServers(pluginRoot: string): Promise<MCPServe
   }
 }
 
+async function findExistingInstallRoot(
+  destinationRoot: string,
+  targetRoots: string[],
+): Promise<string | null> {
+  const candidateRoots = [destinationRoot, ...targetRoots.filter((rootDir) => rootDir !== destinationRoot)];
+  for (const rootDir of candidateRoots) {
+    try {
+      await fs.stat(rootDir);
+      return rootDir;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 function buildServerRenameSignature(server: MCPServerConfig): string {
   return JSON.stringify({
     transport: server.transport,
@@ -230,8 +246,8 @@ export async function installPluginsFromSource(opts: {
     for (const candidate of validCandidates) {
       const destinationRoot = path.join(writableScope.pluginsDir, candidate.pluginId);
       const targetRoots = conflictingTargetRoots(currentCatalog, writableScope, candidate.pluginId);
-      const existingInstallRoot = targetRoots.find((rootDir) => rootDir !== destinationRoot) ?? destinationRoot;
-      const previousServers = await readBundledPluginMcpServers(existingInstallRoot);
+      const existingInstallRoot = await findExistingInstallRoot(destinationRoot, targetRoots);
+      const previousServers = existingInstallRoot ? await readBundledPluginMcpServers(existingInstallRoot) : [];
       const stagedSource = await stageCopySourceIfNeeded(
         candidate.rootDir,
         targetRoots,

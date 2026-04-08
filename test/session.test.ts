@@ -270,6 +270,20 @@ async function flushAsyncWork(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 1_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await flushAsyncWork();
+  }
+  throw new Error(`Condition not met within ${timeoutMs}ms`);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -2926,7 +2940,7 @@ describe("AgentSession", () => {
 
       resolveRunTurn();
       await turnPromise;
-      await flushAsyncWork();
+      await waitForCondition(() => events.some((event) => event.type === "skills_list"));
 
       expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
       const busyFalseIdx = events.findIndex((event) => event.type === "session_busy" && (event as any).busy === false);

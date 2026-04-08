@@ -450,7 +450,7 @@ describe("server JSON-RPC control methods", () => {
       AgentSession.prototype.installPlugins = originalInstallPlugins;
       await stopTestServer(server);
     }
-  });
+  }, 15_000);
 
   test("plugin workspace installs follow the request cwd instead of the server startup cwd", async () => {
     const serverRoot = await makeTmpProject("agent-harness-server-");

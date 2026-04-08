@@ -263,6 +263,43 @@ describe("skill store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBeNull();
   });
 
+  test("selectPlugin preserves the selected plugin when the detail request fails", async () => {
+    const state = createState();
+    state.workspaceRuntimeById[workspaceId] = {
+      ...defaultWorkspaceRuntime(),
+      serverUrl: "ws://mock",
+      controlSessionId: "jsonrpc-control",
+      selectedPluginId: "plugin-1",
+      selectedPluginScope: "workspace",
+      pluginsError: null,
+    } as any;
+    state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
+    const { get, set } = createStoreHarness(state);
+
+    RUNTIME.jsonRpcSockets.set(workspaceId, {
+      readyPromise: Promise.resolve(),
+      request: async () => ({
+        event: {
+          type: "error",
+          sessionId: "jsonrpc-control",
+          message: "Plugin detail request failed.",
+          code: "validation_failed",
+          source: "session",
+        },
+      }),
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    await createSkillActions(set as any, get as any).selectPlugin("plugin-1", "workspace");
+
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginId).toBe("plugin-1");
+    expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
+    expect(state.workspaceRuntimeById[workspaceId].selectedPlugin).toBeNull();
+    expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe("Unable to load plugin details.");
+  });
+
   test("previewSkillInstall removes only its pending key when sendControl fails", async () => {
     const state = createState();
     state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys = { other: true };

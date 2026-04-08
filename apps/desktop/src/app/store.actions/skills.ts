@@ -313,8 +313,6 @@ export function createSkillActions(
             ...s.workspaceRuntimeById,
             [workspaceId]: {
               ...s.workspaceRuntimeById[workspaceId],
-              selectedPluginId: null,
-              selectedPluginScope: null,
               pluginsLoading: false,
               pluginsError: "Unable to load plugin details.",
             },

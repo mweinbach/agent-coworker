@@ -149,7 +149,7 @@ export async function discoverPlugins(opts: {
 }): Promise<PluginDiscoverySnapshot> {
   const warnings: string[] = [];
   const discovered: DiscoveredPluginCandidate[] = [];
-  const seenByRealPath = new Map<string, DiscoveredPluginCandidate>();
+  const seenByRootPath = new Map<string, DiscoveredPluginCandidate>();
 
   const scopes: Array<{ scope: PluginScope; pluginsDir?: string }> = [
     { scope: "workspace", pluginsDir: opts.workspacePluginsDir },
@@ -165,8 +165,8 @@ export async function discoverPlugins(opts: {
     warnings.push(...marketplaceWarnings);
 
     for (const plugin of marketplacePlugins) {
-      if (seenByRealPath.has(plugin.realRootDir)) continue;
-      seenByRealPath.set(plugin.realRootDir, plugin);
+      if (seenByRootPath.has(plugin.rootDir)) continue;
+      seenByRootPath.set(plugin.rootDir, plugin);
       discovered.push(plugin);
     }
 
@@ -175,8 +175,8 @@ export async function discoverPlugins(opts: {
       scope: scopeEntry.scope,
     });
     for (const plugin of directPlugins) {
-      if (seenByRealPath.has(plugin.realRootDir)) continue;
-      seenByRealPath.set(plugin.realRootDir, plugin);
+      if (seenByRootPath.has(plugin.rootDir)) continue;
+      seenByRootPath.set(plugin.rootDir, plugin);
       discovered.push(plugin);
     }
   }

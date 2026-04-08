@@ -47,6 +47,27 @@ export function shouldRequireFreshPluginPreviewForScope(opts: {
     && opts.lastPreviewTargetScope !== opts.targetScope;
 }
 
+export function shouldDisablePluginInstallForScope(opts: {
+  normalizedSourceInput: string;
+  lastPreviewSourceInput: string | null;
+  lastPreviewTargetScope: PluginPreviewScope | null;
+  pluginPreview: PluginPreviewState | null;
+  targetScope: PluginPreviewScope;
+  pluginInstallInFlight: boolean;
+}): boolean {
+  if (opts.pluginInstallInFlight) {
+    return true;
+  }
+  if (shouldRequireFreshPluginPreviewForScope(opts)) {
+    return true;
+  }
+  const previewVisible = isPluginPreviewVisibleForInput(opts);
+  if (!previewVisible || opts.lastPreviewTargetScope !== opts.targetScope) {
+    return false;
+  }
+  return (opts.pluginPreview?.candidates.some((candidate) => candidate.diagnostics.length === 0) ?? false) === false;
+}
+
 export function InstallPluginDialog({
   workspaceId,
 }: {
@@ -91,6 +112,14 @@ export function InstallPluginDialog({
     lastPreviewTargetScope,
     pluginPreview,
     targetScope,
+  });
+  const disableInstallForScope = (targetScope: PluginPreviewScope) => shouldDisablePluginInstallForScope({
+    normalizedSourceInput,
+    lastPreviewSourceInput,
+    lastPreviewTargetScope,
+    pluginPreview,
+    targetScope,
+    pluginInstallInFlight,
   });
 
   const validPreviewCandidates = useMemo(
@@ -177,7 +206,7 @@ export function InstallPluginDialog({
               <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"
-                  disabled={pluginInstallInFlight || requiresFreshPreviewForScope("workspace")}
+                  disabled={disableInstallForScope("workspace")}
                   onClick={() => void handleInstall("workspace")}
                   type="button"
                 >
@@ -186,7 +215,7 @@ export function InstallPluginDialog({
                 <Button
                   size="sm"
                   variant="secondary"
-                  disabled={pluginInstallInFlight || requiresFreshPreviewForScope("user")}
+                  disabled={disableInstallForScope("user")}
                   onClick={() => void handleInstall("user")}
                   type="button"
                 >

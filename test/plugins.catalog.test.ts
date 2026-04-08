@@ -710,6 +710,47 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
+  test("direct plugin discovery keeps workspace and user symlinks to the same checkout as separate scopes", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-discovery-shared-checkout-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-discovery-shared-checkout-home-"));
+
+    try {
+      const checkoutRoot = path.join(workspace, "plugin-checkout", "figma-toolkit");
+      await writePlugin(checkoutRoot, "Shared Figma Toolkit");
+
+      const workspacePluginsDir = path.join(workspace, ".agents", "plugins");
+      const userPluginsDir = path.join(home, ".agents", "plugins");
+      await fs.mkdir(workspacePluginsDir, { recursive: true });
+      await fs.mkdir(userPluginsDir, { recursive: true });
+
+      const workspaceLink = path.join(workspacePluginsDir, "figma-toolkit");
+      const userLink = path.join(userPluginsDir, "figma-toolkit");
+      await fs.symlink(checkoutRoot, workspaceLink, process.platform === "win32" ? "junction" : "dir");
+      await fs.symlink(checkoutRoot, userLink, process.platform === "win32" ? "junction" : "dir");
+
+      const discovery = await discoverPlugins({ workspacePluginsDir, userPluginsDir });
+
+      expect(discovery.plugins).toHaveLength(2);
+      expect(discovery.plugins).toEqual([
+        expect.objectContaining({
+          rootDir: workspaceLink,
+          realRootDir: await fs.realpath(checkoutRoot),
+          scope: "workspace",
+          discoveryKind: "direct",
+        }),
+        expect.objectContaining({
+          rootDir: userLink,
+          realRootDir: await fs.realpath(checkoutRoot),
+          scope: "user",
+          discoveryKind: "direct",
+        }),
+      ]);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
   test("marketplace discovery rejects symlinked source paths that escape the marketplace root", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-marketplace-symlink-workspace-"));
 

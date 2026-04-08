@@ -70,7 +70,10 @@ mock.module("../src/lib/agentSocket", () => ({
 
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
-const { shouldRequireFreshPluginPreviewForScope } = await import("../src/ui/plugins/InstallPluginDialog");
+const {
+  shouldDisablePluginInstallForScope,
+  shouldRequireFreshPluginPreviewForScope,
+} = await import("../src/ui/plugins/InstallPluginDialog");
 const { PluginsCatalogPage } = await import("../src/ui/plugins/PluginsCatalogPage");
 mock.restore();
 
@@ -343,6 +346,68 @@ describe("plugins catalog page", () => {
       pluginPreview: preview,
       targetScope: "user",
     })).toBe(true);
+  });
+
+  test("install dialog disables install when the active preview has no valid candidates", () => {
+    const invalidPreview = {
+      source: {
+        kind: "github_shorthand" as const,
+        raw: "owner/repo",
+        displaySource: "https://github.com/owner/repo",
+        url: "https://github.com/owner/repo",
+        repo: "owner/repo",
+      },
+      targetScope: "workspace" as const,
+      candidates: [{
+        pluginId: "broken-plugin",
+        displayName: "Broken Plugin",
+        description: "Broken plugin",
+        relativeRootPath: ".",
+        wouldBePrimary: true,
+        shadowedPluginIds: [],
+        diagnostics: [{
+          code: "invalid_plugin_manifest",
+          severity: "error" as const,
+          message: "Invalid plugin manifest",
+        }],
+      }],
+      warnings: [],
+    };
+
+    expect(shouldDisablePluginInstallForScope({
+      normalizedSourceInput: "owner/repo",
+      lastPreviewSourceInput: "owner/repo",
+      lastPreviewTargetScope: "workspace",
+      pluginPreview: invalidPreview,
+      targetScope: "workspace",
+      pluginInstallInFlight: false,
+    })).toBe(true);
+
+    expect(shouldDisablePluginInstallForScope({
+      normalizedSourceInput: "owner/repo",
+      lastPreviewSourceInput: "owner/repo",
+      lastPreviewTargetScope: "workspace",
+      pluginPreview: invalidPreview,
+      targetScope: "user",
+      pluginInstallInFlight: false,
+    })).toBe(true);
+
+    const validPreview = {
+      ...invalidPreview,
+      candidates: [{
+        ...invalidPreview.candidates[0],
+        diagnostics: [],
+      }],
+    };
+
+    expect(shouldDisablePluginInstallForScope({
+      normalizedSourceInput: "owner/repo",
+      lastPreviewSourceInput: "owner/repo",
+      lastPreviewTargetScope: "workspace",
+      pluginPreview: validPreview,
+      targetScope: "workspace",
+      pluginInstallInFlight: false,
+    })).toBe(false);
   });
 
   test("renders enabled and disabled plugin sections with counts", async () => {

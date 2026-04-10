@@ -419,6 +419,13 @@ export function createControlSocketHelpers(
       if (!evt || typeof evt !== "object" || typeof evt.type !== "string") {
         return;
       }
+      const eventCwd = (message.params as Record<string, unknown>).cwd;
+      if (typeof eventCwd === "string") {
+        const workspacePath = currentGet().workspaces.find((w) => w.id === workspaceId)?.path;
+        if (workspacePath && eventCwd !== workspacePath) {
+          return;
+        }
+      }
       applyJsonRpcControlEvent(currentGet, currentSet, workspaceId, evt);
     });
     jsonRpcRouterCleanupByWorkspace.set(workspaceId, routerCleanup);
@@ -1013,7 +1020,7 @@ export function createControlSocketHelpers(
       set((s) => {
         const rt = s.workspaceRuntimeById[workspaceId];
         const previewPending = rt.skillMutationPendingKeys["plugin:preview"] === true;
-        const fromUserPreviewRequest = evt.fromUserPreviewRequest !== false;
+        const fromUserPreviewRequest = evt.fromUserPreviewRequest === true;
         const nextPreview =
           fromUserPreviewRequest || !previewPending ? evt.preview : rt.selectedPluginPreview;
         const pendingKeys = { ...rt.skillMutationPendingKeys };
@@ -1075,7 +1082,7 @@ export function createControlSocketHelpers(
       set((s) => {
         const rt = s.workspaceRuntimeById[workspaceId];
         const previewPending = rt.skillMutationPendingKeys.preview === true;
-        const fromUserPreviewRequest = evt.fromUserPreviewRequest !== false;
+        const fromUserPreviewRequest = evt.fromUserPreviewRequest === true;
         const nextPreview =
           fromUserPreviewRequest || !previewPending ? evt.preview : rt.selectedSkillPreview;
         const pendingKeys = { ...rt.skillMutationPendingKeys };

@@ -11,12 +11,10 @@ export function PluginsCatalogPage({
   workspaceId,
   managementScope = "workspace",
   searchQuery,
-  setSearchQuery,
 }: {
   workspaceId: string;
   managementScope?: "workspace" | "global";
   searchQuery: string;
-  setSearchQuery: (query: string) => void;
 }) {
   const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
   const refreshPluginsCatalog = useAppStore((s) => s.refreshPluginsCatalog);

@@ -382,6 +382,7 @@ describe("skill store actions", () => {
           event: {
             type: "plugin_install_preview",
             sessionId: "jsonrpc-control",
+            fromUserPreviewRequest: true,
             preview: {
               source: {
                 kind: "github_shorthand",

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SearchIcon } from "lucide-react";
 import { resolvePluginCatalogWorkspaceSelection } from "../app/pluginManagement";
 import { useAppStore } from "../app/store";
@@ -23,6 +23,10 @@ export function SkillsView() {
   const pluginViewMode = useAppStore((s) => s.workspaceRuntimeById[catalogWorkspaceId ?? ""]?.pluginViewMode ?? "plugins");
   const setPluginViewMode = useAppStore((s) => s.setPluginViewMode);
   const [searchQuery, setSearchQuery] = useState("");
+
+  useEffect(() => {
+    setSearchQuery("");
+  }, [pluginViewMode]);
 
   if (!catalogWorkspaceId) {
     return (
@@ -68,8 +72,8 @@ export function SkillsView() {
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">
         {pluginViewMode === "plugins"
-          ? <PluginsCatalogPage workspaceId={catalogWorkspaceId} managementScope={managementScope} searchQuery={searchQuery} setSearchQuery={setSearchQuery} />
-          : <SkillsCatalogPage workspaceId={catalogWorkspaceId} managementScope={managementScope} searchQuery={searchQuery} setSearchQuery={setSearchQuery} />}
+          ? <PluginsCatalogPage workspaceId={catalogWorkspaceId} managementScope={managementScope} searchQuery={searchQuery} />
+          : <SkillsCatalogPage workspaceId={catalogWorkspaceId} managementScope={managementScope} searchQuery={searchQuery} />}
       </div>
     </div>
   );

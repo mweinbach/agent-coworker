@@ -598,6 +598,7 @@ describe("workspace settings sync", () => {
       ],
       threads: [],
       selectedWorkspaceId: workspaceId,
+      pluginManagementWorkspaceId: null,
       selectedThreadId: null,
       workspaceRuntimeById: {},
       threadRuntimeById: {},
@@ -1380,6 +1381,7 @@ describe("workspace settings sync", () => {
     expect(helperStateBefore.socket.lifecycleListenerCount).toBeGreaterThan(0);
     expect(helperStateBefore.control).toEqual({
       isDisposed: false,
+      hasRouterCleanup: true,
       hasLifecycleCleanup: true,
       hasBootstrapPromise: true,
       hasStoreGetter: true,
@@ -1429,6 +1431,7 @@ describe("workspace settings sync", () => {
     });
     expect(helperStateAfter.control).toEqual({
       isDisposed: true,
+      hasRouterCleanup: false,
       hasLifecycleCleanup: false,
       hasBootstrapPromise: false,
       hasStoreGetter: false,
@@ -1463,6 +1466,39 @@ describe("workspace settings sync", () => {
     expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
   });
 
+  test("removeWorkspace clears pluginManagementWorkspaceId when the deleted workspace owned plugin management", async () => {
+    primeWorkspaceConnection();
+    const managementWorkspaceId = `ws-management-${crypto.randomUUID()}`;
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: [
+        ...state.workspaces,
+        {
+          id: managementWorkspaceId,
+          name: "Management Workspace",
+          path: "/tmp/workspace-management",
+          createdAt: "2026-02-19T00:00:00.000Z",
+          lastOpenedAt: "2026-02-19T00:00:00.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.2",
+          defaultPreferredChildModel: "gpt-5.2",
+          defaultToolOutputOverflowChars: 25000,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          wsProtocol: "jsonrpc",
+          yolo: false,
+        },
+      ],
+      pluginManagementWorkspaceId: managementWorkspaceId,
+    }));
+
+    await useAppStore.getState().removeWorkspace(managementWorkspaceId);
+
+    const state = useAppStore.getState();
+    expect(state.pluginManagementWorkspaceId).toBeNull();
+    expect(state.workspaces.some((workspace) => workspace.id === managementWorkspaceId)).toBe(false);
+  });
+
   test("ensureServerRunning reactivates disposed JSON-RPC helper state for an existing workspace", async () => {
     primeWorkspaceConnection();
     const { threadId } = seedConnectedThread();
@@ -1482,6 +1518,7 @@ describe("workspace settings sync", () => {
       },
       control: {
         isDisposed: true,
+        hasRouterCleanup: false,
         hasLifecycleCleanup: false,
         hasBootstrapPromise: false,
         hasStoreGetter: false,
@@ -1508,6 +1545,7 @@ describe("workspace settings sync", () => {
     expect(helperStateAfter.socket.lifecycleListenerCount).toBeGreaterThan(0);
     expect(helperStateAfter.control).toMatchObject({
       isDisposed: false,
+      hasRouterCleanup: true,
       hasLifecycleCleanup: true,
       hasStoreGetter: true,
       hasStoreSetter: true,

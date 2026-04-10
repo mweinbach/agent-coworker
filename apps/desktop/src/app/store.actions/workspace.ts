@@ -164,11 +164,19 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
         const remainingWorkspaces = s.workspaces.filter((w) => w.id !== workspaceId);
         const remainingThreads = s.threads.filter((t) => t.workspaceId !== workspaceId);
         const selectedWorkspaceId = s.selectedWorkspaceId === workspaceId ? (remainingWorkspaces[0]?.id ?? null) : s.selectedWorkspaceId;
+        const pluginManagementWorkspaceId =
+          s.pluginManagementWorkspaceId === workspaceId ? null : s.pluginManagementWorkspaceId;
+        const pluginManagementMode =
+          s.pluginManagementWorkspaceId === workspaceId && s.pluginManagementMode === "workspace"
+            ? "auto"
+            : s.pluginManagementMode;
         const selectedThreadId =
           s.selectedThreadId && remainingThreads.some((t) => t.id === s.selectedThreadId) ? s.selectedThreadId : null;
-      return {
+        return {
           workspaces: remainingWorkspaces,
           threads: remainingThreads,
+          pluginManagementWorkspaceId,
+          pluginManagementMode,
           selectedWorkspaceId,
           selectedThreadId,
         };

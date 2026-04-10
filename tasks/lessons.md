@@ -1,5 +1,6 @@
 # Lessons
 
+- For plugin install flows in this repo, only synthesize default `.mcp.json` / `.app.json` paths when the file actually exists, require explicitly declared `skills` directories to exist on disk, and normalize local `.codex-plugin/plugin.json` inputs back to the plugin root before discovery.
 - For provider-facing MCP tool schemas, do not pass tuple-style JSON Schema arrays like `items: [{...}, {...}]` through unchanged; normalize schema-valued keywords to provider-safe object/boolean nodes before registering tools or OpenAI-compatible runtimes will reject the function definition at request build time.
 - For MCP OAuth servers with `oauthMode: "auto"`, do not stop after emitting the browser challenge; the harness must continue the loopback callback through token exchange automatically and persist the result into the correct scope-specific `.cowork/auth/mcp-credentials.json` store.
 - When the user adds or corrects required commit trailers in this repo, carry that requirement forward into the active plan and the eventual commit message instead of treating it as a one-off chat note.
@@ -129,7 +130,7 @@
 - When tuning macOS titlebar-adjacent control spacing, use the live screenshot gap as the source of truth; a fixed offset that is technically stable can still be visibly wrong if it leaves a dead spacer between the traffic lights and the custom control.
 - When splitting the top chrome between sidebar-owned and content-owned regions, split the bottom divider too; leaving one full-width header rule under the sidebar still makes the rail look visually cut off from its own top strip.
 - When a desktop sidebar/titlebar separator must read as one continuous line, draw the top segment with the same border surface and color as the live sidebar pane and disable its resize transition; a separate header-only divider layer will look darker and lag during drag resize.
-- When a desktop Codex auth bug reproduces after restart, do not reach for `~/.codex` fallback unless the user explicitly confirms that source; first inspect Cowork’s own `~/.cowork/auth/codex-cli/auth.json` and `connections.json`, and harden those writes atomically so app/server shutdown cannot leave them half-written or silently emptied.
+- For Codex auth in this repo, keep the only persisted source of truth under `~/.cowork/auth/codex-cli/auth.json`; never copy, restore, or fall back to another tool's auth store.
 - When a provider browser-login contract is host-sensitive, do not treat `127.0.0.1` and `localhost` as interchangeable; pin the production OAuth redirect URI to the provider-accepted host and cover the advertised URL in tests before shipping.
 - When you switch an OAuth callback to `localhost`, bind both `::1` and `127.0.0.1` on the chosen port; otherwise Linux/CI can resolve `localhost` to the family your listener did not open and the callback test or live auth flow will hang.
 - For OAuth/browser-login parity, do not stop at decoded query params; assert on the raw authorize URL too, because `URLSearchParams` can silently change wire encoding such as spaces becoming `+` instead of the reference client’s `%20`.
@@ -173,6 +174,8 @@
 - When the user asks to "check again" on an open PR, do not report only CI and mergeability; re-scan the latest SHA for unresolved review threads and top-level review bodies before answering.
 - When review cleanup flips into PR babysitting, immediately inspect the latest GitHub Actions run too; a flaky remote MCP smoke lane can still be the real blocker after comments are resolved.
 - When the user explicitly asks for subagent verification first, spawn the requested subagents before editing, use their issue-by-issue findings to drive the fix plan, and then confirm the same conclusions locally before patching.
+- When the user asks to fix GitHub review feedback and explicitly wants subagent confirmation, run one targeted subagent per reported issue before editing so each finding is independently validated instead of batching the whole PR into one unchecked pass.
+- When cleaning sensitive local config out of a PR, prefer untracking plus `.gitignore` over deleting the working copy if the user still needs the file locally to run the app.
 - When making a live-session control read-only in desktop chat, verify whether draft threads still need that control to seed the first session config; do not remove draft-only setup selectors just because active sessions should be locked.
 - For draft-thread first sends in desktop chat, never flush the queued first message while `pendingWorkspaceDefaultApplyByThread` still holds the selected draft model; send the first `user_message` only after the draft override has been pushed with `apply_session_defaults`, or the session will start on the workspace default model.
 - When the desktop app is meant to feel native, do not ship renderer-wide ::-webkit-scrollbar skins; let Electron fall back to OS scrollbars and focus styling only on layout/containers.
@@ -233,3 +236,4 @@
 ## 2026-03-18 Tool Output Overflow Audit
 
 - Plan: confirm the shared overflow path, exempt `read` from spill-to-workspace truncation, and add regressions for direct tool execution plus provider-managed continuation.
+- For workspace-control JSON-RPC helpers in this repo, keep read-only control sessions ephemeral and non-persistent; routing them through the normal `AgentSession` persistence path silently bloats `.cowork/sessions.db`, and cross-platform rollback tests should inject deterministic copy failures instead of relying on POSIX-only permission tricks like `chmod 000`.

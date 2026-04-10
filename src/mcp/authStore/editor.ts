@@ -25,7 +25,7 @@ export async function setMCPServerApiKeyCredential(opts: {
   const apiKey = opts.apiKey.trim();
   if (!apiKey) throw new Error("API key is required.");
 
-  const scope = resolvePrimaryScope(opts.server.source);
+  const scope = resolvePrimaryScope(opts.server);
   const filePath = await mutateScopeDoc(opts.config, scope, (doc) => {
     const name = normalizeServerName(opts.server.name);
     const existing = doc.servers[name] ?? {};
@@ -51,7 +51,7 @@ export async function setMCPServerApiKeyCredential(opts: {
 
 export async function renameMCPServerCredentials(opts: {
   config: AgentConfig;
-  source: MCPServerSource;
+  source: MCPServerSource | { source: MCPServerSource; pluginScope?: MCPRegistryServer["pluginScope"] };
   previousName: string;
   nextName: string;
 }): Promise<{ moved: boolean; scope: MCPAuthScope; storageFile?: string }> {
@@ -82,7 +82,7 @@ export async function setMCPServerOAuthPending(opts: {
   server: MCPRegistryServer;
   pending: MCPServerOAuthPending;
 }): Promise<{ storageFile: string; scope: MCPAuthScope }> {
-  const scope = resolvePrimaryScope(opts.server.source);
+  const scope = resolvePrimaryScope(opts.server);
   const filePath = await mutateScopeDoc(opts.config, scope, (doc) => {
     const name = normalizeServerName(opts.server.name);
     const existing = doc.servers[name] ?? {};
@@ -103,7 +103,7 @@ export async function completeMCPServerOAuth(opts: {
   tokens: Omit<MCPServerOAuthTokens, "updatedAt">;
   clearPending?: boolean;
 }): Promise<{ storageFile: string; scope: MCPAuthScope }> {
-  const scope = resolvePrimaryScope(opts.server.source);
+  const scope = resolvePrimaryScope(opts.server);
   const filePath = await mutateScopeDoc(opts.config, scope, (doc) => {
     const name = normalizeServerName(opts.server.name);
     const existing = doc.servers[name] ?? {};
@@ -133,7 +133,7 @@ export async function setMCPServerOAuthClientInformation(opts: {
   server: MCPRegistryServer;
   clientInformation: Omit<MCPServerOAuthClientInfo, "updatedAt">;
 }): Promise<{ storageFile: string; scope: MCPAuthScope }> {
-  const scope = resolvePrimaryScope(opts.server.source);
+  const scope = resolvePrimaryScope(opts.server);
   const filePath = await mutateScopeDoc(opts.config, scope, (doc) => {
     const name = normalizeServerName(opts.server.name);
     const existing = doc.servers[name] ?? {};

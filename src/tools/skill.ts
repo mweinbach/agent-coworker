@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { z } from "zod";
 
-import { discoverSkills, stripSkillFrontMatter } from "../skills";
+import { discoverSkillsForConfig, stripSkillFrontMatter } from "../skills";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
@@ -75,7 +75,7 @@ export function createSkillTool(ctx: ToolContext) {
     }),
     execute: async ({ skillName }: { skillName: string }) => {
       ctx.log(`tool> skill ${JSON.stringify({ skillName })}`);
-      const discovered = await discoverSkills(ctx.config.skillsDirs);
+      const discovered = await discoverSkillsForConfig(ctx.config);
       const selected = discovered.find((s) => s.enabled && s.name === skillName);
       if (!selected) {
         ctx.log(`tool< skill ${JSON.stringify({ ok: false, reason: "not_found" })}`);

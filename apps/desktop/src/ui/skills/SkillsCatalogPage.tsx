@@ -1,22 +1,37 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import { RefreshCwIcon } from "lucide-react";
 import { useAppStore } from "../../app/store";
-import { HeaderAndFilters } from "./HeaderAndFilters";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
 import { InstallationCardGrid } from "./InstallationCardGrid";
+import { InstallSkillDialog } from "./InstallSkillDialog";
 import { SkillDetailDialog } from "./SkillDetailDialog";
 
-export function SkillsCatalogPage({ workspaceId }: { workspaceId: string }) {
+export function SkillsCatalogPage({
+  workspaceId,
+  managementScope = "workspace",
+  searchQuery,
+}: {
+  workspaceId: string;
+  managementScope?: "workspace" | "global";
+  searchQuery: string;
+}) {
   const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
   const selectSkillInstallation = useAppStore((s) => s.selectSkillInstallation);
-
-  const [searchQuery, setSearchQuery] = useState("");
+  const refreshSkillsCatalog = useAppStore((s) => s.refreshSkillsCatalog);
 
   const rt = wsRtById[workspaceId];
   const catalog = rt?.skillsCatalog ?? null;
   const skillCatalogLoading = rt?.skillCatalogLoading ?? false;
+  const skillCatalogError = rt?.skillCatalogError ?? null;
   const showLoadingState = skillCatalogLoading && catalog === null;
 
   const installations = useMemo(() => {
     let items = [...(catalog?.installations ?? [])];
+    if (managementScope === "global") {
+      items = items.filter((installation) =>
+        installation.scope === "global" || installation.scope === "user");
+    }
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -32,7 +47,7 @@ export function SkillsCatalogPage({ workspaceId }: { workspaceId: string }) {
     return items.sort((left, right) =>
       `${left.name}:${left.scope}:${left.installationId}`.localeCompare(`${right.name}:${right.scope}:${right.installationId}`),
     );
-  }, [catalog, searchQuery]);
+  }, [catalog, managementScope, searchQuery]);
 
   const effectiveSkills = useMemo(() => {
     return installations.filter((i) => i.state === "effective");
@@ -43,15 +58,22 @@ export function SkillsCatalogPage({ workspaceId }: { workspaceId: string }) {
   }, [installations]);
 
   return (
-    <div className="app-skills-view h-full min-h-0 overflow-y-auto px-6 py-5">
+    <div className="app-skills-view h-full min-h-0 overflow-y-auto px-6 py-4">
       <div className="mx-auto max-w-6xl">
-        <HeaderAndFilters
-          workspaceId={workspaceId}
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
-        />
+        <div className="mb-4 flex items-center justify-end gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-muted-foreground hover:text-foreground"
+            onClick={() => void refreshSkillsCatalog()}
+          >
+            <RefreshCwIcon className="mr-1.5 h-4 w-4" />
+            Refresh
+          </Button>
+          <InstallSkillDialog workspaceId={workspaceId} />
+        </div>
 
-        <div className="space-y-8">
+        <div className="space-y-6">
           {effectiveSkills.length > 0 && (
             <section>
               <h2 className="text-lg font-semibold mb-4">Installed</h2>
@@ -79,7 +101,21 @@ export function SkillsCatalogPage({ workspaceId }: { workspaceId: string }) {
             </div>
           )}
 
-          {!showLoadingState && installations.length === 0 && (
+          {!showLoadingState && skillCatalogError ? (
+            <div className="flex flex-col items-start gap-3 rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-4 text-left">
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="border-destructive/40 text-destructive">
+                  Connection issue
+                </Badge>
+                <span className="text-sm text-destructive">{skillCatalogError}</span>
+              </div>
+              <Button size="sm" variant="outline" onClick={() => void refreshSkillsCatalog()}>
+                Retry
+              </Button>
+            </div>
+          ) : null}
+
+          {!showLoadingState && !skillCatalogError && installations.length === 0 && (
             <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-muted/10 py-10 text-center">
               <div className="mb-1 text-base font-medium">No skills found</div>
               <div className="text-sm text-muted-foreground">

@@ -36,6 +36,12 @@ export function InstallationCardGrid({
                   </div>
                   <div className="truncate text-xs text-muted-foreground flex items-center gap-1.5">
                     <span>{scopeLabel(installation.scope)}</span>
+                    {installation.plugin && (
+                      <>
+                        <span>·</span>
+                        <span>{installation.plugin.displayName}</span>
+                      </>
+                    )}
                     {installation.origin?.kind && (
                       <>
                         <span>·</span>
@@ -62,6 +68,9 @@ export function InstallationCardGrid({
               )}
               {!installation.writable && (
                 <Badge variant="outline" className="text-[10px] px-1.5 py-0">Read-only</Badge>
+              )}
+              {installation.plugin && (
+                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Plugin</Badge>
               )}
             </div>
           </Card>

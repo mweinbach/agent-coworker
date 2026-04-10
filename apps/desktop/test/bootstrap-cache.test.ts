@@ -324,6 +324,7 @@ function resetStoreToCachedSeed(value: unknown = cachedState) {
     threads: [],
     selectedWorkspaceId: null,
     selectedThreadId: null,
+    pluginManagementWorkspaceId: null,
     workspaceRuntimeById: {},
     threadRuntimeById: {},
     latestTodosByThreadId: {},
@@ -408,6 +409,7 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.bootstrapPending).toBe(true);
     expect(seed?.selectedWorkspaceId).toBe("ws-cached");
     expect(seed?.selectedThreadId).toBe("thread-cached");
+    expect(seed?.pluginManagementWorkspaceId).toBeNull();
     expect(seed?.view).toBe("skills");
     expect(seed?.sidebarCollapsed).toBe(true);
     expect(seed?.sidebarWidth).toBe(320);
@@ -437,8 +439,38 @@ describe("desktop bootstrap cache", () => {
     const seed = buildCachedDesktopStateSeed(legacyCachedState);
     expect(seed?.selectedWorkspaceId).toBe("ws-cached");
     expect(seed?.selectedThreadId).toBe("thread-cached");
+    expect(seed?.pluginManagementWorkspaceId).toBeNull();
     expect(seed?.view).toBe("skills");
     expect(seed?.workspaces?.[0]?.wsProtocol).toBe("jsonrpc");
+  });
+
+  test("buildCachedDesktopStateSeed restores plugin management workspace selection", () => {
+    const seed = buildCachedDesktopStateSeed({
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        workspaces: [
+          ...cachedState.persistedState.workspaces,
+          {
+            id: "ws-management",
+            name: "Management Workspace",
+            path: "/tmp/workspace-management",
+            createdAt: "2026-03-19T00:00:00.000Z",
+            lastOpenedAt: "2026-03-19T00:00:00.000Z",
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: true,
+            yolo: false,
+          },
+        ],
+      },
+      ui: {
+        ...cachedState.ui,
+        pluginManagementWorkspaceId: "ws-management",
+      },
+    });
+
+    expect(seed?.pluginManagementWorkspaceId).toBe("ws-management");
+    expect(seed?.selectedWorkspaceId).toBe("ws-cached");
   });
 
   test("buildCachedDesktopStateSeed marks a cached chat thread as hydrating", () => {
@@ -554,8 +586,97 @@ describe("desktop bootstrap cache", () => {
     expect(state.bootstrapPending).toBe(false);
     expect(state.selectedWorkspaceId).toBe("ws-live");
     expect(state.selectedThreadId).toBe("thread-live");
+    expect(state.pluginManagementWorkspaceId).toBeNull();
     expect(state.view).toBe("skills");
     expect(state.sidebarCollapsed).toBe(true);
+  });
+
+  test("init restores plugin management workspace selection from cached state", async () => {
+    const pluginManagementCachedState = {
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        workspaces: [
+          {
+            ...cachedState.persistedState.workspaces[0],
+            id: "ws-live",
+            name: "Live Workspace",
+            path: "/tmp/workspace-live",
+          },
+          {
+            id: "ws-live-management",
+            name: "Management Workspace",
+            path: "/tmp/workspace-live-management",
+            createdAt: "2026-03-20T00:00:00.000Z",
+            lastOpenedAt: "2026-03-20T00:00:00.000Z",
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: true,
+            yolo: false,
+          },
+        ],
+        threads: [
+          {
+            ...cachedState.persistedState.threads[0],
+            id: "thread-live",
+            workspaceId: "ws-live",
+          },
+        ],
+      },
+      ui: {
+        ...cachedState.ui,
+        selectedWorkspaceId: "ws-live",
+        selectedThreadId: "thread-live",
+        pluginManagementWorkspaceId: "ws-live-management",
+      },
+    };
+    loadedState = {
+      ...loadedState,
+      workspaces: [
+        {
+          id: "ws-live",
+          name: "Live Workspace",
+          path: "/tmp/workspace-live",
+          createdAt: "2026-03-20T00:00:00.000Z",
+          lastOpenedAt: "2026-03-20T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        {
+          id: "ws-live-management",
+          name: "Management Workspace",
+          path: "/tmp/workspace-live-management",
+          createdAt: "2026-03-20T00:00:00.000Z",
+          lastOpenedAt: "2026-03-20T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-live",
+          workspaceId: "ws-live",
+          title: "Live Thread",
+          titleSource: "manual",
+          createdAt: "2026-03-20T00:00:00.000Z",
+          lastMessageAt: "2026-03-20T00:00:00.000Z",
+          status: "active",
+          sessionId: null,
+          messageCount: 0,
+          lastEventSeq: 0,
+        },
+      ],
+    };
+    localStorageMock.setItem(DESKTOP_STATE_CACHE_KEY, JSON.stringify(pluginManagementCachedState));
+    resetStoreToCachedSeed(pluginManagementCachedState);
+
+    await useAppStore.getState().init();
+
+    const state = useAppStore.getState();
+    expect(state.selectedWorkspaceId).toBe("ws-live");
+    expect(state.pluginManagementWorkspaceId).toBe("ws-live-management");
+    expect(state.view).toBe("skills");
   });
 
   test("init marks the selected startup thread as hydrating before deferred restore finishes", async () => {

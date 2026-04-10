@@ -218,6 +218,12 @@ function makeSession(
     closeAgentImpl: (opts: any) => Promise<any>;
     cancelAgentSessionsImpl: (parentSessionId: string) => void;
     deleteSessionImpl: (opts: any) => Promise<void>;
+    getSkillMutationBlockReasonImpl: (workingDirectory: string) => string | null;
+    refreshSkillsAcrossWorkspaceSessionsImpl: (opts: {
+      workingDirectory: string;
+      sourceSessionId: string;
+      allWorkspaces?: boolean;
+    }) => Promise<void>;
     sessionInfoPatch: Partial<SessionInfoState>;
     discoveredSkills: Array<{ name: string; description: string }>;
   }>
@@ -253,6 +259,8 @@ function makeSession(
     closeAgentImpl: overrides?.closeAgentImpl,
     cancelAgentSessionsImpl: overrides?.cancelAgentSessionsImpl,
     deleteSessionImpl: overrides?.deleteSessionImpl,
+    getSkillMutationBlockReasonImpl: overrides?.getSkillMutationBlockReasonImpl,
+    refreshSkillsAcrossWorkspaceSessionsImpl: overrides?.refreshSkillsAcrossWorkspaceSessionsImpl,
     sessionInfoPatch: overrides?.sessionInfoPatch,
   });
   return { session, emit, events, sessionBackupFactory };
@@ -260,6 +268,20 @@ function makeSession(
 
 async function flushAsyncWork(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 1_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await flushAsyncWork();
+  }
+  throw new Error(`Condition not met within ${timeoutMs}ms`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1526,6 +1548,95 @@ describe("AgentSession", () => {
     });
   });
 
+  describe("plugins", () => {
+    async function makeTmpDir(prefix = "session-plugins-test-"): Promise<string> {
+      return await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    }
+
+    async function createPluginSource(rootDir: string, name = "figma-toolkit"): Promise<void> {
+      await fs.mkdir(path.join(rootDir, ".codex-plugin"), { recursive: true });
+      await fs.mkdir(path.join(rootDir, "skills", "import-frame"), { recursive: true });
+      await fs.writeFile(
+        path.join(rootDir, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name,
+          description: "Plugin helpers",
+          interface: {
+            displayName: "Figma Toolkit",
+          },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(rootDir, "skills", "import-frame", "SKILL.md"),
+        [
+          "---",
+          "name: import-frame",
+          "description: Import a frame",
+          "---",
+          "",
+          "# Import frame",
+        ].join("\n"),
+        "utf-8",
+      );
+    }
+
+    test("user-scoped plugin installs request shared workspace refresh propagation", async () => {
+      const root = await makeTmpDir();
+      const home = path.join(root, "home");
+      const sourceRoot = path.join(root, "incoming", "figma-toolkit");
+      const refreshSkillsAcrossWorkspaceSessionsImpl = mock(async () => {});
+      await createPluginSource(sourceRoot);
+
+      const cfg: AgentConfig = {
+        ...makeConfig(root),
+        workspaceAgentsDir: path.join(root, ".agents"),
+        userAgentsDir: path.join(home, ".agents"),
+        workspacePluginsDir: path.join(root, ".agents", "plugins"),
+        userPluginsDir: path.join(home, ".agents", "plugins"),
+      };
+      const { session } = makeSession({
+        config: cfg,
+        refreshSkillsAcrossWorkspaceSessionsImpl,
+      });
+
+      await session.installPlugins(sourceRoot, "user");
+
+      expect(refreshSkillsAcrossWorkspaceSessionsImpl).toHaveBeenCalledWith({
+        workingDirectory: root,
+        sourceSessionId: session.id,
+        allWorkspaces: true,
+      });
+    });
+
+    test("workspace-scoped plugin installs keep refresh propagation scoped to the current workspace", async () => {
+      const root = await makeTmpDir();
+      const home = path.join(root, "home");
+      const sourceRoot = path.join(root, "incoming", "figma-toolkit");
+      const refreshSkillsAcrossWorkspaceSessionsImpl = mock(async () => {});
+      await createPluginSource(sourceRoot);
+
+      const cfg: AgentConfig = {
+        ...makeConfig(root),
+        workspaceAgentsDir: path.join(root, ".agents"),
+        userAgentsDir: path.join(home, ".agents"),
+        workspacePluginsDir: path.join(root, ".agents", "plugins"),
+        userPluginsDir: path.join(home, ".agents", "plugins"),
+      };
+      const { session } = makeSession({
+        config: cfg,
+        refreshSkillsAcrossWorkspaceSessionsImpl,
+      });
+
+      await session.installPlugins(sourceRoot, "workspace");
+
+      expect(refreshSkillsAcrossWorkspaceSessionsImpl).toHaveBeenCalledWith({
+        workingDirectory: root,
+        sourceSessionId: session.id,
+      });
+    });
+  });
+
   describe("setModel", () => {
     test("updates model in-session and emits config_updated", async () => {
       const { session, events } = makeSession();
@@ -2035,6 +2146,7 @@ describe("AgentSession", () => {
     });
 
     test("logoutProviderAuth emits provider_auth_result and clears provider state", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-provider-logout-"));
       const getProviderCatalogImpl = mock(async () => ({
         all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" }],
         default: { "codex-cli": "gpt-5.2" },
@@ -2049,6 +2161,7 @@ describe("AgentSession", () => {
         message: "OAuth sign-in completed.",
       }));
       const { session, events } = makeSession({
+        config: makeConfig(dir),
         connectProviderImpl: connectProviderImpl as any,
         getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
         getProviderCatalogImpl: getProviderCatalogImpl as any,
@@ -2803,6 +2916,39 @@ describe("AgentSession", () => {
 
       const busyFalseIdxAfter = events.findIndex((e) => e.type === "session_busy" && (e as any).busy === false);
       expect(busyFalseIdxAfter).toBeGreaterThan(busyTrueIdx);
+    });
+
+    test("defers external skill refresh until the active turn completes", async () => {
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "Refreshed system prompt",
+        discoveredSkills: [{ name: "refreshed-skill", description: "Refreshed skill" }],
+      }));
+      const { session, events } = makeSession({ loadSystemPromptWithSkillsImpl });
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          }),
+      );
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      await session.refreshSkillStateFromExternalMutation("skills.shared_refresh");
+      expect(loadSystemPromptWithSkillsImpl).not.toHaveBeenCalled();
+      expect(events.some((event) => event.type === "skills_list")).toBe(false);
+
+      resolveRunTurn();
+      await turnPromise;
+      await waitForCondition(() => events.some((event) => event.type === "skills_list"));
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      const busyFalseIdx = events.findIndex((event) => event.type === "session_busy" && (event as any).busy === false);
+      const skillsListIdx = events.findIndex((event) => event.type === "skills_list");
+      expect(busyFalseIdx).toBeGreaterThanOrEqual(0);
+      expect(skillsListIdx).toBeGreaterThan(busyFalseIdx);
     });
 
     test("accepts steer_message for the active turn without emitting another busy=true", async () => {

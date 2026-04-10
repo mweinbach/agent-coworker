@@ -295,7 +295,7 @@ describe("getProviderStatuses", () => {
     });
   });
 
-  test("codex-cli: imports legacy .codex auth path into Cowork auth when cowork auth is missing", async () => {
+  test("codex-cli: ignores legacy external auth when Cowork auth is missing", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
 
@@ -317,17 +317,12 @@ describe("getProviderStatuses", () => {
     const statuses = await getProviderStatuses({ paths, fetchImpl: async () => new Response("not found", { status: 404 }) });
     const codex = statuses.find((s) => s.provider === "codex-cli");
     expect(codex).toBeDefined();
-    expect(codex?.authorized).toBe(true);
+    expect(codex?.authorized).toBe(false);
     expect(codex?.verified).toBe(false);
-    expect(codex?.mode).toBe("oauth");
-    expect(codex?.account?.email).toBe("legacy@example.com");
-    expect(codex?.message).toContain("verification failed");
-
-    const imported = JSON.parse(
-      await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
-    ) as any;
-    expect(imported?.tokens?.access_token).toBe(accessToken);
-    expect(imported?.tokens?.id_token).toBe(idToken);
+    expect(codex?.mode).toBe("missing");
+    expect(codex?.account).toBeNull();
+    expect(codex?.message).toContain("Not logged in to Codex");
+    await expect(fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")).rejects.toThrow();
   });
 
   test("codex-cli: usage verification failure keeps credentials authorized but unverified", async () => {

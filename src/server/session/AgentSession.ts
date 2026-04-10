@@ -320,11 +320,14 @@ export class AgentSession {
     getWorkspaceBackupDeltaImpl?: SessionDependencies["getWorkspaceBackupDeltaImpl"];
     getLiveSessionSnapshotImpl?: SessionDependencies["getLiveSessionSnapshotImpl"];
     buildLegacySessionSnapshotImpl?: SessionDependencies["buildLegacySessionSnapshotImpl"];
+    getSkillMutationBlockReasonImpl?: SessionDependencies["getSkillMutationBlockReasonImpl"];
+    refreshSkillsAcrossWorkspaceSessionsImpl?: SessionDependencies["refreshSkillsAcrossWorkspaceSessionsImpl"];
     hydratedState?: HydratedSessionState;
     initialSessionSnapshot?: SessionSnapshot;
     initialLastEventSeq?: number;
     seedContext?: SeededSessionContext;
     skipInitialPersist?: boolean;
+    persistenceEnabled?: boolean;
   }) {
     const hydrated = opts.hydratedState;
     const hydratedSessionInfo = normalizeHydratedSessionInfo(hydrated);
@@ -351,6 +354,7 @@ export class AgentSession {
       currentTurnId: null,
       acceptingSteers: false,
       pendingSteers: [],
+      pendingExternalSkillRefreshReason: null,
       currentTurnOutcome: initialCurrentTurnOutcome(hydrated),
       maxSteps: 100,
       todos: seededTodos,
@@ -431,6 +435,8 @@ export class AgentSession {
       getWorkspaceBackupDeltaImpl: opts.getWorkspaceBackupDeltaImpl,
       getLiveSessionSnapshotImpl: opts.getLiveSessionSnapshotImpl,
       buildLegacySessionSnapshotImpl: opts.buildLegacySessionSnapshotImpl,
+      getSkillMutationBlockReasonImpl: opts.getSkillMutationBlockReasonImpl,
+      refreshSkillsAcrossWorkspaceSessionsImpl: opts.refreshSkillsAcrossWorkspaceSessionsImpl,
     };
 
     if (seededHarnessContext) {
@@ -476,10 +482,15 @@ export class AgentSession {
       syncSessionBackupAvailability: async () => {},
       refreshProviderStatus: async () => await this.getProviderCatalogManager().refreshProviderStatus(),
       emitProviderCatalog: async () => await this.getProviderCatalogManager().emitProviderCatalog(),
+      emitMcpServers: async () => await this.getMcpManager().emitMcpServers(),
       getSkillMutationBlockReason: () =>
         this.deps.getSkillMutationBlockReasonImpl?.(this.state.config.workingDirectory) ?? null,
-      refreshSkillsAcrossWorkspaceSessions: async () => {
-        await this.deps.refreshSkillsAcrossWorkspaceSessionsImpl?.(this.state.config.workingDirectory);
+      refreshSkillsAcrossWorkspaceSessions: async (refreshOpts) => {
+        await this.deps.refreshSkillsAcrossWorkspaceSessionsImpl?.({
+          workingDirectory: this.state.config.workingDirectory,
+          sourceSessionId: this.id,
+          ...(refreshOpts?.allWorkspaces ? { allWorkspaces: true } : {}),
+        });
       },
     };
 
@@ -505,6 +516,7 @@ export class AgentSession {
     });
     this.persistenceManager = new PersistenceManager({
       sessionId: this.id,
+      persistenceEnabled: opts.persistenceEnabled !== false,
       sessionDb: this.deps.sessionDb,
       getCoworkPaths: () => this.getCoworkPaths(),
       writePersistedSessionSnapshot: this.deps.writePersistedSessionSnapshotImpl,
@@ -547,7 +559,7 @@ export class AgentSession {
         });
     this.sessionSnapshotProjector = new SessionSnapshotProjector(initialSnapshot);
 
-    if (!opts.skipInitialPersist) {
+    if (!opts.skipInitialPersist && opts.persistenceEnabled !== false) {
       this.queuePersistSessionSnapshot("session.created");
     }
   }
@@ -576,6 +588,7 @@ export class AgentSession {
         historyManager: this.historyManager,
         metadataManager: this.metadataManager,
         backupController: this.backupController,
+        flushPendingExternalSkillRefresh: async () => await this.flushPendingExternalSkillRefresh(),
       });
     }
     return this.turnExecutionManager;
@@ -1008,6 +1021,56 @@ export class AgentSession {
 
   async getSkillsCatalog() {
     await this.getSkillManager().getSkillsCatalog();
+  }
+
+  async getPluginsCatalog() {
+    await this.getSkillManager().getPluginsCatalog();
+  }
+
+  private async runExternalSkillRefresh(reason: string) {
+    await this.refreshSystemPromptWithSkills(reason);
+    await this.listSkills();
+    await this.listCommands();
+    await this.getSkillsCatalog();
+    await this.getPluginsCatalog();
+    await this.emitMcpServers();
+  }
+
+  async refreshSkillStateFromExternalMutation(reason = "skills.external_refresh") {
+    if (this.state.running) {
+      this.state.pendingExternalSkillRefreshReason = reason;
+      return;
+    }
+    await this.runExternalSkillRefresh(reason);
+  }
+
+  async flushPendingExternalSkillRefresh() {
+    const reason = this.state.pendingExternalSkillRefreshReason;
+    if (!reason || this.state.running) {
+      return;
+    }
+    this.state.pendingExternalSkillRefreshReason = null;
+    await this.runExternalSkillRefresh(reason);
+  }
+
+  async getPlugin(pluginId: string, scope?: "workspace" | "user") {
+    await this.getSkillManager().getPlugin(pluginId, scope);
+  }
+
+  async enablePlugin(pluginId: string, scope?: "workspace" | "user") {
+    await this.getSkillManager().enablePlugin(pluginId, scope);
+  }
+
+  async disablePlugin(pluginId: string, scope?: "workspace" | "user") {
+    await this.getSkillManager().disablePlugin(pluginId, scope);
+  }
+
+  async previewPluginInstall(sourceInput: string, targetScope: "workspace" | "user") {
+    await this.getSkillManager().previewPluginInstall(sourceInput, targetScope);
+  }
+
+  async installPlugins(sourceInput: string, targetScope: "workspace" | "user") {
+    await this.getSkillManager().installPlugins(sourceInput, targetScope);
   }
 
   async getSkillInstallation(installationId: string) {

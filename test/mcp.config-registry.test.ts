@@ -18,6 +18,10 @@ function makeConfig(workspaceRoot: string, userHome: string, builtInConfigDir: s
     knowledgeCutoff: "unknown",
     projectAgentDir: path.join(workspaceRoot, ".agent"),
     userAgentDir: path.join(userHome, ".agent"),
+    workspaceAgentsDir: path.join(workspaceRoot, ".agents"),
+    userAgentsDir: path.join(userHome, ".agents"),
+    workspacePluginsDir: path.join(workspaceRoot, ".agents", "plugins"),
+    userPluginsDir: path.join(userHome, ".agents", "plugins"),
     builtInDir: path.dirname(builtInConfigDir),
     builtInConfigDir,
     skillsDirs: [],
@@ -100,6 +104,290 @@ describe("mcp config registry", () => {
       expect(snapshot.warnings).toHaveLength(1);
       expect(snapshot.warnings[0]).toContain("workspace");
       expect(snapshot.warnings[0]).toContain(path.join(workspace, ".cowork", "mcp-servers.json"));
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin MCP servers retain oauth auth config and plugin scope metadata", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-oauth-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-oauth-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-oauth-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "oauth-toolkit");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "oauth-toolkit",
+          description: "Plugin oauth helpers",
+          interface: { displayName: "OAuth Toolkit" },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".mcp.json"),
+        `${JSON.stringify({
+          mcpServers: {
+            oauthPlugin: {
+              type: "http",
+              url: "https://mcp.plugin.example.com",
+              auth: {
+                type: "oauth",
+                oauthMode: "auto",
+                scope: "plugin.read",
+              },
+            },
+          },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const snapshot = await loadMCPConfigRegistry(config);
+      const server = snapshot.servers.find((entry) => entry.name === "oauthPlugin");
+      expect(server).toBeTruthy();
+      expect(server?.source).toBe("plugin");
+      expect(server?.pluginId).toBe("oauth-toolkit");
+      expect(server?.pluginDisplayName).toBe("OAuth Toolkit");
+      expect(server?.pluginScope).toBe("workspace");
+      expect(server?.inherited).toBe(false);
+      expect(server?.auth).toEqual({
+        type: "oauth",
+        oauthMode: "auto",
+        scope: "plugin.read",
+      });
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin MCP stdio transports rebase only filesystem paths against the plugin root", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-stdio-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "stdio-toolkit");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, "bin"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, "dist"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, "nested"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, "runtime"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "stdio-toolkit",
+          description: "Plugin stdio helpers",
+          interface: { displayName: "Stdio Toolkit" },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(path.join(pluginRoot, "bin", "server.js"), "// server\n", "utf-8");
+      await fs.writeFile(path.join(pluginRoot, "dist", "server.mjs"), "// bundled\n", "utf-8");
+      await fs.writeFile(path.join(pluginRoot, "nested", "server.js"), "// nested\n", "utf-8");
+      await fs.writeFile(
+        path.join(pluginRoot, ".mcp.json"),
+        `${JSON.stringify({
+          mcpServers: {
+            bundledServer: {
+              type: "stdio",
+              command: "./bin/server.js",
+              args: [
+                "./dist/server.mjs",
+                "nested/server.js",
+                "@modelcontextprotocol/server-filesystem",
+                "https://api.example.com",
+                "--port",
+                "7337",
+              ],
+              cwd: "./runtime",
+            },
+            pathServer: {
+              type: "stdio",
+              command: "node",
+            },
+          },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const snapshot = await loadMCPConfigRegistry(config);
+      const bundledServer = snapshot.servers.find((entry) => entry.name === "bundledServer");
+      expect(bundledServer?.transport.type).toBe("stdio");
+      if (bundledServer?.transport.type === "stdio") {
+        expect(bundledServer.transport.command).toBe(path.join(pluginRoot, "bin", "server.js"));
+        expect(bundledServer.transport.cwd).toBe(path.join(pluginRoot, "runtime"));
+        expect(bundledServer.transport.args).toEqual([
+          path.join(pluginRoot, "dist", "server.mjs"),
+          path.join(pluginRoot, "nested", "server.js"),
+          "@modelcontextprotocol/server-filesystem",
+          "https://api.example.com",
+          "--port",
+          "7337",
+        ]);
+      }
+
+      const pathServer = snapshot.servers.find((entry) => entry.name === "pathServer");
+      expect(pathServer?.transport.type).toBe("stdio");
+      if (pathServer?.transport.type === "stdio") {
+        expect(pathServer.transport.command).toBe("node");
+        expect(pathServer.transport.cwd).toBeUndefined();
+      }
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin MCP stdio transports reject relative paths that escape the plugin root", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-escape-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-escape-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-escape-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "escape-toolkit");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "escape-toolkit",
+          description: "Plugin escape helpers",
+          interface: { displayName: "Escape Toolkit" },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".mcp.json"),
+        `${JSON.stringify({
+          mcpServers: {
+            escapedServer: {
+              type: "stdio",
+              command: "node",
+              args: ["../outside/server.mjs"],
+              cwd: "../outside",
+            },
+          },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const snapshot = await loadMCPConfigRegistry(config);
+
+      expect(snapshot.servers.find((entry) => entry.name === "escapedServer")).toBeUndefined();
+      expect(snapshot.warnings).toEqual([
+        expect.stringContaining("Ignoring malformed plugin MCP config"),
+      ]);
+      expect(snapshot.warnings[0]).toContain('resolves argument "../outside/server.mjs" outside the plugin root');
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin MCP stdio transports reject absolute cwd paths outside the plugin root", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-absolute-cwd-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-absolute-cwd-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-absolute-cwd-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "absolute-cwd-toolkit");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "absolute-cwd-toolkit",
+          description: "Plugin absolute cwd helpers",
+          interface: { displayName: "Absolute Cwd Toolkit" },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".mcp.json"),
+        `${JSON.stringify({
+          mcpServers: {
+            escapedServer: {
+              type: "stdio",
+              command: "node",
+              cwd: os.tmpdir(),
+            },
+          },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const snapshot = await loadMCPConfigRegistry(config);
+
+      expect(snapshot.servers.find((entry) => entry.name === "escapedServer")).toBeUndefined();
+      expect(snapshot.warnings).toEqual([
+        expect.stringContaining("Ignoring malformed plugin MCP config"),
+      ]);
+      expect(snapshot.warnings[0]).toContain("resolves cwd outside the plugin root");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin MCP stdio transports reject symlinked paths that escape the plugin root", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-symlink-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-symlink-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-symlink-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      const pluginRoot = path.join(workspace, ".agents", "plugins", "symlink-toolkit");
+      const outsideRoot = path.join(workspace, "outside");
+      await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+      await fs.mkdir(path.join(pluginRoot, "bin"), { recursive: true });
+      await fs.mkdir(outsideRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        `${JSON.stringify({
+          name: "symlink-toolkit",
+          description: "Plugin symlink helpers",
+          interface: { displayName: "Symlink Toolkit" },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      const outsideCommand = path.join(outsideRoot, "server.js");
+      await fs.writeFile(outsideCommand, "// outside\n", "utf-8");
+      await fs.symlink(
+        outsideCommand,
+        path.join(pluginRoot, "bin", "server.js"),
+        process.platform === "win32" ? "file" : undefined,
+      );
+      await fs.writeFile(
+        path.join(pluginRoot, ".mcp.json"),
+        `${JSON.stringify({
+          mcpServers: {
+            escapedServer: {
+              type: "stdio",
+              command: "./bin/server.js",
+            },
+          },
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const snapshot = await loadMCPConfigRegistry(config);
+
+      expect(snapshot.servers.find((entry) => entry.name === "escapedServer")).toBeUndefined();
+      expect(snapshot.warnings).toEqual([
+        expect.stringContaining("Ignoring malformed plugin MCP config"),
+      ]);
+      expect(snapshot.warnings[0]).toContain('resolves command outside the plugin root');
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

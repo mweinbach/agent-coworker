@@ -398,6 +398,35 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("DEFAULT SYSTEM TEMPLATE");
   });
 
+  test("applies prompt template overlays when the base template uses CRLF newlines", async () => {
+    const { builtIn } = await makeTmpDirs();
+
+    await writeFile(
+      path.join(builtIn, "prompts", "system.md"),
+      "DEFAULT SYSTEM TEMPLATE\r\n{{modelName}}",
+    );
+    await writeFile(
+      path.join(builtIn, "prompts", "system-models", "gpt-5.4.json"),
+      JSON.stringify({
+        extends: "../system.md",
+        replacements: [{
+          old: "DEFAULT SYSTEM TEMPLATE\n{{modelName}}",
+          new: "GPT-5.4 SYSTEM TEMPLATE\n{{modelName}}",
+        }],
+      }, null, 2),
+    );
+
+    const prompt = await loadSystemPrompt(makeConfig({
+      builtInDir: builtIn,
+      provider: "openai",
+      model: "gpt-5.4",
+      skillsDirs: ["/nonexistent/skills"],
+    }));
+
+    expect(prompt).toContain("GPT-5.4 SYSTEM TEMPLATE\nGPT-5.4");
+    expect(prompt).not.toContain("DEFAULT SYSTEM TEMPLATE");
+  });
+
   test("uses the gpt-5.4 system template for gpt-5.4-mini", async () => {
     const { builtIn } = await makeTmpDirs();
 

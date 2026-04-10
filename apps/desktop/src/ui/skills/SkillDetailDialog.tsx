@@ -89,6 +89,12 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                   <DialogTitle className="text-xl">{selectedDisplayName}</DialogTitle>
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <span>{selectedInstallation ? scopeLabel(selectedInstallation.scope) : selectedSkill ? skillSourceLabel(selectedSkill.source) : "Unknown"}</span>
+                    {selectedInstallation?.plugin && (
+                      <>
+                        <span>·</span>
+                        <span>Plugin: {selectedInstallation.plugin.displayName}</span>
+                      </>
+                    )}
                     {selectedInstallation?.origin?.kind && (
                       <>
                         <span>·</span>
@@ -126,6 +132,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
               <Badge variant="secondary">{scopeLabel(selectedInstallation.scope)}</Badge>
               <Badge variant="outline">{selectedInstallation.writable ? "Writable" : "Read-only"}</Badge>
               {selectedInstallation.managed ? <Badge variant="outline">Managed</Badge> : <Badge variant="outline">Unmanaged</Badge>}
+              {selectedInstallation.plugin ? <Badge variant="outline">Plugin-owned</Badge> : null}
             </div>
           )}
 
@@ -161,7 +168,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
 
         <div className="p-4 border-t border-border/50 bg-muted/10 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            {selectedInstallation?.writable ? (
+            {selectedInstallation?.writable && !selectedInstallation.plugin ? (
               <Button
                 variant="destructive"
                 size="sm"
@@ -176,7 +183,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
               </Button>
             ) : null}
             
-            {selectedInstallation?.writable ? (
+            {selectedInstallation ? (
               selectedInstallation.enabled ? (
                 <Button
                   variant="outline"
@@ -200,7 +207,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
           </div>
           
           <div className="flex items-center gap-2">
-            {selectedInstallation?.writable && (
+            {selectedInstallation?.writable && !selectedInstallation.plugin && (
               <>
                 <Button
                   variant="outline"
@@ -221,7 +228,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
               </>
             )}
             
-            {!selectedInstallation?.writable && selectedInstallation && (
+            {!selectedInstallation?.writable && !selectedInstallation?.plugin && selectedInstallation && (
               <>
                 <Button
                   variant="outline"

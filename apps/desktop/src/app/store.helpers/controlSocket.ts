@@ -7,6 +7,7 @@ import { RUNTIME } from "./runtimeState";
 import {
   ensureWorkspaceJsonRpcSocket,
   registerWorkspaceJsonRpcLifecycle,
+  registerWorkspaceJsonRpcRouter,
   requestJsonRpc,
   requestJsonRpcThreadList,
   requestJsonRpcThreadRead,
@@ -50,6 +51,7 @@ export function createControlSocketHelpers(
 ) {
   const requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   const jsonRpcLifecycleCleanupByWorkspace = new Map<string, () => void>();
+  const jsonRpcRouterCleanupByWorkspace = new Map<string, () => void>();
   const jsonRpcBootstrapPromises = new Map<string, Promise<void>>();
   const jsonRpcBootstrapQueuedByWorkspace = new Set<string>();
   const controlStoreGettersByWorkspace = new Map<string, StoreGet>();
@@ -274,6 +276,11 @@ export function createControlSocketHelpers(
       RUNTIME.skillInstallWaiters.delete(workspaceId);
       installWaiter.reject(new Error("Control connection closed"));
     }
+    const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
+    if (pluginInstallWaiter) {
+      RUNTIME.pluginInstallWaiters.delete(workspaceId);
+      pluginInstallWaiter.reject(new Error("Control connection closed"));
+    }
 
     set((s) => {
       const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
@@ -298,11 +305,20 @@ export function createControlSocketHelpers(
                 controlSessionId: null,
                 controlConfig: null,
                 controlSessionConfig: null,
+                pluginsCatalog: null,
+                selectedPluginId: null,
+                selectedPluginScope: null,
+                selectedPlugin: null,
+                selectedPluginPreview: null,
+                pluginsLoading: false,
+                pluginsError: null,
                 memoriesLoading: false,
                 skillCatalogLoading: false,
+                skillCatalogError: workspaceRuntime.skillCatalogError,
                 skillsMutationBlocked: false,
                 skillsMutationBlockedReason: null,
                 skillMutationPendingKeys: {},
+                skillMutationError: null,
                 workspaceBackupsLoading: false,
                 workspaceBackupsError: workspaceRuntime.workspaceBackupsError,
                 workspaceBackupPendingActionKeys: {},
@@ -366,9 +382,15 @@ export function createControlSocketHelpers(
     }
     rememberControlStoreGet(workspaceId, get);
     rememberControlStoreSet(workspaceId, set);
-    if (jsonRpcLifecycleCleanupByWorkspace.has(workspaceId)) {
+    const existingLifecycleCleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
+    const existingRouterCleanup = jsonRpcRouterCleanupByWorkspace.get(workspaceId);
+    if (existingLifecycleCleanup && existingRouterCleanup) {
       return;
     }
+    existingLifecycleCleanup?.();
+    existingRouterCleanup?.();
+    jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
+    jsonRpcRouterCleanupByWorkspace.delete(workspaceId);
     const cleanup = registerWorkspaceJsonRpcLifecycle(workspaceId, {
       onOpen: () => {
         const currentGet = getControlStoreGet(workspaceId);
@@ -384,6 +406,29 @@ export function createControlSocketHelpers(
       },
     });
     jsonRpcLifecycleCleanupByWorkspace.set(workspaceId, cleanup);
+    const routerCleanup = registerWorkspaceJsonRpcRouter(workspaceId, (message) => {
+      if (message.kind !== "notification" || message.method !== "cowork/control/event") {
+        return;
+      }
+      const currentGet = getControlStoreGet(workspaceId);
+      const currentSet = getControlStoreSet(workspaceId);
+      if (!currentGet || !currentSet) {
+        return;
+      }
+      const evt = message.params as ServerEvent | undefined;
+      if (!evt || typeof evt !== "object" || typeof evt.type !== "string") {
+        return;
+      }
+      const eventCwd = (message.params as Record<string, unknown>).cwd;
+      if (typeof eventCwd === "string") {
+        const workspacePath = currentGet().workspaces.find((w) => w.id === workspaceId)?.path;
+        if (workspacePath && eventCwd !== workspacePath) {
+          return;
+        }
+      }
+      applyJsonRpcControlEvent(currentGet, currentSet, workspaceId, evt);
+    });
+    jsonRpcRouterCleanupByWorkspace.set(workspaceId, routerCleanup);
   }
 
   function ensureControlSocket(get: StoreGet, set: StoreSet, workspaceId: string) {
@@ -564,6 +609,7 @@ export function createControlSocketHelpers(
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/servers/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/list", { cwd }),
+      requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/catalog/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/catalog/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/list", { cwd }),
     ]);
@@ -587,6 +633,16 @@ export function createControlSocketHelpers(
       await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/read", {
         cwd,
         installationId: selectedInstallationId,
+      });
+    }
+
+    const selectedPluginId = get().workspaceRuntimeById[workspaceId]?.selectedPluginId;
+    const selectedPluginScope = get().workspaceRuntimeById[workspaceId]?.selectedPluginScope;
+    if (selectedPluginId) {
+      await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/plugins/read", {
+        cwd,
+        pluginId: selectedPluginId,
+        ...(selectedPluginScope ? { scope: selectedPluginScope } : {}),
       });
     }
   }
@@ -844,6 +900,7 @@ export function createControlSocketHelpers(
 
     if (evt.type === "skills_catalog") {
       const installWaiter = RUNTIME.skillInstallWaiters.get(workspaceId);
+      const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
       const workspaceRuntimeBefore = get().workspaceRuntimeById[workspaceId];
       const clearedMutationPendingKeys = evt.clearedMutationPendingKeys ?? [];
       const shouldResolveInstall =
@@ -851,6 +908,11 @@ export function createControlSocketHelpers(
         workspaceRuntimeBefore != null &&
         clearedMutationPendingKeys.includes(installWaiter.pendingKey) &&
         workspaceRuntimeBefore.skillMutationPendingKeys[installWaiter.pendingKey] === true;
+      const shouldResolvePluginInstall =
+        pluginInstallWaiter != null &&
+        workspaceRuntimeBefore != null &&
+        clearedMutationPendingKeys.includes(pluginInstallWaiter.pendingKey) &&
+        workspaceRuntimeBefore.skillMutationPendingKeys[pluginInstallWaiter.pendingKey] === true;
 
       set((s) => {
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
@@ -885,6 +947,99 @@ export function createControlSocketHelpers(
         RUNTIME.skillInstallWaiters.delete(workspaceId);
         installWaiter.resolve();
       }
+      if (shouldResolvePluginInstall && pluginInstallWaiter) {
+        RUNTIME.pluginInstallWaiters.delete(workspaceId);
+        pluginInstallWaiter.resolve();
+      }
+      return;
+    }
+
+    if (evt.type === "plugins_catalog") {
+      set((s) => {
+        const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
+        const selectedPluginId = workspaceRuntime.selectedPluginId;
+        const selectedPluginScope = workspaceRuntime.selectedPluginScope;
+        const selectedPlugin =
+          selectedPluginId
+            ? evt.catalog.plugins.find((plugin) =>
+              plugin.id === selectedPluginId
+              && (selectedPluginScope === null || plugin.scope === selectedPluginScope)) ?? null
+            : null;
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...workspaceRuntime,
+              pluginsCatalog: evt.catalog,
+              pluginsLoading: false,
+              pluginsError: null,
+              skillMutationPendingKeys: omitSkillMutationPendingKeys(
+                workspaceRuntime.skillMutationPendingKeys,
+                evt.clearedMutationPendingKeys ?? [],
+              ),
+              selectedPluginId: selectedPlugin ? selectedPluginId : null,
+              selectedPluginScope: selectedPlugin?.scope ?? null,
+              selectedPlugin,
+            },
+          },
+        };
+      });
+
+      const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
+      const workspaceRuntimeAfter = get().workspaceRuntimeById[workspaceId];
+      const clearedMutationPendingKeys = evt.clearedMutationPendingKeys ?? [];
+      if (
+        pluginInstallWaiter &&
+        workspaceRuntimeAfter &&
+        clearedMutationPendingKeys.includes(pluginInstallWaiter.pendingKey)
+      ) {
+        RUNTIME.pluginInstallWaiters.delete(workspaceId);
+        pluginInstallWaiter.resolve();
+      }
+      return;
+    }
+
+    if (evt.type === "plugin_detail") {
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            selectedPluginId: evt.plugin?.id ?? null,
+            selectedPluginScope: evt.plugin?.scope ?? null,
+            selectedPlugin: evt.plugin,
+            pluginsLoading: false,
+            pluginsError: null,
+          },
+        },
+      }));
+      return;
+    }
+
+    if (evt.type === "plugin_install_preview") {
+      set((s) => {
+        const rt = s.workspaceRuntimeById[workspaceId];
+        const previewPending = rt.skillMutationPendingKeys["plugin:preview"] === true;
+        const fromUserPreviewRequest = evt.fromUserPreviewRequest === true;
+        const nextPreview =
+          fromUserPreviewRequest || !previewPending ? evt.preview : rt.selectedPluginPreview;
+        const pendingKeys = { ...rt.skillMutationPendingKeys };
+        if (fromUserPreviewRequest) {
+          delete pendingKeys["plugin:preview"];
+        }
+        return {
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...rt,
+              selectedPluginPreview: nextPreview,
+              skillMutationPendingKeys: pendingKeys,
+              pluginsLoading: false,
+              pluginsError: null,
+            },
+          },
+        };
+      });
       return;
     }
 
@@ -927,7 +1082,7 @@ export function createControlSocketHelpers(
       set((s) => {
         const rt = s.workspaceRuntimeById[workspaceId];
         const previewPending = rt.skillMutationPendingKeys.preview === true;
-        const fromUserPreviewRequest = evt.fromUserPreviewRequest !== false;
+        const fromUserPreviewRequest = evt.fromUserPreviewRequest === true;
         const nextPreview =
           fromUserPreviewRequest || !previewPending ? evt.preview : rt.selectedSkillPreview;
         const pendingKeys = { ...rt.skillMutationPendingKeys };
@@ -1102,6 +1257,7 @@ export function createControlSocketHelpers(
     if (evt.type === "error") {
       const workspaceRuntimeBefore = get().workspaceRuntimeById[workspaceId];
       const installWaiter = RUNTIME.skillInstallWaiters.get(workspaceId);
+      const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
       const hasPendingSkillStateBefore =
         workspaceRuntimeBefore &&
         (workspaceRuntimeBefore.skillCatalogLoading
@@ -1111,13 +1267,20 @@ export function createControlSocketHelpers(
         workspaceRuntimeBefore &&
         hasPendingSkillStateBefore &&
         workspaceRuntimeBefore.skillMutationPendingKeys[installWaiter.pendingKey] === true;
+      const shouldRejectPluginInstall =
+        pluginInstallWaiter != null &&
+        workspaceRuntimeBefore != null &&
+        workspaceRuntimeBefore.skillMutationPendingKeys[pluginInstallWaiter.pendingKey] === true;
 
       set((s) => {
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
         const hasPendingMemories = workspaceRuntime.memoriesLoading;
+        const pendingSkillMutationKeys = Object.keys(workspaceRuntime.skillMutationPendingKeys);
+        const hasPendingPluginMutation = pendingSkillMutationKeys.some((key) => key.startsWith("plugin:"));
         const hasPendingSkillState =
           workspaceRuntime.skillCatalogLoading
-          || Object.keys(workspaceRuntime.skillMutationPendingKeys).length > 0;
+          || pendingSkillMutationKeys.some((key) => !key.startsWith("plugin:"));
+        const hasPendingAnyMutation = hasPendingSkillState || hasPendingPluginMutation;
         const hasPendingBackupState =
           workspaceRuntime.workspaceBackupsLoading
           || Object.keys(workspaceRuntime.workspaceBackupPendingActionKeys).length > 0;
@@ -1135,12 +1298,22 @@ export function createControlSocketHelpers(
             [workspaceId]: {
               ...workspaceRuntime,
               memoriesLoading: hasPendingMemories ? false : workspaceRuntime.memoriesLoading,
+              ...(hasPendingAnyMutation
+                ? {
+                    skillMutationPendingKeys: {},
+                    skillMutationError: evt.message,
+                  }
+                : {}),
               ...(hasPendingSkillState
                 ? {
                     skillCatalogLoading: false,
                     skillCatalogError: evt.message,
-                    skillMutationPendingKeys: {},
-                    skillMutationError: evt.message,
+                  }
+                : {}),
+              ...(workspaceRuntime.pluginsLoading || hasPendingPluginMutation
+                ? {
+                    pluginsLoading: false,
+                    pluginsError: evt.message,
                   }
                 : {}),
               ...(hasPendingBackupState
@@ -1166,6 +1339,10 @@ export function createControlSocketHelpers(
         RUNTIME.skillInstallWaiters.delete(workspaceId);
         installWaiter.reject(new Error(evt.message));
       }
+      if (shouldRejectPluginInstall && pluginInstallWaiter) {
+        RUNTIME.pluginInstallWaiters.delete(workspaceId);
+        pluginInstallWaiter.reject(new Error(evt.message));
+      }
       return;
     }
 
@@ -1190,8 +1367,16 @@ export function createControlSocketHelpers(
     workspaceId: string,
     method: string,
     params: Record<string, unknown>,
+    errorDetailOut?: { message?: string },
   ): Promise<boolean> {
+    const setErrorDetail = (message: string) => {
+      if (errorDetailOut) {
+        errorDetailOut.message = message;
+      }
+    };
+
     if (isWorkspaceDisposed(workspaceId)) {
+      setErrorDetail("Workspace control session was disposed.");
       return false;
     }
     try {
@@ -1206,6 +1391,7 @@ export function createControlSocketHelpers(
           ? [event]
           : [];
       if (isWorkspaceDisposed(workspaceId)) {
+        setErrorDetail("Workspace control session was disposed.");
         return false;
       }
       if (normalizedEvents.length === 0) {
@@ -1216,10 +1402,14 @@ export function createControlSocketHelpers(
         applyJsonRpcControlEvent(get, set, workspaceId, nextEvent);
         if (nextEvent.type === "error") {
           ok = false;
+          if (typeof (nextEvent as Extract<ServerEvent, { type: "error" }>).message === "string") {
+            setErrorDetail((nextEvent as Extract<ServerEvent, { type: "error" }>).message);
+          }
         }
       }
       return ok;
-    } catch {
+    } catch (err) {
+      setErrorDetail(err instanceof Error ? err.message : String(err));
       return false;
     }
   }
@@ -1235,11 +1425,19 @@ export function createControlSocketHelpers(
         RUNTIME.skillInstallWaiters.delete(workspaceId);
         installWaiter.reject(new Error("Control connection closed"));
       }
+      const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
+      if (pluginInstallWaiter) {
+        RUNTIME.pluginInstallWaiters.delete(workspaceId);
+        pluginInstallWaiter.reject(new Error("Control connection closed"));
+      }
     }
     disposedWorkspaces.add(workspaceId);
     const cleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
     cleanup?.();
     jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
+    const routerCleanup = jsonRpcRouterCleanupByWorkspace.get(workspaceId);
+    routerCleanup?.();
+    jsonRpcRouterCleanupByWorkspace.delete(workspaceId);
     jsonRpcBootstrapPromises.delete(workspaceId);
     jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
     controlStoreGettersByWorkspace.delete(workspaceId);
@@ -1265,6 +1463,7 @@ export function createControlSocketHelpers(
       getWorkspaceStateSnapshot: (workspaceId: string) => ({
         isDisposed: isWorkspaceDisposed(workspaceId),
         hasLifecycleCleanup: jsonRpcLifecycleCleanupByWorkspace.has(workspaceId),
+        hasRouterCleanup: jsonRpcRouterCleanupByWorkspace.has(workspaceId),
         hasBootstrapPromise: jsonRpcBootstrapPromises.has(workspaceId),
         hasStoreGetter: controlStoreGettersByWorkspace.has(workspaceId),
         hasStoreSetter: controlStoreSettersByWorkspace.has(workspaceId),
@@ -1280,6 +1479,9 @@ export function createControlSocketHelpers(
           const cleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
           cleanup?.();
           jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
+          const routerCleanup = jsonRpcRouterCleanupByWorkspace.get(workspaceId);
+          routerCleanup?.();
+          jsonRpcRouterCleanupByWorkspace.delete(workspaceId);
           jsonRpcBootstrapPromises.delete(workspaceId);
           jsonRpcBootstrapQueuedByWorkspace.delete(workspaceId);
           controlStoreGettersByWorkspace.delete(workspaceId);
@@ -1290,6 +1492,10 @@ export function createControlSocketHelpers(
           cleanup();
         }
         jsonRpcLifecycleCleanupByWorkspace.clear();
+        for (const cleanup of jsonRpcRouterCleanupByWorkspace.values()) {
+          cleanup();
+        }
+        jsonRpcRouterCleanupByWorkspace.clear();
         jsonRpcBootstrapPromises.clear();
         jsonRpcBootstrapQueuedByWorkspace.clear();
         controlStoreGettersByWorkspace.clear();

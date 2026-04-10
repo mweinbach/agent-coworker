@@ -55,6 +55,7 @@ import {
 import { deriveConnectedProviders, normalizePersistedProviderState } from "../persistedProviderState";
 import { deriveDefaultLmStudioUiEnabled, normalizePersistedProviderUiState } from "../providerUiState";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
+import { resolvePluginCatalogWorkspaceSelection, resolvePluginManagementWorkspaceId } from "../pluginManagement";
 import {
   type CachedSessionSnapshot,
   normalizeWorkspaceUserProfile,
@@ -247,6 +248,8 @@ const persistedThreadSchema = z.object({
 const persistedUiSchema = z.object({
   selectedWorkspaceId: normalizedNullableSelectionSchema.optional(),
   selectedThreadId: normalizedNullableSelectionSchema.optional(),
+  pluginManagementWorkspaceId: normalizedNullableSelectionSchema.optional(),
+  pluginManagementMode: z.enum(["auto", "global", "workspace"]).optional(),
   view: normalizedViewSchema.optional(),
   settingsPage: normalizedSettingsPageSchema.optional(),
   lastNonSettingsView: normalizedViewSchema.optional(),
@@ -258,6 +261,8 @@ const persistedUiSchema = z.object({
 }).passthrough().transform((ui): CachedDesktopUiState => ({
   selectedWorkspaceId: ui.selectedWorkspaceId ?? null,
   selectedThreadId: ui.selectedThreadId ?? null,
+  pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId ?? null,
+  pluginManagementMode: ui.pluginManagementMode ?? "auto",
   view: ui.view ?? "chat",
   settingsPage: ui.settingsPage ?? "providers",
   lastNonSettingsView: ui.lastNonSettingsView ?? "chat",
@@ -309,10 +314,18 @@ function buildResolvedDesktopUiState(
   const normalizedUi = persistedUiSchema.parse(ui ?? {});
   const workspaceByRecency = [...workspaces].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
   const fallbackSelectedWorkspaceId = workspaceByRecency[0]?.id ?? null;
-  const selectedWorkspaceId =
-    normalizedUi.selectedWorkspaceId && workspaces.some((workspace) => workspace.id === normalizedUi.selectedWorkspaceId)
-      ? normalizedUi.selectedWorkspaceId
-      : fallbackSelectedWorkspaceId;
+  const selection = resolvePluginCatalogWorkspaceSelection({
+    workspaces,
+    selectedWorkspaceId:
+      normalizedUi.selectedWorkspaceId && workspaces.some((workspace) => workspace.id === normalizedUi.selectedWorkspaceId)
+        ? normalizedUi.selectedWorkspaceId
+        : fallbackSelectedWorkspaceId,
+    pluginManagementWorkspaceId: normalizedUi.pluginManagementWorkspaceId,
+    pluginManagementMode: normalizedUi.pluginManagementMode,
+  });
+  const selectedWorkspaceId = selection.selectedWorkspaceId;
+  const pluginManagementWorkspaceId = selection.pluginManagementWorkspaceId;
+  const pluginManagementMode = selection.pluginManagementMode;
   const workspaceThreads = selectedWorkspaceId
     ? threads
         .filter((thread) => thread.workspaceId === selectedWorkspaceId)
@@ -340,6 +353,8 @@ function buildResolvedDesktopUiState(
   return {
     selectedWorkspaceId,
     selectedThreadId,
+    pluginManagementWorkspaceId,
+    pluginManagementMode,
     view: normalizedUi.view ?? "chat",
     settingsPage: normalizeSettingsPageId(normalizedUi.settingsPage),
     lastNonSettingsView,
@@ -446,6 +461,8 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       threads: state.threads,
       selectedWorkspaceId: ui.selectedWorkspaceId,
       selectedThreadId: ui.selectedThreadId,
+      pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId,
+      pluginManagementMode: ui.pluginManagementMode,
       providerStatusByName: state.providerState?.statusByName ?? {},
       providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
       providerConnected: connectedProviders,
@@ -487,6 +504,8 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
         const ui = buildResolvedDesktopUiState(state.workspaces, state.threads, {
           selectedWorkspaceId: get().selectedWorkspaceId,
           selectedThreadId: get().selectedThreadId,
+          pluginManagementWorkspaceId: get().pluginManagementWorkspaceId,
+          pluginManagementMode: get().pluginManagementMode,
           view: get().view,
           settingsPage: get().settingsPage,
           lastNonSettingsView: get().lastNonSettingsView,
@@ -523,6 +542,8 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           threads: state.threads,
           selectedWorkspaceId: ui.selectedWorkspaceId,
           selectedThreadId: ui.selectedThreadId,
+          pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId,
+          pluginManagementMode: ui.pluginManagementMode,
           providerStatusByName: state.providerState?.statusByName ?? {},
           providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
           providerConnected: connectedProviders,
@@ -573,22 +594,32 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
             void current.selectThread(ui.selectedThreadId);
           });
         } else if (ui.selectedWorkspaceId && ui.view === "chat") {
+          const selectedWorkspaceId = ui.selectedWorkspaceId;
           runAfterInitialPaint(() => {
             const current = get();
-            if (current.selectedWorkspaceId !== ui.selectedWorkspaceId || current.view !== "chat") {
+            if (current.selectedWorkspaceId !== selectedWorkspaceId || current.view !== "chat") {
               return;
             }
-            void current.selectWorkspace(ui.selectedWorkspaceId);
+            void current.selectWorkspace(selectedWorkspaceId);
           });
         } else if (ui.selectedWorkspaceId && ui.view === "skills") {
+          const startupWorkspaceId = resolvePluginManagementWorkspaceId(
+            state.workspaces,
+            ui.pluginManagementWorkspaceId,
+          ) ?? ui.selectedWorkspaceId;
           runAfterInitialPaint(() => {
             const current = get();
-            if (current.selectedWorkspaceId !== ui.selectedWorkspaceId || current.view !== "skills") {
+            if (
+              current.selectedWorkspaceId !== ui.selectedWorkspaceId
+              || current.pluginManagementWorkspaceId !== ui.pluginManagementWorkspaceId
+              || current.pluginManagementMode !== ui.pluginManagementMode
+              || current.view !== "skills"
+            ) {
               return;
             }
-            ensureWorkspaceRuntime(get, set, ui.selectedWorkspaceId);
-            void ensureServerRunning(get, set, ui.selectedWorkspaceId).then(() => {
-              ensureControlSocket(get, set, ui.selectedWorkspaceId);
+            ensureWorkspaceRuntime(get, set, startupWorkspaceId);
+            void ensureServerRunning(get, set, startupWorkspaceId).then(() => {
+              ensureControlSocket(get, set, startupWorkspaceId);
             });
           });
         }

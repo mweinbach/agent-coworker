@@ -304,6 +304,67 @@ export function getSavedProviderApiKey(config: AgentConfig, provider: ProviderNa
   return getSavedProviderApiKeyForHome(resolveAuthHomeDir(config), provider);
 }
 
+function isSubpathOf(parent: string, candidate: string): boolean {
+  const relative = path.relative(parent, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function rebaseAbsolutePathWithinWorkspace(
+  filePath: string | undefined,
+  previousWorkspaceRoot: string,
+  nextWorkspaceRoot: string,
+): string | undefined {
+  if (!filePath) {
+    return undefined;
+  }
+  if (!isSubpathOf(previousWorkspaceRoot, filePath)) {
+    return filePath;
+  }
+  return path.join(nextWorkspaceRoot, path.relative(previousWorkspaceRoot, filePath));
+}
+
+export function rebaseWorkspaceConfig(config: AgentConfig, cwd: string): AgentConfig {
+  const previousWorkspaceRoot = path.dirname(config.projectAgentDir);
+  if (previousWorkspaceRoot === cwd) {
+    return {
+      ...config,
+      workingDirectory: cwd,
+    };
+  }
+
+  const projectAgentDir = path.join(cwd, ".agent");
+  const workspaceAgentsDir = path.join(cwd, ".agents");
+  const workspacePluginsDir = path.join(workspaceAgentsDir, "plugins");
+  const builtInSkillsDir = path.join(config.builtInDir, "skills");
+  const builtInSkillsEnabled = config.skillsDirs.includes(builtInSkillsDir);
+
+  return {
+    ...config,
+    workingDirectory: cwd,
+    projectAgentDir,
+    workspaceAgentsDir,
+    workspacePluginsDir,
+    outputDirectory: rebaseAbsolutePathWithinWorkspace(config.outputDirectory, previousWorkspaceRoot, cwd),
+    uploadsDirectory: rebaseAbsolutePathWithinWorkspace(config.uploadsDirectory, previousWorkspaceRoot, cwd),
+    skillsDirs: [
+      path.join(projectAgentDir, "skills"),
+      ...config.skillsDirs.filter((skillsDir) =>
+        skillsDir !== path.join(config.projectAgentDir, "skills")
+        && skillsDir !== builtInSkillsDir
+      ),
+      ...(builtInSkillsEnabled ? [builtInSkillsDir] : []),
+    ],
+    memoryDirs: [
+      path.join(projectAgentDir, "memory"),
+      ...config.memoryDirs.filter((memoryDir) => memoryDir !== path.join(config.projectAgentDir, "memory")),
+    ],
+    configDirs: [
+      projectAgentDir,
+      ...config.configDirs.filter((configDir) => configDir !== config.projectAgentDir),
+    ],
+  };
+}
+
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<AgentConfig> {
   const cwd = options.cwd ?? process.cwd();
   const homedir = options.homedir ?? os.homedir();
@@ -312,6 +373,10 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
   const projectAgentDir = path.join(cwd, ".agent");
   const userAgentDir = path.join(homedir, ".agent");
+  const workspaceAgentsDir = path.join(cwd, ".agents");
+  const userAgentsDir = path.join(homedir, ".agents");
+  const workspacePluginsDir = path.join(workspaceAgentsDir, "plugins");
+  const userPluginsDir = path.join(userAgentsDir, "plugins");
   const builtInConfigDir = path.join(builtInDir, "config");
   const coworkPaths = getAiCoworkerPaths({ homedir });
 
@@ -551,6 +616,10 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
     projectAgentDir,
     userAgentDir,
+    workspaceAgentsDir,
+    userAgentsDir,
+    workspacePluginsDir,
+    userPluginsDir,
     builtInDir,
     builtInConfigDir,
 

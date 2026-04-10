@@ -97,7 +97,7 @@ describe("skills catalog page", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(SkillsCatalogPage, { workspaceId: "ws-1" }));
+        root.render(createElement(SkillsCatalogPage, { workspaceId: "ws-1", searchQuery: "", setSearchQuery: () => {} }));
       });
 
       expect(container.firstElementChild?.className).toContain("app-skills-view");
@@ -142,12 +142,210 @@ describe("skills catalog page", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(SkillsCatalogPage, { workspaceId: "ws-1" }));
+        root.render(createElement(SkillsCatalogPage, { workspaceId: "ws-1", searchQuery: "", setSearchQuery: () => {} }));
       });
 
       expect(container.textContent).toContain("No skills found");
       expect(container.textContent).toContain("Install a skill to give Codex superpowers.");
       expect(container.textContent).not.toContain("Loading...");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
+  test("shows inline error state when the skills catalog refresh fails", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      workspaceRuntimeById: {
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          skillsCatalog: null,
+          skillCatalogLoading: false,
+          skillCatalogError: "Unable to refresh skills catalog.",
+        },
+      },
+      refreshSkillsCatalog: async () => {},
+    } as any);
+
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(SkillsCatalogPage, { workspaceId: "ws-1", searchQuery: "", setSearchQuery: () => {} }));
+      });
+
+      expect(container.textContent).toContain("Connection issue");
+      expect(container.textContent).toContain("Unable to refresh skills catalog.");
+      expect(container.textContent).toContain("Retry");
+      expect(container.textContent).not.toContain("No skills found");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
+  test("shows user-scoped plugin skills in the Global view", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      workspaceRuntimeById: {
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          skillsCatalog: {
+            scopes: [],
+            effectiveSkills: [],
+            installations: [
+              {
+                installationId: "plugin:figma-toolkit:import-frame",
+                name: "figma-toolkit:import-frame",
+                description: "Import a frame",
+                scope: "user",
+                enabled: true,
+                writable: false,
+                managed: false,
+                effective: true,
+                state: "effective",
+                rootDir: "/tmp/home/.agents/plugins/figma-toolkit/skills/import-frame",
+                skillPath: "/tmp/home/.agents/plugins/figma-toolkit/skills/import-frame/SKILL.md",
+                path: "/tmp/home/.agents/plugins/figma-toolkit/skills/import-frame/SKILL.md",
+                triggers: ["import-frame"],
+                descriptionSource: "frontmatter",
+                plugin: {
+                  pluginId: "figma-toolkit",
+                  name: "figma-toolkit",
+                  displayName: "Figma Toolkit",
+                  scope: "user",
+                  discoveryKind: "direct",
+                  rootDir: "/tmp/home/.agents/plugins/figma-toolkit",
+                },
+              },
+            ],
+          },
+          skillCatalogLoading: false,
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(SkillsCatalogPage, {
+          workspaceId: "ws-1",
+          managementScope: "global",
+          searchQuery: "",
+          setSearchQuery: () => {},
+        }));
+      });
+
+      expect(container.textContent).toContain("figma-toolkit:import-frame");
+      expect(container.textContent).toContain("Figma Toolkit");
+      expect(container.textContent).not.toContain("No skills found");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
+  test("shows standalone user-scoped skills in the Global view", async () => {
+    const previousState = useAppStore.getState();
+
+    useAppStore.setState({
+      workspaceRuntimeById: {
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          skillsCatalog: {
+            scopes: [],
+            effectiveSkills: [],
+            installations: [
+              {
+                installationId: "user:custom-toolkit",
+                name: "custom-toolkit",
+                description: "Reusable user skill",
+                scope: "user",
+                enabled: true,
+                writable: false,
+                managed: false,
+                effective: true,
+                state: "effective",
+                rootDir: "/tmp/home/.agent/skills/custom-toolkit",
+                skillPath: "/tmp/home/.agent/skills/custom-toolkit/SKILL.md",
+                path: "/tmp/home/.agent/skills/custom-toolkit/SKILL.md",
+                triggers: ["custom-toolkit"],
+                descriptionSource: "frontmatter",
+                diagnostics: [],
+              },
+              {
+                installationId: "project:local-only",
+                name: "local-only",
+                description: "Workspace-only skill",
+                scope: "project",
+                enabled: true,
+                writable: true,
+                managed: false,
+                effective: true,
+                state: "effective",
+                rootDir: "/tmp/workspace/.agent/skills/local-only",
+                skillPath: "/tmp/workspace/.agent/skills/local-only/SKILL.md",
+                path: "/tmp/workspace/.agent/skills/local-only/SKILL.md",
+                triggers: ["local-only"],
+                descriptionSource: "frontmatter",
+                diagnostics: [],
+              },
+            ],
+          },
+          skillCatalogLoading: false,
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(SkillsCatalogPage, {
+          workspaceId: "ws-1",
+          managementScope: "global",
+          searchQuery: "",
+          setSearchQuery: () => {},
+        }));
+      });
+
+      expect(container.textContent).toContain("custom-toolkit");
+      expect(container.textContent).not.toContain("local-only");
+      expect(container.textContent).not.toContain("No skills found");
 
       await act(async () => {
         root.unmount();

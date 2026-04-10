@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { discoverSkills, stripSkillFrontMatter } from "../skills";
+import { discoverSkillsForConfig, stripSkillFrontMatter } from "../skills";
 import type { AgentConfig, CommandInfo, CommandSource } from "../types";
 
 export type CommandDefinition = CommandInfo & {
@@ -103,7 +103,7 @@ async function buildCommandMap(config: AgentConfig): Promise<Map<string, Command
     map.set(normalized, commandInfo(name, command.description, command.source ?? "command", template));
   }
 
-  const skills = await discoverSkills(config.skillsDirs);
+  const skills = await discoverSkillsForConfig(config);
   for (const skill of skills) {
     if (!skill.enabled) continue;
     const normalized = normalizeName(skill.name);

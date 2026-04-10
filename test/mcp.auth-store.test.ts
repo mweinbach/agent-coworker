@@ -7,6 +7,7 @@ import type { AgentConfig } from "../src/types";
 import {
   completeMCPServerOAuth,
   readMCPAuthFiles,
+  readMCPServerOAuthPending,
   renameMCPServerCredentials,
   resolveMCPServerAuthState,
   setMCPServerApiKeyCredential,
@@ -54,6 +55,20 @@ function inheritedServer(name: string): MCPRegistryServer {
     inherited: true,
     transport: { type: "http", url: "https://mcp.example.com" },
     auth: { type: "api_key", headerName: "Authorization", prefix: "Bearer" },
+  };
+}
+
+function pluginServer(name: string, pluginScope: "workspace" | "user"): MCPRegistryServer {
+  return {
+    name,
+    source: "plugin",
+    inherited: pluginScope !== "workspace",
+    pluginId: `${name}-plugin`,
+    pluginName: `${name}-plugin`,
+    pluginDisplayName: `${name} Plugin`,
+    pluginScope,
+    transport: { type: "http", url: "https://mcp.plugin.example.com" },
+    auth: { type: "oauth", oauthMode: "auto" },
   };
 }
 
@@ -123,6 +138,106 @@ describe("mcp auth store", () => {
       expect(state.mode).toBe("missing");
       expect(state.scope).toBe("workspace");
       expect(state.message).toContain("API key required");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("workspace-scoped plugin OAuth state stays in workspace auth storage", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-plugin-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-plugin-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-plugin-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+    const server = pluginServer("plugin-oauth", "workspace");
+
+    try {
+      await setMCPServerOAuthPending({
+        config,
+        server,
+        pending: {
+          challengeId: "challenge-1",
+          state: "state-1",
+          codeVerifier: "verifier-1",
+          redirectUri: "http://127.0.0.1/callback",
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      });
+
+      const workspaceFiles = await readMCPAuthFiles(config);
+      expect(workspaceFiles.workspace.doc.servers["plugin-oauth"]?.oauth?.pending?.challengeId).toBe("challenge-1");
+      expect(workspaceFiles.user.doc.servers["plugin-oauth"]).toBeUndefined();
+
+      const pendingState = await readMCPServerOAuthPending({ config, server });
+      expect(pendingState.scope).toBe("workspace");
+      expect(pendingState.pending?.challengeId).toBe("challenge-1");
+
+      await completeMCPServerOAuth({
+        config,
+        server,
+        tokens: {
+          accessToken: "workspace-access-token",
+          tokenType: "Bearer",
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      });
+
+      const resolved = await resolveMCPServerAuthState(config, server);
+      expect(resolved.scope).toBe("workspace");
+      expect(resolved.mode).toBe("oauth");
+      expect(resolved.oauthTokens?.accessToken).toBe("workspace-access-token");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("user-scoped plugin OAuth state stays in user auth storage", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-plugin-user-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-plugin-user-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-plugin-user-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+    const server = pluginServer("plugin-user-oauth", "user");
+
+    try {
+      await setMCPServerOAuthPending({
+        config,
+        server,
+        pending: {
+          challengeId: "challenge-2",
+          state: "state-2",
+          codeVerifier: "verifier-2",
+          redirectUri: "http://127.0.0.1/callback",
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      });
+
+      const files = await readMCPAuthFiles(config);
+      expect(files.workspace.doc.servers["plugin-user-oauth"]).toBeUndefined();
+      expect(files.user.doc.servers["plugin-user-oauth"]?.oauth?.pending?.challengeId).toBe("challenge-2");
+
+      const pendingState = await readMCPServerOAuthPending({ config, server });
+      expect(pendingState.scope).toBe("user");
+      expect(pendingState.pending?.challengeId).toBe("challenge-2");
+
+      await completeMCPServerOAuth({
+        config,
+        server,
+        tokens: {
+          accessToken: "user-access-token",
+          tokenType: "Bearer",
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      });
+
+      const resolved = await resolveMCPServerAuthState(config, server);
+      expect(resolved.scope).toBe("user");
+      expect(resolved.mode).toBe("oauth");
+      expect(resolved.oauthTokens?.accessToken).toBe("user-access-token");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

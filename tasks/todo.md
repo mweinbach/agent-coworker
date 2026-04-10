@@ -1,5 +1,73 @@
 # Task Plan
 
+## Fix Plugin Symlink Boundary Regressions
+
+- [x] Canonicalize plugin-local MCP transport path checks before containment validation so symlinked command/arg/cwd paths cannot escape the plugin root.
+- [x] Canonicalize marketplace entry source paths before containment validation so symlinked marketplace bundles cannot escape the marketplace root.
+- [x] Add focused regression coverage for both symlink escape paths.
+- [x] Re-run focused Bun tests plus `bun run typecheck`.
+
+## Fix Plugin Symlink Boundary Regressions Review
+
+- `src/utils/paths.ts` now exposes a symlink-safe canonicalization helper that resolves through existing ancestors, so boundary checks catch escapes even when the final path exists only through a symlink.
+- `src/mcp/configRegistry/layers.ts` now validates plugin-local stdio `command`, `args`, and `cwd` paths against canonical plugin-root and target paths before rebasing them into the loaded MCP config.
+- `src/plugins/marketplace.ts` now canonicalizes marketplace roots and source paths before containment validation, blocking nested symlink bundles that point outside the marketplace tree.
+- Added focused regressions in `test/mcp.config-registry.test.ts` and `test/plugins.catalog.test.ts`.
+- Verification passed with:
+  - `~/.bun/bin/bun test test/mcp.config-registry.test.ts test/plugins.catalog.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+  - `~/.bun/bin/bun test` on 2026-04-02 (`2938 pass`, `3 skip`, `0 fail`)
+
+## Fix Plugin Install Review Regressions Follow-up
+
+- [x] Stop inventing default plugin `.mcp.json` / `.app.json` paths when those files are absent.
+- [x] Reject explicitly configured plugin `skills` directories that do not exist.
+- [x] Normalize local `.codex-plugin/plugin.json` install inputs back to the plugin bundle root.
+- [x] Add focused regression coverage and rerun plugin tests, `bun run typecheck`, and the full `bun test` suite.
+
+## Fix Plugin Install Review Regressions Follow-up Review
+
+- `src/plugins/manifest.ts` now only assigns implicit plugin MCP/app config paths when `.mcp.json` / `.app.json` actually exist on disk, so skill-only bundles no longer surface bogus MCP validation noise.
+- `src/plugins/manifest.ts` now treats an explicit `skills` manifest path as a real contract: missing or non-directory paths fail manifest validation instead of silently behaving like an empty skill bundle.
+- `src/plugins/sourceResolver.ts` now normalizes local `.codex-plugin/plugin.json` inputs back to the bundle root before discovery, matching the existing GitHub blob/raw handling.
+- Added focused regressions in `test/plugins.catalog.test.ts` and `test/plugins.sourceResolver.test.ts`.
+- Verification passed with:
+  - `bun test test/plugins.catalog.test.ts test/plugins.sourceResolver.test.ts`
+  - `bun run typecheck`
+  - `bun test` on 2026-04-01 (`2913 pass`, `3 skip`, `0 fail`)
+
+## Fix Plugin Review Regressions
+
+- [ ] Fix duplicate-scope plugin rendering in the desktop catalog so same-ID workspace/user plugins no longer collide in React state or list identity.
+- [ ] Restore a visible skills catalog error state and wire failed refreshes back into `skillCatalogError`.
+- [ ] Make plugin detail reads fail fast with a terminal validation error for missing or ambiguous plugin selections instead of hanging the JSON-RPC request.
+- [ ] Add/update focused backend and desktop regression tests for the above fixes.
+- [ ] Re-run focused Bun test slices, `bun run typecheck`, and a manual desktop walkthrough before closing the task.
+
+## Add Plugin Install Flow
+
+- [x] Add backend plugin source preview/install support that materializes Codex-style plugin bundles into workspace or user `.agents/plugins` roots without folding plugins into `skillsDirs`.
+- [x] Extend plugin JSON-RPC/session/protocol/schema contracts plus desktop runtime/store state for plugin install preview/install mutations.
+- [x] Add a desktop `+ New plugin` dialog in the Plugins page using the same preview/install interaction pattern as skills, then verify with focused tests, typecheck, docs generation, and a manual desktop walkthrough.
+
+## Add Codex-style First-Class Plugin Layer
+
+- [x] Extend core config/types with `.agents` plugin roots and plugin-aware skill/MCP metadata without folding plugins into `skillsDirs`.
+- [x] Add plugin discovery/catalog/override/MCP parsing modules and bridge enabled plugin skills into source-aware skill scanning.
+- [x] Integrate plugin-aware skills into prompt loading, `skill` tool resolution, slash commands, permissions, and MCP runtime layering/auth scope.
+- [x] Add plugin catalog + enable/disable control methods/events through protocol, JSON-RPC, `SkillManager`, and `AgentSession`.
+- [x] Update the desktop `skills` view shell into visible `Plugins` UI with `Plugins | Skills` switch, plugin catalog/detail state, plugin-owned skill badges/actions, and plugin MCP read-only entries.
+- [x] Add/update focused backend and desktop tests, run targeted Bun test slices plus `bun run typecheck`, then do a manual desktop walkthrough with artifacts.
+
+## Add Plugin Install Flow Review
+
+- Added dedicated plugin source resolution and install operations so Codex-style bundles can be previewed and installed into workspace or user `.agents/plugins` roots without piggybacking on `skillsDirs`.
+- Exposed the new preview/install flow through JSON-RPC control routes, session management, protocol/schema types, and desktop store/runtime state, including plugin install previews and waiter handling.
+- Finished the desktop renderer integration with a `+ New plugin` dialog, management-workspace-aware store actions, and a Global-default top-bar selector that now drives the plugin/skills management surface.
+- Focused verification passed with:
+  - `~/.bun/bin/bun test test/server.jsonrpc.control.test.ts apps/desktop/test/app-topbar.test.tsx apps/desktop/test/plugins-catalog-page.test.ts apps/desktop/test/skills-actions.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+
 ## Fix Mobile Relay Pairing Trust and Workspace Cache
 
 - [x] Confirm the three mobile-relay review findings are still real against current `HEAD`.

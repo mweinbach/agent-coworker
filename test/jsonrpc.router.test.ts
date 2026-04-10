@@ -49,12 +49,13 @@ function createRouterHarness() {
       readSnapshot: () => null,
     },
     workspaceControl: {
-      getOrCreateBinding: (() => {
+      getOrCreateBinding: (async () => {
         throw new Error("not used");
       }) as any,
       withSession: (async () => {
         throw new Error("not used");
       }) as any,
+      readState: (async () => []) as any,
     },
     journal: {
       enqueue: async (event) => {
@@ -169,12 +170,13 @@ function createThreadResumeHarness() {
       readSnapshot: () => null,
     },
     workspaceControl: {
-      getOrCreateBinding: (() => {
+      getOrCreateBinding: (async () => {
         throw new Error("not used");
       }) as any,
       withSession: (async () => {
         throw new Error("not used");
       }) as any,
+      readState: (async () => []) as any,
     },
     journal: {
       enqueue: async () => {},
@@ -296,12 +298,13 @@ function createThreadReadHarness(snapshotOverride?: any) {
       readSnapshot: () => snapshot,
     },
     workspaceControl: {
-      getOrCreateBinding: (() => {
+      getOrCreateBinding: (async () => {
         throw new Error("not used");
       }) as any,
       withSession: (async () => {
         throw new Error("not used");
       }) as any,
+      readState: (async () => []) as any,
     },
     journal: {
       enqueue: async () => {},

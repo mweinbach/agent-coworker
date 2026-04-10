@@ -3,10 +3,13 @@ import path from "node:path";
 import { z } from "zod";
 
 import type {
+  PluginCatalogEntry,
   SkillCatalogSnapshot,
   SkillEntry,
   SkillInstallationDiagnostic,
   SkillInstallationEntry,
+  SkillInterfaceMeta,
+  SkillPluginOwner,
   SkillScope,
   SkillScopeDescriptor,
 } from "../types";
@@ -40,6 +43,18 @@ type ScanScopeDir = {
   scopeAnchorDir: string;
   enabled: boolean;
 };
+
+export type SkillCatalogSource =
+  | {
+      kind: "standalone";
+      descriptor: SkillScopeDescriptor;
+    }
+  | {
+      kind: "plugin";
+      plugin: PluginCatalogEntry;
+      skill: PluginCatalogEntry["skills"][number];
+      enabled: boolean;
+    };
 
 const unknownRecordSchema = z.record(z.string(), z.unknown());
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
@@ -190,10 +205,10 @@ async function readSkillFileAsDataUri(skillRoot: string, relativePath: string): 
   }
 }
 
-function parseAgentInterfaceYaml(raw: string): SkillEntry["interface"] | null {
+function parseAgentInterfaceYaml(raw: string): SkillInterfaceMeta | null {
   const lines = raw.split(/\r?\n/);
   let inInterface = false;
-  const out: NonNullable<SkillEntry["interface"]> = {};
+  const out: SkillInterfaceMeta = {};
 
   for (const line of lines) {
     if (!inInterface) {
@@ -229,7 +244,7 @@ function parseAgentInterfaceYaml(raw: string): SkillEntry["interface"] | null {
   return Object.keys(out).length > 0 ? out : null;
 }
 
-async function readAgentInterface(skillRoot: string): Promise<SkillEntry["interface"] | undefined> {
+async function readAgentInterface(skillRoot: string): Promise<SkillInterfaceMeta | undefined> {
   const agentsDir = path.join(skillRoot, "agents");
   let entries: Array<{ name: string; isFile: boolean }> = [];
   try {
@@ -257,7 +272,7 @@ async function readAgentInterface(skillRoot: string): Promise<SkillEntry["interf
 
   const parsed = parseAgentInterfaceYaml(raw);
   const agents = agentFiles.map((file) => file.replace(/\.(ya?ml)$/i, ""));
-  const out: NonNullable<SkillEntry["interface"]> = { ...(parsed ?? {}), agents };
+  const out: SkillInterfaceMeta = { ...(parsed ?? {}), agents };
 
   const iconSmallPathMatch = raw.match(/^\s+icon_small:\s*(.+)\s*$/m);
   const iconLargePathMatch = raw.match(/^\s+icon_large:\s*(.+)\s*$/m);
@@ -314,6 +329,25 @@ function buildDiagnostic(code: string, severity: SkillInstallationDiagnostic["se
   return { code, severity, message };
 }
 
+function buildPluginOwner(plugin: PluginCatalogEntry): SkillPluginOwner {
+  return {
+    pluginId: plugin.id,
+    name: plugin.name,
+    displayName: plugin.displayName,
+    scope: plugin.scope,
+    discoveryKind: plugin.discoveryKind,
+    rootDir: plugin.rootDir,
+  };
+}
+
+function buildPluginSkillInstallationId(
+  plugin: PluginCatalogEntry,
+  skill: PluginCatalogEntry["skills"][number],
+): string {
+  const relativeSkillRoot = path.relative(plugin.rootDir, skill.rootDir).split(path.sep).join("/");
+  return `plugin:${plugin.scope}:${plugin.id}:${relativeSkillRoot || skill.rawName}`;
+}
+
 export function getSkillScopeDescriptors(skillsDirs: string[]): SkillScopeDescriptor[] {
   const scopes: SkillScope[] = ["project", "global", "user", "built-in"];
   return skillsDirs.map((skillsDir, index) => {
@@ -354,6 +388,55 @@ function getScanScopeDirs(descriptors: SkillScopeDescriptor[], includeDisabled: 
     }
   }
   return out;
+}
+
+async function buildPluginInstallationEntry(opts: {
+  plugin: PluginCatalogEntry;
+  skill: PluginCatalogEntry["skills"][number];
+  enabled: boolean;
+}): Promise<SkillInstallationEntry> {
+  const diagnostics: SkillInstallationDiagnostic[] = [];
+  let fileModifiedAt: string | undefined;
+  try {
+    const stat = await fs.stat(opts.skill.skillPath);
+    fileModifiedAt = stat.mtime.toISOString();
+  } catch {
+    diagnostics.push(buildDiagnostic("missing_skill_md", "error", "Missing SKILL.md"));
+  }
+
+  if (diagnostics.length === 0) {
+    try {
+      const raw = await fs.readFile(opts.skill.skillPath, "utf-8");
+      const parsed = parseSkillFrontMatter(raw, opts.skill.rawName);
+      if (!parsed) {
+        diagnostics.push(buildDiagnostic("invalid_frontmatter", "error", "Invalid or missing skill frontmatter"));
+      }
+    } catch (error) {
+      diagnostics.push(buildDiagnostic("unreadable_skill_md", "error", `Unable to read SKILL.md: ${String(error)}`));
+    }
+  }
+
+  const pluginOwner = buildPluginOwner(opts.plugin);
+  return {
+    installationId: buildPluginSkillInstallationId(opts.plugin, opts.skill),
+    name: opts.skill.name,
+    description: opts.skill.description,
+    scope: opts.plugin.scope === "workspace" ? "project" : "user",
+    enabled: opts.enabled,
+    writable: false,
+    managed: false,
+    effective: false,
+    state: diagnostics.length > 0 ? "invalid" : opts.enabled ? "shadowed" : "disabled",
+    rootDir: opts.skill.rootDir,
+    skillPath: diagnostics.length > 0 ? null : opts.skill.skillPath,
+    path: diagnostics.length > 0 ? opts.skill.rootDir : opts.skill.skillPath,
+    triggers: [...opts.skill.triggers],
+    descriptionSource: "frontmatter",
+    ...(opts.skill.interface ? { interface: opts.skill.interface } : {}),
+    diagnostics,
+    ...(fileModifiedAt ? { fileModifiedAt } : {}),
+    plugin: pluginOwner,
+  };
 }
 
 async function buildInstallationEntry(opts: {
@@ -466,14 +549,16 @@ function applyEffectiveResolution(installations: SkillInstallationEntry[]): Skil
   };
 }
 
-export async function scanSkillCatalog(
-  skillsDirs: string[],
+export async function scanSkillCatalogFromSources(
+  sources: SkillCatalogSource[],
   opts: {
     includeDisabled?: boolean;
     adoptManagedWritableInstalls?: boolean;
   } = {},
 ): Promise<SkillCatalogSnapshot> {
-  const descriptors = getSkillScopeDescriptors(skillsDirs);
+  const descriptors = sources
+    .filter((source): source is Extract<SkillCatalogSource, { kind: "standalone" }> => source.kind === "standalone")
+    .map((source) => source.descriptor);
   const scanDirs = getScanScopeDirs(descriptors, opts.includeDisabled === true);
   const installations: SkillInstallationEntry[] = [];
 
@@ -507,12 +592,35 @@ export async function scanSkillCatalog(
     }
   }
 
+  for (const source of sources) {
+    if (source.kind !== "plugin") continue;
+    const entry = await buildPluginInstallationEntry({
+      plugin: source.plugin,
+      skill: source.skill,
+      enabled: source.enabled,
+    });
+    installations.push(entry);
+  }
+
   const resolved = applyEffectiveResolution(installations);
   return {
     scopes: descriptors,
     effectiveSkills: resolved.effectiveSkills,
     installations: resolved.installations,
   };
+}
+
+export async function scanSkillCatalog(
+  skillsDirs: string[],
+  opts: {
+    includeDisabled?: boolean;
+    adoptManagedWritableInstalls?: boolean;
+  } = {},
+): Promise<SkillCatalogSnapshot> {
+  return await scanSkillCatalogFromSources(
+    getSkillScopeDescriptors(skillsDirs).map((descriptor) => ({ kind: "standalone" as const, descriptor })),
+    opts,
+  );
 }
 
 export function toLegacySkillEntry(installation: SkillInstallationEntry): SkillEntry | null {
@@ -528,6 +636,7 @@ export function toLegacySkillEntry(installation: SkillInstallationEntry): SkillE
     triggers: installation.triggers,
     description: installation.description,
     ...(installation.interface ? { interface: installation.interface } : {}),
+    ...(installation.plugin ? { plugin: installation.plugin } : {}),
   };
 }
 

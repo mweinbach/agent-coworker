@@ -41,7 +41,7 @@ export function createSessionRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       context.jsonrpc.sendResult(ws, message.id, {
-        events: context.workspaceControl.readState(cwd),
+        events: await context.workspaceControl.readState(cwd),
       });
     },
 
@@ -194,40 +194,64 @@ export function createSessionRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      const binding = threadId
-        ? context.threads.load(threadId)
-        : context.workspaceControl.getOrCreateBinding(cwd);
-      const session = binding?.session;
-      if (!binding || !session) {
-        context.jsonrpc.sendError(ws, message.id, {
-          code: JSONRPC_ERROR_CODES.invalidParams,
-          message: `${message.method} requires a live workspace control session or threadId`,
-        });
-        return;
-      }
       const provider = typeof params.provider === "string"
         ? params.provider as AgentConfig["provider"]
         : undefined;
       const model = typeof params.model === "string" ? params.model : undefined;
       const enableMcp = typeof params.enableMcp === "boolean" ? params.enableMcp : undefined;
       const configPatch = params.config as any;
-      const outcome = await context.events.captureMutationOutcome(
-        binding,
-        async () => await session.applySessionDefaults({
-          ...(provider !== undefined && model !== undefined ? { provider, model } : {}),
-          ...(enableMcp !== undefined ? { enableMcp } : {}),
-          ...(configPatch && typeof configPatch === "object" ? { config: configPatch } : {}),
-        }),
-        (event): event is Extract<ServerEvent, { type: "session_config" | "config_updated" | "session_settings" | "session_info" | "error" }> => (
-          event.type === "session_config"
-          || event.type === "config_updated"
-          || event.type === "session_settings"
-          || event.type === "session_info"
-          || event.type === "error"
-        ),
-      );
+
+      const result = threadId
+        ? await (async () => {
+            const binding = context.threads.load(threadId);
+            const session = binding?.session;
+            if (!binding || !session) {
+              context.jsonrpc.sendError(ws, message.id, {
+                code: JSONRPC_ERROR_CODES.invalidParams,
+                message: `${message.method} requires a live workspace control session or threadId`,
+              });
+              return null;
+            }
+            const outcome = await context.events.captureMutationOutcome(
+              binding,
+              async () => await session.applySessionDefaults({
+                ...(provider !== undefined && model !== undefined ? { provider, model } : {}),
+                ...(enableMcp !== undefined ? { enableMcp } : {}),
+                ...(configPatch && typeof configPatch === "object" ? { config: configPatch } : {}),
+              }),
+              (event): event is Extract<ServerEvent, { type: "session_config" | "config_updated" | "session_settings" | "session_info" | "error" }> => (
+                event.type === "session_config"
+                || event.type === "config_updated"
+                || event.type === "session_settings"
+                || event.type === "session_info"
+                || event.type === "error"
+              ),
+            );
+            return { outcome, fallback: session.getSessionConfigEvent() };
+          })()
+        : await context.workspaceControl.withSession(cwd, async (binding, session) => {
+            const outcome = await context.events.captureMutationOutcome(
+              binding,
+              async () => await session.applySessionDefaults({
+                ...(provider !== undefined && model !== undefined ? { provider, model } : {}),
+                ...(enableMcp !== undefined ? { enableMcp } : {}),
+                ...(configPatch && typeof configPatch === "object" ? { config: configPatch } : {}),
+              }),
+              (event): event is Extract<ServerEvent, { type: "session_config" | "config_updated" | "session_settings" | "session_info" | "error" }> => (
+                event.type === "session_config"
+                || event.type === "config_updated"
+                || event.type === "session_settings"
+                || event.type === "session_info"
+                || event.type === "error"
+              ),
+            );
+            return { outcome, fallback: session.getSessionConfigEvent() };
+          });
+      if (result === null) {
+        return;
+      }
       context.jsonrpc.sendResult(ws, message.id, {
-        event: outcome?.type === "error" ? outcome : session.getSessionConfigEvent(),
+        event: result.outcome?.type === "error" ? result.outcome : result.fallback,
       });
     },
 
@@ -260,11 +284,10 @@ export function createSessionRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const targetSessionId = typeof params.targetSessionId === "string" ? params.targetSessionId.trim() : "";
-      const session = context.workspaceControl.getOrCreateBinding(cwd).session!;
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async () => await session.deleteSession(targetSessionId),
+        async (session) => await session.deleteSession(targetSessionId),
         (event): event is Extract<ServerEvent, { type: "session_deleted" }> => (
           event.type === "session_deleted" && event.targetSessionId === targetSessionId
         ),

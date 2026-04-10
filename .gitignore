@@ -35,8 +35,12 @@ uploads/
 *.swp
 *~
 __pycache__/
+.claude/.supermemory-claude/
+.claude/settings.local.json
+.codex/config.toml
 /native
 tasks/todo.md
 # heroui-agents-md
 .heroui-docs/
 /apps/mobile/dist-export
+/.omx

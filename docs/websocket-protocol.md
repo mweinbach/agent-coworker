@@ -211,6 +211,13 @@ Currently implemented `cowork/*` methods include:
   - `cowork/skills/installation/update`
   - `cowork/skills/installation/copy`
   - `cowork/skills/installation/checkUpdate`
+- plugin controls
+  - `cowork/plugins/catalog/read`
+  - `cowork/plugins/read`
+  - `cowork/plugins/install/preview`
+  - `cowork/plugins/install`
+  - `cowork/plugins/enable`
+  - `cowork/plugins/disable`
 - memory controls
   - `cowork/memory/list`
   - `cowork/memory/upsert`
@@ -229,9 +236,12 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 - message turns
 - approvals / asks
 - provider panels
+- plugin catalog + detail
 - skills management
 - MCP management
 - memories
+
+`cowork/plugins/read`, `cowork/plugins/enable`, and `cowork/plugins/disable` accept an optional `scope` field (`workspace` or `user`) so callers can address a specific installed copy when the same plugin id exists in both scopes.
 - workspace backups
 
 `thread/list` and workspace-scoped `cowork/*` control methods now default omitted `cwd` to the sidecar/server working directory. Mobile and other remote clients no longer need to know a host filesystem path just to list threads or read workspace control state.

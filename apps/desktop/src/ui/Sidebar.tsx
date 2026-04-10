@@ -12,6 +12,7 @@ import {
   SparklesIcon,
 } from "lucide-react";
 
+import { resolvePluginCatalogWorkspaceSelection } from "../app/pluginManagement";
 import { useAppStore } from "../app/store";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
 import { confirmAction, showContextMenu } from "../lib/desktopCommands";
@@ -37,7 +38,7 @@ function formatWorkspaceMeta(opts: {
   const sessionLabel = opts.threadCount === 1 ? "1 session" : `${opts.threadCount} sessions`;
 
   if (opts.isActive && opts.view === "skills") {
-    return `${sessionLabel} · viewing skills`;
+    return `${sessionLabel} · viewing plugins`;
   }
   if (opts.isCurrentThreadWorkspace) {
     return `${sessionLabel} · current chat`;
@@ -55,6 +56,8 @@ export const Sidebar = memo(function Sidebar() {
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
+  const pluginManagementMode = useAppStore((s) => s.pluginManagementMode);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
@@ -63,6 +66,7 @@ export const Sidebar = memo(function Sidebar() {
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const reorderWorkspaces = useAppStore((s) => s.reorderWorkspaces);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
+  const setPluginManagementWorkspace = useAppStore((s) => s.setPluginManagementWorkspace);
   const newThread = useAppStore((s) => s.newThread);
   const removeThread = useAppStore((s) => s.removeThread);
   const deleteThreadHistory = useAppStore((s) => s.deleteThreadHistory);
@@ -79,6 +83,16 @@ export const Sidebar = memo(function Sidebar() {
   const [dropTargetWorkspaceId, setDropTargetWorkspaceId] = useState<string | null>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
 
+  const pluginSelection = useMemo(() => resolvePluginCatalogWorkspaceSelection({
+    workspaces,
+    selectedWorkspaceId,
+    pluginManagementWorkspaceId,
+    pluginManagementMode,
+  }), [pluginManagementMode, pluginManagementWorkspaceId, selectedWorkspaceId, workspaces]);
+  const activeWorkspaceId = view === "skills"
+    ? pluginSelection.displayWorkspaceId
+    : selectedWorkspaceId;
+
   useEffect(() => {
     if (editingThreadId) {
       const input = editInputRef.current;
@@ -90,15 +104,15 @@ export const Sidebar = memo(function Sidebar() {
   }, [editingThreadId]);
 
   useEffect(() => {
-    if (!selectedWorkspaceId) {
+    if (!activeWorkspaceId) {
       return;
     }
     setExpandedWorkspaceSections((current) =>
-      current[selectedWorkspaceId] !== undefined
+      current[activeWorkspaceId] !== undefined
         ? current
-        : { ...current, [selectedWorkspaceId]: true },
+        : { ...current, [activeWorkspaceId]: true },
     );
-  }, [selectedWorkspaceId]);
+  }, [activeWorkspaceId]);
 
   const commitRename = useCallback(
     (threadId: string, title: string) => {
@@ -191,7 +205,7 @@ export const Sidebar = memo(function Sidebar() {
     ]);
 
     if (result === "select") {
-      void selectWorkspace(wsId);
+      void (view === "skills" ? setPluginManagementWorkspace(wsId) : selectWorkspace(wsId));
     } else if (result === "remove") {
       const confirmed = await confirmAction({
         title: "Remove workspace",
@@ -298,7 +312,7 @@ export const Sidebar = memo(function Sidebar() {
           onClick={() => void openSkills()}
         >
           <SparklesIcon className="h-4 w-4 text-muted-foreground" />
-          Skills
+          Plugins
         </Button>
       </nav>
 
@@ -327,7 +341,7 @@ export const Sidebar = memo(function Sidebar() {
             </div>
           ) : (
             workspaces.map((workspace) => {
-              const active = workspace.id === selectedWorkspaceId;
+              const active = workspace.id === activeWorkspaceId;
               const expanded = expandedWorkspaceSections[workspace.id] ?? false;
               const workspaceRuntime = workspaceRuntimeById[workspace.id];
               const workspaceThreads = threadsByWorkspaceId.get(workspace.id) ?? [];
@@ -412,7 +426,9 @@ export const Sidebar = memo(function Sidebar() {
                     </CollapsibleTrigger>
                     <Button
                       className="sidebar-lift flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left"
-                      onClick={() => void selectWorkspace(workspace.id)}
+                      onClick={() => void (view === "skills"
+                        ? setPluginManagementWorkspace(workspace.id)
+                        : selectWorkspace(workspace.id))}
                       title={workspace.path}
                       type="button"
                       variant="ghost"

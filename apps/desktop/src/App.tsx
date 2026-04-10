@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 
+import { resolvePluginCatalogWorkspaceSelection } from "./app/pluginManagement";
 import { disposeAllJsonRpcState } from "./app/store.helpers";
 import { useAppStore } from "./app/store";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
@@ -92,7 +93,11 @@ const ChatShell = memo(function ChatShell({
   const threads = useAppStore((s) => s.threads);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
+  const pluginManagementMode = useAppStore((s) => s.pluginManagementMode);
+  const setPluginManagementWorkspace = useAppStore((s) => s.setPluginManagementWorkspace);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
+  const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
@@ -116,14 +121,28 @@ const ChatShell = memo(function ChatShell({
     () => workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null,
     [selectedWorkspaceId, workspaces],
   );
+  const pluginSelection = useMemo(() => resolvePluginCatalogWorkspaceSelection({
+    workspaces,
+    selectedWorkspaceId,
+    pluginManagementWorkspaceId,
+    pluginManagementMode,
+  }), [pluginManagementMode, pluginManagementWorkspaceId, selectedWorkspaceId, workspaces]);
+  const pluginManagementWorkspace = useMemo(
+    () => workspaces.find((workspace) => workspace.id === pluginSelection.displayWorkspaceId) ?? null,
+    [pluginSelection.displayWorkspaceId, workspaces],
+  );
   const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
   const busy = runtime?.busy === true;
   const showContextSidebar = view === "chat" && activeThread !== null;
+  const catalogWorkspaceId = pluginSelection.catalogWorkspaceId;
+  const pluginViewMode = catalogWorkspaceId
+    ? workspaceRuntimeById[catalogWorkspaceId]?.pluginViewMode ?? "plugins"
+    : "plugins";
   const topBarTitle = view === "skills"
-    ? "Skills"
+    ? (pluginViewMode === "skills" ? "Skills" : "Plugins")
     : activeThread?.title?.trim() || "New thread";
   const topBarSubtitle = view === "skills"
-    ? selectedWorkspace?.name ?? "Cowork"
+    ? pluginManagementWorkspace?.name ?? "Global"
     : activeWorkspace?.name ?? "Cowork";
   const canClearHardCap = runtime?.sessionUsage?.budgetStatus.stopTriggered === true
     && runtime?.transcriptOnly !== true
@@ -159,6 +178,17 @@ const ChatShell = memo(function ChatShell({
         onToggleContextSidebar={toggleContextSidebar}
         title={topBarTitle}
         subtitle={topBarSubtitle}
+        managementMode={view === "skills" ? "plugins" : "thread"}
+        managementWorkspaceId={pluginSelection.displayWorkspaceId}
+        managementWorkspaces={workspaces.map((workspace) => ({
+          id: workspace.id,
+          name: workspace.name,
+        }))}
+        onSelectManagementWorkspace={
+          view === "skills"
+            ? (workspaceId: string | null) => void setPluginManagementWorkspace(workspaceId)
+            : undefined
+        }
         sessionUsage={view === "chat" ? (runtime?.sessionUsage ?? null) : null}
         lastTurnUsage={view === "chat" ? (runtime?.lastTurnUsage ?? null) : null}
         canClearHardCap={canClearHardCap}

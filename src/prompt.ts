@@ -8,7 +8,14 @@ import type { ResolvedModelMetadata } from "./models/metadataTypes";
 import { getChildAgentModelInfo, listChildAgentModelsWithInfo } from "./models/childAgentModelInfo";
 import { parseChildModelRef } from "./models/childModelRouting";
 import { MemoryStore } from "./memoryStore";
-import { AGENT_ROLE_DEFINITIONS } from "./server/agents/roles";
+import {
+  AGENT_ROLE_DEFINITIONS,
+  buildSpawnAgentRolePromptLines,
+  SPAWN_AGENT_MODEL_OVERRIDE_GUIDANCE,
+  SPAWN_AGENT_ORCHESTRATION_RULES,
+  SPAWN_AGENT_PROMPT_OVERVIEW,
+  SPAWN_AGENT_WHEN_TO_USE,
+} from "./server/agents/roles";
 import type { AgentRole } from "./shared/agents";
 import {
   getCodexWebSearchBackendFromProviderOptions,
@@ -264,13 +271,18 @@ const PROVIDER_DISPLAY_NAMES: Record<ProviderName, string> = {
   "codex-cli": "Codex CLI",
 };
 
-function buildSpawnAgentPromptBody(config: AgentConfig): string {
+const SPAWN_AGENT_MARKDOWN_SECTION_PLACEHOLDER = "{{spawnAgentMarkdownSection}}";
+const SPAWN_AGENT_TOOL_SECTION_PLACEHOLDER = "{{spawnAgentToolSection}}";
+const SPAWN_AGENT_XML_SECTION_PLACEHOLDER = "{{spawnAgentXmlSection}}";
+const SPAWN_AGENT_PROMPT_BODY_PLACEHOLDER = "{{spawnAgentPromptBody}}";
+
+export function buildSpawnAgentPromptBody(config: AgentConfig): string {
   const providerLabel = PROVIDER_DISPLAY_NAMES[config.provider] ?? config.provider;
   const currentModel = getResolvedModelMetadataSync(config.provider, config.model, "model");
-
-  const roleLines = Object.values(AGENT_ROLE_DEFINITIONS)
-    .map((role) => `- **${role.id}**: ${role.description}`)
-    .join("\n");
+  const roleLines = buildSpawnAgentRolePromptLines().join("\n");
+  const whenToUseLines = SPAWN_AGENT_WHEN_TO_USE.map((item) => `- **${item.label}**: ${item.description}`);
+  const orchestrationRuleLines = SPAWN_AGENT_ORCHESTRATION_RULES.map((rule) => `- ${rule}`);
+  const modelOverrideGuidanceLines = SPAWN_AGENT_MODEL_OVERRIDE_GUIDANCE.map((rule) => `- ${rule}`);
 
   const crossProviderRefs = (config.allowedChildModelRefs ?? [])
     .map((ref) => {
@@ -297,21 +309,16 @@ function buildSpawnAgentPromptBody(config: AgentConfig): string {
           .join("\n");
 
   return [
-    "Launch a collaborative child agent for a well-scoped task. It returns a durable child handle to use with follow-up agent tools; it does not return the child agent's final answer text directly.",
+    SPAWN_AGENT_PROMPT_OVERVIEW,
     "",
     "When to use:",
-    "- **Parallelization**: Independent work that can proceed concurrently.",
-    "- **Context isolation**: Large codebase reads, heavy research, or deep analysis that would bloat the parent context.",
-    "- **Verification**: Focused review, testing, or validation after implementation.",
+    ...whenToUseLines,
     "",
-    "Rules:",
-    "- Provide detailed, self-contained prompts with the exact files, ownership, and expected output.",
-    "- If `model` is omitted, the child inherits the live parent provider/model.",
-    "- `model` may be a same-provider model id or a full `provider:modelId` child target ref.",
-    "- `preferredChildModelRef` is only a workspace/UI suggestion; it does not override the spawn request automatically.",
-    "- If a cross-provider target is disallowed for this workspace or its provider is disconnected, the child falls back to the live parent provider/model.",
-    "- Child-agent results are not visible to the user unless you summarize them.",
-    "- Child agents should stay bounded; do not use them for vague or open-ended delegation.",
+    "Orchestration rules:",
+    ...orchestrationRuleLines,
+    "",
+    "Model override guidance:",
+    ...modelOverrideGuidanceLines,
     "",
     "Available child-agent roles:",
     roleLines,
@@ -326,11 +333,36 @@ function buildSpawnAgentPromptBody(config: AgentConfig): string {
   ].join("\n");
 }
 
-function renderSpawnAgentSpecificPrompt(prompt: string, config: AgentConfig): string {
+function buildSpawnAgentPromptSections(config: AgentConfig): {
+  body: string;
+  markdownSection: string;
+  toolSection: string;
+  xmlSection: string;
+} {
   const body = buildSpawnAgentPromptBody(config);
-  const markdownSection = `### spawnAgent\n${body}`;
-  const toolSection = `<tool name="spawnAgent">\n${body}\n</tool>`;
-  const xmlSection = `<spawnAgent>\n${body}\n</spawnAgent>`;
+  return {
+    body,
+    markdownSection: `### spawnAgent\n${body}`,
+    toolSection: `<tool name="spawnAgent">\n${body}\n</tool>`,
+    xmlSection: `<spawnAgent>\n${body}\n</spawnAgent>`,
+  };
+}
+
+function renderSpawnAgentSpecificPrompt(prompt: string, config: AgentConfig): string {
+  const { body, markdownSection, toolSection, xmlSection } = buildSpawnAgentPromptSections(config);
+
+  if (prompt.includes(SPAWN_AGENT_MARKDOWN_SECTION_PLACEHOLDER)) {
+    return prompt.replaceAll(SPAWN_AGENT_MARKDOWN_SECTION_PLACEHOLDER, markdownSection);
+  }
+  if (prompt.includes(SPAWN_AGENT_TOOL_SECTION_PLACEHOLDER)) {
+    return prompt.replaceAll(SPAWN_AGENT_TOOL_SECTION_PLACEHOLDER, toolSection);
+  }
+  if (prompt.includes(SPAWN_AGENT_XML_SECTION_PLACEHOLDER)) {
+    return prompt.replaceAll(SPAWN_AGENT_XML_SECTION_PLACEHOLDER, xmlSection);
+  }
+  if (prompt.includes(SPAWN_AGENT_PROMPT_BODY_PLACEHOLDER)) {
+    return prompt.replaceAll(SPAWN_AGENT_PROMPT_BODY_PLACEHOLDER, body);
+  }
 
   if (prompt.includes('<tool name="spawnAgent">')) {
     return prompt.replace(/<tool name="spawnAgent">[\s\S]*?<\/tool>/i, toolSection);

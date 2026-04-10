@@ -16,6 +16,37 @@ export type AgentRoleDefinition = {
   };
 };
 
+export const SPAWN_AGENT_PROMPT_OVERVIEW =
+  "Launch a collaborative child agent for a well-scoped task. It returns a durable child handle to use with follow-up agent tools; it does not return the child agent's final answer text directly.";
+
+export const SPAWN_AGENT_WHEN_TO_USE = [
+  {
+    label: "Parallelization",
+    description: "Independent work that can proceed concurrently.",
+  },
+  {
+    label: "Context isolation",
+    description: "Large codebase reads, heavy research, or deep analysis that would bloat the parent context.",
+  },
+  {
+    label: "Verification",
+    description: "Focused review, testing, or validation after implementation.",
+  },
+] as const;
+
+export const SPAWN_AGENT_ORCHESTRATION_RULES = [
+  "Provide detailed, self-contained prompts with the exact files, ownership, and expected output.",
+  "Child-agent results are not visible to the user unless you summarize them.",
+  "Child agents should stay bounded; do not use them for vague or open-ended delegation.",
+] as const;
+
+export const SPAWN_AGENT_MODEL_OVERRIDE_GUIDANCE = [
+  "If `model` is omitted, the child inherits the live parent provider/model unless the role has a fixed model policy.",
+  "`model` may be a same-provider model id or a full `provider:modelId` child target ref.",
+  "`preferredChildModelRef` is only a workspace/UI suggestion; it does not override the spawn request automatically.",
+  "If a cross-provider target is disallowed for this workspace or its provider is disconnected, the child falls back to the live parent provider/model.",
+] as const;
+
 export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
   default: {
     id: "default",
@@ -76,4 +107,33 @@ export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
 
 export function getAgentRoleDefinition(role: AgentRole): AgentRoleDefinition {
   return AGENT_ROLE_DEFINITIONS[role];
+}
+
+function formatRoleCapabilities(role: AgentRoleDefinition): string[] {
+  const capabilities = [
+    role.description,
+    `Default mode: ${role.defaultMode}.`,
+    role.readOnly ? "Read-only." : "Write-capable.",
+    role.canAskUser ? "Can ask the user directly." : "Cannot ask the user directly.",
+    role.canSpawnChildren
+      ? `Can spawn child agents up to depth ${role.maxDepth}.`
+      : `Cannot spawn child agents; max depth ${role.maxDepth}.`,
+  ];
+
+  if (role.modelPolicy?.fixedModel) {
+    capabilities.push(`Fixed model: \`${role.modelPolicy.fixedModel}\`.`);
+  }
+  if (role.modelPolicy?.fixedReasoningEffort) {
+    capabilities.push(`Fixed reasoning effort: \`${role.modelPolicy.fixedReasoningEffort}\`.`);
+  }
+
+  return capabilities;
+}
+
+export function buildSpawnAgentRolePromptLine(role: AgentRoleDefinition): string {
+  return `- **${role.id}**: ${formatRoleCapabilities(role).join(" ")}`;
+}
+
+export function buildSpawnAgentRolePromptLines(): string[] {
+  return Object.values(AGENT_ROLE_DEFINITIONS).map((role) => buildSpawnAgentRolePromptLine(role));
 }

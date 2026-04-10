@@ -5,6 +5,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadSystemPrompt, loadSubAgentPrompt, loadSystemPromptWithSkills } from "../src/prompt";
+import {
+  AGENT_ROLE_DEFINITIONS,
+  buildSpawnAgentRolePromptLines,
+  SPAWN_AGENT_MODEL_OVERRIDE_GUIDANCE,
+  SPAWN_AGENT_ORCHESTRATION_RULES,
+  SPAWN_AGENT_PROMPT_OVERVIEW,
+  SPAWN_AGENT_WHEN_TO_USE,
+} from "../src/server/agents/roles";
 import type { AgentConfig } from "../src/types";
 
 function repoRoot(): string {
@@ -53,6 +61,58 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 async function writeFile(p: string, content: string) {
   await fs.mkdir(path.dirname(p), { recursive: true });
   await fs.writeFile(p, content, "utf-8");
+}
+
+function extractSpawnAgentBody(prompt: string): string {
+  const patterns = [
+    /<tool name="spawnAgent">\n([\s\S]*?)\n<\/tool>/,
+    /<spawnAgent>\n([\s\S]*?)\n<\/spawnAgent>/,
+    /### spawnAgent\n([\s\S]*?)(?=\n### notebookEdit\b)/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = prompt.match(pattern);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  throw new Error("spawnAgent section not found");
+}
+
+function expectedSpawnAgentRoleCatalog(): string {
+  return [
+    "Available child-agent roles:",
+    ...buildSpawnAgentRolePromptLines(),
+  ].join("\n");
+}
+
+function expectedSpawnAgentSharedGuidance(): string {
+  return [
+    SPAWN_AGENT_PROMPT_OVERVIEW,
+    "",
+    "When to use:",
+    ...SPAWN_AGENT_WHEN_TO_USE.map((item) => `- **${item.label}**: ${item.description}`),
+    "",
+    "Orchestration rules:",
+    ...SPAWN_AGENT_ORCHESTRATION_RULES.map((rule) => `- ${rule}`),
+    "",
+    "Model override guidance:",
+    ...SPAWN_AGENT_MODEL_OVERRIDE_GUIDANCE.map((rule) => `- ${rule}`),
+  ].join("\n");
+}
+
+function extractSpawnAgentRoleCatalog(prompt: string): string {
+  const body = extractSpawnAgentBody(prompt);
+  const match = body.match(
+    /Available child-agent roles:\n([\s\S]*?)(?=\n\n(?:Available allowed child target refs for this workspace:|Available model overrides for the current provider \(|$))/
+  );
+
+  if (!match?.[1]) {
+    throw new Error("spawnAgent role catalog not found");
+  }
+
+  return `Available child-agent roles:\n${match[1].trimEnd()}`;
 }
 
 async function withMockedFetch<T>(
@@ -194,25 +254,44 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("Any LM Studio LLM key discovered at runtime is allowed.");
   });
 
-  test("renders dynamic spawnAgent roles and current-provider model guidance", async () => {
+  test("renders spawnAgent role catalog from AGENT_ROLE_DEFINITIONS across prompt formats", async () => {
+    const expectedRoleCatalog = expectedSpawnAgentRoleCatalog();
+    const expectedSharedGuidance = `${expectedSpawnAgentSharedGuidance()}\n\n${expectedRoleCatalog}`;
+    const promptConfigs = [
+      makeConfig({ provider: "openai", model: "gpt-5.4", preferredChildModel: "gpt-5.4" }),
+      makeConfig({ provider: "google", model: "gemini-3.1-pro-preview", preferredChildModel: "gemini-3.1-pro-preview" }),
+      makeConfig({ provider: "anthropic", model: "claude-sonnet-4-6", preferredChildModel: "claude-sonnet-4-6" }),
+    ];
+
+    expect(buildSpawnAgentRolePromptLines()).toHaveLength(Object.keys(AGENT_ROLE_DEFINITIONS).length);
+
+    for (const config of promptConfigs) {
+      const prompt = await loadSystemPrompt(config);
+      const spawnAgentBody = extractSpawnAgentBody(prompt);
+
+      expect(spawnAgentBody.startsWith(expectedSharedGuidance)).toBe(true);
+      expect(extractSpawnAgentRoleCatalog(prompt)).toBe(expectedRoleCatalog);
+      expect(spawnAgentBody).not.toContain("**explore**:");
+      expect(spawnAgentBody).not.toContain("**general**:");
+    }
+  });
+
+  test("renders dynamic spawnAgent model guidance for the current provider", async () => {
     const config = makeConfig({ provider: "openai", model: "gpt-5.4", preferredChildModel: "gpt-5.4" });
     const prompt = await loadSystemPrompt(config);
+    const spawnAgentBody = extractSpawnAgentBody(prompt);
 
-    expect(prompt).toContain("Available child-agent roles:");
-    expect(prompt).toContain("**default**");
-    expect(prompt).toContain("**explorer**");
-    expect(prompt).toContain("**research**");
-    expect(prompt).toContain("**worker**");
-    expect(prompt).toContain("**reviewer**");
-    expect(prompt).toContain("Available model overrides for the current provider (OpenAI):");
-    expect(prompt).toContain("**GPT-5.4** (`gpt-5.4`)");
-    expect(prompt).toContain("**GPT-5.4 Mini** (`gpt-5.4-mini`)");
-    expect(prompt).toContain("**GPT-5 Mini** (`gpt-5-mini`)");
-    expect(prompt).toContain("`preferredChildModelRef` is only a workspace/UI suggestion");
+    expect(spawnAgentBody).toContain("Orchestration rules:");
+    expect(spawnAgentBody).toContain("Model override guidance:");
+    expect(spawnAgentBody).toContain("Available model overrides for the current provider (OpenAI):");
+    expect(spawnAgentBody).toContain("**GPT-5.4** (`gpt-5.4`)");
+    expect(spawnAgentBody).toContain("**GPT-5.4 Mini** (`gpt-5.4-mini`)");
+    expect(spawnAgentBody).toContain("**GPT-5 Mini** (`gpt-5-mini`)");
+    expect(spawnAgentBody).toContain("`preferredChildModelRef` is only a workspace/UI suggestion");
     expect(prompt).toContain("spawnAgent with `role: \"explorer\"`");
     expect(prompt).not.toContain("spawnAgent (explore type)");
-    expect(prompt).not.toContain("**explore**: Fast codebase exploration.");
-    expect(prompt).not.toContain("**general**: Full-capability agent for delegated tasks.");
+    expect(spawnAgentBody).not.toContain("**explore**: Fast codebase exploration.");
+    expect(spawnAgentBody).not.toContain("**general**: Full-capability agent for delegated tasks.");
     expect(prompt).not.toContain("moonshotai/Kimi-K2.5");
   });
 

@@ -321,27 +321,7 @@ User: "Add user authentication and run tests"
 
 ## Agent
 
-### spawnAgent
-Launch a sub-agent to handle a specific task independently. The sub-agent runs in its own context with its own tools and returns a result.
-
-When to use:
-
-- **Parallelization**: When you have two or more independent tasks, spawn agents for each. They can work simultaneously.
-- **Context isolation**: When a subtask requires reading many files, extensive research, or heavy analysis, spawn an agent so the intermediate context doesn't bloat the main conversation.
-- **Verification**: After completing complex work, spawn an agent to verify the result (run tests, check for errors, validate output).
-
-Rules:
-
-- Provide detailed, self-contained prompts. The sub-agent doesn't see the main conversation history.
-- Clearly tell the sub-agent whether to write code/files or just research and report back.
-- Sub-agent results are not visible to the user — summarize them in your response.
-- Sub-agents cannot spawn their own sub-agents (no recursive spawning).
-
-Available sub-agent types:
-
-- **explore**: Fast codebase exploration. Uses a cheap/fast model. Tools: read, glob, grep, bash. Read-only — does not modify files.
-- **research**: Web research and synthesis. Uses the main model. Tools: webSearch, webFetch, read. Returns sourced summaries.
-- **general**: Full-capability agent for delegated tasks. Uses all tools except spawnAgent.
+{{spawnAgentMarkdownSection}}
 
 ### notebookEdit
 Edit Jupyter notebook (.ipynb) cells. Supports replace, insert, and delete operations.

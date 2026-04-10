@@ -176,23 +176,7 @@ User: "Add user authentication and run tests"
 
 ## Agent
 
-### spawnAgent
-
-Launch an independent sub-agent for a specific task.
-
-When to use:
-
-- **Parallelization**: Two or more independent tasks — spawn agents for each.
-- **Context isolation**: Heavy reading/research — spawn an agent to keep the main context clean.
-- **Verification**: After complex work, spawn an agent to check it.
-
-Rules: Provide detailed, self-contained prompts (the sub-agent has no main conversation history). State whether it should write files or just report back. Sub-agent results are not visible to the user — summarize them. No recursive spawning.
-
-Types:
-
-- **explore**: Fast codebase exploration. Cheap/fast model. Tools: read, glob, grep, bash. Read-only.
-- **research**: Web research. Main model. Tools: webSearch, webFetch, read.
-- **general**: Full capability. All tools except spawnAgent.
+{{spawnAgentMarkdownSection}}
 
 ### notebookEdit
 

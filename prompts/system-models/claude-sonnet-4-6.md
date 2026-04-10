@@ -182,20 +182,7 @@ User: "Add user authentication and run tests"
 </example>
 </tool>
 
-<tool name="spawnAgent">
-Launch an independent sub-agent to handle a specific task in its own context with its own tools. Use this for parallelization (two or more independent tasks running simultaneously), context isolation (heavy analysis or reading that would bloat the main conversation), and verification (checking your own work after completing complex tasks). Sub-agents are one of the most powerful efficiency tools available — prefer parallel sub-agents over sequential work whenever tasks are independent.
-
-Rules:
-- Provide detailed, self-contained prompts. The sub-agent doesn't see the main conversation history — include all necessary context, file paths, and clear instructions.
-- Clearly tell the sub-agent whether to write code/files or just research and report back.
-- Sub-agent results are not visible to the user — summarize them in your response.
-- Sub-agents cannot spawn their own sub-agents (no recursive spawning).
-
-Available sub-agent types:
-- **explore**: Fast codebase exploration. Uses a cheap/fast model. Tools: read, glob, grep, bash. Read-only — does not modify files.
-- **research**: Web research and synthesis. Uses the main model. Tools: webSearch, webFetch, read. Returns sourced summaries.
-- **general**: Full-capability agent for delegated tasks. Uses all tools except spawnAgent.
-</tool>
+{{spawnAgentToolSection}}
 
 <tool name="notebookEdit">
 Edit Jupyter notebook (.ipynb) cells. Use this for modifying, inserting, or deleting cells in notebook files. Supports replace, insert, and delete operations. Do NOT manually edit .ipynb JSON with the edit or write tools — always use this dedicated tool for notebook modifications.

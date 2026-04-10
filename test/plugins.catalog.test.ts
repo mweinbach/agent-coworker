@@ -5,7 +5,11 @@ import path from "node:path";
 
 import { readMCPAuthFiles, setMCPServerApiKeyCredential } from "../src/mcp/authStore";
 import { loadMCPConfigRegistry } from "../src/mcp/configRegistry/layers";
-import { installPluginsFromSource, previewPluginInstall } from "../src/plugins/operations";
+import {
+  __internal as pluginOperationsInternal,
+  installPluginsFromSource,
+  previewPluginInstall,
+} from "../src/plugins/operations";
 import { buildPluginCatalogSnapshot, resolvePluginCatalogEntry } from "../src/plugins/catalog";
 import { discoverPlugins } from "../src/plugins/discovery";
 import { readPluginManifest } from "../src/plugins/manifest";
@@ -35,6 +39,36 @@ function makeConfig(workspaceRoot: string, userHome: string, builtInConfigDir: s
     configDirs: [],
     enableMcp: true,
   };
+}
+
+async function createSymlinkOrSkip(
+  target: string,
+  linkPath: string,
+  type?: Parameters<typeof fs.symlink>[2],
+): Promise<boolean> {
+  try {
+    await fs.symlink(target, linkPath, type);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") return false;
+    throw err;
+  }
+}
+
+async function removePathForTest(targetPath: string): Promise<void> {
+  try {
+    const stats = await fs.lstat(targetPath);
+    if (stats.isSymbolicLink()) {
+      await fs.unlink(targetPath);
+      return;
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return;
+    throw err;
+  }
+
+  await fs.rm(targetPath, { recursive: true, force: true });
 }
 
 async function writePlugin(
@@ -218,21 +252,21 @@ describe("plugin catalog and install operations", () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-atomic-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-atomic-builtin-"));
     const config = makeConfig(workspace, home, builtInConfigDir);
-    const unreadablePath = path.join(workspace, "plugin-source", "figma-toolkit", "secret.bin");
 
     try {
       const installedPluginRoot = path.join(workspace, ".agents", "plugins", "figma-toolkit");
       const sourceRoot = path.join(workspace, "plugin-source", "figma-toolkit");
       await writePlugin(installedPluginRoot, "Existing Figma Toolkit", "Existing plugin");
       await writePlugin(sourceRoot, "Replacement Figma Toolkit", "Replacement plugin");
-      await fs.writeFile(unreadablePath, "secret\n", "utf-8");
-      await fs.chmod(unreadablePath, 0o000);
+      pluginOperationsInternal.setCopyPluginRootImplForTests(async () => {
+        throw new Error("simulated copy failure");
+      });
 
       await expect(installPluginsFromSource({
         config,
         input: sourceRoot,
         targetScope: "workspace",
-      })).rejects.toThrow();
+      })).rejects.toThrow("simulated copy failure");
 
       const installedManifest = JSON.parse(
         await fs.readFile(path.join(installedPluginRoot, ".codex-plugin", "plugin.json"), "utf-8"),
@@ -240,7 +274,7 @@ describe("plugin catalog and install operations", () => {
       expect(installedManifest.description).toBe("Existing plugin");
       expect(installedManifest.interface?.displayName).toBe("Existing Figma Toolkit");
     } finally {
-      await fs.chmod(unreadablePath, 0o644).catch(() => {});
+      pluginOperationsInternal.resetForTests();
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
       await fs.rm(builtInConfigDir, { recursive: true, force: true });
@@ -668,16 +702,23 @@ describe("plugin catalog and install operations", () => {
       );
       await fs.writeFile(outsideFile, "{}\n", "utf-8");
 
-      await fs.symlink(outsideSkillsRoot, path.join(pluginRoot, "skills"));
+      const linkedSkills = await createSymlinkOrSkip(
+        outsideSkillsRoot,
+        path.join(pluginRoot, "skills"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      if (!linkedSkills) return;
       await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves skills outside the plugin root");
 
-      await fs.rm(path.join(pluginRoot, "skills"), { force: true });
+      await removePathForTest(path.join(pluginRoot, "skills"));
       await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
-      await fs.symlink(outsideFile, path.join(pluginRoot, ".mcp.json"));
+      const linkedMcp = await createSymlinkOrSkip(outsideFile, path.join(pluginRoot, ".mcp.json"));
+      if (!linkedMcp) return;
       await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves mcpServers outside the plugin root");
 
-      await fs.rm(path.join(pluginRoot, ".mcp.json"), { force: true });
-      await fs.symlink(outsideFile, path.join(pluginRoot, ".app.json"));
+      await removePathForTest(path.join(pluginRoot, ".mcp.json"));
+      const linkedApp = await createSymlinkOrSkip(outsideFile, path.join(pluginRoot, ".app.json"));
+      if (!linkedApp) return;
       await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves apps outside the plugin root");
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

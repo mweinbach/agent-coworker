@@ -27,6 +27,8 @@ type WritablePluginScopePaths = {
   pluginsDir: string;
 };
 
+type CopyPluginRootImpl = (sourceRoot: string, destinationRoot: string) => Promise<void>;
+
 function requireWritablePluginScope(
   config: AgentConfig,
   scope: PluginInstallTargetScope,
@@ -71,13 +73,26 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
-async function copyPluginRoot(sourceRoot: string, destinationRoot: string): Promise<void> {
+async function defaultCopyPluginRoot(
+  sourceRoot: string,
+  destinationRoot: string,
+): Promise<void> {
   await fs.mkdir(path.dirname(destinationRoot), { recursive: true });
   await fs.cp(sourceRoot, destinationRoot, {
     recursive: true,
     force: true,
     errorOnExist: false,
   });
+}
+
+const pluginOperationInternals: {
+  copyPluginRootImpl: CopyPluginRootImpl;
+} = {
+  copyPluginRootImpl: defaultCopyPluginRoot,
+};
+
+async function copyPluginRoot(sourceRoot: string, destinationRoot: string): Promise<void> {
+  await pluginOperationInternals.copyPluginRootImpl(sourceRoot, destinationRoot);
 }
 
 async function stageCopySourceIfNeeded(
@@ -360,3 +375,12 @@ export type { MaterializedPluginSource };
 export function resolvePluginSourceDescriptorForInstallInput(input: string, cwd = process.cwd()) {
   return resolvePluginSource(input, cwd);
 }
+
+export const __internal = {
+  setCopyPluginRootImplForTests(copyPluginRootImpl?: CopyPluginRootImpl) {
+    pluginOperationInternals.copyPluginRootImpl = copyPluginRootImpl ?? defaultCopyPluginRoot;
+  },
+  resetForTests() {
+    pluginOperationInternals.copyPluginRootImpl = defaultCopyPluginRoot;
+  },
+};

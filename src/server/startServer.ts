@@ -820,6 +820,7 @@ export async function startAgentServer(
     persistedSessionId?: string,
     overrides?: {
       config?: AgentConfig;
+      persistenceEnabled?: boolean;
       system?: string;
       seedContext?: SeededSessionContext;
       sessionInfoPatch?: Partial<SessionInfoState>;
@@ -853,6 +854,7 @@ export async function startAgentServer(
     const session = new AgentSession({
       config: sessionConfig,
       system: overrides?.system ?? system,
+      persistenceEnabled: overrides?.persistenceEnabled,
       ...(overrides?.seedContext ? { seedContext: overrides.seedContext } : {}),
       ...(overrides?.sessionInfoPatch ? { sessionInfoPatch: overrides.sessionInfoPatch } : {}),
       ...common,
@@ -1176,6 +1178,7 @@ export async function startAgentServer(
     };
     const built = buildSession(binding, undefined, {
       config: await loadWorkspaceControlConfig(cwd),
+      persistenceEnabled: false,
     });
     binding.session = built.session;
     return binding;

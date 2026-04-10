@@ -11,6 +11,7 @@ export class PersistenceManager {
   constructor(
     private readonly opts: {
       sessionId: string;
+      persistenceEnabled?: boolean;
       sessionDb: SessionDb | null;
       getCoworkPaths: () => AiCoworkerPaths;
       writePersistedSessionSnapshot: (opts: {
@@ -33,6 +34,9 @@ export class PersistenceManager {
   ) {}
 
   queuePersistSessionSnapshot(reason: string) {
+    if (this.opts.persistenceEnabled === false) {
+      return;
+    }
     this.pendingReasons.add(reason);
     if (this.flushQueued) {
       return;

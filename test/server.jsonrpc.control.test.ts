@@ -1,4 +1,6 @@
+import { Database } from "bun:sqlite";
 import fs from "node:fs/promises";
+import path from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
@@ -176,6 +178,34 @@ describe("server JSON-RPC control methods", () => {
         }),
       );
 
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("workspace control reads do not persist ephemeral control sessions", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    const dbPath = path.join(tmpDir, ".cowork", "sessions.db");
+    const countPersistedSessions = () => {
+      const db = new Database(dbPath);
+      try {
+        return Number((db.query("select count(*) as count from sessions").get() as { count: number }).count);
+      } finally {
+        db.close();
+      }
+    };
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      expect(countPersistedSessions()).toBe(0);
+
+      await rpc.request("cowork/skills/catalog/read", { cwd: tmpDir });
+      await rpc.request("cowork/plugins/catalog/read", { cwd: tmpDir });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(countPersistedSessions()).toBe(0);
       rpc.close();
     } finally {
       await stopTestServer(server);

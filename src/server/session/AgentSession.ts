@@ -327,6 +327,7 @@ export class AgentSession {
     initialLastEventSeq?: number;
     seedContext?: SeededSessionContext;
     skipInitialPersist?: boolean;
+    persistenceEnabled?: boolean;
   }) {
     const hydrated = opts.hydratedState;
     const hydratedSessionInfo = normalizeHydratedSessionInfo(hydrated);
@@ -515,6 +516,7 @@ export class AgentSession {
     });
     this.persistenceManager = new PersistenceManager({
       sessionId: this.id,
+      persistenceEnabled: opts.persistenceEnabled !== false,
       sessionDb: this.deps.sessionDb,
       getCoworkPaths: () => this.getCoworkPaths(),
       writePersistedSessionSnapshot: this.deps.writePersistedSessionSnapshotImpl,
@@ -557,7 +559,7 @@ export class AgentSession {
         });
     this.sessionSnapshotProjector = new SessionSnapshotProjector(initialSnapshot);
 
-    if (!opts.skipInitialPersist) {
+    if (!opts.skipInitialPersist && opts.persistenceEnabled !== false) {
       this.queuePersistSessionSnapshot("session.created");
     }
   }

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(claude-supermemory:super-search)",
+      "Bash(node:*)",
+      "Bash(SUPERMEMORY_CC_API_KEY=\"sm_NT3AVD3adrcrkwBEAhUQ9x_tZIjdHgRPhPCZYYA8ru3xsxuCH5eBxMdg1lFhDjnptBgOgETaEo3mqeBOQazeH6m\" node:*)",
+      "Bash(SUPERMEMORY_DEBUG=true node:*)"
+    ]
+  }
+}

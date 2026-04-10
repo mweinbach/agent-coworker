@@ -234,3 +234,4 @@
 ## 2026-03-18 Tool Output Overflow Audit
 
 - Plan: confirm the shared overflow path, exempt `read` from spill-to-workspace truncation, and add regressions for direct tool execution plus provider-managed continuation.
+- For workspace-control JSON-RPC helpers in this repo, keep read-only control sessions ephemeral and non-persistent; routing them through the normal `AgentSession` persistence path silently bloats `.cowork/sessions.db`, and cross-platform rollback tests should inject deterministic copy failures instead of relying on POSIX-only permission tricks like `chmod 000`.

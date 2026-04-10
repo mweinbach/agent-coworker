@@ -937,6 +937,15 @@ export async function startAgentServer(
     if (!connectionId) {
       return;
     }
+    for (const [registeredCwd, subscribers] of workspaceControlSubscribers) {
+      if (registeredCwd === cwd) {
+        continue;
+      }
+      subscribers.delete(connectionId);
+      if (subscribers.size === 0) {
+        workspaceControlSubscribers.delete(registeredCwd);
+      }
+    }
     const subscribers = workspaceControlSubscribers.get(cwd) ?? new Map<string, Bun.ServerWebSocket<StartServerSocketData>>();
     subscribers.set(connectionId, ws);
     workspaceControlSubscribers.set(cwd, subscribers);

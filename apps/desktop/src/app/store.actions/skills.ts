@@ -46,7 +46,7 @@ import {
   truncateTitle,
 } from "../store.helpers";
 import { resolvePluginCatalogWorkspaceSelection, resolvePluginManagementWorkspaceId } from "../pluginManagement";
-import type { ThreadRecord, WorkspaceRecord } from "../types";
+import type { ThreadRecord, WorkspaceRecord, WorkspaceRuntime } from "../types";
 
 type PluginSelection = Pick<PluginCatalogEntry, "id" | "scope">;
 
@@ -58,7 +58,13 @@ function pluginPendingKey(action: string, selection?: PluginSelection): string {
   return selection ? `plugin:${action}:${selection.scope}:${selection.id}` : `plugin:${action}`;
 }
 
-function clearFailedPluginMutationSend(set: StoreSet, workspaceId: string, key: string, detail: string): void {
+function clearFailedMutationSend(
+  set: StoreSet,
+  workspaceId: string,
+  key: string,
+  detail: string,
+  overrides?: Partial<WorkspaceRuntime>,
+): void {
   set((s) => ({
     workspaceRuntimeById: {
       ...s.workspaceRuntimeById,
@@ -69,32 +75,7 @@ function clearFailedPluginMutationSend(set: StoreSet, workspaceId: string, key: 
           delete pendingKeys[key];
           return pendingKeys;
         })(),
-        pluginsLoading: false,
-        pluginsError: detail,
-        skillMutationError: detail,
-      },
-    },
-    notifications: pushNotification(s.notifications, {
-      id: makeId(),
-      ts: nowIso(),
-      kind: "error",
-      title: "Not connected",
-      detail,
-    }),
-  }));
-}
-
-function clearFailedSkillMutationSend(set: StoreSet, workspaceId: string, key: string, detail: string): void {
-  set((s) => ({
-    workspaceRuntimeById: {
-      ...s.workspaceRuntimeById,
-      [workspaceId]: {
-        ...s.workspaceRuntimeById[workspaceId],
-        skillMutationPendingKeys: (() => {
-          const pendingKeys = { ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys };
-          delete pendingKeys[key];
-          return pendingKeys;
-        })(),
+        ...(overrides ?? {}),
       },
     },
     notifications: pushNotification(s.notifications, {
@@ -325,7 +306,7 @@ export function createSkillActions(
       set({
         pluginManagementWorkspaceId: resolvePluginManagementWorkspaceId(get().workspaces ?? [], workspaceId),
         pluginManagementMode: workspaceId === null ? "global" : "workspace",
-      } as any);
+      });
       syncDesktopStateCache(get);
       const targetWorkspaceId = managementWorkspaceId();
       if (!targetWorkspaceId) {
@@ -377,7 +358,11 @@ export function createSkillActions(
       );
       if (!ok) {
         const detail = rpcError.message?.trim() || "Unable to preview plugin install.";
-        clearFailedPluginMutationSend(set, workspaceId, key, detail);
+        clearFailedMutationSend(set, workspaceId, key, detail, {
+          pluginsLoading: false,
+          pluginsError: detail,
+          skillMutationError: detail,
+        });
       }
     },
 
@@ -424,7 +409,11 @@ export function createSkillActions(
         } else {
           RUNTIME.pluginInstallWaiters.delete(workspaceId);
         }
-        clearFailedPluginMutationSend(set, workspaceId, key, detail);
+        clearFailedMutationSend(set, workspaceId, key, detail, {
+          pluginsLoading: false,
+          pluginsError: detail,
+          skillMutationError: detail,
+        });
         installPromise.reject(new Error(detail));
       } else if (existing) {
         existing.reject(new Error("Another install was started"));
@@ -477,7 +466,12 @@ export function createSkillActions(
         ...(scope ? { scope } : {}),
       }, rpcError);
       if (!ok) {
-        clearFailedPluginMutationSend(set, workspaceId, key, rpcError.message?.trim() || "Unable to enable plugin.");
+        const detail = rpcError.message?.trim() || "Unable to enable plugin.";
+        clearFailedMutationSend(set, workspaceId, key, detail, {
+          pluginsLoading: false,
+          pluginsError: detail,
+          skillMutationError: detail,
+        });
       } else {
         set((s) => ({
           workspaceRuntimeById: {
@@ -524,7 +518,12 @@ export function createSkillActions(
         ...(scope ? { scope } : {}),
       }, rpcError);
       if (!ok) {
-        clearFailedPluginMutationSend(set, workspaceId, key, rpcError.message?.trim() || "Unable to disable plugin.");
+        const detail = rpcError.message?.trim() || "Unable to disable plugin.";
+        clearFailedMutationSend(set, workspaceId, key, detail, {
+          pluginsLoading: false,
+          pluginsError: detail,
+          skillMutationError: detail,
+        });
       } else {
         set((s) => ({
           workspaceRuntimeById: {
@@ -743,7 +742,7 @@ export function createSkillActions(
         } else {
           RUNTIME.skillInstallWaiters.delete(workspaceId);
         }
-        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to install skills.");
+        clearFailedMutationSend(set, workspaceId, key, "Unable to install skills.");
         installPromise.reject(new Error("Unable to install skills."));
       } else if (existing) {
         existing.reject(new Error("Another skill install was started"));
@@ -815,7 +814,7 @@ export function createSkillActions(
       }));
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/disable", { cwd, installationId });
       if (!ok) {
-        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to disable skill installation.");
+        clearFailedMutationSend(set, workspaceId, key, "Unable to disable skill installation.");
       } else if (installationScope === "global") {
         await refreshSharedWorkspaceState(workspaceId);
       }
@@ -841,7 +840,7 @@ export function createSkillActions(
       }));
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/enable", { cwd, installationId });
       if (!ok) {
-        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to enable skill installation.");
+        clearFailedMutationSend(set, workspaceId, key, "Unable to enable skill installation.");
       } else if (installationScope === "global") {
         await refreshSharedWorkspaceState(workspaceId);
       }
@@ -867,7 +866,7 @@ export function createSkillActions(
       }));
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/delete", { cwd, installationId });
       if (!ok) {
-        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to delete skill installation.");
+        clearFailedMutationSend(set, workspaceId, key, "Unable to delete skill installation.");
       } else if (installationScope === "global") {
         await refreshSharedWorkspaceState(workspaceId);
       }
@@ -892,7 +891,7 @@ export function createSkillActions(
       }));
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/copy", { cwd, installationId, targetScope });
       if (!ok) {
-        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to copy skill installation.");
+        clearFailedMutationSend(set, workspaceId, key, "Unable to copy skill installation.");
       } else if (targetScope === "global") {
         await refreshSharedWorkspaceState(workspaceId);
       }
@@ -926,7 +925,7 @@ export function createSkillActions(
       }));
       const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/update", { cwd, installationId });
       if (!ok) {
-        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to update skill installation.");
+        clearFailedMutationSend(set, workspaceId, key, "Unable to update skill installation.");
       } else if (installationScope === "global") {
         await refreshSharedWorkspaceState(workspaceId);
       }

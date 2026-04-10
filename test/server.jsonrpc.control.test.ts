@@ -701,14 +701,6 @@ describe("server JSON-RPC control methods", () => {
       });
       expect(installResponse.error).toBeUndefined();
 
-      const workspaceANotification = await subscriber.waitFor(
-        (message) =>
-          message.method === "cowork/control/event"
-          && message.params?.type === "skills_catalog"
-          && message.params?.cwd === workspaceA,
-      );
-      expect(workspaceANotification.params.cwd).toBe(workspaceA);
-
       const workspaceBNotification = await subscriber.waitFor(
         (message) =>
           message.method === "cowork/control/event"
@@ -716,6 +708,16 @@ describe("server JSON-RPC control methods", () => {
           && message.params?.cwd === workspaceB,
       );
       expect(workspaceBNotification.params.cwd).toBe(workspaceB);
+
+      await expect(
+        subscriber.waitFor(
+          (message) =>
+            message.method === "cowork/control/event"
+            && message.params?.type === "skills_catalog"
+            && message.params?.cwd === workspaceA,
+          200,
+        ),
+      ).rejects.toThrow("Timed out waiting for JSON-RPC message");
 
       subscriber.close();
       mutator.close();

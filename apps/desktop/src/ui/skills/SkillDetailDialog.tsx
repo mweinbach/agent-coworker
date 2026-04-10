@@ -168,7 +168,7 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
 
         <div className="p-4 border-t border-border/50 bg-muted/10 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            {selectedInstallation && !selectedInstallation.plugin ? (
+            {selectedInstallation?.writable && !selectedInstallation.plugin ? (
               <Button
                 variant="destructive"
                 size="sm"

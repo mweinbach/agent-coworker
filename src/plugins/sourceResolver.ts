@@ -508,6 +508,7 @@ async function resolveAmbiguousGitHubMaterializationAttempts(
 ): Promise<GitHubMaterializationAttempt[]> {
   const uniqueAttempts = dedupeGitHubMaterializationAttempts(attempts);
   const checkedRefs = new Map<string, boolean>();
+  const existingAttempts: GitHubMaterializationAttempt[] = [];
 
   for (const attempt of uniqueAttempts) {
     let refExists = checkedRefs.get(attempt.ref);
@@ -516,11 +517,11 @@ async function resolveAmbiguousGitHubMaterializationAttempts(
       checkedRefs.set(attempt.ref, refExists);
     }
     if (refExists) {
-      return [attempt];
+      existingAttempts.push(attempt);
     }
   }
 
-  return uniqueAttempts;
+  return existingAttempts.length > 0 ? existingAttempts : uniqueAttempts;
 }
 
 async function fetchGitHubDefaultBranch(fetchImpl: FetchLike, repo: string): Promise<string | null> {

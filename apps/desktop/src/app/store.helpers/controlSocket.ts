@@ -1412,6 +1412,11 @@ export function createControlSocketHelpers(
         RUNTIME.skillInstallWaiters.delete(workspaceId);
         installWaiter.reject(new Error("Control connection closed"));
       }
+      const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
+      if (pluginInstallWaiter) {
+        RUNTIME.pluginInstallWaiters.delete(workspaceId);
+        pluginInstallWaiter.reject(new Error("Control connection closed"));
+      }
     }
     disposedWorkspaces.add(workspaceId);
     const cleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);

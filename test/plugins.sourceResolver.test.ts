@@ -275,6 +275,37 @@ describe("plugin GitHub source materialization", () => {
     expect(requests).toContain(buildContentsUrl(repo, "feature/foo", "packages/demo-plugin"));
     expect(requests).not.toContain(buildContentsUrl(repo, "feature", "foo/packages/demo-plugin"));
   });
+
+  test("tries shorter valid ref/path splits when the first existing ref does not materialize", async () => {
+    const repo = "owner/repo";
+    const { fetchImpl, requests } = createGitHubPluginFetch({
+      repo,
+      defaultBranch: "main",
+      filesByRef: {
+        feature: {
+          "foo/packages/demo-plugin/.codex-plugin/plugin.json": pluginManifest("fallback-ref-plugin"),
+          "foo/packages/demo-plugin/skills/example/SKILL.md": skillDoc("example", "Fallback ref plugin."),
+        },
+        "feature/foo": {
+          "README.md": "not a plugin\n",
+        },
+      },
+    });
+
+    const preview = await buildPluginInstallPreview({
+      input: "https://github.com/owner/repo/tree/feature/foo/packages/demo-plugin",
+      targetScope: "workspace",
+      catalog: emptyCatalog,
+      fetchImpl,
+    });
+
+    expect(preview.source.ref).toBe("feature");
+    expect(preview.source.subdir).toBe("foo/packages/demo-plugin");
+    expect(preview.candidates).toHaveLength(1);
+    expect(preview.candidates[0]?.pluginId).toBe("fallback-ref-plugin");
+    expect(requests).toContain(buildContentsUrl(repo, "feature/foo", "packages/demo-plugin"));
+    expect(requests).toContain(buildContentsUrl(repo, "feature", "foo/packages/demo-plugin"));
+  });
 });
 
 describe("plugin local source materialization", () => {

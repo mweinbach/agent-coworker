@@ -159,6 +159,9 @@ describe("skill detail dialog", () => {
       const openFolderButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
         (button) => button.textContent?.includes("Open folder"),
       );
+      const uninstallButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent?.includes("Uninstall"),
+      );
 
       if (!openFolderButton) {
         const html = harness.dom.window.document.getElementById("root")?.innerHTML ?? "(empty)";
@@ -168,6 +171,8 @@ describe("skill detail dialog", () => {
           ` | DOM: ${html.slice(0, 500)}`
         );
       }
+
+      expect(uninstallButton).toBeUndefined();
 
       await act(async () => {
         openFolderButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));

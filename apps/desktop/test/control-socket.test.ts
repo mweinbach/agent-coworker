@@ -173,6 +173,7 @@ describe("control socket helpers over JSON-RPC", () => {
     MockJsonRpcSocket.deferClose = false;
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.workspaceJsonRpcSocketGenerations.clear();
+    RUNTIME.pluginInstallWaiters.clear();
     RUNTIME.skillInstallWaiters.clear();
     RUNTIME.sessionSnapshots.clear();
     RUNTIME.providerStatusRefreshGeneration = 0;
@@ -532,6 +533,23 @@ describe("control socket helpers over JSON-RPC", () => {
 
     blockedProviderStatus.resolve({});
     await flushAsyncWork();
+  });
+
+  test("disposeWorkspaceControlState rejects pending plugin install waiters without store bindings", async () => {
+    const workspaceId = "ws-plugin-dispose";
+    const rejected = Promise.withResolvers<void>();
+    RUNTIME.pluginInstallWaiters.set(workspaceId, {
+      pendingKey: "plugin:install:workspace",
+      resolve: rejected.resolve,
+      reject: rejected.reject,
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    const rejectedPromise = rejected.promise;
+    helpers.disposeWorkspaceControlState(workspaceId);
+
+    await expect(rejectedPromise).rejects.toThrow("Control connection closed");
+    expect(RUNTIME.pluginInstallWaiters.has(workspaceId)).toBe(false);
   });
 
   test("waitForControlSession waits for JSON-RPC control bootstrap to hydrate control state", async () => {

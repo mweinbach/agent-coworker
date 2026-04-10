@@ -431,4 +431,28 @@ describe("assertReadPathAllowed", () => {
 
     await expect(assertReadPathAllowed(target, cfg, "read")).resolves.toBe(path.resolve(target));
   });
+
+  test("allows reads from bundled plugin skill directories", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-plugin-roots-"));
+    const cfg = makeConfig(dir);
+    const pluginRoot = path.join(dir, ".agents", "plugins", "figma-toolkit");
+    const bundledSkillsDir = path.join(pluginRoot, "skills");
+    const target = path.join(bundledSkillsDir, "import-frame", "SKILL.md");
+
+    cfg.workspacePluginsDir = path.join(dir, ".agents", "plugins");
+
+    await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "figma-toolkit",
+        description: "Figma plugin",
+      }, null, 2)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(target, "---\nname: import-frame\ndescription: Import a frame\n---\n", "utf-8");
+
+    await expect(assertReadPathAllowed(target, cfg, "read")).resolves.toBe(path.resolve(target));
+  });
 });

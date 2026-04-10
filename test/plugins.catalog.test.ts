@@ -792,6 +792,35 @@ describe("plugin catalog and install operations", () => {
     }
   });
 
+  test("direct plugin discovery deduplicates same-scope symlinks to the same checkout", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-discovery-duplicate-symlink-workspace-"));
+
+    try {
+      const checkoutRoot = path.join(workspace, "plugin-checkout", "figma-toolkit");
+      await writePlugin(checkoutRoot, "Shared Figma Toolkit");
+
+      const workspacePluginsDir = path.join(workspace, ".agents", "plugins");
+      await fs.mkdir(workspacePluginsDir, { recursive: true });
+
+      const directLink = path.join(workspacePluginsDir, "figma-toolkit");
+      const aliasLink = path.join(workspacePluginsDir, "figma-toolkit-alias");
+      await fs.symlink(checkoutRoot, directLink, process.platform === "win32" ? "junction" : "dir");
+      await fs.symlink(checkoutRoot, aliasLink, process.platform === "win32" ? "junction" : "dir");
+
+      const discovery = await discoverPlugins({ workspacePluginsDir });
+
+      expect(discovery.plugins).toHaveLength(1);
+      expect([directLink, aliasLink]).toContain(discovery.plugins[0]?.rootDir);
+      expect(discovery.plugins[0]).toMatchObject({
+        realRootDir: await fs.realpath(checkoutRoot),
+        scope: "workspace",
+        discoveryKind: "direct",
+      });
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("marketplace discovery rejects symlinked source paths that escape the marketplace root", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-marketplace-symlink-workspace-"));
 
@@ -836,6 +865,56 @@ describe("plugin catalog and install operations", () => {
         expect.stringContaining("Ignoring malformed marketplace"),
       ]);
       expect(discovery.warnings[0]).toContain("resolves outside marketplace root");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("plugin discovery deduplicates marketplace and direct entries for the same canonical plugin root", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-marketplace-direct-dedupe-workspace-"));
+
+    try {
+      const pluginsDir = path.join(workspace, ".agents", "plugins");
+      const checkoutRoot = path.join(pluginsDir, "market", "figma-toolkit");
+      await writePlugin(checkoutRoot, "Marketplace Figma Toolkit");
+
+      await fs.mkdir(pluginsDir, { recursive: true });
+      const directLink = path.join(pluginsDir, "figma-toolkit");
+      await fs.symlink(checkoutRoot, directLink, process.platform === "win32" ? "junction" : "dir");
+      await fs.writeFile(
+        path.join(pluginsDir, "marketplace.json"),
+        `${JSON.stringify({
+          name: "workspace-market",
+          plugins: [
+            {
+              name: "figma-toolkit",
+              source: {
+                source: "local",
+                path: "./market/figma-toolkit",
+              },
+              policy: {
+                installation: "manual",
+                authentication: "optional",
+              },
+              category: "design",
+              interface: {
+                displayName: "Marketplace Figma Toolkit",
+              },
+            },
+          ],
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const discovery = await discoverPlugins({ workspacePluginsDir: pluginsDir });
+
+      expect(discovery.plugins).toHaveLength(1);
+      expect(discovery.plugins[0]).toMatchObject({
+        rootDir: checkoutRoot,
+        realRootDir: await fs.realpath(checkoutRoot),
+        scope: "workspace",
+        discoveryKind: "marketplace",
+      });
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
     }

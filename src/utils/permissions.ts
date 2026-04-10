@@ -3,7 +3,8 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import type { AgentConfig } from "../types";
-import { buildPluginCatalogSnapshot } from "../plugins";
+import { discoverPlugins } from "../plugins/discovery";
+import { readPluginManifest } from "../plugins/manifest";
 import { isPathInside } from "./paths";
 
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
@@ -31,14 +32,22 @@ function readRoots(config: AgentConfig): string[] {
 
 async function pluginReadRoots(config: AgentConfig): Promise<string[]> {
   try {
-    const snapshot = await buildPluginCatalogSnapshot(config);
-    return snapshot.plugins.flatMap((plugin) => {
-      const roots = [plugin.rootDir];
-      for (const skill of plugin.skills) {
-        roots.push(skill.rootDir);
+    const discovery = await discoverPlugins(config);
+    const roots = new Set<string>();
+
+    for (const plugin of discovery.plugins) {
+      roots.add(plugin.rootDir);
+      try {
+        const manifest = await readPluginManifest(plugin.rootDir);
+        for (const skillsPath of manifest.skillsPaths) {
+          roots.add(skillsPath);
+        }
+      } catch {
+        // Ignore malformed plugin manifests here; permission checks should fail closed.
       }
-      return roots;
-    });
+    }
+
+    return [...roots];
   } catch {
     return [];
   }

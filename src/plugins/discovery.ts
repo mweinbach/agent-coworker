@@ -149,7 +149,8 @@ export async function discoverPlugins(opts: {
 }): Promise<PluginDiscoverySnapshot> {
   const warnings: string[] = [];
   const discovered: DiscoveredPluginCandidate[] = [];
-  const seenByRootPath = new Map<string, DiscoveredPluginCandidate>();
+  const seenByRootPath = new Set<string>();
+  const seenByCanonicalRoot = new Map<string, DiscoveredPluginCandidate>();
 
   const scopes: Array<{ scope: PluginScope; pluginsDir?: string }> = [
     { scope: "workspace", pluginsDir: opts.workspacePluginsDir },
@@ -166,7 +167,11 @@ export async function discoverPlugins(opts: {
 
     for (const plugin of marketplacePlugins) {
       if (seenByRootPath.has(plugin.rootDir)) continue;
-      seenByRootPath.set(plugin.rootDir, plugin);
+      seenByRootPath.add(plugin.rootDir);
+      const dedupeKey = `${plugin.scope}:${plugin.realRootDir}`;
+      if (!seenByCanonicalRoot.has(dedupeKey)) {
+        seenByCanonicalRoot.set(dedupeKey, plugin);
+      }
       discovered.push(plugin);
     }
 
@@ -176,7 +181,10 @@ export async function discoverPlugins(opts: {
     });
     for (const plugin of directPlugins) {
       if (seenByRootPath.has(plugin.rootDir)) continue;
-      seenByRootPath.set(plugin.rootDir, plugin);
+      seenByRootPath.add(plugin.rootDir);
+      const dedupeKey = `${plugin.scope}:${plugin.realRootDir}`;
+      if (seenByCanonicalRoot.has(dedupeKey)) continue;
+      seenByCanonicalRoot.set(dedupeKey, plugin);
       discovered.push(plugin);
     }
   }

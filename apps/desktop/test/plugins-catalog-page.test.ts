@@ -275,6 +275,8 @@ describe("plugins catalog page", () => {
 
     const harness = setupJsdom();
     try {
+      (harness.dom.window.HTMLElement.prototype as { attachEvent?: () => void; detachEvent?: () => void }).attachEvent = () => {};
+      (harness.dom.window.HTMLElement.prototype as { attachEvent?: () => void; detachEvent?: () => void }).detachEvent = () => {};
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       root = createRoot(container);
@@ -302,6 +304,73 @@ describe("plugins catalog page", () => {
       const textarea = harness.dom.window.document.querySelector("textarea");
       expect(textarea?.getAttribute("placeholder")).toContain("https://github.com/example/codex-plugin-repo");
       expect((textarea as HTMLTextAreaElement | null)?.value ?? "").toBe("");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
+
+  test("new plugin dialog renders a single error banner for plugin mutation failures", async () => {
+    const previousState = useAppStore.getState();
+    let root: ReturnType<typeof createRoot> | null = null;
+    const previewPluginInstall = mock(async () => {});
+    useAppStore.setState({
+      ...baseWorkspaceState(),
+      previewPluginInstall: previewPluginInstall as typeof previousState.previewPluginInstall,
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          pluginsError: "Plugin is shadowed by a global install.",
+          skillMutationError: "Plugin is shadowed by a global install.",
+        },
+      },
+    } as any);
+
+    const harness = setupJsdom();
+    try {
+      (harness.dom.window.HTMLElement.prototype as { attachEvent?: () => void; detachEvent?: () => void }).attachEvent = () => {};
+      (harness.dom.window.HTMLElement.prototype as { attachEvent?: () => void; detachEvent?: () => void }).detachEvent = () => {};
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(PluginsCatalogPage, { workspaceId, searchQuery: "", setSearchQuery: () => {} }));
+      });
+
+      const newPluginButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent?.includes("+ New plugin"),
+      );
+      if (!(newPluginButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing new plugin button");
+      }
+
+      await act(async () => {
+        newPluginButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      const textarea = harness.dom.window.document.querySelector("textarea");
+      if (!(textarea instanceof harness.dom.window.HTMLTextAreaElement)) {
+        throw new Error("missing textarea");
+      }
+
+      await act(async () => {
+        textarea.value = "owner/repo";
+        textarea.dispatchEvent(new harness.dom.window.Event("input", { bubbles: true }));
+        textarea.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
+      });
+
+      const dialogText = harness.dom.window.document.body.textContent ?? "";
+      expect(dialogText.match(/Plugin is shadowed by a global install\./g)?.length ?? 0).toBe(1);
 
       await act(async () => {
         root.unmount();

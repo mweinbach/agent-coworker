@@ -106,6 +106,11 @@ export function InstallPluginDialog({
     && lastMutationSourceInput !== null
     && normalizedSourceInput.length > 0
     && normalizedSourceInput === lastMutationSourceInput;
+  const dialogError = showMutationError
+    ? runtime?.skillMutationError ?? null
+    : showPluginsError
+      ? runtime?.pluginsError ?? null
+      : null;
   const requiresFreshPreviewForScope = (targetScope: PluginPreviewScope) => shouldRequireFreshPluginPreviewForScope({
     normalizedSourceInput,
     lastPreviewSourceInput,
@@ -275,17 +280,12 @@ export function InstallPluginDialog({
               </div>
             ) : null}
 
-            {showMutationError ? (
+            {dialogError ? (
               <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-                {runtime.skillMutationError}
+                {dialogError}
               </div>
             ) : null}
-            {showPluginsError ? (
-              <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-                {runtime.pluginsError}
-              </div>
-            ) : null}
-            {(showMutationError || showPluginsError) && lastMutationTargetScope ? (
+            {dialogError && lastMutationTargetScope ? (
               <div className="text-[11px] text-muted-foreground">
                 Last attempted target: {lastMutationTargetScope === "workspace" ? "workspace" : "global"}.
               </div>

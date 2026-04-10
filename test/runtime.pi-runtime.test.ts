@@ -142,7 +142,7 @@ describe("pi runtime regressions", () => {
     expect(resolved.model.maxTokens).toBe(128000);
   });
 
-  test("codex runtime model resolution imports legacy ~/.codex auth into Cowork auth", async () => {
+  test("codex runtime model resolution ignores legacy external auth without Cowork credentials", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-codex-legacy-"));
     const workspaceDir = path.join(homeDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -170,18 +170,12 @@ describe("pi runtime regressions", () => {
       userAgentDir: path.join(workspaceDir, ".agent"),
     });
 
-    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
-
-    expect(resolved.apiKey).toBe("legacy-access-token");
-    expect(resolved.accountId).toBe("acct_legacy");
-
-    const importedRaw = await fs.readFile(
-      path.join(homeDir, ".cowork", "auth", "codex-cli", "auth.json"),
-      "utf-8",
+    await expect(resolveOpenAiResponsesModel(makeParams(config))).rejects.toThrow(
+      "Codex auth is missing. Run /connect codex-cli to authenticate.",
     );
-    const imported = JSON.parse(importedRaw) as Record<string, any>;
-    expect(imported.tokens?.access_token).toBe("legacy-access-token");
-    expect(imported.tokens?.refresh_token).toBe("legacy-refresh-token");
+    await expect(
+      fs.readFile(path.join(homeDir, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
+    ).rejects.toThrow();
   });
 
   test("codex runtime model resolution keeps supported OpenAI token limits when using a saved API key", async () => {

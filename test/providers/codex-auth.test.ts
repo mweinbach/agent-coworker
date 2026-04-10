@@ -414,7 +414,7 @@ describe("readCodexAuthMaterial fallback behavior", () => {
     expect(material?.planType).toBe("pro");
   });
 
-  test("imports legacy ~/.codex auth into Cowork auth.json when Cowork auth is missing", async () => {
+  test("ignores legacy external auth when Cowork auth is missing", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-auth-import-legacy-"));
     const paths = makePaths(home);
     const accessToken = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, email: "legacy@example.com" });
@@ -438,24 +438,28 @@ describe("readCodexAuthMaterial fallback behavior", () => {
       "utf-8",
     );
 
-    const material = await readCodexAuthMaterial(paths);
-    const coworkPath = path.join(paths.authDir, "codex-cli", "auth.json");
-
-    expect(material).toBeTruthy();
-    expect(material?.file).toBe(coworkPath);
-    expect(material?.accessToken).toBe(accessToken);
-    expect(material?.refreshToken).toBe("legacy-refresh-token");
-    expect(material?.accountId).toBe("acct_legacy");
-
-    const persisted = JSON.parse(await fs.readFile(coworkPath, "utf-8")) as any;
-    expect(persisted?.tokens?.access_token).toBe(accessToken);
-    expect(persisted?.tokens?.refresh_token).toBe("legacy-refresh-token");
-    expect(persisted?.tokens?.id_token).toBe(idToken);
+    await expect(readCodexAuthMaterial(paths)).resolves.toBeNull();
+    await expect(fs.readFile(path.join(paths.authDir, "codex-cli", "auth.json"), "utf-8")).rejects.toThrow();
   });
 
-  test("clearCodexAuthMaterial blocks legacy re-import until Cowork signs in again", async () => {
+  test("clearCodexAuthMaterial only clears Cowork auth and does not restore from legacy auth", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-auth-block-legacy-"));
     const paths = makePaths(home);
+    const coworkPath = path.join(paths.authDir, "codex-cli", "auth.json");
+    await fs.mkdir(path.dirname(coworkPath), { recursive: true });
+    await fs.writeFile(
+      coworkPath,
+      JSON.stringify({
+        version: 1,
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+          refresh_token: "cowork-refresh-token",
+        },
+      }),
+      "utf-8",
+    );
+
     const legacyPath = path.join(home, ".codex", "auth.json");
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
     await fs.writeFile(
@@ -470,9 +474,11 @@ describe("readCodexAuthMaterial fallback behavior", () => {
       "utf-8",
     );
 
-    await clearCodexAuthMaterial(paths);
+    const cleared = await clearCodexAuthMaterial(paths);
 
+    expect(cleared.removed).toBe(true);
     await expect(readCodexAuthMaterial(paths)).resolves.toBeNull();
-    await expect(fs.readFile(path.join(paths.authDir, "codex-cli", "auth.json"), "utf-8")).rejects.toThrow();
+    await expect(fs.readFile(coworkPath, "utf-8")).rejects.toThrow();
+    await expect(fs.readFile(legacyPath, "utf-8")).resolves.toContain("legacy-refresh-token");
   });
 });

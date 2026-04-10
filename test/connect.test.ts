@@ -254,7 +254,7 @@ describe("connectProvider", () => {
     expect(entry?.mode).toBe("oauth");
   });
 
-  test("codex-cli imports legacy .codex credentials into Cowork auth.json", async () => {
+  test("codex-cli ignores legacy external auth and runs Cowork-owned oauth", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
     const accessToken = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3_600 });
@@ -286,7 +286,7 @@ describe("connectProvider", () => {
     const result = await connectProvider({
       provider: "codex-cli",
       paths,
-      openUrl: async () => true,
+      openUrl: async (url) => url === mockedAuthorizeUrl,
       fetchImpl: async () => {
         throw new Error("Unexpected network call during fresh Codex OAuth login.");
       },
@@ -295,16 +295,16 @@ describe("connectProvider", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.mode).toBe("oauth");
-    expect(result.message).toContain("Existing Codex OAuth credentials detected.");
+    expect(result.message).toContain("Codex OAuth sign-in completed.");
     expect(result.oauthCredentialsFile).toBe(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"));
-    expect(runCodexLoginMock).toHaveBeenCalledTimes(0);
+    expect(runCodexLoginMock).toHaveBeenCalledTimes(1);
 
     const persisted = JSON.parse(
       await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")
     ) as any;
-    expect(persisted?.tokens?.access_token).toBe(accessToken);
-    expect(persisted?.tokens?.refresh_token).toBe("legacy-refresh-token");
-    expect(persisted?.account?.account_id).toBe("acc_legacy");
+    expect(persisted?.tokens?.access_token).toBe("mock-access-token");
+    expect(persisted?.tokens?.refresh_token).toBe("mock-refresh-token");
+    expect(persisted?.account?.account_id).toBe("acc_mock");
   });
 
   test("codex-cli stale credentials trigger new oauth flow", async () => {

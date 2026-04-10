@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Changed
+
+- Removed legacy external Codex auth import so Cowork now relies only on its own `~/.cowork/auth/codex-cli/auth.json` credentials.
+
 ## 0.1.41 - 2026-03-30
 
 ### Fixed
@@ -190,5 +196,5 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - Fixed Codex auth persistence so desktop restarts no longer make recoverable Cowork-owned auth look lost after refresh failures or cross-process token races.
-- Fixed Cowork auth recovery so usable legacy `~/.codex/auth.json` material is imported into `~/.cowork/auth/codex-cli/auth.json` when needed instead of leaving users unexpectedly signed out.
+- Fixed Cowork auth recovery so valid Codex credentials persisted in the Cowork auth store are preserved instead of leaving users unexpectedly signed out.
 - Fixed the desktop Backup settings page freeze-on-open loop by stabilizing its initial refresh path.

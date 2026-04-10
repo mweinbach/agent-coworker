@@ -2146,6 +2146,7 @@ describe("AgentSession", () => {
     });
 
     test("logoutProviderAuth emits provider_auth_result and clears provider state", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-provider-logout-"));
       const getProviderCatalogImpl = mock(async () => ({
         all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" }],
         default: { "codex-cli": "gpt-5.2" },
@@ -2160,6 +2161,7 @@ describe("AgentSession", () => {
         message: "OAuth sign-in completed.",
       }));
       const { session, events } = makeSession({
+        config: makeConfig(dir),
         connectProviderImpl: connectProviderImpl as any,
         getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
         getProviderCatalogImpl: getProviderCatalogImpl as any,

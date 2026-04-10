@@ -290,9 +290,9 @@ export function InstallPluginDialog({
                 Last attempted target: {lastMutationTargetScope === "workspace" ? "workspace" : "global"}.
               </div>
             ) : null}
-            {showPreview && lastPreviewTargetScope !== null ? (
+            {showPreview ? (
               <div className="text-[11px] text-muted-foreground">
-                Run a new preview before installing to {lastPreviewTargetScope === "workspace" ? "global" : "workspace"}.
+                To install to {lastPreviewTargetScope === "workspace" ? "global" : "workspace"}, run a new preview for that scope first.
               </div>
             ) : null}
             {showPreview && validPreviewCandidates.length === 0 ? (

@@ -382,9 +382,15 @@ export function createControlSocketHelpers(
     }
     rememberControlStoreGet(workspaceId, get);
     rememberControlStoreSet(workspaceId, set);
-    if (jsonRpcLifecycleCleanupByWorkspace.has(workspaceId) && jsonRpcRouterCleanupByWorkspace.has(workspaceId)) {
+    const existingLifecycleCleanup = jsonRpcLifecycleCleanupByWorkspace.get(workspaceId);
+    const existingRouterCleanup = jsonRpcRouterCleanupByWorkspace.get(workspaceId);
+    if (existingLifecycleCleanup && existingRouterCleanup) {
       return;
     }
+    existingLifecycleCleanup?.();
+    existingRouterCleanup?.();
+    jsonRpcLifecycleCleanupByWorkspace.delete(workspaceId);
+    jsonRpcRouterCleanupByWorkspace.delete(workspaceId);
     const cleanup = registerWorkspaceJsonRpcLifecycle(workspaceId, {
       onOpen: () => {
         const currentGet = getControlStoreGet(workspaceId);

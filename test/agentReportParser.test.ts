@@ -58,6 +58,28 @@ describe("parseChildAgentReport", () => {
     expect(parseChildAgentReport(text)).toBeNull();
   });
 
+  test("prefers the trailing tagged footer over earlier tagged examples", () => {
+    const text = [
+      "Use this format:",
+      '<agent_report>{"status":"blocked","summary":"Example only"}</agent_report>',
+      "",
+      "Summary",
+      "<agent_report>",
+      JSON.stringify({
+        status: "completed",
+        summary: "Actual trailing footer",
+        filesChanged: ["src/server/agents/reportParser.ts"],
+      }),
+      "</agent_report>",
+    ].join("\n");
+
+    expect(parseChildAgentReport(text)).toEqual({
+      status: "completed",
+      summary: "Actual trailing footer",
+      filesChanged: ["src/server/agents/reportParser.ts"],
+    });
+  });
+
   test("falls back to legacy fenced JSON when no tag exists", () => {
     const text = [
       "Summary",

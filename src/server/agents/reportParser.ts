@@ -43,9 +43,10 @@ function collectLegacyChildAgentReportCandidates(text: string): string[] {
 export function parseChildAgentReport(text: string | null | undefined): ChildAgentReport | null {
   if (!text?.trim()) return null;
 
-  const match = text.match(REPORT_RE);
-  if (match) {
-    return match[1] ? tryParseChildAgentReport(match[1]) : null;
+  const taggedMatches = [...text.matchAll(new RegExp(REPORT_RE.source, "ig"))];
+  const taggedFooter = taggedMatches.at(-1);
+  if (taggedFooter) {
+    return taggedFooter[1] ? tryParseChildAgentReport(taggedFooter[1]) : null;
   }
 
   for (const candidate of collectLegacyChildAgentReportCandidates(text)) {

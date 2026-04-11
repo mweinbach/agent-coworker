@@ -262,6 +262,7 @@ type RawLoopAgentControlState = {
   routedConfig: AgentConfig;
   connectedProviders: readonly ProviderName[];
   historyMessages: ModelMessage[];
+  todos: TodoItem[];
   harnessContext: HarnessContextState | null;
   abortController: AbortController | null;
   runPromise: Promise<void> | null;
@@ -516,7 +517,7 @@ function withExecuteGuard(
 
 export function createRawLoopAgentControl(
   opts: Pick<ToolContext, "config" | "log" | "askUser" | "approveCommand" | "availableSkills" | "spawnDepth" | "abortSignal">
-    & { parentMessages?: ModelMessage[]; harnessContext?: HarnessContextState | null },
+    & { parentMessages?: ModelMessage[]; getParentTodos?: () => TodoItem[]; harnessContext?: HarnessContextState | null },
   deps: RawLoopAgentControlDeps = {},
 ): NonNullable<ToolContext["agentControl"]> {
   const statusBus = new StatusBus();
@@ -571,7 +572,11 @@ export function createRawLoopAgentControl(
       abortSignal: controller.signal,
       discoveredSkills: opts.availableSkills,
       ...(priorMessages.length > 0 ? { seedMessages: priorMessages } : {}),
+      ...(state.todos.length > 0 ? { initialTodos: structuredClone(state.todos) } : {}),
       ...(state.harnessContext ? { harnessContext: state.harnessContext } : {}),
+      updateTodos: (todos) => {
+        state.todos = structuredClone(todos);
+      },
       ...(state.requestedModel ? { model: state.requestedModel } : {}),
       ...(state.requestedReasoningEffort ? { reasoningEffort: state.requestedReasoningEffort } : {}),
       ...(state.connectedProviders.length > 0 ? { connectedProviders: state.connectedProviders } : {}),
@@ -636,6 +641,9 @@ export function createRawLoopAgentControl(
         opts.log(routed.fallbackLine);
       }
       const timestamp = now();
+      const seededTodos = resolvedContext.includeParentTodos && opts.getParentTodos
+        ? structuredClone(opts.getParentTodos())
+        : [];
       const state: RawLoopAgentControlState = {
         routedConfig: routed.config,
         summary: {
@@ -665,6 +673,7 @@ export function createRawLoopAgentControl(
           : resolvedContext.contextMode === "brief"
             ? [{ role: "user", content: `Parent briefing:\n${resolvedContext.briefing}` }]
             : [],
+        todos: seededTodos,
         harnessContext: (
           resolvedContext.contextMode === "full"
           || resolvedContext.includeHarnessContext
@@ -2157,6 +2166,7 @@ async function main() {
         approveCommand,
         availableSkills: discoveredSkills,
         parentMessages: inputMessages,
+        getParentTodos: () => structuredClone(todoEvents.at(-1)?.todos ?? []),
         harnessContext,
       }, {
         getConnectedProviders: async () => connectedProviders,

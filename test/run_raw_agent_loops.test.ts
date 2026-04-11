@@ -258,6 +258,38 @@ describe("raw loop child-agent control", () => {
     );
   });
 
+  test("seeds parent todos into raw-loop child runs when requested", async () => {
+    const seededTodos = [
+      { content: "Reuse the parent checklist", status: "in_progress", activeForm: "Reusing the parent checklist" },
+    ];
+    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
+    const control = createRawLoopAgentControl(
+      {
+        config: makeConfig(),
+        log: () => {},
+        askUser: async () => "",
+        approveCommand: async () => true,
+        getParentTodos: () => seededTodos,
+      },
+      {
+        createDelegateRunner: () => ({ run }),
+      },
+    );
+
+    await control.spawn({
+      role: "worker",
+      message: "Use the parent todo state",
+      includeParentTodos: true,
+    });
+
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialTodos: seededTodos,
+        updateTodos: expect.any(Function),
+      }),
+    );
+  });
+
   test("carries child history into subsequent sendInput runs", async () => {
     const run = mock()
       .mockResolvedValueOnce(makeDelegateRunResult("First reply"))

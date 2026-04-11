@@ -1,5 +1,21 @@
 # Task Plan
 
+## Fix Raw-loop includeParentTodos Review Thread
+
+- [x] Confirm the unresolved raw-loop review comment is still real against current `HEAD`.
+- [x] Preserve parent todo state in raw-loop child spawns instead of silently dropping `includeParentTodos`.
+- [x] Add focused regressions for raw-loop child todo seeding and delegate todo propagation.
+- [x] Re-run focused Bun tests plus `bun run typecheck`.
+
+## Fix Raw-loop includeParentTodos Review Thread Review
+
+- `scripts/run_raw_agent_loops.ts` now snapshots parent todos at raw-loop child spawn time, carries them in raw-loop child state, and preserves child todo updates through the delegate run path instead of dropping `includeParentTodos`.
+- `src/server/agents/DelegateRunner.ts` now accepts seeded todo state plus an `updateTodos` callback so raw-loop delegate runs initialize inherited todo state before the child turn starts.
+- Added focused regressions in `test/run_raw_agent_loops.test.ts` and `test/delegateRunner.test.ts`.
+- Verification passed with:
+  - `bun test test/run_raw_agent_loops.test.ts test/delegateRunner.test.ts`
+  - `bun run typecheck`
+
 ## Replace forkContext With Explicit Context Modes
 
 - [x] Add shared `contextMode` types plus spawn-option normalization that preserves deprecated `forkContext` compatibility.

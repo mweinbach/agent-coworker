@@ -147,4 +147,37 @@ describe("DelegateRunner", () => {
     expect(runTurn.mock.calls[0]?.[0]?.system).toContain("- Run ID: run-delegate");
     expect(runTurn.mock.calls[0]?.[0]?.system).toContain("- Objective: Verify delegated prompt injection");
   });
+
+  test("seeds delegated todo state before the child turn starts", async () => {
+    const seededTodos = [
+      { content: "Carry parent plan", status: "in_progress", activeForm: "Carrying parent plan" },
+    ];
+    const updateTodos = mock((_todos: typeof seededTodos) => {});
+    const runTurn = mock(async () => ({
+      text: "ok",
+      reasoningText: undefined as string | undefined,
+      responseMessages: [],
+    }));
+    const runner = new DelegateRunner({
+      loadAgentPrompt: async () => "delegate system prompt",
+      buildRuntimeTelemetrySettings: async () => null,
+      buildGooglePrepareStep: () => undefined,
+      createRuntime: () => ({ runTurn }),
+      createTools: () => ({}),
+    });
+
+    await runner.run({
+      config: makeConfig(),
+      role: "worker",
+      message: "Continue the inherited plan",
+      askUser: async () => "",
+      approveCommand: async () => true,
+      log: () => {},
+      initialTodos: seededTodos,
+      updateTodos,
+    });
+
+    expect(updateTodos).toHaveBeenCalledWith(seededTodos);
+    expect(updateTodos.mock.invocationCallOrder[0]).toBeLessThan(runTurn.mock.invocationCallOrder[0]);
+  });
 });

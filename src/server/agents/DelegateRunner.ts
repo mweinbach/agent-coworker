@@ -6,7 +6,7 @@ import { createTools } from "../../tools";
 import type { ToolContext } from "../../tools";
 import { buildTurnSystemPrompt } from "../../harness/buildTurnSystemPrompt";
 import type { ModelMessage } from "../../types";
-import type { AgentConfig, HarnessContextState, ProviderName } from "../../types";
+import type { AgentConfig, HarnessContextState, ProviderName, TodoItem } from "../../types";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 
 import { routeAgentConfig } from "./modelRouter";
@@ -48,7 +48,9 @@ export class DelegateRunner {
     abortSignal?: AbortSignal;
     discoveredSkills?: ToolContext["availableSkills"];
     seedMessages?: ModelMessage[];
+    initialTodos?: TodoItem[];
     harnessContext?: HarnessContextState | null;
+    updateTodos?: ToolContext["updateTodos"];
     model?: string;
     reasoningEffort?: AgentReasoningEffort;
     connectedProviders?: readonly ProviderName[];
@@ -73,6 +75,7 @@ export class DelegateRunner {
       log: (line) => opts.log(`[delegate:${opts.role}] ${line}`),
       askUser: opts.askUser,
       approveCommand: opts.approveCommand,
+      updateTodos: opts.updateTodos,
       spawnDepth: (opts.spawnDepth ?? 0) + 1,
       abortSignal: opts.abortSignal,
       availableSkills: opts.discoveredSkills,
@@ -92,6 +95,10 @@ export class DelegateRunner {
         model: routed.effectiveModel,
       },
     });
+
+    if (opts.initialTodos && opts.updateTodos) {
+      opts.updateTodos(structuredClone(opts.initialTodos));
+    }
 
     const runtime = this.deps.createRuntime(routed.config);
     const result = await runtime.runTurn({

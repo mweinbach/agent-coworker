@@ -181,6 +181,41 @@ const LEGACY_MODEL_ALIASES: Record<string, string> = {
   "google:gemini-3-pro-preview": "google:gemini-3.1-pro-preview-customtools",
 };
 
+type LikelyModelProvider = "openai" | "anthropic";
+
+function inferLikelyProviderForModelId(modelId: string): LikelyModelProvider | null {
+  const normalized = modelId.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized.startsWith("claude-")) return "anthropic";
+  if (
+    normalized.startsWith("gpt-5")
+    || normalized.startsWith("gpt-4o")
+    || /^o(?:1|3|4)(?:$|[-.])/.test(normalized)
+    || /(^|[-.])codex(?:$|[-.])/.test(normalized)
+  ) {
+    return "openai";
+  }
+  return null;
+}
+
+function providerMatchesLikelyModelProvider(provider: ProviderName, expectedProvider: LikelyModelProvider): boolean {
+  if (expectedProvider === "openai") {
+    return provider === "openai" || provider === "codex-cli";
+  }
+  return provider === expectedProvider;
+}
+
+export function describeModelProviderMismatch(provider: ProviderName, modelId: string): string | null {
+  const expectedProvider = inferLikelyProviderForModelId(modelId);
+  if (!expectedProvider || providerMatchesLikelyModelProvider(provider, expectedProvider)) {
+    return null;
+  }
+  if (expectedProvider === "openai") {
+    return `"${modelId}" looks like an OpenAI model; use provider openai instead (Responses API).`;
+  }
+  return `"${modelId}" looks like an Anthropic model; use provider anthropic instead.`;
+}
+
 export { MODEL_REGISTRY_ENTRIES };
 
 export function isStaticRegistryProvider(provider: ProviderName): provider is StaticModelProviderName {
@@ -230,6 +265,9 @@ export function assertSupportedModel(provider: ProviderName, modelId: string, so
   const supported = getSupportedModel(provider, modelId);
   if (supported) return supported;
 
+  const mismatchHint = describeModelProviderMismatch(provider, modelId);
   const supportedIds = listSupportedModelIds(provider).join(", ");
-  throw new Error(`Unsupported ${source} "${modelId}" for provider ${provider}. Supported models: ${supportedIds}`);
+  throw new Error(
+    `Unsupported ${source} "${modelId}" for provider ${provider}.${mismatchHint ? ` ${mismatchHint}` : ""} Supported models: ${supportedIds}`
+  );
 }

@@ -1833,6 +1833,31 @@ describe("AgentSession", () => {
       }
     });
 
+    test("OpenAI-looking model on anthropic emits actionable provider guidance", async () => {
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session-model-mismatch"),
+          provider: "anthropic",
+          model: "claude-sonnet-4-5",
+          preferredChildModel: "claude-sonnet-4-5",
+          knowledgeCutoff: getSupportedModel("anthropic", "claude-sonnet-4-5")?.knowledgeCutoff ?? "unknown",
+        },
+      });
+      const before = session.getPublicConfig();
+
+      await session.setModel("gpt-5.4(xhigh)", "anthropic");
+
+      expect(session.getPublicConfig()).toEqual(before);
+      const err = events.find((e): e is Extract<ServerEvent, { type: "error" }> => e.type === "error");
+      expect(err).toBeDefined();
+      if (err) {
+        expect(err.code).toBe("validation_failed");
+        expect(err.source).toBe("provider");
+        expect(err.message).toContain("looks like an OpenAI model");
+        expect(err.message).toContain("use provider openai instead");
+      }
+    });
+
     test("applySessionDefaults persists combined defaults once and emits one snapshot write", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({

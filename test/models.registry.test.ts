@@ -9,6 +9,7 @@ import {
   listSupportedModels,
   getSupportedModel,
   assertSupportedModel,
+  describeModelProviderMismatch,
   supportsImageInput,
   providerOptionsDefaultsForModel,
 } from "../src/models/registry";
@@ -60,6 +61,20 @@ describe("model registry invariants", () => {
 describe("model registry helpers", () => {
   test("assertSupportedModel throws for unknown model", () => {
     expect(() => assertSupportedModel("openai", "missing-model")).toThrow(/Unsupported model/);
+  });
+
+  test("assertSupportedModel includes OpenAI mismatch guidance for anthropic provider", () => {
+    expect(() => assertSupportedModel("anthropic", "gpt-5.4(xhigh)")).toThrow(/looks like an OpenAI model/);
+    expect(() => assertSupportedModel("anthropic", "gpt-5.4(xhigh)")).toThrow(/use provider openai instead/);
+  });
+
+  test("assertSupportedModel includes Anthropic mismatch guidance for openai provider", () => {
+    expect(() => assertSupportedModel("openai", "claude-sonnet-4-5")).toThrow(/looks like an Anthropic model/);
+    expect(() => assertSupportedModel("openai", "claude-sonnet-4-5")).toThrow(/use provider anthropic instead/);
+  });
+
+  test("describeModelProviderMismatch allows codex-cli for OpenAI-family models", () => {
+    expect(describeModelProviderMismatch("codex-cli", "gpt-5.4(xhigh)")).toBeNull();
   });
 
   test("getSupportedModel returns null for unknown models", () => {

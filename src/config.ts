@@ -17,7 +17,7 @@ import {
 } from "./types";
 import type { AgentConfig, CommandTemplateConfig, ProviderName, RuntimeName } from "./types";
 import { resolveAuthHomeDir } from "./utils/authHome";
-import { defaultSupportedModel, getSupportedModel } from "./models/registry";
+import { defaultSupportedModel, describeModelProviderMismatch, getSupportedModel } from "./models/registry";
 import { normalizeChildRoutingConfig } from "./models/childModelRouting";
 import {
   getResolvedModelMetadataSync,
@@ -129,8 +129,9 @@ async function resolveConfiguredModelMetadata(
   const supported = getSupportedModel(provider, modelId);
   if (supported) return supported;
   const fallback = defaultSupportedModel(provider);
+  const mismatchHint = describeModelProviderMismatch(provider, modelId);
   console.warn(
-    `[config] Ignoring unsupported ${source} "${modelId}" for provider ${provider}; using "${fallback.id}".`
+    `[config] Ignoring unsupported ${source} "${modelId}" for provider ${provider}; using "${fallback.id}".${mismatchHint ? ` ${mismatchHint}` : ""}`
   );
   return fallback;
 }

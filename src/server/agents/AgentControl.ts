@@ -1,6 +1,7 @@
 import type { AgentSession } from "../session/AgentSession";
 import {
   parseChildAgentReport,
+  resolveAgentSpawnContextOptions,
   type AgentExecutionState,
   type AgentInspectResult,
   type AgentMode,
@@ -30,6 +31,35 @@ function executionStateForSession(session: AgentSession, fallback: AgentExecutio
   if (info.executionState === "running" || info.executionState === "pending_init") return fallback;
   if (info.executionState) return info.executionState;
   return fallback;
+}
+
+function shouldReadParentSeedContext(opts: ReturnType<typeof resolveAgentSpawnContextOptions>): boolean {
+  return opts.contextMode !== "none" || opts.includeParentTodos || opts.includeHarnessContext;
+}
+
+function buildSeedContextForSpawn(
+  parentSession: AgentSession,
+  opts: ReturnType<typeof resolveAgentSpawnContextOptions>,
+) {
+  if (opts.contextMode === "full") {
+    return parentSession.buildForkContextSeed();
+  }
+  if (opts.contextMode === "brief") {
+    return parentSession.buildContextSeed({
+      contextMode: "brief",
+      briefing: opts.briefing,
+      includeParentTodos: opts.includeParentTodos,
+      includeHarnessContext: opts.includeHarnessContext,
+    });
+  }
+  if (!opts.includeParentTodos && !opts.includeHarnessContext) {
+    return null;
+  }
+  return parentSession.buildContextSeed({
+    contextMode: "none",
+    includeParentTodos: opts.includeParentTodos,
+    includeHarnessContext: opts.includeHarnessContext,
+  });
 }
 
 export class AgentControl {
@@ -129,12 +159,14 @@ export class AgentControl {
     const role = opts.role ?? "default";
     const roleDefinition = getAgentRoleDefinition(role);
     const depth = (opts.parentDepth ?? 0) + 1;
-    const parentSession = opts.forkContext
+    const resolvedContext = resolveAgentSpawnContextOptions(opts);
+    const parentSession = shouldReadParentSeedContext(resolvedContext)
       ? this.deps.sessionBindings.get(opts.parentSessionId)?.session
       : null;
-    if (opts.forkContext && !parentSession) {
+    if (shouldReadParentSeedContext(resolvedContext) && !parentSession) {
       throw new Error(`Unknown parent session: ${opts.parentSessionId}`);
     }
+    const seedContext = parentSession ? buildSeedContextForSpawn(parentSession, resolvedContext) : null;
     const routed = routeAgentConfig(opts.parentConfig, {
       role: roleDefinition,
       ...(opts.model ? { model: opts.model } : {}),
@@ -149,7 +181,7 @@ export class AgentControl {
     const built = this.deps.buildSession(binding, undefined, {
       config: routed.config,
       system: childSystem,
-      ...(parentSession ? { seedContext: parentSession.buildForkContextSeed() } : {}),
+      ...(seedContext ? { seedContext } : {}),
       sessionInfoPatch: {
         sessionKind: "agent",
         parentSessionId: opts.parentSessionId,

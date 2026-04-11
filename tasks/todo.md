@@ -1,5 +1,21 @@
 # Task Plan
 
+## Replace forkContext With Explicit Context Modes
+
+- [x] Add shared `contextMode` types plus spawn-option normalization that preserves deprecated `forkContext` compatibility.
+- [x] Implement `none` / `brief` / `full` child-context seeding across persistent sessions and raw-loop delegate control.
+- [x] Update spawn tool, JSON-RPC/docs/generated schema artifacts, and focused tests, then rerun targeted Bun verification plus `bun run typecheck`.
+
+## Replace forkContext With Explicit Context Modes Review
+
+- Added shared `AgentContextMode` values plus a central `resolveAgentSpawnContextOptions(...)` helper so deprecated `forkContext` resolves deterministically to `full` or `none` while new callers use explicit `contextMode`, `briefing`, and optional todo/harness inheritance.
+- Persistent child sessions now seed parent context in three modes: `none` skips transcript inheritance, `brief` injects a single synthetic briefing message plus optional todos/harness context, and `full` preserves the old transcript/todo/harness clone behavior.
+- Updated the model-facing `spawnAgent` tool, JSON-RPC agent spawn schema/route/docs, raw-loop delegate child control, and regenerated JSON-RPC schema artifacts so every spawn surface shares the same explicit contract.
+- Focused verification passed with:
+  - `~/.bun/bin/bun test test/spawnAgent.tool.test.ts test/agentControl.test.ts test/run_raw_agent_loops.test.ts test/jsonrpc.routes.review-fixes.test.ts test/harness.ws.e2e.test.ts`
+  - `~/.bun/bin/bun run docs:generate-jsonrpc`
+  - `~/.bun/bin/bun run typecheck`
+
 ## Fix Plugin Symlink Boundary Regressions
 
 - [x] Canonicalize plugin-local MCP transport path checks before containment validation so symlinked command/arg/cwd paths cannot escape the plugin root.

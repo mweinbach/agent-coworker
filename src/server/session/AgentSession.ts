@@ -60,7 +60,13 @@ import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
 import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
 import { SkillManager } from "./SkillManager";
 import { TurnExecutionManager } from "./TurnExecutionManager";
-import type { AgentInspectResult, AgentReasoningEffort, AgentRole } from "../../shared/agents";
+import type {
+  AgentInspectResult,
+  AgentReasoningEffort,
+  AgentRole,
+  AgentSpawnContextOptions,
+  AgentContextMode,
+} from "../../shared/agents";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 
 // Packaged Bun sidecar builds need these dynamic imports because the old createRequire
@@ -1476,6 +1482,21 @@ export class AgentSession {
     };
   }
 
+  buildContextSeed(opts: {
+    contextMode: Exclude<AgentContextMode, "full">;
+    briefing?: string;
+    includeParentTodos?: boolean;
+    includeHarnessContext?: boolean;
+  }): SeededSessionContext {
+    return {
+      messages: opts.contextMode === "brief" && opts.briefing
+        ? [{ role: "user", content: `Parent briefing:\n${opts.briefing}` }]
+        : [],
+      todos: opts.includeParentTodos ? structuredClone(this.state.todos) : [],
+      harnessContext: opts.includeHarnessContext ? this.deps.harnessContextStore.get(this.id) : null,
+    };
+  }
+
   setSessionTitle(title: string) {
     this.metadataManager.setSessionTitle(title);
   }
@@ -1492,12 +1513,11 @@ export class AgentSession {
     await this.getAdminManager().listAgentSessions();
   }
 
-  async createAgentSession(opts: {
+  async createAgentSession(opts: AgentSpawnContextOptions & {
     message: string;
     role?: AgentRole;
     model?: string;
     reasoningEffort?: AgentReasoningEffort;
-    forkContext?: boolean;
   }) {
     await this.getAdminManager().createAgentSession(opts);
   }

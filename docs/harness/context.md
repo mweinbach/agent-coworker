@@ -51,10 +51,12 @@ Normalization rules:
 
 ## Child-Agent Behavior
 
-- Forked child sessions inherit harness context through the existing seed-context path.
-- `AgentSession.buildForkContextSeed()` includes `harnessContext`.
-- `AgentControl.spawn()` passes that seed when `forkContext: true`.
-- The child sees inherited context in its runtime prompt path, but the context is **not** duplicated into transcript messages.
+- Child sessions inherit parent context through explicit spawn context modes instead of a single coarse fork flag.
+- `contextMode: "full"` keeps the existing `AgentSession.buildForkContextSeed()` behavior and carries transcript, todos, and harness context together.
+- `contextMode: "brief"` injects a synthetic `Parent briefing:` user seed message and can optionally carry harness context and todos.
+- `contextMode: "none"` skips transcript cloning and only carries structured context when explicitly requested.
+- Deprecated `forkContext` still maps to `contextMode: "full"` / `"none"` for compatibility.
+- The child sees inherited harness context in its runtime prompt path, but the context is **not** duplicated into transcript messages.
 
 ## Raw-Loop Behavior
 

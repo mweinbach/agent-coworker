@@ -25,6 +25,7 @@ import { routeAgentConfig } from "../src/server/agents/modelRouter";
 import { getAgentRoleDefinition } from "../src/server/agents/roles";
 import {
   parseChildAgentReport,
+  resolveAgentSpawnContextOptions,
   type AgentInspectResult,
   type AgentReasoningEffort,
   type AgentRole,
@@ -615,8 +616,15 @@ export function createRawLoopAgentControl(
   };
 
   return {
-    spawn: async ({ message, role, model, reasoningEffort, forkContext }) => {
+    spawn: async (spawnOpts) => {
+      const {
+        message,
+        role,
+        model,
+        reasoningEffort,
+      } = spawnOpts;
       const effectiveRole = role ?? "default";
+      const resolvedContext = resolveAgentSpawnContextOptions(spawnOpts);
       const connectedProviders = await getConnectedProviders();
       const routed = routeAgentConfig(opts.config, {
         role: getAgentRoleDefinition(effectiveRole),
@@ -652,14 +660,17 @@ export function createRawLoopAgentControl(
         requestedModel: routed.requestedModel,
         requestedReasoningEffort: routed.requestedReasoningEffort,
         connectedProviders,
-        historyMessages:
-          forkContext && opts.parentMessages
-            ? structuredClone(opts.parentMessages)
+        historyMessages: resolvedContext.contextMode === "full" && opts.parentMessages
+          ? structuredClone(opts.parentMessages)
+          : resolvedContext.contextMode === "brief"
+            ? [{ role: "user", content: `Parent briefing:\n${resolvedContext.briefing}` }]
             : [],
-        harnessContext:
-          forkContext && opts.harnessContext
-            ? structuredClone(opts.harnessContext)
-            : null,
+        harnessContext: (
+          resolvedContext.contextMode === "full"
+          || resolvedContext.includeHarnessContext
+        ) && opts.harnessContext
+          ? structuredClone(opts.harnessContext)
+          : null,
         abortController: null,
         runPromise: null,
         runToken: 0,

@@ -1,4 +1,5 @@
 import type {
+  AgentSpawnContextOptions,
   AgentInspectResult,
   AgentReasoningEffort,
   PersistentAgentSummary,
@@ -14,12 +15,11 @@ export type AgentWaitResult = {
 };
 
 export interface AgentControl {
-  spawn: (opts: {
+  spawn: (opts: AgentSpawnContextOptions & {
     message: string;
     role?: AgentRole;
     model?: string;
     reasoningEffort?: AgentReasoningEffort;
-    forkContext?: boolean;
   }) => Promise<PersistentAgentSummary>;
   list: () => Promise<PersistentAgentSummary[]>;
   sendInput: (opts: { agentId: string; message: string; interrupt?: boolean }) => Promise<void>;

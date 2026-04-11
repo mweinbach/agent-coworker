@@ -14,6 +14,9 @@ export type AgentRole = (typeof AGENT_ROLE_VALUES)[number];
 export const AGENT_MODE_VALUES = ["collaborative", "delegate"] as const;
 export type AgentMode = (typeof AGENT_MODE_VALUES)[number];
 
+export const AGENT_CONTEXT_MODE_VALUES = ["none", "brief", "full"] as const;
+export type AgentContextMode = (typeof AGENT_CONTEXT_MODE_VALUES)[number];
+
 export const AGENT_LIFECYCLE_STATE_VALUES = ["active", "closed"] as const;
 export type AgentLifecycleState = (typeof AGENT_LIFECYCLE_STATE_VALUES)[number];
 
@@ -25,9 +28,45 @@ export type AgentReasoningEffort = OpenAiReasoningEffort;
 export const sessionKindSchema = z.enum(SESSION_KIND_VALUES);
 export const agentRoleSchema = z.enum(AGENT_ROLE_VALUES);
 export const agentModeSchema = z.enum(AGENT_MODE_VALUES);
+export const agentContextModeSchema = z.enum(AGENT_CONTEXT_MODE_VALUES);
 export const agentLifecycleStateSchema = z.enum(AGENT_LIFECYCLE_STATE_VALUES);
 export const agentExecutionStateSchema = z.enum(AGENT_EXECUTION_STATE_VALUES);
 export const agentReasoningEffortSchema = z.enum(OPENAI_REASONING_EFFORT_VALUES);
+
+export type AgentSpawnContextOptions = {
+  contextMode?: AgentContextMode;
+  briefing?: string;
+  includeParentTodos?: boolean;
+  includeHarnessContext?: boolean;
+  forkContext?: boolean;
+};
+
+export type ResolvedAgentSpawnContextOptions = {
+  contextMode: AgentContextMode;
+  briefing?: string;
+  includeParentTodos: boolean;
+  includeHarnessContext: boolean;
+};
+
+export function resolveAgentSpawnContextOptions(
+  opts: AgentSpawnContextOptions | null | undefined,
+): ResolvedAgentSpawnContextOptions {
+  const contextMode = opts?.forkContext === true
+    ? "full"
+    : opts?.forkContext === false
+      ? "none"
+      : opts?.contextMode ?? "none";
+  const briefing = opts?.briefing?.trim();
+  if (contextMode === "brief" && !briefing) {
+    throw new Error('briefing is required when contextMode is "brief"');
+  }
+  return {
+    contextMode,
+    ...(briefing ? { briefing } : {}),
+    includeParentTodos: opts?.includeParentTodos === true,
+    includeHarnessContext: opts?.includeHarnessContext === true,
+  };
+}
 
 export type PersistentAgentSummary = {
   agentId: string;

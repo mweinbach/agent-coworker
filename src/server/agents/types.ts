@@ -3,6 +3,7 @@ import type { SessionDb } from "../sessionDb";
 import type { AgentConfig } from "../../types";
 import type { ProviderName } from "../../types";
 import type {
+  AgentSpawnContextOptions,
   AgentInspectResult,
   AgentMode,
   AgentReasoningEffort,
@@ -12,14 +13,13 @@ import type {
 import type { SessionBinding } from "../startServer/types";
 import type { SeededSessionContext } from "../session/SessionContext";
 
-export type AgentSpawnOptions = {
+export type AgentSpawnOptions = AgentSpawnContextOptions & {
   parentSessionId: string;
   parentConfig: AgentConfig;
   message: string;
   role?: AgentRole;
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
-  forkContext?: boolean;
   parentDepth?: number;
 };
 

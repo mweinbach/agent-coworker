@@ -109,7 +109,9 @@ describe("WebSocket harness context runtime visibility", () => {
               type: "agent_spawn",
               sessionId,
               role: "worker",
-              forkContext: true,
+              contextMode: "brief",
+              briefing: "Carry the active harness contract into the child runtime.",
+              includeHarnessContext: true,
               message: "handle the child task",
             }));
             return;

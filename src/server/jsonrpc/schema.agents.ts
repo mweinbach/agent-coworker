@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-import { agentInspectResultSchema, agentReasoningEffortSchema, agentRoleSchema } from "../../shared/agents";
+import {
+  agentContextModeSchema,
+  agentInspectResultSchema,
+  agentReasoningEffortSchema,
+  agentRoleSchema,
+  resolveAgentSpawnContextOptions,
+} from "../../shared/agents";
 import { legacyEventEnvelope, nonEmptyTrimmedStringSchema, optionalNonEmptyTrimmedStringSchema } from "./schema.shared";
 
 export const agentListEventSchema = z.object({
@@ -31,17 +37,32 @@ export const jsonRpcAgentNotificationSchemas = {
   "cowork/session/agentWaitResult": agentWaitResultEventSchema,
 } as const;
 
+const agentSpawnRequestSchema = z.object({
+  threadId: nonEmptyTrimmedStringSchema,
+  message: nonEmptyTrimmedStringSchema,
+  role: agentRoleSchema.optional(),
+  model: optionalNonEmptyTrimmedStringSchema,
+  reasoningEffort: agentReasoningEffortSchema.optional(),
+  contextMode: agentContextModeSchema.optional(),
+  briefing: optionalNonEmptyTrimmedStringSchema,
+  includeParentTodos: z.boolean().optional(),
+  includeHarnessContext: z.boolean().optional(),
+  forkContext: z.boolean().optional(),
+}).strict().superRefine((value, issueContext) => {
+  try {
+    resolveAgentSpawnContextOptions(value);
+  } catch (error) {
+    issueContext.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
 export const jsonRpcAgentRequestSchemas = {
   // role / reasoningEffort use shared enums so malformed strings fail JSON-RPC invalidParams
   // before createAgentSession (see test/jsonrpc.routes.review-fixes.test.ts).
-  "cowork/session/agent/spawn": z.object({
-    threadId: nonEmptyTrimmedStringSchema,
-    message: nonEmptyTrimmedStringSchema,
-    role: agentRoleSchema.optional(),
-    model: optionalNonEmptyTrimmedStringSchema,
-    reasoningEffort: agentReasoningEffortSchema.optional(),
-    forkContext: z.boolean().optional(),
-  }).strict(),
+  "cowork/session/agent/spawn": agentSpawnRequestSchema,
   "cowork/session/agent/list": z.object({
     threadId: nonEmptyTrimmedStringSchema,
   }).strict(),

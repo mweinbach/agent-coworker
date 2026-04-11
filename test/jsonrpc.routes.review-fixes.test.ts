@@ -255,13 +255,43 @@ describe("JSON-RPC extracted route review fixes", () => {
     expect(response.result).toBeUndefined();
   });
 
-  test("session agent spawn forwards valid role and reasoningEffort", async () => {
+  test("session agent spawn rejects brief contextMode without briefing as invalidParams", async () => {
+    const threadSession = {
+      id: "thread-1",
+      createAgentSession: async () => {
+        throw new Error("createAgentSession should not run without briefing");
+      },
+    };
+    const harness = createRouteHarness({}, [], { threadSession });
+    const handlers = createAgentRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/agent/spawn", {
+      threadId: "thread-1",
+      message: "hi",
+      contextMode: "brief",
+    });
+
+    expect(response.error?.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
+    expect(response.result).toBeUndefined();
+  });
+
+  test("session agent spawn forwards valid role, reasoningEffort, and context options", async () => {
     let harness!: RouteHarness;
     const threadSession = {
       id: "thread-1",
-      createAgentSession: async (opts: { role?: string; reasoningEffort?: string }) => {
+      createAgentSession: async (opts: {
+        role?: string;
+        reasoningEffort?: string;
+        contextMode?: string;
+        briefing?: string;
+        includeParentTodos?: boolean;
+        includeHarnessContext?: boolean;
+      }) => {
         expect(opts.role).toBe("explorer");
         expect(opts.reasoningEffort).toBe("low");
+        expect(opts.contextMode).toBe("brief");
+        expect(opts.briefing).toBe("Focus on the parser failure.");
+        expect(opts.includeParentTodos).toBe(true);
+        expect(opts.includeHarnessContext).toBe(true);
       },
     };
     harness = createRouteHarness({}, [], { threadSession });
@@ -272,6 +302,10 @@ describe("JSON-RPC extracted route review fixes", () => {
       message: "hi",
       role: "explorer",
       reasoningEffort: "low",
+      contextMode: "brief",
+      briefing: "Focus on the parser failure.",
+      includeParentTodos: true,
+      includeHarnessContext: true,
     });
 
     expect(response.error).toBeUndefined();

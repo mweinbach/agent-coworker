@@ -122,7 +122,7 @@ function makePersistedChildRecord(config: AgentConfig, overrides: Partial<Persis
 }
 
 describe("AgentControl.spawn", () => {
-  test("passes a forked parent context seed into child session creation", async () => {
+  test("passes a full parent context seed into child session creation when contextMode is full", async () => {
     const parentConfig = makeConfig();
     const childConfig = makeConfig({ model: "gpt-5-mini", preferredChildModel: "gpt-5-mini" });
     const seedContext: SeededSessionContext = {
@@ -145,9 +145,14 @@ describe("AgentControl.spawn", () => {
       return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
     });
     const buildForkContextSeed = mock(() => seedContext);
+    const buildContextSeed = mock(() => ({
+      messages: [],
+      todos: [],
+      harnessContext: null,
+    }));
     const control = new AgentControl({
       sessionBindings: new Map([
-        ["root-1", { session: { buildForkContextSeed }, socket: null }],
+        ["root-1", { session: { buildForkContextSeed, buildContextSeed }, socket: null }],
       ]) as Map<string, SessionBinding>,
       sessionDb: null,
       getConnectedProviders: async () => ["openai"],
@@ -163,10 +168,11 @@ describe("AgentControl.spawn", () => {
       parentConfig,
       role: "worker",
       message: "Handle the fix",
-      forkContext: true,
+      contextMode: "full",
     });
 
     expect(buildForkContextSeed).toHaveBeenCalledTimes(1);
+    expect(buildContextSeed).not.toHaveBeenCalled();
     expect(buildSession).toHaveBeenCalledWith(
       expect.anything(),
       undefined,
@@ -177,7 +183,72 @@ describe("AgentControl.spawn", () => {
     expect(childSession.sendUserMessage).toHaveBeenCalledWith("Handle the fix");
   });
 
-  test("does not seed parent context when forkContext is omitted", async () => {
+  test("builds a briefing seed with optional structured context when contextMode is brief", async () => {
+    const parentConfig = makeConfig();
+    const seedContext: SeededSessionContext = {
+      messages: [{ role: "user", content: "Parent briefing:\nFocus on the parser regression only." }],
+      todos: [{ content: "Reproduce the bug", status: "completed", activeForm: "Reproducing the bug" }],
+      harnessContext: {
+        runId: "run-1",
+        objective: "Fix the review findings",
+        acceptanceCriteria: ["Preserve the essential parent context"],
+        constraints: ["Do not clone the full parent transcript"],
+        updatedAt: "2026-03-16T15:00:00.000Z",
+      },
+    };
+    const childSession = makeChildSession(parentConfig);
+    const buildSession = mock((binding: SessionBinding, _persistedSessionId?: string, overrides?: Record<string, unknown>) => {
+      binding.session = childSession;
+      return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
+    });
+    const buildForkContextSeed = mock(() => ({
+      messages: [],
+      todos: [],
+      harnessContext: null,
+    }));
+    const buildContextSeed = mock(() => seedContext);
+    const control = new AgentControl({
+      sessionBindings: new Map([
+        ["root-1", { session: { buildForkContextSeed, buildContextSeed }, socket: null }],
+      ]) as Map<string, SessionBinding>,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: buildSession as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    await control.spawn({
+      parentSessionId: "root-1",
+      parentConfig,
+      role: "worker",
+      message: "Handle the fix",
+      contextMode: "brief",
+      briefing: "Focus on the parser regression only.",
+      includeParentTodos: true,
+      includeHarnessContext: true,
+    });
+
+    expect(buildForkContextSeed).not.toHaveBeenCalled();
+    expect(buildContextSeed).toHaveBeenCalledWith({
+      contextMode: "brief",
+      briefing: "Focus on the parser regression only.",
+      includeParentTodos: true,
+      includeHarnessContext: true,
+    });
+    expect(buildSession).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      expect.objectContaining({
+        seedContext,
+      }),
+    );
+    expect(childSession.sendUserMessage).toHaveBeenCalledWith("Handle the fix");
+  });
+
+  test("does not seed parent context when contextMode defaults to none", async () => {
     const parentConfig = makeConfig();
     const childSession = makeChildSession(parentConfig);
     const buildSession = mock((binding: SessionBinding) => {
@@ -189,9 +260,14 @@ describe("AgentControl.spawn", () => {
       todos: [],
       harnessContext: null,
     }));
+    const buildContextSeed = mock(() => ({
+      messages: [],
+      todos: [],
+      harnessContext: null,
+    }));
     const control = new AgentControl({
       sessionBindings: new Map([
-        ["root-1", { session: { buildForkContextSeed }, socket: null }],
+        ["root-1", { session: { buildForkContextSeed, buildContextSeed }, socket: null }],
       ]) as Map<string, SessionBinding>,
       sessionDb: null,
       getConnectedProviders: async () => ["openai"],
@@ -210,6 +286,7 @@ describe("AgentControl.spawn", () => {
     });
 
     expect(buildForkContextSeed).not.toHaveBeenCalled();
+    expect(buildContextSeed).not.toHaveBeenCalled();
     expect(buildSession).toHaveBeenCalledWith(
       expect.anything(),
       undefined,

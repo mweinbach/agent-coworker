@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { decodeBase64Strict, MAX_ATTACHMENT_UPLOAD_BASE64_SIZE } from "../../shared/attachments";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
-import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
+import type { AgentReasoningEffort, AgentRole, AgentSpawnContextOptions } from "../../shared/agents";
 import { sameWorkspacePath } from "../../utils/workspacePath";
 import {
   deletePersistedSessionSnapshot,
@@ -242,12 +242,11 @@ export class SessionAdminManager {
     }
   }
 
-  async createAgentSession(opts: {
+  async createAgentSession(opts: AgentSpawnContextOptions & {
     message: string;
     role?: AgentRole;
     model?: string;
     reasoningEffort?: AgentReasoningEffort;
-    forkContext?: boolean;
   }) {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
       this.context.emitError("validation_failed", "session", "Only root sessions can create child agents");
@@ -265,6 +264,10 @@ export class SessionAdminManager {
         role: opts.role,
         ...(opts.model ? { model: opts.model } : {}),
         ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
+        ...(opts.contextMode !== undefined ? { contextMode: opts.contextMode } : {}),
+        ...(opts.briefing !== undefined ? { briefing: opts.briefing } : {}),
+        ...(opts.includeParentTodos !== undefined ? { includeParentTodos: opts.includeParentTodos } : {}),
+        ...(opts.includeHarnessContext !== undefined ? { includeHarnessContext: opts.includeHarnessContext } : {}),
         ...(opts.forkContext !== undefined ? { forkContext: opts.forkContext } : {}),
         parentDepth: typeof this.context.state.sessionInfo.depth === "number" ? this.context.state.sessionInfo.depth : 0,
       });

@@ -2490,7 +2490,9 @@ Create a durable child session for the current root session and queue its initia
   "message": "Investigate the flaky parser test",
   "model": "gpt-5.4",
   "reasoningEffort": "high",
-  "forkContext": true
+  "contextMode": "brief",
+  "briefing": "Focus on the flaky parser test and report only the root cause.",
+  "includeHarnessContext": true
 }
 ```
 
@@ -2502,7 +2504,11 @@ Create a durable child session for the current root session and queue its initia
 | `role` | `"default" \| "explorer" \| "research" \| "worker" \| "reviewer"` | No | Child-agent role. Defaults to `"default"` |
 | `model` | `string` | No | Requested child model override. Accepts either a same-provider model id or a canonical `provider:modelId` child target ref |
 | `reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | Requested reasoning level override |
-| `forkContext` | `boolean` | No | When `true`, request that the child inherit the current parent context snapshot |
+| `contextMode` | `"none" \| "brief" \| "full"` | No | Parent-context message mode. Defaults to `"none"` |
+| `briefing` | `string` | No | Required when `contextMode` is `"brief"`. Injected as a synthetic `Parent briefing:` user seed message |
+| `includeParentTodos` | `boolean` | No | When `contextMode` is not `"full"`, include the parent todo list in the child seed |
+| `includeHarnessContext` | `boolean` | No | When `contextMode` is not `"full"`, include the parent harness context in the child seed |
+| `forkContext` | `boolean` | No | Deprecated alias. `true` resolves to `contextMode: "full"` and `false` resolves to `contextMode: "none"` |
 
 **Response:** `agent_spawned`
 **Error:** `validation_failed` when called from a child session.

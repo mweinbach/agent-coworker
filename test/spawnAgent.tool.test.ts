@@ -58,7 +58,7 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
 }
 
 describe("spawnAgent tool", () => {
-  test("forwards message and optional fields to agentControl.spawn", async () => {
+  test("forwards explicit context mode fields to agentControl.spawn", async () => {
     const summary = makeSummary({
       role: "research",
       effectiveModel: "gpt-5.4",
@@ -90,7 +90,10 @@ describe("spawnAgent tool", () => {
       role: "research",
       model: "gpt-5.4",
       reasoningEffort: "high",
-      forkContext: true,
+      contextMode: "brief",
+      briefing: "Focus on the flaky parser test and report only the root cause.",
+      includeParentTodos: true,
+      includeHarnessContext: true,
     });
 
     expect(spawn).toHaveBeenCalledWith({
@@ -98,9 +101,45 @@ describe("spawnAgent tool", () => {
       role: "research",
       model: "gpt-5.4",
       reasoningEffort: "high",
-      forkContext: true,
+      contextMode: "brief",
+      briefing: "Focus on the flaky parser test and report only the root cause.",
+      includeParentTodos: true,
+      includeHarnessContext: true,
     });
     expect(result).toEqual(summary);
+  });
+
+  test("maps deprecated forkContext to explicit contextMode for direct compatibility", async () => {
+    const summary = makeSummary();
+    const spawn = mock(async () => summary);
+    const tool: any = createSpawnAgentTool(makeCtx({
+      agentControl: {
+        spawn,
+        list: async () => [],
+        sendInput: async () => {},
+        wait: async () => ({ timedOut: false, agents: [] }),
+        inspect: async () => ({
+          agent: summary,
+          latestAssistantText: null,
+          parsedReport: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+        }),
+        resume: async () => summary,
+        close: async () => summary,
+      },
+    }));
+
+    await tool.execute({
+      message: "Investigate this failure",
+      forkContext: true,
+    });
+
+    expect(spawn).toHaveBeenCalledWith({
+      message: "Investigate this failure",
+      role: "default",
+      contextMode: "full",
+    });
   });
 
   test("defaults role to default", async () => {
@@ -129,6 +168,7 @@ describe("spawnAgent tool", () => {
     expect(spawn).toHaveBeenCalledWith({
       message: "Check the code path",
       role: "default",
+      contextMode: "none",
     });
   });
 

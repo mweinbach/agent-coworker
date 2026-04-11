@@ -638,7 +638,17 @@ export class TurnExecutionManager {
           this.context.state.sessionInfo.sessionKind === "agent" || !this.context.deps.createAgentSessionImpl
             ? undefined
             : {
-                spawn: async ({ message, role, model, reasoningEffort, forkContext }) =>
+                spawn: async ({
+                  message,
+                  role,
+                  model,
+                  reasoningEffort,
+                  contextMode,
+                  briefing,
+                  includeParentTodos,
+                  includeHarnessContext,
+                  forkContext,
+                }) =>
                   await this.context.deps.createAgentSessionImpl!({
                     parentSessionId: this.context.id,
                     parentConfig: this.context.state.config,
@@ -646,6 +656,10 @@ export class TurnExecutionManager {
                     ...(role ? { role } : {}),
                     ...(model ? { model } : {}),
                     ...(reasoningEffort ? { reasoningEffort } : {}),
+                    ...(contextMode !== undefined ? { contextMode } : {}),
+                    ...(briefing !== undefined ? { briefing } : {}),
+                    ...(includeParentTodos !== undefined ? { includeParentTodos } : {}),
+                    ...(includeHarnessContext !== undefined ? { includeHarnessContext } : {}),
                     ...(forkContext !== undefined ? { forkContext } : {}),
                     parentDepth: typeof this.context.state.sessionInfo.depth === "number" ? this.context.state.sessionInfo.depth : 0,
                   }),

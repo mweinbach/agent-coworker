@@ -206,6 +206,10 @@ export function withSession<T>(
                 ...(message.role ? { role: message.role } : {}),
                 ...(message.model ? { model: message.model } : {}),
                 ...(message.reasoningEffort ? { reasoningEffort: message.reasoningEffort } : {}),
+                ...(message.contextMode !== undefined ? { contextMode: message.contextMode } : {}),
+                ...(message.briefing !== undefined ? { briefing: message.briefing } : {}),
+                ...(message.includeParentTodos !== undefined ? { includeParentTodos: message.includeParentTodos } : {}),
+                ...(message.includeHarnessContext !== undefined ? { includeHarnessContext: message.includeHarnessContext } : {}),
                 ...(message.forkContext !== undefined ? { forkContext: message.forkContext } : {}),
               });
               return;

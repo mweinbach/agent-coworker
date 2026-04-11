@@ -9,6 +9,7 @@ import type { getProviderStatuses } from "../../providerStatus";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../../shared/openaiCompatibleOptions";
 import type { ProviderContinuationState } from "../../shared/providerContinuation";
 import type {
+  AgentSpawnContextOptions,
   AgentInspectResult,
   AgentReasoningEffort,
   PersistentAgentSummary,
@@ -146,14 +147,13 @@ export type SessionDependencies = {
   generateSessionTitleImpl: typeof generateSessionTitle;
   sessionDb: SessionDb | null;
   writePersistedSessionSnapshotImpl: typeof writePersistedSessionSnapshot;
-  createAgentSessionImpl?: (opts: {
+  createAgentSessionImpl?: (opts: AgentSpawnContextOptions & {
     parentSessionId: string;
     parentConfig: AgentConfig;
     message: string;
     role?: AgentRole;
     model?: string;
     reasoningEffort?: AgentReasoningEffort;
-    forkContext?: boolean;
     parentDepth?: number;
   }) => Promise<PersistentAgentSummary>;
   listAgentSessionsImpl?: (parentSessionId: string) => Promise<PersistentAgentSummary[]>;

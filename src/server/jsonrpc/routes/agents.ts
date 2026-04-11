@@ -19,7 +19,18 @@ export function createAgentRouteHandlers(
         return;
       }
 
-      const { threadId, message: prompt, role, model, reasoningEffort, forkContext } = parsed.data;
+      const {
+        threadId,
+        message: prompt,
+        role,
+        model,
+        reasoningEffort,
+        contextMode,
+        briefing,
+        includeParentTodos,
+        includeHarnessContext,
+        forkContext,
+      } = parsed.data;
       const binding = context.threads.getLive(threadId);
       const session = binding?.session;
       if (!session || !prompt.trim()) {
@@ -35,6 +46,10 @@ export function createAgentRouteHandlers(
         ...(role !== undefined ? { role } : {}),
         ...(model !== undefined ? { model } : {}),
         ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+        ...(contextMode !== undefined ? { contextMode } : {}),
+        ...(briefing !== undefined ? { briefing } : {}),
+        ...(includeParentTodos !== undefined ? { includeParentTodos } : {}),
+        ...(includeHarnessContext !== undefined ? { includeHarnessContext } : {}),
         ...(forkContext !== undefined ? { forkContext } : {}),
       });
       context.jsonrpc.sendResult(ws, message.id, {});

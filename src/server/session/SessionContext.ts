@@ -8,7 +8,12 @@ import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import type { getProviderStatuses } from "../../providerStatus";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../../shared/openaiCompatibleOptions";
 import type { ProviderContinuationState } from "../../shared/providerContinuation";
-import type { AgentReasoningEffort, PersistentAgentSummary, AgentRole } from "../../shared/agents";
+import type {
+  AgentInspectResult,
+  AgentReasoningEffort,
+  PersistentAgentSummary,
+  AgentRole,
+} from "../../shared/agents";
 import type {
   AgentConfig,
   ChildModelRoutingMode,
@@ -163,6 +168,10 @@ export type SessionDependencies = {
     agentIds: string[];
     timeoutMs?: number;
   }) => Promise<{ timedOut: boolean; agents: PersistentAgentSummary[] }>;
+  inspectAgentImpl?: (opts: {
+    parentSessionId: string;
+    agentId: string;
+  }) => Promise<AgentInspectResult>;
   resumeAgentImpl?: (opts: {
     parentSessionId: string;
     agentId: string;

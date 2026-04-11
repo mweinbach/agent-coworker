@@ -2,7 +2,13 @@ import type { AgentSession } from "../session/AgentSession";
 import type { SessionDb } from "../sessionDb";
 import type { AgentConfig } from "../../types";
 import type { ProviderName } from "../../types";
-import type { AgentMode, AgentReasoningEffort, AgentRole, PersistentAgentSummary } from "../../shared/agents";
+import type {
+  AgentInspectResult,
+  AgentMode,
+  AgentReasoningEffort,
+  AgentRole,
+  PersistentAgentSummary,
+} from "../../shared/agents";
 import type { SessionBinding } from "../startServer/types";
 import type { SeededSessionContext } from "../session/SessionContext";
 
@@ -31,6 +37,11 @@ export type AgentWaitOptions = {
 };
 
 export type AgentResumeOptions = {
+  parentSessionId: string;
+  agentId: string;
+};
+
+export type AgentInspectOptions = {
   parentSessionId: string;
   agentId: string;
 };
@@ -73,3 +84,5 @@ export type AgentControlDeps = {
   emitParentAgentStatus: (parentSessionId: string, agent: PersistentAgentSummary) => void;
   emitParentLog: (parentSessionId: string, line: string) => void;
 };
+
+export type AgentInspectRecord = AgentInspectResult;

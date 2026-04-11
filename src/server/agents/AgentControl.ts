@@ -1,5 +1,11 @@
 import type { AgentSession } from "../session/AgentSession";
-import type { AgentExecutionState, AgentMode, PersistentAgentSummary } from "../../shared/agents";
+import {
+  parseChildAgentReport,
+  type AgentExecutionState,
+  type AgentInspectResult,
+  type AgentMode,
+  type PersistentAgentSummary,
+} from "../../shared/agents";
 import type { SessionBinding } from "../startServer/types";
 
 import { routeAgentConfig } from "./modelRouter";
@@ -8,6 +14,7 @@ import { StatusBus } from "./StatusBus";
 import type {
   AgentCloseOptions,
   AgentControlDeps,
+  AgentInspectOptions,
   AgentControlSummaryOverrides,
   AgentResumeOptions,
   AgentSendInputOptions,
@@ -205,6 +212,18 @@ export class AgentControl {
       this.publish(opts.parentSessionId, session);
     }
     return await this.statusBus.wait(opts.agentIds, opts.timeoutMs);
+  }
+
+  async inspect(opts: AgentInspectOptions): Promise<AgentInspectResult> {
+    const session = this.ensureAgentSession(opts.parentSessionId, opts.agentId);
+    const latestAssistantText = session.getLatestAssistantText() ?? null;
+    return {
+      agent: this.buildAgentSummary(session),
+      latestAssistantText,
+      parsedReport: parseChildAgentReport(latestAssistantText),
+      sessionUsage: session.getCompactUsageSnapshot(),
+      lastTurnUsage: session.getLastTurnUsage(),
+    };
   }
 
   async resume(opts: AgentResumeOptions): Promise<PersistentAgentSummary> {

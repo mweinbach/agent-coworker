@@ -177,6 +177,7 @@ Currently implemented `cowork/*` methods include:
   - `cowork/session/defaults/apply`
   - `cowork/session/file/upload`
   - `cowork/session/delete`
+  - `cowork/session/agent/inspect`
 - provider controls
   - `cowork/provider/catalog/read`
   - `cowork/provider/authMethods/read`
@@ -251,6 +252,8 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 `cowork/session/defaults/apply` remains the composite "apply provider/model, editable defaults, and MCP enablement" write. Supplying only `cwd` targets the workspace control session; supplying `threadId` as well applies the same composite write directly to that loaded thread session.
 
 `cowork/session/file/upload` writes a file into the workspace uploads directory and returns a legacy-compatible `file_uploaded` event envelope. JSON-RPC clients can then reference that saved file from `turn/start` or `turn/steer` with an `uploadedFile` input part when the file is too large to send inline.
+
+`cowork/session/agent/inspect` is a thread-scoped, root-only read for child agents. It returns the same detailed inspection payload as the root `inspectAgent` tool: the latest child summary, the full latest assistant text, a parsed structured child report when the final assistant text includes a recognized JSON footer, and compact session/last-turn usage snapshots for the child.
 
 ### Core JSON-RPC notifications currently available
 

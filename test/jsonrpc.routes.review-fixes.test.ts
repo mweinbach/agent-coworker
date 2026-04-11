@@ -277,6 +277,66 @@ describe("JSON-RPC extracted route review fixes", () => {
     expect(response.error).toBeUndefined();
   });
 
+  test("session agent inspect rejects missing agentId as invalidParams", async () => {
+    const threadSession = {
+      id: "thread-1",
+      inspectAgent: async () => {
+        throw new Error("inspectAgent should not run for invalid params");
+      },
+    };
+    const harness = createRouteHarness({}, [], { threadSession });
+    const handlers = createAgentRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/agent/inspect", {
+      threadId: "thread-1",
+    });
+
+    expect(response.error?.code).toBe(JSONRPC_ERROR_CODES.invalidParams);
+    expect(response.result).toBeUndefined();
+  });
+
+  test("session agent inspect returns the session inspect payload", async () => {
+    const inspectEvent = {
+      agent: {
+        agentId: "child-1",
+        parentSessionId: "thread-1",
+        role: "worker",
+        mode: "collaborative",
+        depth: 1,
+        effectiveModel: "gpt-5.4",
+        title: "child",
+        provider: "openai",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        lifecycleState: "active",
+        executionState: "completed",
+        busy: false,
+      },
+      latestAssistantText: "done",
+      parsedReport: {
+        status: "completed",
+        summary: "Task done",
+      },
+      sessionUsage: null,
+      lastTurnUsage: null,
+    };
+    const threadSession = {
+      id: "thread-1",
+      inspectAgent: async (agentId: string) => {
+        expect(agentId).toBe("child-1");
+        return inspectEvent;
+      },
+    };
+    const harness = createRouteHarness({}, [], { threadSession });
+    const handlers = createAgentRouteHandlers(harness.context);
+    const response = await harness.invoke(handlers, "cowork/session/agent/inspect", {
+      threadId: "thread-1",
+      agentId: "child-1",
+    });
+
+    expect(response.error).toBeUndefined();
+    expect((response.result as { event: typeof inspectEvent }).event).toEqual(inspectEvent);
+  });
+
   test("session harness context set forwards valid payload to session", async () => {
     let harness!: RouteHarness;
     const threadSession = {

@@ -47,6 +47,21 @@ export function createWaitForAgentTool(ctx: ToolContext) {
   });
 }
 
+export function createInspectAgentTool(ctx: ToolContext) {
+  return defineTool({
+    description: "Read the latest detailed result for a child agent, including full assistant text and parsed structured report.",
+    inputSchema: z.object({
+      agentId: z.string().trim().min(1),
+    }),
+    execute: async ({ agentId }: { agentId: string }) => {
+      ctx.log(`tool> inspectAgent ${JSON.stringify({ agentId })}`);
+      const result = await requireAgentControl(ctx).inspect({ agentId });
+      ctx.log(`tool< inspectAgent ${JSON.stringify({ agentId, hasText: !!result.latestAssistantText, hasReport: !!result.parsedReport })}`);
+      return result;
+    },
+  });
+}
+
 export function createResumeAgentTool(ctx: ToolContext) {
   return defineTool({
     description: "Resume a previously closed child agent by id so it can receive new input and waits.",

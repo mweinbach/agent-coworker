@@ -99,6 +99,32 @@ export function createAgentRouteHandlers(
       context.jsonrpc.sendResult(ws, message.id, {});
     },
 
+    "cowork/session/agent/inspect": async (ws, message) => {
+      const parsed = jsonRpcAgentRequestSchemas["cowork/session/agent/inspect"].safeParse(message.params);
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+
+      const { threadId, agentId } = parsed.data;
+      const binding = context.threads.getLive(threadId);
+      const session = binding?.session;
+      if (!session) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} requires threadId`,
+        });
+        return;
+      }
+
+      const event = await session.inspectAgent(agentId);
+      context.jsonrpc.sendResult(ws, message.id, { event });
+    },
+
     "cowork/session/agent/resume": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";

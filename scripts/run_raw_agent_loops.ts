@@ -23,8 +23,15 @@ import { StatusBus } from "../src/server/agents/StatusBus";
 import { DelegateRunner } from "../src/server/agents/DelegateRunner";
 import { routeAgentConfig } from "../src/server/agents/modelRouter";
 import { getAgentRoleDefinition } from "../src/server/agents/roles";
-import type { AgentReasoningEffort, AgentRole, PersistentAgentSummary } from "../src/shared/agents";
+import {
+  parseChildAgentReport,
+  type AgentInspectResult,
+  type AgentReasoningEffort,
+  type AgentRole,
+  type PersistentAgentSummary,
+} from "../src/shared/agents";
 import { ensureDefaultGlobalSkillsReady } from "../src/skills/defaultGlobalSkills";
+import type { SessionUsageSnapshot, TurnUsage } from "../src/session/costTracker";
 import type {
   AgentConfig,
   HarnessContextPayload,
@@ -43,6 +50,7 @@ import { createMemoryTool } from "../src/tools/memory";
 import { createNotebookEditTool } from "../src/tools/notebookEdit";
 import {
   createCloseAgentTool,
+  createInspectAgentTool,
   createListAgentsTool,
   createResumeAgentTool,
   createSendAgentInputTool,
@@ -257,6 +265,9 @@ type RawLoopAgentControlState = {
   abortController: AbortController | null;
   runPromise: Promise<void> | null;
   runToken: number;
+  latestAssistantText: string | null;
+  sessionUsage: SessionUsageSnapshot | null;
+  lastTurnUsage: TurnUsage | null;
 };
 
 type RawLoopAgentControlDeps = {
@@ -569,6 +580,7 @@ export function createRawLoopAgentControl(
       }
       state.historyMessages.push(...structuredClone(result.responseMessages));
       const trimmed = result.text.trim();
+      state.latestAssistantText = trimmed || null;
       publish(state, {
         executionState: "completed",
         busy: false,
@@ -578,6 +590,7 @@ export function createRawLoopAgentControl(
       if (state.runToken !== runToken || state.abortController !== controller || state.summary.lifecycleState === "closed") {
         return;
       }
+      state.latestAssistantText = controller.signal.aborted ? null : String(err);
       publish(state, {
         executionState: controller.signal.aborted ? "closed" : "errored",
         busy: false,
@@ -650,6 +663,9 @@ export function createRawLoopAgentControl(
         abortController: null,
         runPromise: null,
         runToken: 0,
+        latestAssistantText: null,
+        sessionUsage: null,
+        lastTurnUsage: null,
       };
       states.set(state.summary.agentId, state);
       statusBus.publish(state.summary);
@@ -675,6 +691,16 @@ export function createRawLoopAgentControl(
         getState(agentId);
       }
       return await statusBus.wait(agentIds, timeoutMs);
+    },
+    inspect: async ({ agentId }): Promise<AgentInspectResult> => {
+      const state = getState(agentId);
+      return {
+        agent: state.summary,
+        latestAssistantText: state.latestAssistantText,
+        parsedReport: parseChildAgentReport(state.latestAssistantText),
+        sessionUsage: state.sessionUsage,
+        lastTurnUsage: state.lastTurnUsage,
+      };
     },
     resume: async ({ agentId }) => {
       const state = getState(agentId);
@@ -718,6 +744,7 @@ export function createToolsWithTracing(
           listAgents: createListAgentsTool(ctx),
           sendAgentInput: createSendAgentInputTool(ctx),
           waitForAgent: createWaitForAgentTool(ctx),
+          inspectAgent: createInspectAgentTool(ctx),
           resumeAgent: createResumeAgentTool(ctx),
           closeAgent: createCloseAgentTool(ctx),
         }

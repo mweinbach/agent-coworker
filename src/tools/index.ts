@@ -10,6 +10,7 @@ import { createMemoryTool } from "./memory";
 import { createNotebookEditTool } from "./notebookEdit";
 import {
   createCloseAgentTool,
+  createInspectAgentTool,
   createListAgentsTool,
   createResumeAgentTool,
   createSendAgentInputTool,
@@ -79,7 +80,7 @@ export function listSessionToolNames(
     ...(config.enableMemory ?? true ? ["memory"] : []),
     "usage",
     ...(opts.includeAgentControl
-      ? ["spawnAgent", "listAgents", "sendAgentInput", "waitForAgent", "resumeAgent", "closeAgent"]
+      ? ["spawnAgent", "listAgents", "sendAgentInput", "waitForAgent", "inspectAgent", "resumeAgent", "closeAgent"]
       : []),
   ];
 
@@ -123,6 +124,7 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     listAgents: createListAgentsTool(ctx),
     sendAgentInput: createSendAgentInputTool(ctx),
     waitForAgent: createWaitForAgentTool(ctx),
+    inspectAgent: createInspectAgentTool(ctx),
     resumeAgent: createResumeAgentTool(ctx),
     closeAgent: createCloseAgentTool(ctx),
   };

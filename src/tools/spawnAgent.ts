@@ -15,7 +15,7 @@ function requireAgentControl(ctx: ToolContext) {
 export function createSpawnAgentTool(ctx: ToolContext) {
   return defineTool({
     description:
-      "Spawn a collaborative child agent for a well-scoped task. The optional model override may be a same-provider model id or a provider:modelId child target ref. Returns the child handle to use with sendAgentInput, waitForAgent, resumeAgent, and closeAgent.",
+      "Spawn a collaborative child agent for a well-scoped task. The optional model override may be a same-provider model id or a provider:modelId child target ref. Returns the child handle to use with sendAgentInput, waitForAgent, inspectAgent, resumeAgent, and closeAgent.",
     inputSchema: z.object({
       message: z.string().trim().min(1).max(20_000),
       role: z.enum(AGENT_ROLE_VALUES).optional().default("default"),

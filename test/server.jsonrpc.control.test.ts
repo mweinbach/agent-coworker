@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import { MemoryStore } from "../src/memoryStore";
+import { AgentControl } from "../src/server/agents/AgentControl";
 import { startAgentServer } from "../src/server/startServer";
 import { AgentSession } from "../src/server/session/AgentSession";
 import { WorkspaceBackupService } from "../src/server/workspaceBackups";
@@ -1139,6 +1140,58 @@ describe("server JSON-RPC control methods", () => {
       expect(usageUpdated.result.event.type).toBe("session_usage");
       rpc.close();
     } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("session agent inspect returns the detailed inspect payload", async () => {
+    const originalInspect = AgentControl.prototype.inspect;
+    (AgentControl.prototype as any).inspect = async function inspectMock() {
+      return {
+        agent: {
+          agentId: "child-1",
+          parentSessionId: "thread-1",
+          role: "worker",
+          mode: "collaborative",
+          depth: 1,
+          effectiveModel: "gpt-5.4",
+          title: "child",
+          provider: "openai",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          lifecycleState: "closed",
+          executionState: "completed",
+          busy: false,
+          lastMessagePreview: "done",
+        },
+        latestAssistantText: "done\n\n```json\n{\"status\":\"completed\",\"summary\":\"Task done\"}\n```",
+        parsedReport: {
+          status: "completed",
+          summary: "Task done",
+        },
+        sessionUsage: null,
+        lastTurnUsage: null,
+      };
+    };
+
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const created = await rpc.request("thread/start", { cwd: tmpDir });
+      const threadId = created.result.thread.id as string;
+      const response = await rpc.request("cowork/session/agent/inspect", {
+        threadId,
+        agentId: "child-1",
+      });
+
+      expect(response.result.event.agent.agentId).toBe("child-1");
+      expect(response.result.event.latestAssistantText).toContain("done");
+      expect(response.result.event.parsedReport.summary).toBe("Task done");
+      rpc.close();
+    } finally {
+      (AgentControl.prototype as any).inspect = originalInspect;
       await stopTestServer(server);
     }
   });

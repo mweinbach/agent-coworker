@@ -682,6 +682,9 @@ export async function startAgentServer(
       waitForAgentImpl: async (
         agentOpts: Parameters<NonNullable<SessionDependencies["waitForAgentImpl"]>>[0],
       ) => await getAgentControl().wait(agentOpts),
+      inspectAgentImpl: async (
+        agentOpts: Parameters<NonNullable<SessionDependencies["inspectAgentImpl"]>>[0],
+      ) => await getAgentControl().inspect(agentOpts),
       resumeAgentImpl: async (
         agentOpts: Parameters<NonNullable<SessionDependencies["resumeAgentImpl"]>>[0],
       ) => await getAgentControl().resume(agentOpts),

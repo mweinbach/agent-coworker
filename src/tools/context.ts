@@ -1,4 +1,9 @@
-import type { AgentReasoningEffort, PersistentAgentSummary, AgentRole } from "../shared/agents";
+import type {
+  AgentInspectResult,
+  AgentReasoningEffort,
+  PersistentAgentSummary,
+  AgentRole,
+} from "../shared/agents";
 import type { AgentConfig, HarnessContextState } from "../types";
 import type { TodoItem } from "../types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "../session/costTracker";
@@ -19,6 +24,7 @@ export interface AgentControl {
   list: () => Promise<PersistentAgentSummary[]>;
   sendInput: (opts: { agentId: string; message: string; interrupt?: boolean }) => Promise<void>;
   wait: (opts: { agentIds: string[]; timeoutMs?: number }) => Promise<AgentWaitResult>;
+  inspect: (opts: { agentId: string }) => Promise<AgentInspectResult>;
   resume: (opts: { agentId: string }) => Promise<PersistentAgentSummary>;
   close: (opts: { agentId: string }) => Promise<PersistentAgentSummary>;
 }

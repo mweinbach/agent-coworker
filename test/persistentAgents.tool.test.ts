@@ -3,6 +3,7 @@ import path from "node:path";
 
 import {
   createCloseAgentTool,
+  createInspectAgentTool,
   createListAgentsTool,
   createResumeAgentTool,
   createSendAgentInputTool,
@@ -75,6 +76,16 @@ describe("persistent agent tools", () => {
       timedOut: false,
       agents: [makeSummary({ executionState: "completed" })],
     }));
+    const inspect = mock(async () => ({
+      agent: makeSummary({ executionState: "completed", lastMessagePreview: "done" }),
+      latestAssistantText: "done",
+      parsedReport: {
+        status: "completed" as const,
+        summary: "Finished",
+      },
+      sessionUsage: null,
+      lastTurnUsage: null,
+    }));
     const resume = mock(async () => resumed);
     const close = mock(async () => closed);
 
@@ -84,6 +95,7 @@ describe("persistent agent tools", () => {
         list,
         sendInput,
         wait,
+        inspect,
         resume,
         close,
       },
@@ -92,6 +104,7 @@ describe("persistent agent tools", () => {
     const listTool: any = createListAgentsTool(ctx);
     const sendTool: any = createSendAgentInputTool(ctx);
     const waitTool: any = createWaitForAgentTool(ctx);
+    const inspectTool: any = createInspectAgentTool(ctx);
     const resumeTool: any = createResumeAgentTool(ctx);
     const closeTool: any = createCloseAgentTool(ctx);
 
@@ -104,11 +117,17 @@ describe("persistent agent tools", () => {
       timedOut: false,
       agents: [makeSummary({ executionState: "completed" })],
     });
+    await expect(inspectTool.execute({ agentId: "child-1" })).resolves.toEqual(expect.objectContaining({
+      agent: expect.objectContaining({ agentId: "child-1" }),
+      latestAssistantText: "done",
+      parsedReport: expect.objectContaining({ status: "completed", summary: "Finished" }),
+    }));
     await expect(resumeTool.execute({ agentId: "child-1" })).resolves.toEqual(resumed);
     await expect(closeTool.execute({ agentId: "child-1" })).resolves.toEqual(closed);
 
     expect(sendInput).toHaveBeenCalledWith({ agentId: "child-1", message: "next step", interrupt: true });
     expect(wait).toHaveBeenCalledWith({ agentIds: ["child-1"], timeoutMs: 10 });
+    expect(inspect).toHaveBeenCalledWith({ agentId: "child-1" });
     expect(resume).toHaveBeenCalledWith({ agentId: "child-1" });
     expect(close).toHaveBeenCalledWith({ agentId: "child-1" });
   });

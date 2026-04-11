@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 
 import { AgentControl } from "../src/server/agents/AgentControl";
+import { parseChildAgentReport } from "../src/shared/agents";
 import type { SeededSessionContext } from "../src/server/session/SessionContext";
 import type { AgentConfig } from "../src/types";
 import type { SessionBinding } from "../src/server/startServer/types";
@@ -71,6 +72,8 @@ function makeChildSession(config: AgentConfig) {
     }),
     getPublicConfig: () => config,
     getLatestAssistantText: () => null,
+    getCompactUsageSnapshot: () => null,
+    getLastTurnUsage: () => null,
   } as any;
   return session;
 }
@@ -474,6 +477,80 @@ describe("AgentControl persisted child control", () => {
     expect(result.timedOut).toBe(false);
     expect(result.agents).toHaveLength(1);
     expect(result.agents[0]?.executionState).toBe("completed");
+  });
+
+  test("inspect returns latest assistant text, parsed report, and usage for hydrated children", async () => {
+    const config = makeConfig();
+    const childSession = makeChildSession(config);
+    childSession.getLatestAssistantText = () => [
+      "Finished the task.",
+      "```json",
+      JSON.stringify({
+        status: "completed",
+        summary: "Task finished",
+        filesRead: ["src/agent.ts"],
+      }),
+      "```",
+    ].join("\n");
+    childSession.getCompactUsageSnapshot = () => ({
+      sessionId: "child-1",
+      totalTurns: 1,
+      totalPromptTokens: 5,
+      totalCompletionTokens: 7,
+      totalTokens: 12,
+      estimatedTotalCostUsd: 0.01,
+      costTrackingAvailable: true,
+      byModel: [],
+      turns: [],
+      budgetStatus: {
+        configured: false,
+        warnAtUsd: null,
+        stopAtUsd: null,
+        warningTriggered: false,
+        stopTriggered: false,
+        currentCostUsd: 0.01,
+      },
+      createdAt: "2026-03-16T15:00:00.000Z",
+      updatedAt: "2026-03-16T15:00:00.000Z",
+    });
+    childSession.getLastTurnUsage = () => ({
+      promptTokens: 5,
+      completionTokens: 7,
+      totalTokens: 12,
+      estimatedCostUsd: 0.01,
+    });
+    const control = new AgentControl({
+      sessionBindings: new Map(),
+      sessionDb: {
+        getSessionRecord: (sessionId: string) =>
+          sessionId === "child-1" ? makePersistedChildRecord(config) : null,
+      } as any,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: true, resumedFromStorage: true };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    const inspected = await control.inspect({
+      parentSessionId: "root-1",
+      agentId: "child-1",
+    });
+
+    expect(inspected.agent.agentId).toBe("child-1");
+    expect(inspected.latestAssistantText).toContain("Finished the task.");
+    expect(inspected.parsedReport).toEqual(parseChildAgentReport(inspected.latestAssistantText));
+    expect(inspected.parsedReport).toEqual(expect.objectContaining({
+      status: "completed",
+      summary: "Task finished",
+      filesRead: ["src/agent.ts"],
+    }));
+    expect(inspected.sessionUsage?.totalTokens).toBe(12);
+    expect(inspected.lastTurnUsage?.totalTokens).toBe(12);
   });
 
   test("list normalizes hydrated stale pending_init child status to completed when idle", async () => {

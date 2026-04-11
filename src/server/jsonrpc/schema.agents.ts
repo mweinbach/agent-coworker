@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-import { agentReasoningEffortSchema, agentRoleSchema } from "../../shared/agents";
-import { nonEmptyTrimmedStringSchema, optionalNonEmptyTrimmedStringSchema } from "./schema.shared";
+import { agentInspectResultSchema, agentReasoningEffortSchema, agentRoleSchema } from "../../shared/agents";
+import { legacyEventEnvelope, nonEmptyTrimmedStringSchema, optionalNonEmptyTrimmedStringSchema } from "./schema.shared";
 
 export const agentListEventSchema = z.object({
   type: z.literal("agent_list"),
@@ -56,6 +56,10 @@ export const jsonRpcAgentRequestSchemas = {
     agentIds: z.array(nonEmptyTrimmedStringSchema).min(1),
     timeoutMs: z.number().int().nonnegative().optional(),
   }).strict(),
+  "cowork/session/agent/inspect": z.object({
+    threadId: nonEmptyTrimmedStringSchema,
+    agentId: nonEmptyTrimmedStringSchema,
+  }).strict(),
   "cowork/session/agent/resume": z.object({
     threadId: nonEmptyTrimmedStringSchema,
     agentId: nonEmptyTrimmedStringSchema,
@@ -71,6 +75,7 @@ export const jsonRpcAgentResultSchemas = {
   "cowork/session/agent/list": z.object({}).strict(),
   "cowork/session/agent/input/send": z.object({}).strict(),
   "cowork/session/agent/wait": z.object({}).strict(),
+  "cowork/session/agent/inspect": legacyEventEnvelope(agentInspectResultSchema),
   "cowork/session/agent/resume": z.object({}).strict(),
   "cowork/session/agent/close": z.object({}).strict(),
 } as const;

@@ -4,6 +4,7 @@ import {
   jsonRpcControlRequestSchemas,
   jsonRpcControlResultSchemas,
 } from "../src/shared/jsonrpcControlSchemas";
+import { jsonRpcAgentRequestSchemas, jsonRpcAgentResultSchemas } from "../src/server/jsonrpc/schema.agents";
 
 describe("shared JSON-RPC control schemas", () => {
   test("parses provider auth and status envelopes", () => {
@@ -213,5 +214,42 @@ describe("shared JSON-RPC control schemas", () => {
 
     expect(request.config?.providerOptions?.google?.nativeWebSearch).toBe(true);
     expect(state.events[2]?.type).toBe("session_config");
+  });
+
+  test("parses inspectAgent request and result envelopes", () => {
+    const request = jsonRpcAgentRequestSchemas["cowork/session/agent/inspect"].parse({
+      threadId: "thread-1",
+      agentId: "agent-1",
+    });
+    const result = jsonRpcAgentResultSchemas["cowork/session/agent/inspect"].parse({
+      event: {
+        agent: {
+          agentId: "agent-1",
+          parentSessionId: "thread-1",
+          role: "worker",
+          mode: "collaborative",
+          depth: 1,
+          effectiveModel: "gpt-5.4",
+          title: "child",
+          provider: "openai",
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+          lifecycleState: "active",
+          executionState: "completed",
+          busy: false,
+          lastMessagePreview: "done",
+        },
+        latestAssistantText: "done",
+        parsedReport: {
+          status: "completed",
+          summary: "Task done",
+        },
+        sessionUsage: null,
+        lastTurnUsage: null,
+      },
+    });
+
+    expect(request.agentId).toBe("agent-1");
+    expect(result.event.parsedReport?.summary).toBe("Task done");
   });
 });

@@ -17,7 +17,7 @@ export type AgentRoleDefinition = {
 };
 
 export const SPAWN_AGENT_PROMPT_OVERVIEW =
-  "Launch a collaborative child agent for a well-scoped task. It returns a durable child handle to use with follow-up agent tools; it does not return the child agent's final answer text directly.";
+  "Launch a collaborative child agent for a well-scoped task. It returns a durable child handle to use with follow-up agent tools; use inspectAgent to read the child agent's full result.";
 
 export const SPAWN_AGENT_WHEN_TO_USE = [
   {

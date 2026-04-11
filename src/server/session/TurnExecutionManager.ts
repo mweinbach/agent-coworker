@@ -672,6 +672,15 @@ export class TurnExecutionManager {
                     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
                   });
                 },
+                inspect: async ({ agentId }) => {
+                  if (!this.context.deps.inspectAgentImpl) {
+                    throw new Error("Child-agent inspection is unavailable.");
+                  }
+                  return await this.context.deps.inspectAgentImpl({
+                    parentSessionId: this.context.id,
+                    agentId,
+                  });
+                },
                 resume: async ({ agentId }) => {
                   if (!this.context.deps.resumeAgentImpl) {
                     throw new Error("Child-agent resume is unavailable.");

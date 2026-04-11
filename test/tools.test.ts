@@ -3574,6 +3574,7 @@ describe("createTools", () => {
       "listAgents",
       "sendAgentInput",
       "waitForAgent",
+      "inspectAgent",
       "resumeAgent",
       "closeAgent",
     ]));
@@ -3588,6 +3589,7 @@ describe("createTools", () => {
     expect(tools).not.toHaveProperty("listAgents");
     expect(tools).not.toHaveProperty("sendAgentInput");
     expect(tools).not.toHaveProperty("waitForAgent");
+    expect(tools).not.toHaveProperty("inspectAgent");
     expect(tools).not.toHaveProperty("resumeAgent");
     expect(tools).not.toHaveProperty("closeAgent");
   });
@@ -3735,6 +3737,31 @@ describe("createTools", () => {
         },
       ],
     }));
+    const inspect = mock(async () => ({
+      agent: {
+        agentId: "child",
+        parentSessionId: "root",
+        role: "worker" as const,
+        mode: "collaborative" as const,
+        depth: 1,
+        effectiveModel: "gpt-5.2",
+        provider: "openai" as const,
+        title: "child",
+        createdAt: "2026-03-08T00:00:00.000Z",
+        updatedAt: "2026-03-08T00:00:00.000Z",
+        lifecycleState: "active" as const,
+        executionState: "completed" as const,
+        busy: false,
+        lastMessagePreview: "done",
+      },
+      latestAssistantText: "Done.\n\n```json\n{\"status\":\"completed\",\"summary\":\"Finished\"}\n```",
+      parsedReport: {
+        status: "completed" as const,
+        summary: "Finished",
+      },
+      sessionUsage: null,
+      lastTurnUsage: null,
+    }));
     const resume = mock(async () => ({
       agentId: "child",
       parentSessionId: "root",
@@ -3772,6 +3799,7 @@ describe("createTools", () => {
         list,
         sendInput,
         wait,
+        inspect,
         resume,
         close,
       },
@@ -3783,6 +3811,7 @@ describe("createTools", () => {
     const listTool: any = tools.listAgents;
     const sendTool: any = tools.sendAgentInput;
     const waitTool: any = tools.waitForAgent;
+    const inspectTool: any = tools.inspectAgent;
     const resumeTool: any = tools.resumeAgent;
     const closeTool: any = tools.closeAgent;
 
@@ -3805,6 +3834,11 @@ describe("createTools", () => {
         }),
       ],
     });
+    await expect(inspectTool.execute({ agentId: "child" })).resolves.toEqual(expect.objectContaining({
+      agent: expect.objectContaining({ agentId: "child" }),
+      latestAssistantText: expect.stringContaining("Done."),
+      parsedReport: expect.objectContaining({ status: "completed", summary: "Finished" }),
+    }));
     await expect(resumeTool.execute({ agentId: "child" })).resolves.toMatchObject({
       agentId: "child",
       lifecycleState: "active",

@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 import { type OpenAiReasoningEffort, OPENAI_REASONING_EFFORT_VALUES } from "./openaiCompatibleOptions";
+import { sessionUsageSnapshotSchema, turnUsageSchema } from "../session/sessionUsageSchema";
+import type { SessionUsageSnapshot, TurnUsage } from "../session/costTracker";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 
 export const SESSION_KIND_VALUES = ["root", "agent"] as const;
@@ -68,6 +70,97 @@ export const persistentAgentSummarySchema = z.object({
   busy: z.boolean(),
   lastMessagePreview: z.string().trim().min(1).optional(),
 }).strict();
+
+export type ChildAgentReport = {
+  status: "completed" | "blocked" | "failed";
+  summary: string;
+  filesChanged?: string[];
+  filesRead?: string[];
+  verification?: Array<{
+    command: string;
+    outcome: "passed" | "failed";
+    notes?: string;
+  }>;
+  residualRisks?: string[];
+};
+
+export const childAgentReportSchema: z.ZodType<ChildAgentReport> = z.object({
+  status: z.enum(["completed", "blocked", "failed"]),
+  summary: z.string().trim().min(1),
+  filesChanged: z.array(z.string().trim().min(1)).optional(),
+  filesRead: z.array(z.string().trim().min(1)).optional(),
+  verification: z.array(z.object({
+    command: z.string().trim().min(1),
+    outcome: z.enum(["passed", "failed"]),
+    notes: z.string().trim().min(1).optional(),
+  }).strict()).optional(),
+  residualRisks: z.array(z.string().trim().min(1)).optional(),
+}).strict();
+
+export type AgentInspectResult = {
+  agent: PersistentAgentSummary;
+  latestAssistantText: string | null;
+  parsedReport: ChildAgentReport | null;
+  sessionUsage: SessionUsageSnapshot | null;
+  lastTurnUsage: TurnUsage | null;
+};
+
+export const agentInspectResultSchema: z.ZodType<AgentInspectResult> = z.object({
+  agent: persistentAgentSummarySchema,
+  latestAssistantText: z.string().nullable(),
+  parsedReport: childAgentReportSchema.nullable(),
+  sessionUsage: sessionUsageSnapshotSchema.nullable(),
+  lastTurnUsage: turnUsageSchema.nullable(),
+}).strict();
+
+function tryParseChildAgentReport(candidate: string): ChildAgentReport | null {
+  try {
+    const parsed = JSON.parse(candidate);
+    const result = childAgentReportSchema.safeParse(parsed);
+    return result.success ? result.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function collectChildAgentReportCandidates(text: string): string[] {
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  const push = (candidate: string | null | undefined) => {
+    const trimmed = candidate?.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    candidates.push(trimmed);
+  };
+
+  const trimmed = text.trim();
+  const fencedBlocks = [...trimmed.matchAll(/```(?:[a-zA-Z0-9_-]+)?\s*([\s\S]*?)```/g)];
+  for (let i = fencedBlocks.length - 1; i >= 0; i -= 1) {
+    push(fencedBlocks[i]?.[1]);
+  }
+
+  const lines = trimmed.split(/\r?\n/);
+  const firstJsonLine = Math.max(0, lines.length - 60);
+  for (let i = lines.length - 1; i >= firstJsonLine; i -= 1) {
+    const candidate = lines.slice(i).join("\n").trim();
+    if (!candidate.startsWith("{")) continue;
+    push(candidate);
+  }
+
+  push(trimmed);
+  return candidates;
+}
+
+export function parseChildAgentReport(text: string | null | undefined): ChildAgentReport | null {
+  if (!text?.trim()) return null;
+  for (const candidate of collectChildAgentReportCandidates(text)) {
+    const parsed = tryParseChildAgentReport(candidate);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return null;
+}
 
 export function mapLegacyAgentTypeToRole(role: string | null | undefined): AgentRole | null {
   if (!role) return null;

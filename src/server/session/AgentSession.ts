@@ -2,7 +2,7 @@ import type { connectProvider as connectModelProvider, ConnectProviderResult } f
 import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { runTurn } from "../../agent";
 import { HarnessContextStore } from "../../harness/contextStore";
-import { SessionCostTracker } from "../../session/costTracker";
+import { SessionCostTracker, type SessionUsageSnapshot, type TurnUsage } from "../../session/costTracker";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import type { getProviderStatuses } from "../../providerStatus";
@@ -60,7 +60,7 @@ import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
 import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
 import { SkillManager } from "./SkillManager";
 import { TurnExecutionManager } from "./TurnExecutionManager";
-import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
+import type { AgentInspectResult, AgentReasoningEffort, AgentRole } from "../../shared/agents";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 
 // Packaged Bun sidecar builds need these dynamic imports because the old createRequire
@@ -308,6 +308,7 @@ export class AgentSession {
     listAgentSessionsImpl?: SessionDependencies["listAgentSessionsImpl"];
     sendAgentInputImpl?: SessionDependencies["sendAgentInputImpl"];
     waitForAgentImpl?: SessionDependencies["waitForAgentImpl"];
+    inspectAgentImpl?: SessionDependencies["inspectAgentImpl"];
     resumeAgentImpl?: SessionDependencies["resumeAgentImpl"];
     closeAgentImpl?: SessionDependencies["closeAgentImpl"];
     cancelAgentSessionsImpl?: SessionDependencies["cancelAgentSessionsImpl"];
@@ -423,6 +424,7 @@ export class AgentSession {
       listAgentSessionsImpl: opts.listAgentSessionsImpl,
       sendAgentInputImpl: opts.sendAgentInputImpl,
       waitForAgentImpl: opts.waitForAgentImpl,
+      inspectAgentImpl: opts.inspectAgentImpl,
       resumeAgentImpl: opts.resumeAgentImpl,
       closeAgentImpl: opts.closeAgentImpl,
       cancelAgentSessionsImpl: opts.cancelAgentSessionsImpl,
@@ -674,6 +676,7 @@ export class AgentSession {
     listAgentSessionsImpl?: SessionDependencies["listAgentSessionsImpl"];
     sendAgentInputImpl?: SessionDependencies["sendAgentInputImpl"];
     waitForAgentImpl?: SessionDependencies["waitForAgentImpl"];
+    inspectAgentImpl?: SessionDependencies["inspectAgentImpl"];
     resumeAgentImpl?: SessionDependencies["resumeAgentImpl"];
     closeAgentImpl?: SessionDependencies["closeAgentImpl"];
     cancelAgentSessionsImpl?: SessionDependencies["cancelAgentSessionsImpl"];
@@ -746,6 +749,7 @@ export class AgentSession {
       listAgentSessionsImpl: opts.listAgentSessionsImpl,
       sendAgentInputImpl: opts.sendAgentInputImpl,
       waitForAgentImpl: opts.waitForAgentImpl,
+      inspectAgentImpl: opts.inspectAgentImpl,
       resumeAgentImpl: opts.resumeAgentImpl,
       closeAgentImpl: opts.closeAgentImpl,
       cancelAgentSessionsImpl: opts.cancelAgentSessionsImpl,
@@ -949,6 +953,16 @@ export class AgentSession {
       if (text) return text;
     }
     return undefined;
+  }
+
+  getCompactUsageSnapshot(): SessionUsageSnapshot | null {
+    return this.state.costTracker?.getCompactSnapshot() ?? null;
+  }
+
+  getLastTurnUsage(): TurnUsage | null {
+    const turns = this.state.costTracker?.getCompactSnapshot(1).turns ?? [];
+    const latest = turns[turns.length - 1];
+    return latest ? { ...latest.usage } : null;
   }
 
   getObservabilityStatusEvent() {
@@ -1494,6 +1508,19 @@ export class AgentSession {
 
   async waitForAgents(agentIds: string[], timeoutMs?: number) {
     await this.getAdminManager().waitForAgents(agentIds, timeoutMs);
+  }
+
+  async inspectAgent(agentId: string): Promise<AgentInspectResult> {
+    if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
+      throw new Error("Only root sessions can inspect child agents");
+    }
+    if (!this.context.deps.inspectAgentImpl) {
+      throw new Error("Child-agent inspection is unavailable");
+    }
+    return await this.context.deps.inspectAgentImpl({
+      parentSessionId: this.context.id,
+      agentId,
+    });
   }
 
   async resumeAgent(agentId: string) {

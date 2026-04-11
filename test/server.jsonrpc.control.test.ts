@@ -1164,7 +1164,7 @@ describe("server JSON-RPC control methods", () => {
           busy: false,
           lastMessagePreview: "done",
         },
-        latestAssistantText: "done\n\n```json\n{\"status\":\"completed\",\"summary\":\"Task done\"}\n```",
+        latestAssistantText: "done\n\n<agent_report>{\"status\":\"completed\",\"summary\":\"Task done\"}</agent_report>",
         parsedReport: {
           status: "completed",
           summary: "Task done",

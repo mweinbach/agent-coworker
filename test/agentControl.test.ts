@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 
 import { AgentControl } from "../src/server/agents/AgentControl";
-import { parseChildAgentReport } from "../src/shared/agents";
+import { parseChildAgentReport } from "../src/server/agents/reportParser";
 import type { SeededSessionContext } from "../src/server/session/SessionContext";
 import type { AgentConfig } from "../src/types";
 import type { SessionBinding } from "../src/server/startServer/types";
@@ -561,13 +561,13 @@ describe("AgentControl persisted child control", () => {
     const childSession = makeChildSession(config);
     childSession.getLatestAssistantText = () => [
       "Finished the task.",
-      "```json",
+      "<agent_report>",
       JSON.stringify({
         status: "completed",
         summary: "Task finished",
         filesRead: ["src/agent.ts"],
       }),
-      "```",
+      "</agent_report>",
     ].join("\n");
     childSession.getCompactUsageSnapshot = () => ({
       sessionId: "child-1",
@@ -628,6 +628,49 @@ describe("AgentControl persisted child control", () => {
     }));
     expect(inspected.sessionUsage?.totalTokens).toBe(12);
     expect(inspected.lastTurnUsage?.totalTokens).toBe(12);
+  });
+
+  test("inspect falls back to legacy fenced JSON when no tagged report exists", async () => {
+    const config = makeConfig();
+    const childSession = makeChildSession(config);
+    childSession.getLatestAssistantText = () => [
+      "Finished the task.",
+      "```json",
+      JSON.stringify({
+        status: "completed",
+        summary: "Legacy task finished",
+        filesRead: ["src/legacy-agent.ts"],
+      }),
+      "```",
+    ].join("\n");
+    const control = new AgentControl({
+      sessionBindings: new Map(),
+      sessionDb: {
+        getSessionRecord: (sessionId: string) =>
+          sessionId === "child-1" ? makePersistedChildRecord(config) : null,
+      } as any,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: true, resumedFromStorage: true };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    const inspected = await control.inspect({
+      parentSessionId: "root-1",
+      agentId: "child-1",
+    });
+
+    expect(inspected.parsedReport).toEqual(parseChildAgentReport(inspected.latestAssistantText));
+    expect(inspected.parsedReport).toEqual(expect.objectContaining({
+      status: "completed",
+      summary: "Legacy task finished",
+      filesRead: ["src/legacy-agent.ts"],
+    }));
   });
 
   test("list normalizes hydrated stale pending_init child status to completed when idle", async () => {

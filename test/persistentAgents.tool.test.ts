@@ -78,7 +78,7 @@ describe("persistent agent tools", () => {
     }));
     const inspect = mock(async () => ({
       agent: makeSummary({ executionState: "completed", lastMessagePreview: "done" }),
-      latestAssistantText: "done",
+      latestAssistantText: 'Summary\n\n<agent_report>{"status":"completed","summary":"Finished"}</agent_report>',
       parsedReport: {
         status: "completed" as const,
         summary: "Finished",
@@ -119,7 +119,7 @@ describe("persistent agent tools", () => {
     });
     await expect(inspectTool.execute({ agentId: "child-1" })).resolves.toEqual(expect.objectContaining({
       agent: expect.objectContaining({ agentId: "child-1" }),
-      latestAssistantText: "done",
+      latestAssistantText: expect.stringContaining("<agent_report>"),
       parsedReport: expect.objectContaining({ status: "completed", summary: "Finished" }),
     }));
     await expect(resumeTool.execute({ agentId: "child-1" })).resolves.toEqual(resumed);

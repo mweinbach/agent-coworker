@@ -142,6 +142,42 @@ describe("spawnAgent tool", () => {
     });
   });
 
+  test("prefers explicit contextMode over deprecated forkContext when both are provided", async () => {
+    const summary = makeSummary();
+    const spawn = mock(async () => summary);
+    const tool: any = createSpawnAgentTool(makeCtx({
+      agentControl: {
+        spawn,
+        list: async () => [],
+        sendInput: async () => {},
+        wait: async () => ({ timedOut: false, agents: [] }),
+        inspect: async () => ({
+          agent: summary,
+          latestAssistantText: null,
+          parsedReport: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+        }),
+        resume: async () => summary,
+        close: async () => summary,
+      },
+    }));
+
+    await tool.execute({
+      message: "Investigate this failure",
+      contextMode: "brief",
+      briefing: "Use the explicit mode.",
+      forkContext: false,
+    });
+
+    expect(spawn).toHaveBeenCalledWith({
+      message: "Investigate this failure",
+      role: "default",
+      contextMode: "brief",
+      briefing: "Use the explicit mode.",
+    });
+  });
+
   test("defaults role to default", async () => {
     const summary = makeSummary({ role: "default" });
     const spawn = mock(async () => summary);

@@ -51,11 +51,7 @@ export type ResolvedAgentSpawnContextOptions = {
 export function resolveAgentSpawnContextOptions(
   opts: AgentSpawnContextOptions | null | undefined,
 ): ResolvedAgentSpawnContextOptions {
-  const contextMode = opts?.forkContext === true
-    ? "full"
-    : opts?.forkContext === false
-      ? "none"
-      : opts?.contextMode ?? "none";
+  const contextMode = opts?.contextMode ?? (opts?.forkContext === true ? "full" : "none");
   const briefing = opts?.briefing?.trim();
   if (contextMode === "brief" && !briefing) {
     throw new Error('briefing is required when contextMode is "brief"');

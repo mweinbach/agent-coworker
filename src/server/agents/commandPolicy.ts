@@ -35,7 +35,7 @@ const SHELL_WRITE_RULES: ShellCommandRule[] = [
   },
   {
     reason: "shell redirection or tee write",
-    pattern: /(?:^|[\s;&|()]+)\d*>>?\s*(?!&\d+\b|\/dev\/null\b)\S+|\btee\b/,
+    pattern: /(?<!<)\d*>>?\s*(?!&\d+\b|\/dev\/null\b)\S+|\btee\b/,
   },
   {
     reason: "in-place editor",
@@ -49,22 +49,41 @@ const SHELL_WRITE_RULES: ShellCommandRule[] = [
   {
     reason: "package install command",
     pattern:
-      /(?:^|[\s;&|()]+)(?:npm\s+(?:install|i)\b|pnpm\s+(?:install|i|add)\b|yarn\s+(?:install|add)\b|bun\s+(?:install|add)\b|(?:pip|pip3)\s+install\b|(?:python|python3|py)\s+-m\s+pip\s+install\b|uv\s+pip\s+install\b|cargo\s+add\b)/,
+      /(?:^|[\s;&|()]+)(?:npm\s+(?:install|i|ci)\b|pnpm\s+(?:install|i|add)\b|yarn(?:\s+(?:install|add)\b|$)|bun\s+(?:install|i|add)\b|(?:pip|pip3)\s+install\b|(?:python|python3|py)\s+-m\s+pip\s+install\b|uv\s+pip\s+install\b|cargo\s+add\b)/,
   },
 ];
 
 function tokenizeShellCommand(command: string): string[] {
   const tokens: string[] = [];
   const re =
-    /((?:--[a-zA-Z0-9-]+|-[a-zA-Z0-9])=(?:"[^"]*"|'[^']*'|`[^`]*`|\S+)|"([^"]*)"|'([^']*)'|`([^`]*)`|(\S+))/g;
+    /((?:--[a-zA-Z0-9-]+|-[a-zA-Z0-9])=(?:"[^"]*"|'[^']*'|`[^`]*`|\$"[^"]*"|\$'[^']*'|\S+)|"([^"]*)"|'([^']*)'|`([^`]*)`|\$"([^"]*)"|\$'([^']*)'|(\S+))/g;
 
   let match: RegExpExecArray | null = null;
   while ((match = re.exec(command)) !== null) {
-    const token = match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[1] ?? "";
+    const token = match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[6] ?? match[7] ?? match[1] ?? "";
     if (token) tokens.push(token);
   }
 
   return tokens;
+}
+
+function unwrapShellTokenValue(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("$'") && trimmed.endsWith("'")) {
+    return trimmed.slice(2, -1);
+  }
+  if (trimmed.startsWith('$"') && trimmed.endsWith('"')) {
+    return trimmed.slice(2, -1);
+  }
+  if (
+    (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("`") && trimmed.endsWith("`"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+
+  return trimmed;
 }
 
 function stripSingleAndDoubleQuotedSegments(command: string): string {
@@ -100,6 +119,20 @@ function extractShellCommandStringSegments(command: string): string[] {
       const arg = tokens[j];
       const normalizedArg = arg?.toLowerCase();
       if (!normalizedArg) break;
+
+      if (normalizedArg.startsWith("--command=")) {
+        const inlineSegment = arg.slice(arg.indexOf("=") + 1).trim();
+        if (inlineSegment) segments.push(unwrapShellTokenValue(inlineSegment));
+        break;
+      }
+
+      const shortInlineMatch = arg.match(/^-c(.+)$/i);
+      if (shortInlineMatch) {
+        const inlineSegment = shortInlineMatch[1]?.trim();
+        if (inlineSegment) segments.push(unwrapShellTokenValue(inlineSegment));
+        break;
+      }
+
       if (SHELL_COMMAND_ARG_FLAGS.has(normalizedArg) || /^-[a-z]*c$/i.test(normalizedArg)) {
         const segment = tokens[j + 1]?.trim();
         if (segment) segments.push(segment);
@@ -162,13 +195,6 @@ export function getShellCommandPolicyViolation(
   }
 
   return null;
-}
-
-export function isShellCommandAllowedByPolicy(
-  command: string,
-  shellPolicy: AgentShellPolicy | null | undefined,
-): boolean {
-  return getShellCommandPolicyViolation(command, shellPolicy) === null;
 }
 
 export const __internal = {

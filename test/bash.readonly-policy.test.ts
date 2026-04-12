@@ -54,9 +54,14 @@ describe("bash read-only shell policy", () => {
       ["mkdir scratch", "filesystem mutation command"],
       ["rm -rf output", "filesystem mutation command"],
       ['sh -lc "touch bypass.txt"', "filesystem mutation command"],
+      ["bash -c $'touch bypass.txt'", "filesystem mutation command"],
+      ['bash --command="touch bypass.txt"', "filesystem mutation command"],
+      ["bash -ctouch bypass.txt", "filesystem mutation command"],
       ["echo `touch bypass.txt`", "filesystem mutation command"],
       ["echo $(touch bypass.txt)", "filesystem mutation command"],
       ['echo "hello" > out.txt', "shell redirection or tee write"],
+      ["echo hi>out.txt", "shell redirection or tee write"],
+      ["echo hi>>out.txt", "shell redirection or tee write"],
       ["printf hi | tee out.txt", "shell redirection or tee write"],
       ["sed -i 's/a/b/' file.txt", "in-place editor"],
       ["perl -pi -e 's/a/b/' file.txt", "in-place editor"],
@@ -64,11 +69,14 @@ describe("bash read-only shell policy", () => {
       ["git checkout main", "git write command"],
       ["git reset --hard HEAD", "git write command"],
       ["npm install", "package install command"],
+      ["npm ci", "package install command"],
       ["pnpm add zod", "package install command"],
       ["pnpm i", "package install command"],
+      ["yarn", "package install command"],
       ["yarn install", "package install command"],
       ["yarn add lodash", "package install command"],
       ["bun add zod", "package install command"],
+      ["bun i", "package install command"],
       ["python -m pip install requests", "package install command"],
       ["cargo add serde", "package install command"],
     ] as const;
@@ -97,6 +105,7 @@ describe("bash read-only shell policy", () => {
       "bun test test/tools.test.ts 2>/dev/null",
       "bun run typecheck",
       "npm run build",
+      "yarn test",
     ];
 
     for (const command of allowedCommands) {

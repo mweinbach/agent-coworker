@@ -1,5 +1,13 @@
 # Task Plan
 
+## Enforce Read-Only Shell Policy At Tool Layer
+
+- [ ] Add shell policy metadata for agent roles and thread the effective policy into `ToolContext`.
+- [ ] Add a conservative command-policy helper for `no_project_write` shell enforcement.
+- [ ] Reject obviously mutating bash commands before approval in read-only roles.
+- [ ] Add focused regressions for blocked mutating commands and allowed read/test commands.
+- [ ] Run focused Bun tests plus `bun run typecheck`.
+
 ## Fix Raw-loop includeParentTodos Review Thread
 
 - [x] Confirm the unresolved raw-loop review comment is still real against current `HEAD`.
@@ -75,6 +83,23 @@
 - [ ] Make plugin detail reads fail fast with a terminal validation error for missing or ambiguous plugin selections instead of hanging the JSON-RPC request.
 - [ ] Add/update focused backend and desktop regression tests for the above fixes.
 - [ ] Re-run focused Bun test slices, `bun run typecheck`, and a manual desktop walkthrough before closing the task.
+
+## Enforce Read-only Shell Policy
+
+- [x] Add role-level `shellPolicy` metadata and default effective policy helpers for child-agent roles.
+- [x] Thread the effective shell policy through root-session and delegated `ToolContext` construction.
+- [x] Enforce a conservative `no_project_write` bash guard for obvious mutating commands before approval/execution.
+- [x] Add focused regressions in `test/tools.test.ts` and `test/bash.readonly-policy.test.ts`, then rerun targeted Bun tests plus `bun run typecheck`.
+
+## Enforce Read-only Shell Policy Review
+
+- Added `src/server/agents/commandPolicy.ts` to centralize the shell policy contract and a conservative regex-based classifier for obvious mutations such as filesystem writes, shell redirection/`tee`, in-place editors, git write commands, and package install commands.
+- `src/server/agents/roles.ts` now declares `shellPolicy` per role, with `explorer` and `reviewer` locked to `no_project_write`, `research` also marked `no_project_write` despite not receiving bash, and write-capable roles remaining `full`.
+- The effective shell policy now flows through `RunTurnParams`, live session tool context, delegated child-agent tool context, and auxiliary tool-listing contexts so bash sees a real enforcement signal instead of relying only on role prompts.
+- `src/tools/bash.ts` now checks the shell policy before `approveCommand(...)` and rejects blocked commands with a clear error message, keeping read-only bash useful for inspection, test, build, and typecheck commands.
+- Added focused regressions in `test/bash.readonly-policy.test.ts` plus `test/tools.test.ts`, and verification passed with:
+  - `~/.bun/bin/bun test test/bash.readonly-policy.test.ts test/tools.test.ts`
+  - `~/.bun/bin/bun run typecheck`
 
 ## Add Plugin Install Flow
 

@@ -78,6 +78,7 @@ function makeCtx(dir: string, overrides: Partial<ToolContext> = {}): ToolContext
     log: () => {},
     askUser: async () => "",
     approveCommand: async () => true,
+    shellPolicy: "full",
     ...overrides,
   };
 }
@@ -3592,6 +3593,21 @@ describe("createTools", () => {
     expect(tools).not.toHaveProperty("inspectAgent");
     expect(tools).not.toHaveProperty("resumeAgent");
     expect(tools).not.toHaveProperty("closeAgent");
+  });
+
+  test("keeps bash but omits write tools for reviewer role", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(makeCtx(dir, {
+      agentRole: "reviewer",
+      shellPolicy: "no_project_write",
+    }));
+
+    expect(tools).toHaveProperty("bash");
+    expect(tools).toHaveProperty("read");
+    expect(tools).toHaveProperty("glob");
+    expect(tools).toHaveProperty("grep");
+    expect(tools).not.toHaveProperty("write");
+    expect(tools).not.toHaveProperty("edit");
   });
 
   test("returns an executable webSearch tool for opencode-go", async () => {

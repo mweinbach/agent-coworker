@@ -1,11 +1,14 @@
 import type { AgentMode, AgentReasoningEffort, AgentRole } from "../../shared/agents";
 
+import type { AgentShellPolicy } from "./commandPolicy";
+
 export type AgentRoleDefinition = {
   id: AgentRole;
   description: string;
   promptFile: string;
   defaultMode: AgentMode;
   readOnly: boolean;
+  shellPolicy?: AgentShellPolicy;
   allowTools: string[];
   canAskUser: boolean;
   canSpawnChildren: boolean;
@@ -54,6 +57,7 @@ export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
     promptFile: "default.md",
     defaultMode: "collaborative",
     readOnly: false,
+    shellPolicy: "full",
     allowTools: ["bash", "read", "write", "edit", "glob", "grep", "webSearch", "webFetch", "notebookEdit", "skill", "memory", "usage", "todoWrite"],
     canAskUser: false,
     canSpawnChildren: false,
@@ -65,6 +69,7 @@ export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
     promptFile: "explorer.md",
     defaultMode: "collaborative",
     readOnly: true,
+    shellPolicy: "no_project_write",
     allowTools: ["bash", "read", "glob", "grep"],
     canAskUser: false,
     canSpawnChildren: false,
@@ -76,6 +81,7 @@ export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
     promptFile: "research.md",
     defaultMode: "collaborative",
     readOnly: true,
+    shellPolicy: "no_project_write",
     allowTools: ["read", "webSearch", "webFetch"],
     canAskUser: false,
     canSpawnChildren: false,
@@ -87,6 +93,7 @@ export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
     promptFile: "worker.md",
     defaultMode: "collaborative",
     readOnly: false,
+    shellPolicy: "full",
     allowTools: ["bash", "read", "write", "edit", "glob", "grep", "webSearch", "webFetch", "notebookEdit", "skill", "memory", "usage", "todoWrite"],
     canAskUser: false,
     canSpawnChildren: false,
@@ -98,6 +105,7 @@ export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
     promptFile: "reviewer.md",
     defaultMode: "delegate",
     readOnly: true,
+    shellPolicy: "no_project_write",
     allowTools: ["bash", "read", "glob", "grep"],
     canAskUser: false,
     canSpawnChildren: false,
@@ -107,6 +115,11 @@ export const AGENT_ROLE_DEFINITIONS: Record<AgentRole, AgentRoleDefinition> = {
 
 export function getAgentRoleDefinition(role: AgentRole): AgentRoleDefinition {
   return AGENT_ROLE_DEFINITIONS[role];
+}
+
+export function getAgentRoleShellPolicy(role: AgentRole | null | undefined): AgentShellPolicy {
+  if (!role) return "full";
+  return AGENT_ROLE_DEFINITIONS[role].shellPolicy ?? "full";
 }
 
 function formatRoleCapabilities(role: AgentRoleDefinition): string[] {

@@ -30,6 +30,7 @@ import {
 import { supportsImageInput } from "../../models/registry";
 import { isPathInside } from "../../utils/paths";
 import type { FileAttachment, OrderedInputPart } from "../jsonrpc/routes/shared";
+import { getAgentRoleShellPolicy } from "../agents/roles";
 import type { HistoryManager } from "./HistoryManager";
 import type { InteractionManager } from "./InteractionManager";
 import type { SessionBackupController } from "./SessionBackupController";
@@ -723,6 +724,7 @@ export class TurnExecutionManager {
         enableMcp: this.context.state.config.enableMcp,
         spawnDepth: typeof this.context.state.sessionInfo.depth === "number" ? this.context.state.sessionInfo.depth : 0,
         agentRole: this.context.state.sessionInfo.role,
+        shellPolicy: getAgentRoleShellPolicy(this.context.state.sessionInfo.role),
         telemetryContext: {
           functionId: "session.turn",
           metadata: {

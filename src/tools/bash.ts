@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { execFile } from "node:child_process";
 
+import { getShellCommandPolicyViolation } from "../server/agents/commandPolicy";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
@@ -143,6 +144,19 @@ export function createBashTool(ctx: ToolContext) {
 
       if (ctx.abortSignal?.aborted) {
         const res = { stdout: "", stderr: "Command aborted.", exitCode: 130 };
+        ctx.log(`tool< bash ${JSON.stringify(res)}`);
+        return res;
+      }
+
+      const shellPolicyViolation = getShellCommandPolicyViolation(command, ctx.shellPolicy);
+      if (shellPolicyViolation) {
+        const res = {
+          stdout: "",
+          stderr:
+            `Command blocked by shell policy "${shellPolicyViolation.shellPolicy}": `
+            + `${shellPolicyViolation.reason}. Use read/test/build commands or a write-capable role instead.`,
+          exitCode: 1,
+        };
         ctx.log(`tool< bash ${JSON.stringify(res)}`);
         return res;
       }

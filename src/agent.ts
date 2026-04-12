@@ -13,7 +13,8 @@ import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from ".
 import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTracker";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { createTools } from "./tools";
-import { getAgentRoleDefinition } from "./server/agents/roles";
+import type { AgentShellPolicy } from "./server/agents/commandPolicy";
+import { getAgentRoleDefinition, getAgentRoleShellPolicy } from "./server/agents/roles";
 import { filterToolsForRole } from "./server/agents/toolPolicy";
 
 const MAX_STREAM_SETTLE_TICKS = 64;
@@ -69,6 +70,7 @@ export interface RunTurnParams {
   /** Sub-agent nesting depth (0 for root session turn). */
   spawnDepth?: number;
   agentRole?: AgentRole;
+  shellPolicy?: AgentShellPolicy;
 
   maxSteps?: number;
   enableMcp?: boolean;
@@ -278,6 +280,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       getTurnUserPrompt: () => extractTurnUserPrompt(latestTurnMessages),
       harnessContext: params.harnessContext,
       agentRole: params.agentRole,
+      shellPolicy: params.shellPolicy ?? getAgentRoleShellPolicy(params.agentRole),
       agentControl: params.agentControl,
       costTracker: params.costTracker,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,

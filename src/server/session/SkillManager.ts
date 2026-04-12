@@ -204,6 +204,7 @@ export class SkillManager {
       log: () => {},
       askUser: async () => "",
       approveCommand: async () => false,
+      shellPolicy: "full",
     });
 
     const tools = Object.entries(toolMap)

@@ -1,5 +1,13 @@
 # Task Plan
 
+## Enforce Read-Only Shell Policy At Tool Layer
+
+- [ ] Add shell policy metadata for agent roles and thread the effective policy into `ToolContext`.
+- [ ] Add a conservative command-policy helper for `no_project_write` shell enforcement.
+- [ ] Reject obviously mutating bash commands before approval in read-only roles.
+- [ ] Add focused regressions for blocked mutating commands and allowed read/test commands.
+- [ ] Run focused Bun tests plus `bun run typecheck`.
+
 ## Fix Raw-loop includeParentTodos Review Thread
 
 - [x] Confirm the unresolved raw-loop review comment is still real against current `HEAD`.

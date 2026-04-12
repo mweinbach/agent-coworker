@@ -10,7 +10,7 @@ import type { AgentConfig, HarnessContextState, ProviderName, TodoItem } from ".
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 
 import { routeAgentConfig } from "./modelRouter";
-import { getAgentRoleDefinition } from "./roles";
+import { getAgentRoleDefinition, getAgentRoleShellPolicy } from "./roles";
 import { filterToolsForRole } from "./toolPolicy";
 
 export type DelegateRunResult = {
@@ -82,6 +82,7 @@ export class DelegateRunner {
       turnUserPrompt: opts.message,
       harnessContext: opts.harnessContext,
       agentRole: opts.role,
+      shellPolicy: getAgentRoleShellPolicy(opts.role),
     };
     const tools = filterToolsForRole(this.deps.createTools(delegateContext), roleDefinition);
     const googlePrepareStep =

@@ -5,6 +5,7 @@ import type {
   PersistentAgentSummary,
   AgentRole,
 } from "../shared/agents";
+import type { AgentShellPolicy } from "../server/agents/commandPolicy";
 import type { AgentConfig, HarnessContextState } from "../types";
 import type { TodoItem } from "../types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "../session/costTracker";
@@ -63,6 +64,9 @@ export interface ToolContext {
 
   /** Optional role for child-agent tool filtering. */
   agentRole?: AgentRole;
+
+  /** Effective shell mutation policy. Defaults to "full" when omitted. */
+  shellPolicy?: AgentShellPolicy;
 
   /** Session-backed persistent agent lifecycle callbacks. */
   agentControl?: AgentControl;

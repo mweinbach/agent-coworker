@@ -12,7 +12,7 @@ type ShellCommandPolicyViolation = {
 
 type ShellCommandRule = {
   reason: ShellCommandPolicyViolation["reason"];
-  pattern: RegExp;
+  matches: (command: string) => boolean;
 };
 
 const SHELL_COMMAND_ARG_FLAGS = new Set(["-c", "--command"]);
@@ -27,29 +27,54 @@ const SHELL_COMMAND_LAUNCHERS = new Set([
   "powershell",
   "powershell.exe",
 ]);
+const SHELL_COMMAND_SEPARATORS = new Set([";", "&&", "||", "|", "&", "(", ")"]);
+const SHELL_EXECUTION_WRAPPERS = new Set([
+  "builtin",
+  "command",
+  "env",
+  "exec",
+  "nice",
+  "nohup",
+  "sudo",
+  "time",
+]);
+const FILESYSTEM_MUTATION_COMMANDS = new Set(["rm", "mv", "cp", "touch", "mkdir"]);
+const GIT_WRITE_SUBCOMMANDS = new Set(["add", "commit", "checkout", "switch", "restore", "clean"]);
+const GIT_GLOBAL_OPTIONS_WITH_VALUES = new Set([
+  "-c",
+  "-C",
+  "--config-env",
+  "--exec-path",
+  "--git-dir",
+  "--namespace",
+  "--super-prefix",
+  "--work-tree",
+]);
+
+function regexRule(reason: ShellCommandPolicyViolation["reason"], pattern: RegExp): ShellCommandRule {
+  return {
+    reason,
+    matches: (command) => pattern.test(command),
+  };
+}
 
 const SHELL_WRITE_RULES: ShellCommandRule[] = [
   {
     reason: "filesystem mutation command",
-    pattern: /(?:^|[\s;&|()]+)(?:rm|mv|cp|touch|mkdir)\b/,
+    matches: (command) => hasFilesystemMutationCommand(command),
   },
-  {
-    reason: "shell redirection or tee write",
-    pattern: /(?<!<)\d*>>?\s*(?!&\d+\b|\/dev\/null\b)\S+|\btee\b/,
-  },
-  {
-    reason: "in-place editor",
-    pattern: /\bsed\b[^\n\r]*\s-i(?:\b|["'])|\bperl\b[^\n\r]*(?:\s-pi\b|\s-p\b[^\n\r]*\s-i\b)/,
-  },
+  regexRule("shell redirection or tee write", /(?<!<)\d*>>?\s*(?!&\d+\b|\/dev\/null\b)\S+|\btee\b/),
+  regexRule(
+    "in-place editor",
+    /\bsed\b[^\n\r]*\s-i(?:\b|["'])|\bperl\b[^\n\r]*(?:\s-pi\b|\s-p\b[^\n\r]*\s-i\b)/,
+  ),
   {
     reason: "git write command",
-    pattern:
-      /(?:^|[\s;&|()]+)git\s+(?:add|commit|checkout|switch|restore|clean)\b|(?:^|[\s;&|()]+)git\s+reset\b[^\n\r]*(?:^|[\s])--hard(?:$|[\s])/,
+    matches: (command) => hasGitWriteCommand(command),
   },
   {
     reason: "package install command",
-    pattern:
-      /(?:^|[\s;&|()]+)(?:npm\s+(?:install|i|ci)\b|pnpm\s+(?:install|i|add)\b|yarn(?:\s+(?:install|add)\b|$)|bun\s+(?:install|i|add)\b|(?:pip|pip3)\s+install\b|(?:python|python3|py)\s+-m\s+pip\s+install\b|uv\s+pip\s+install\b|cargo\s+add\b)/,
+    matches: (command) => hasPackageInstallCommand(command),
   },
 ];
 
@@ -86,8 +111,193 @@ function unwrapShellTokenValue(value: string): string {
   return trimmed;
 }
 
+function getShellTokenBaseName(token: string): string {
+  const normalized = token.replace(/\\/g, "/").replace(/\/+$/, "");
+  const lastPathComponent = normalized.split("/").pop() ?? normalized;
+  return lastPathComponent.toLowerCase();
+}
+
+function isEnvAssignmentToken(token: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token);
+}
+
+function splitShellCommandIntoSegments(command: string): string[][] {
+  const tokens = tokenizeShellCommand(command);
+  const segments: string[][] = [];
+  let currentSegment: string[] = [];
+
+  for (const token of tokens) {
+    if (SHELL_COMMAND_SEPARATORS.has(token)) {
+      if (currentSegment.length > 0) {
+        segments.push(currentSegment);
+        currentSegment = [];
+      }
+      continue;
+    }
+    currentSegment.push(token);
+  }
+
+  if (currentSegment.length > 0) {
+    segments.push(currentSegment);
+  }
+
+  return segments;
+}
+
+function findSegmentExecutableIndex(tokens: string[]): number {
+  let index = 0;
+  while (index < tokens.length && isEnvAssignmentToken(tokens[index] ?? "")) {
+    index += 1;
+  }
+
+  while (index < tokens.length) {
+    const token = tokens[index];
+    if (!token) break;
+
+    const baseName = getShellTokenBaseName(token);
+    if (!SHELL_EXECUTION_WRAPPERS.has(baseName)) {
+      return index;
+    }
+
+    index += 1;
+    if (baseName !== "env") {
+      continue;
+    }
+
+    while (index < tokens.length) {
+      const envToken = tokens[index];
+      if (!envToken) break;
+      if (envToken === "--") {
+        index += 1;
+        break;
+      }
+      if (isEnvAssignmentToken(envToken)) {
+        index += 1;
+        continue;
+      }
+      if (/^-[A-Za-z-]+$/.test(envToken)) {
+        index += 1;
+        continue;
+      }
+      break;
+    }
+  }
+
+  return -1;
+}
+
+function isShellCommandLauncherToken(token: string): boolean {
+  return SHELL_COMMAND_LAUNCHERS.has(getShellTokenBaseName(token));
+}
+
+function hasFilesystemMutationCommand(command: string): boolean {
+  for (const segment of splitShellCommandIntoSegments(command)) {
+    const executableIndex = findSegmentExecutableIndex(segment);
+    if (executableIndex < 0) continue;
+    if (FILESYSTEM_MUTATION_COMMANDS.has(getShellTokenBaseName(segment[executableIndex] ?? ""))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function findGitSubcommandIndex(tokens: string[], gitIndex: number): number {
+  let index = gitIndex + 1;
+  while (index < tokens.length) {
+    const token = tokens[index];
+    if (!token) break;
+    if (token === "--") {
+      index += 1;
+      break;
+    }
+    if (token.startsWith("--")) {
+      const flag = token.split("=")[0] ?? token;
+      if (GIT_GLOBAL_OPTIONS_WITH_VALUES.has(flag) && !token.includes("=")) {
+        index += 2;
+      } else {
+        index += 1;
+      }
+      continue;
+    }
+    if (token.startsWith("-") && token !== "-") {
+      if (GIT_GLOBAL_OPTIONS_WITH_VALUES.has(token)) {
+        index += 2;
+      } else {
+        index += 1;
+      }
+      continue;
+    }
+    break;
+  }
+
+  return index;
+}
+
+function hasGitWriteCommand(command: string): boolean {
+  for (const segment of splitShellCommandIntoSegments(command)) {
+    const executableIndex = findSegmentExecutableIndex(segment);
+    if (executableIndex < 0) continue;
+    if (getShellTokenBaseName(segment[executableIndex] ?? "") !== "git") continue;
+
+    const subcommandIndex = findGitSubcommandIndex(segment, executableIndex);
+    const subcommand = segment[subcommandIndex]?.toLowerCase();
+    if (!subcommand) continue;
+    if (GIT_WRITE_SUBCOMMANDS.has(subcommand)) {
+      return true;
+    }
+    if (subcommand === "reset") {
+      const args = segment.slice(subcommandIndex + 1).map((arg) => arg.toLowerCase());
+      if (args.includes("--hard")) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function hasPackageInstallCommand(command: string): boolean {
+  for (const segment of splitShellCommandIntoSegments(command)) {
+    const executableIndex = findSegmentExecutableIndex(segment);
+    if (executableIndex < 0) continue;
+
+    const executable = getShellTokenBaseName(segment[executableIndex] ?? "");
+    const firstArg = segment[executableIndex + 1]?.toLowerCase();
+    const secondArg = segment[executableIndex + 2]?.toLowerCase();
+    const thirdArg = segment[executableIndex + 3]?.toLowerCase();
+
+    if (executable === "npm" && ["install", "i", "ci"].includes(firstArg ?? "")) {
+      return true;
+    }
+    if (executable === "pnpm" && ["install", "i", "add"].includes(firstArg ?? "")) {
+      return true;
+    }
+    if (executable === "yarn" && (!firstArg || ["install", "add"].includes(firstArg))) {
+      return true;
+    }
+    if (executable === "bun" && ["install", "i", "add"].includes(firstArg ?? "")) {
+      return true;
+    }
+    if ((executable === "pip" || executable === "pip3") && firstArg === "install") {
+      return true;
+    }
+    if (["python", "python3", "py"].includes(executable) && firstArg === "-m" && secondArg === "pip" && thirdArg === "install") {
+      return true;
+    }
+    if (executable === "uv" && firstArg === "pip" && secondArg === "install") {
+      return true;
+    }
+    if (executable === "cargo" && firstArg === "add") {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function stripSingleAndDoubleQuotedSegments(command: string): string {
-  return command.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " ");
+  return command.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, " ");
 }
 
 function extractCommandSubstitutionSegments(command: string): string[] {
@@ -108,15 +318,15 @@ function stripCommandSubstitutionSegments(command: string): string {
 }
 
 function extractShellCommandStringSegments(command: string): string[] {
-  const tokens = tokenizeShellCommand(command);
   const segments: string[] = [];
 
-  for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i]?.toLowerCase();
-    if (!token || !SHELL_COMMAND_LAUNCHERS.has(token)) continue;
+  for (const commandSegment of splitShellCommandIntoSegments(command)) {
+    const launcherIndex = findSegmentExecutableIndex(commandSegment);
+    if (launcherIndex < 0) continue;
+    if (!isShellCommandLauncherToken(commandSegment[launcherIndex] ?? "")) continue;
 
-    for (let j = i + 1; j < tokens.length; j += 1) {
-      const arg = tokens[j];
+    for (let j = launcherIndex + 1; j < commandSegment.length; j += 1) {
+      const arg = commandSegment[j];
       const normalizedArg = arg?.toLowerCase();
       if (!normalizedArg) break;
 
@@ -134,7 +344,7 @@ function extractShellCommandStringSegments(command: string): string[] {
       }
 
       if (SHELL_COMMAND_ARG_FLAGS.has(normalizedArg) || /^-[a-z]*c$/i.test(normalizedArg)) {
-        const segment = tokens[j + 1]?.trim();
+        const segment = commandSegment[j + 1]?.trim();
         if (segment) segments.push(segment);
         break;
       }
@@ -188,7 +398,7 @@ export function getShellCommandPolicyViolation(
   const candidates = collectShellPolicyCandidates(command);
   for (const rule of SHELL_WRITE_RULES) {
     for (const candidate of candidates) {
-      if (rule.pattern.test(candidate)) {
+      if (rule.matches(candidate)) {
         return { shellPolicy: "no_project_write", reason: rule.reason };
       }
     }

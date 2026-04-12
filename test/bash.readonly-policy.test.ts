@@ -51,9 +51,13 @@ describe("bash read-only shell policy", () => {
   test("blocks obvious project-mutating commands", () => {
     const blockedCommands = [
       ["touch README.tmp", "filesystem mutation command"],
+      ["/bin/touch blocked.txt", "filesystem mutation command"],
+      ["env /usr/bin/mkdir scratch", "filesystem mutation command"],
       ["mkdir scratch", "filesystem mutation command"],
       ["rm -rf output", "filesystem mutation command"],
+      ["ls 'x\\'; rm -rf /; echo 'y'", "filesystem mutation command"],
       ['sh -lc "touch bypass.txt"', "filesystem mutation command"],
+      ['env /bin/sh -c "touch bypass.txt"', "filesystem mutation command"],
       ["bash -c $'touch bypass.txt'", "filesystem mutation command"],
       ['bash --command="touch bypass.txt"', "filesystem mutation command"],
       ["bash -ctouch bypass.txt", "filesystem mutation command"],
@@ -66,9 +70,13 @@ describe("bash read-only shell policy", () => {
       ["sed -i 's/a/b/' file.txt", "in-place editor"],
       ["perl -pi -e 's/a/b/' file.txt", "in-place editor"],
       ["git add .", "git write command"],
+      ["git -C . add .", "git write command"],
+      ["git --no-pager checkout main", "git write command"],
+      ["/usr/bin/git -C . reset --hard HEAD", "git write command"],
       ["git checkout main", "git write command"],
       ["git reset --hard HEAD", "git write command"],
       ["npm install", "package install command"],
+      ["/usr/bin/npm install", "package install command"],
       ["npm ci", "package install command"],
       ["pnpm add zod", "package install command"],
       ["pnpm i", "package install command"],
@@ -92,6 +100,8 @@ describe("bash read-only shell policy", () => {
   test("allows read-only inspection and verification commands", () => {
     const allowedCommands = [
       "git status --short",
+      "git -C . status --short",
+      "git --no-pager diff --stat",
       "git diff --stat",
       "git log -1 --oneline",
       "ls -la",
@@ -105,7 +115,10 @@ describe("bash read-only shell policy", () => {
       "bun test test/tools.test.ts 2>/dev/null",
       "bun run typecheck",
       "npm run build",
+      "which yarn",
+      "command -v yarn",
       "yarn test",
+      '/bin/sh -c "git status --short"',
     ];
 
     for (const command of allowedCommands) {

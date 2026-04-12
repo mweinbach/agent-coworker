@@ -1,6 +1,5 @@
 import type { AgentSession } from "../session/AgentSession";
 import {
-  parseChildAgentReport,
   resolveAgentSpawnContextOptions,
   type AgentExecutionState,
   type AgentInspectResult,
@@ -10,6 +9,7 @@ import {
 import type { SessionBinding } from "../startServer/types";
 
 import { routeAgentConfig } from "./modelRouter";
+import { parseChildAgentReport } from "./reportParser";
 import { getAgentRoleDefinition } from "./roles";
 import { StatusBus } from "./StatusBus";
 import type {

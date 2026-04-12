@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadSystemPrompt, loadSubAgentPrompt, loadSystemPromptWithSkills } from "../src/prompt";
+import { loadAgentPrompt, loadSystemPrompt, loadSubAgentPrompt, loadSystemPromptWithSkills } from "../src/prompt";
 import {
   AGENT_ROLE_DEFINITIONS,
   buildSpawnAgentRolePromptLines,
@@ -177,6 +177,14 @@ function expectWebFetchDownloadGuidance(prompt: string) {
   expect(normalized).toContain("image");
   expect(normalized).toContain("pdf");
   expect(normalized).toContain("markdown");
+}
+
+function expectSharedAgentReportContract(prompt: string) {
+  expect(prompt).toContain("Completion contract:");
+  expect(prompt).toContain("exactly one `<agent_report>...</agent_report>` footer");
+  expect(prompt).toContain("Required footer fields: `status`, `summary`.");
+  expect(prompt).toContain("Optional footer fields: `filesChanged`, `filesRead`, `verification`, `residualRisks`.");
+  expect(prompt).toContain("`status` must be one of `completed`, `blocked`, or `failed`.");
 }
 
 const IMAGE_GUIDANCE_PROMPT_CONFIGS = [
@@ -1051,6 +1059,51 @@ describe("loadSubAgentPrompt", () => {
     expect(typeof prompt).toBe("string");
     expect(prompt.length).toBeGreaterThan(0);
     expect(prompt).toContain("Role: worker");
+  });
+
+  test("worker prompt requires structured completion and parseable footer", async () => {
+    const config = makeConfig();
+    const prompt = await loadAgentPrompt(config, "worker");
+    expectSharedAgentReportContract(prompt);
+    expect(prompt).toContain("Own a narrow, explicitly assigned slice of work.");
+    expect(prompt).toContain("Run the most relevant verification you can before finishing.");
+    expect(prompt).toContain("Summary");
+    expect(prompt).toContain("Files changed");
+    expect(prompt).toContain("Verification");
+    expect(prompt).toContain("Residual risks");
+  });
+
+  test("reviewer prompt requires read-only verification evidence, adversarial probe, and verdict", async () => {
+    const config = makeConfig();
+    const prompt = await loadAgentPrompt(config, "reviewer");
+    expectSharedAgentReportContract(prompt);
+    expect(prompt).toContain("Do not modify project files.");
+    expect(prompt).toContain("Every PASS claim must include the command you ran and the observed output");
+    expect(prompt).toContain("Run at least one adversarial probe");
+    expect(prompt).toContain("VERDICT: PASS");
+    expect(prompt).toContain("PASS -> `completed`, PARTIAL -> `blocked`, FAIL -> `failed`");
+  });
+
+  test("explorer prompt requires structured answer sections and parseable footer", async () => {
+    const config = makeConfig();
+    const prompt = await loadAgentPrompt(config, "explorer");
+    expectSharedAgentReportContract(prompt);
+    expect(prompt).toContain("Answer");
+    expect(prompt).toContain("Evidence");
+    expect(prompt).toContain("Important files");
+    expect(prompt).toContain("Uncertainties / open questions");
+  });
+
+  test("default prompt inherits the shared parseable footer contract", async () => {
+    const config = makeConfig();
+    const prompt = await loadAgentPrompt(config, "default");
+    expectSharedAgentReportContract(prompt);
+    expect(prompt).toContain("Role: default");
+    expect(prompt).toContain("Stay bounded, execute directly when appropriate, and verify relevant claims before finishing.");
+    expect(prompt).toContain("Summary");
+    expect(prompt).toContain("Files changed");
+    expect(prompt).toContain("Verification");
+    expect(prompt).toContain("Residual risks");
   });
 
   test("loads from builtInDir/prompts/sub-agents/ path", async () => {

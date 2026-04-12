@@ -23,8 +23,8 @@ import { StatusBus } from "../src/server/agents/StatusBus";
 import { DelegateRunner } from "../src/server/agents/DelegateRunner";
 import { routeAgentConfig } from "../src/server/agents/modelRouter";
 import { getAgentRoleDefinition } from "../src/server/agents/roles";
+import { parseChildAgentReport } from "../src/server/agents/reportParser";
 import {
-  parseChildAgentReport,
   resolveAgentSpawnContextOptions,
   type AgentInspectResult,
   type AgentReasoningEffort,

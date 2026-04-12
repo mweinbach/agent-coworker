@@ -3754,7 +3754,7 @@ describe("createTools", () => {
         busy: false,
         lastMessagePreview: "done",
       },
-      latestAssistantText: "Done.\n\n```json\n{\"status\":\"completed\",\"summary\":\"Finished\"}\n```",
+      latestAssistantText: "Done.\n\n<agent_report>{\"status\":\"completed\",\"summary\":\"Finished\"}</agent_report>",
       parsedReport: {
         status: "completed" as const,
         summary: "Finished",

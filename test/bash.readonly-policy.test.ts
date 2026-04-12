@@ -53,6 +53,9 @@ describe("bash read-only shell policy", () => {
       ["touch README.tmp", "filesystem mutation command"],
       ["mkdir scratch", "filesystem mutation command"],
       ["rm -rf output", "filesystem mutation command"],
+      ['sh -lc "touch bypass.txt"', "filesystem mutation command"],
+      ["echo `touch bypass.txt`", "filesystem mutation command"],
+      ["echo $(touch bypass.txt)", "filesystem mutation command"],
       ['echo "hello" > out.txt', "shell redirection or tee write"],
       ["printf hi | tee out.txt", "shell redirection or tee write"],
       ["sed -i 's/a/b/' file.txt", "in-place editor"],
@@ -62,6 +65,9 @@ describe("bash read-only shell policy", () => {
       ["git reset --hard HEAD", "git write command"],
       ["npm install", "package install command"],
       ["pnpm add zod", "package install command"],
+      ["pnpm i", "package install command"],
+      ["yarn install", "package install command"],
+      ["yarn add lodash", "package install command"],
       ["bun add zod", "package install command"],
       ["python -m pip install requests", "package install command"],
       ["cargo add serde", "package install command"],
@@ -87,6 +93,8 @@ describe("bash read-only shell policy", () => {
       "head -n 5 README.md",
       "tail -n 5 README.md",
       "bun test test/tools.test.ts",
+      "bun test test/tools.test.ts 2>&1",
+      "bun test test/tools.test.ts 2>/dev/null",
       "bun run typecheck",
       "npm run build",
     ];
@@ -98,6 +106,11 @@ describe("bash read-only shell policy", () => {
 
   test("ignores redirection characters inside quoted strings", () => {
     expect(getShellCommandPolicyViolation('rg "a > b" src', "no_project_write")).toBeNull();
+  });
+
+  test("ignores mutation keywords inside quoted literals", () => {
+    expect(getShellCommandPolicyViolation('rg "touch bypass.txt" src', "no_project_write")).toBeNull();
+    expect(getShellCommandPolicyViolation('echo "git add ."', "no_project_write")).toBeNull();
   });
 
   test("blocks mutating commands before approval or execution", async () => {

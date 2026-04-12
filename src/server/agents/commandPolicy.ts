@@ -15,6 +15,19 @@ type ShellCommandRule = {
   pattern: RegExp;
 };
 
+const SHELL_COMMAND_ARG_FLAGS = new Set(["-c", "--command"]);
+const SHELL_COMMAND_LAUNCHERS = new Set([
+  "sh",
+  "bash",
+  "zsh",
+  "dash",
+  "ksh",
+  "fish",
+  "pwsh",
+  "powershell",
+  "powershell.exe",
+]);
+
 const SHELL_WRITE_RULES: ShellCommandRule[] = [
   {
     reason: "filesystem mutation command",
@@ -22,7 +35,7 @@ const SHELL_WRITE_RULES: ShellCommandRule[] = [
   },
   {
     reason: "shell redirection or tee write",
-    pattern: /(?:\d*>>?\s*\S)|\btee\b/,
+    pattern: /(?:^|[\s;&|()]+)\d*>>?\s*(?!&\d+\b|\/dev\/null\b)\S+|\btee\b/,
   },
   {
     reason: "in-place editor",
@@ -36,16 +49,99 @@ const SHELL_WRITE_RULES: ShellCommandRule[] = [
   {
     reason: "package install command",
     pattern:
-      /(?:^|[\s;&|()]+)(?:npm\s+(?:install|i)\b|pnpm\s+(?:install|add)\b|bun\s+(?:install|add)\b|(?:pip|pip3)\s+install\b|(?:python|python3|py)\s+-m\s+pip\s+install\b|uv\s+pip\s+install\b|cargo\s+add\b)/,
+      /(?:^|[\s;&|()]+)(?:npm\s+(?:install|i)\b|pnpm\s+(?:install|i|add)\b|yarn\s+(?:install|add)\b|bun\s+(?:install|add)\b|(?:pip|pip3)\s+install\b|(?:python|python3|py)\s+-m\s+pip\s+install\b|uv\s+pip\s+install\b|cargo\s+add\b)/,
   },
 ];
 
-function stripQuotedShellSegments(command: string): string {
-  return command.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`/g, " ");
+function tokenizeShellCommand(command: string): string[] {
+  const tokens: string[] = [];
+  const re =
+    /((?:--[a-zA-Z0-9-]+|-[a-zA-Z0-9])=(?:"[^"]*"|'[^']*'|`[^`]*`|\S+)|"([^"]*)"|'([^']*)'|`([^`]*)`|(\S+))/g;
+
+  let match: RegExpExecArray | null = null;
+  while ((match = re.exec(command)) !== null) {
+    const token = match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[1] ?? "";
+    if (token) tokens.push(token);
+  }
+
+  return tokens;
+}
+
+function stripSingleAndDoubleQuotedSegments(command: string): string {
+  return command.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, " ");
+}
+
+function extractCommandSubstitutionSegments(command: string): string[] {
+  const segments: string[] = [];
+  const re = /\$\(((?:\\.|[^()\\])*)\)|`((?:\\.|[^`\\])*)`/g;
+  let match: RegExpExecArray | null = null;
+
+  while ((match = re.exec(command)) !== null) {
+    const segment = (match[1] ?? match[2] ?? "").trim();
+    if (segment) segments.push(segment);
+  }
+
+  return segments;
+}
+
+function stripCommandSubstitutionSegments(command: string): string {
+  return command.replace(/\$\((?:\\.|[^()\\])*\)|`(?:\\.|[^`\\])*`/g, " ");
+}
+
+function extractShellCommandStringSegments(command: string): string[] {
+  const tokens = tokenizeShellCommand(command);
+  const segments: string[] = [];
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i]?.toLowerCase();
+    if (!token || !SHELL_COMMAND_LAUNCHERS.has(token)) continue;
+
+    for (let j = i + 1; j < tokens.length; j += 1) {
+      const arg = tokens[j];
+      const normalizedArg = arg?.toLowerCase();
+      if (!normalizedArg) break;
+      if (SHELL_COMMAND_ARG_FLAGS.has(normalizedArg) || /^-[a-z]*c$/i.test(normalizedArg)) {
+        const segment = tokens[j + 1]?.trim();
+        if (segment) segments.push(segment);
+        break;
+      }
+      if (!normalizedArg.startsWith("-")) {
+        break;
+      }
+    }
+  }
+
+  return segments;
 }
 
 function normalizeShellCommandForPolicy(command: string): string {
-  return stripQuotedShellSegments(command).toLowerCase().replace(/\s+/g, " ").trim();
+  return command.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function buildTopLevelPolicyCandidate(command: string): string {
+  return stripCommandSubstitutionSegments(stripSingleAndDoubleQuotedSegments(command));
+}
+
+function collectShellPolicyCandidates(command: string, depth = 0): string[] {
+  const candidates: string[] = [];
+  const topLevelCandidate = normalizeShellCommandForPolicy(buildTopLevelPolicyCandidate(command));
+  if (topLevelCandidate) {
+    candidates.push(topLevelCandidate);
+  }
+
+  if (depth >= 2) {
+    return [...new Set(candidates)];
+  }
+
+  const executedSegments = [
+    ...extractCommandSubstitutionSegments(command),
+    ...extractShellCommandStringSegments(command),
+  ];
+  for (const segment of executedSegments) {
+    candidates.push(...collectShellPolicyCandidates(segment, depth + 1));
+  }
+
+  return [...new Set(candidates.filter(Boolean))];
 }
 
 export function getShellCommandPolicyViolation(
@@ -56,10 +152,12 @@ export function getShellCommandPolicyViolation(
     return null;
   }
 
-  const normalized = normalizeShellCommandForPolicy(command);
+  const candidates = collectShellPolicyCandidates(command);
   for (const rule of SHELL_WRITE_RULES) {
-    if (rule.pattern.test(normalized)) {
-      return { shellPolicy: "no_project_write", reason: rule.reason };
+    for (const candidate of candidates) {
+      if (rule.pattern.test(candidate)) {
+        return { shellPolicy: "no_project_write", reason: rule.reason };
+      }
     }
   }
 
@@ -74,5 +172,6 @@ export function isShellCommandAllowedByPolicy(
 }
 
 export const __internal = {
+  collectShellPolicyCandidates,
   normalizeShellCommandForPolicy,
 };

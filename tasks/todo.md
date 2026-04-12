@@ -84,6 +84,23 @@
 - [ ] Add/update focused backend and desktop regression tests for the above fixes.
 - [ ] Re-run focused Bun test slices, `bun run typecheck`, and a manual desktop walkthrough before closing the task.
 
+## Enforce Read-only Shell Policy
+
+- [x] Add role-level `shellPolicy` metadata and default effective policy helpers for child-agent roles.
+- [x] Thread the effective shell policy through root-session and delegated `ToolContext` construction.
+- [x] Enforce a conservative `no_project_write` bash guard for obvious mutating commands before approval/execution.
+- [x] Add focused regressions in `test/tools.test.ts` and `test/bash.readonly-policy.test.ts`, then rerun targeted Bun tests plus `bun run typecheck`.
+
+## Enforce Read-only Shell Policy Review
+
+- Added `src/server/agents/commandPolicy.ts` to centralize the shell policy contract and a conservative regex-based classifier for obvious mutations such as filesystem writes, shell redirection/`tee`, in-place editors, git write commands, and package install commands.
+- `src/server/agents/roles.ts` now declares `shellPolicy` per role, with `explorer` and `reviewer` locked to `no_project_write`, `research` also marked `no_project_write` despite not receiving bash, and write-capable roles remaining `full`.
+- The effective shell policy now flows through `RunTurnParams`, live session tool context, delegated child-agent tool context, and auxiliary tool-listing contexts so bash sees a real enforcement signal instead of relying only on role prompts.
+- `src/tools/bash.ts` now checks the shell policy before `approveCommand(...)` and rejects blocked commands with a clear error message, keeping read-only bash useful for inspection, test, build, and typecheck commands.
+- Added focused regressions in `test/bash.readonly-policy.test.ts` plus `test/tools.test.ts`, and verification passed with:
+  - `~/.bun/bin/bun test test/bash.readonly-policy.test.ts test/tools.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+
 ## Add Plugin Install Flow
 
 - [x] Add backend plugin source preview/install support that materializes Codex-style plugin bundles into workspace or user `.agents/plugins` roots without folding plugins into `skillsDirs`.

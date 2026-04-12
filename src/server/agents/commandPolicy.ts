@@ -31,7 +31,7 @@ const SHELL_WRITE_RULES: ShellCommandRule[] = [
   {
     reason: "git write command",
     pattern:
-      /(?:^|[\s;&|()]+)git\s+(?:add|commit|checkout|switch|restore|clean)\b|(?:^|[\s;&|()]+)git\s+reset\b[^\n\r]*\b--hard\b/,
+      /(?:^|[\s;&|()]+)git\s+(?:add|commit|checkout|switch|restore|clean)\b|(?:^|[\s;&|()]+)git\s+reset\b[^\n\r]*(?:^|[\s])--hard(?:$|[\s])/,
   },
   {
     reason: "package install command",

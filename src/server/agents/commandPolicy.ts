@@ -687,6 +687,47 @@ function extractCommandSubstitutionSegments(command: string): string[] {
   return segments;
 }
 
+function extractEnvSplitStringSegments(command: string): string[] {
+  const segments: string[] = [];
+
+  for (const commandSegment of splitShellCommandIntoSegments(command)) {
+    let index = 0;
+    while (index < commandSegment.length && isEnvAssignmentToken(commandSegment[index] ?? "")) {
+      index += 1;
+    }
+    if (getShellTokenBaseName(commandSegment[index] ?? "") !== "env") continue;
+
+    for (let j = index + 1; j < commandSegment.length; j += 1) {
+      const arg = commandSegment[j];
+      const normalizedArg = arg?.toLowerCase();
+      if (!normalizedArg) break;
+      if (normalizedArg === "--") break;
+      if (normalizedArg === "-s" || normalizedArg === "--split-string") {
+        const splitString = commandSegment[j + 1]?.trim();
+        if (splitString) segments.push(splitString);
+        break;
+      }
+      if (normalizedArg.startsWith("--split-string=")) {
+        const splitString = arg.slice(arg.indexOf("=") + 1).trim();
+        if (splitString) segments.push(unwrapShellTokenValue(splitString));
+        break;
+      }
+      if (!normalizedArg.startsWith("-")) break;
+      if (!arg.includes("=")) {
+        const option = normalizedArg.split("=")[0] ?? normalizedArg;
+        const attachedShortOption = !option.startsWith("--") && option.length > 2 ? option.slice(0, 2) : null;
+        if (ENV_OPTIONS_WITH_VALUES.has(option)) {
+          j += 1;
+        } else if (attachedShortOption && ENV_OPTIONS_WITH_VALUES.has(attachedShortOption)) {
+          continue;
+        }
+      }
+    }
+  }
+
+  return segments;
+}
+
 function stripCommandSubstitutionSegments(command: string): string {
   return command.replace(/\$\((?:\\.|[^()\\])*\)|`(?:\\.|[^`\\])*`/g, " ");
 }
@@ -697,6 +738,11 @@ function extractShellCommandStringSegments(command: string): string[] {
   for (const commandSegment of splitShellCommandIntoSegments(command)) {
     const launcherIndex = findSegmentExecutableIndex(commandSegment);
     if (launcherIndex < 0) continue;
+    if (getShellTokenBaseName(commandSegment[launcherIndex] ?? "") === "eval") {
+      const evalPayload = commandSegment.slice(launcherIndex + 1).join(" ").trim();
+      if (evalPayload) segments.push(evalPayload);
+      continue;
+    }
     if (!isShellCommandLauncherToken(commandSegment[launcherIndex] ?? "")) continue;
     const launcherBaseName = getShellTokenBaseName(commandSegment[launcherIndex] ?? "");
     const optionsWithValues = SHELL_LAUNCHER_OPTIONS_WITH_VALUES[launcherBaseName];
@@ -770,6 +816,7 @@ function collectShellPolicyCandidates(command: string): string[] {
 
     const executedSegments = [
       ...extractCommandSubstitutionSegments(candidate),
+      ...extractEnvSplitStringSegments(candidate),
       ...extractShellCommandStringSegments(candidate),
     ];
     for (const segment of executedSegments) {

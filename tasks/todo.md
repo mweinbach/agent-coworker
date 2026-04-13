@@ -95,6 +95,8 @@
 - The focused regression slice now also covers `pnpm -C` / `bun -C`, `true <> file`, and the exact escaped-backtick nesting form reported in review.
 - A ninth follow-up pass makes shell-specific option-with-value parsing run before generic `-c` command extraction so Fish init-command forms like `fish -C "echo ok" -c "touch secret.txt"` no longer mask the real executed payload.
 - The focused regression slice now also covers the Fish `-C ... -c ...` launcher form.
+- A tenth follow-up pass teaches recursive candidate extraction to inspect `env -S` split-string payloads and `eval` argument strings as executable shell content, closing the last practical embedded-command executors still surfaced in review.
+- The focused regression slice now also covers `env -S "sh -c ..."` and `eval "..."` write forms.
 - Focused verification passed with:
   - `~/.bun/bin/bun test test/bash.readonly-policy.test.ts test/tools.test.ts`
   - `~/.bun/bin/bun run typecheck`

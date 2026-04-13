@@ -12,6 +12,7 @@ type ShellCommandPolicyViolation = {
 
 type ShellCommandRule = {
   reason: ShellCommandPolicyViolation["reason"];
+  input: "raw" | "stripped";
   matches: (command: string) => boolean;
 };
 
@@ -50,10 +51,37 @@ const GIT_GLOBAL_OPTIONS_WITH_VALUES = new Set([
   "--super-prefix",
   "--work-tree",
 ]);
+const WRAPPER_OPTIONS_WITH_VALUES: Record<string, Set<string>> = {
+  exec: new Set(["-a"]),
+  nice: new Set(["-n", "--adjustment"]),
+  sudo: new Set([
+    "-C",
+    "-D",
+    "-g",
+    "-h",
+    "-p",
+    "-R",
+    "-r",
+    "-t",
+    "-T",
+    "-u",
+    "--chdir",
+    "--close-from",
+    "--group",
+    "--host",
+    "--other-user",
+    "--prompt",
+    "--role",
+    "--type",
+    "--user",
+  ]),
+  time: new Set(["-f", "-o"]),
+};
 
 function regexRule(reason: ShellCommandPolicyViolation["reason"], pattern: RegExp): ShellCommandRule {
   return {
     reason,
+    input: "stripped",
     matches: (command) => pattern.test(command),
   };
 }
@@ -61,6 +89,7 @@ function regexRule(reason: ShellCommandPolicyViolation["reason"], pattern: RegEx
 const SHELL_WRITE_RULES: ShellCommandRule[] = [
   {
     reason: "filesystem mutation command",
+    input: "raw",
     matches: (command) => hasFilesystemMutationCommand(command),
   },
   regexRule("shell redirection or tee write", /(?<!<)\d*>>?\s*(?!&\d+\b|\/dev\/null\b)\S+|\btee\b/),
@@ -70,25 +99,116 @@ const SHELL_WRITE_RULES: ShellCommandRule[] = [
   ),
   {
     reason: "git write command",
+    input: "raw",
     matches: (command) => hasGitWriteCommand(command),
   },
   {
     reason: "package install command",
+    input: "raw",
     matches: (command) => hasPackageInstallCommand(command),
   },
 ];
 
-function tokenizeShellCommand(command: string): string[] {
-  const tokens: string[] = [];
-  const re =
-    /((?:--[a-zA-Z0-9-]+|-[a-zA-Z0-9])=(?:"[^"]*"|'[^']*'|`[^`]*`|\$"[^"]*"|\$'[^']*'|\S+)|"([^"]*)"|'([^']*)'|`([^`]*)`|\$"([^"]*)"|\$'([^']*)'|(\S+))/g;
+function consumeQuotedShellToken(
+  command: string,
+  startIndex: number,
+  quote: "'" | '"' | "`",
+): { value: string; endIndex: number } {
+  let value = "";
+  let index = startIndex;
 
-  let match: RegExpExecArray | null = null;
-  while ((match = re.exec(command)) !== null) {
-    const token = match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[6] ?? match[7] ?? match[1] ?? "";
-    if (token) tokens.push(token);
+  while (index < command.length) {
+    const ch = command[index];
+    if (!ch) break;
+
+    if (quote !== "'" && ch === "\\") {
+      const next = command[index + 1];
+      if (next) {
+        value += next;
+        index += 2;
+        continue;
+      }
+    }
+
+    if (ch === quote) {
+      return { value, endIndex: index + 1 };
+    }
+
+    value += ch;
+    index += 1;
   }
 
+  return { value, endIndex: index };
+}
+
+function tokenizeShellCommand(command: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let index = 0;
+
+  const pushCurrent = () => {
+    if (!current) return;
+    tokens.push(current);
+    current = "";
+  };
+
+  while (index < command.length) {
+    const ch = command[index];
+    const next = command[index + 1];
+    if (!ch) break;
+
+    if (/\s/.test(ch)) {
+      pushCurrent();
+      index += 1;
+      continue;
+    }
+
+    if (ch === "&" && next === "&") {
+      pushCurrent();
+      tokens.push("&&");
+      index += 2;
+      continue;
+    }
+
+    if (ch === "|" && next === "|") {
+      pushCurrent();
+      tokens.push("||");
+      index += 2;
+      continue;
+    }
+
+    if (SHELL_COMMAND_SEPARATORS.has(ch)) {
+      pushCurrent();
+      tokens.push(ch);
+      index += 1;
+      continue;
+    }
+
+    if (ch === "\\" && next) {
+      current += next;
+      index += 2;
+      continue;
+    }
+
+    if (ch === "$" && (next === "'" || next === '"')) {
+      const quoted = consumeQuotedShellToken(command, index + 2, next);
+      current += quoted.value;
+      index = quoted.endIndex;
+      continue;
+    }
+
+    if (ch === "'" || ch === '"' || ch === "`") {
+      const quoted = consumeQuotedShellToken(command, index + 1, ch);
+      current += quoted.value;
+      index = quoted.endIndex;
+      continue;
+    }
+
+    current += ch;
+    index += 1;
+  }
+
+  pushCurrent();
   return tokens;
 }
 
@@ -160,26 +280,62 @@ function findSegmentExecutableIndex(tokens: string[]): number {
     }
 
     index += 1;
-    if (baseName !== "env") {
+    if (baseName === "env") {
+      while (index < tokens.length) {
+        const envToken = tokens[index];
+        if (!envToken) break;
+        if (envToken === "--") {
+          index += 1;
+          break;
+        }
+        if (isEnvAssignmentToken(envToken)) {
+          index += 1;
+          continue;
+        }
+        if (/^-[A-Za-z-]+$/.test(envToken)) {
+          index += 1;
+          continue;
+        }
+        break;
+      }
       continue;
     }
 
     while (index < tokens.length) {
-      const envToken = tokens[index];
-      if (!envToken) break;
-      if (envToken === "--") {
+      const wrapperToken = tokens[index];
+      if (!wrapperToken) break;
+      if (wrapperToken === "--") {
         index += 1;
         break;
       }
-      if (isEnvAssignmentToken(envToken)) {
+      if (isEnvAssignmentToken(wrapperToken)) {
         index += 1;
         continue;
       }
-      if (/^-[A-Za-z-]+$/.test(envToken)) {
+
+      if (!wrapperToken.startsWith("-") || wrapperToken === "-") {
+        break;
+      }
+
+      const option = wrapperToken.split("=")[0] ?? wrapperToken;
+      if (baseName === "command") {
+        if (option === "-v" || option === "-V") {
+          return -1;
+        }
+        if (option !== "-p") {
+          break;
+        }
         index += 1;
         continue;
       }
-      break;
+
+      const optionsWithValues = WRAPPER_OPTIONS_WITH_VALUES[baseName];
+      if (optionsWithValues?.has(option) && !wrapperToken.includes("=")) {
+        index += 2;
+        continue;
+      }
+
+      index += 1;
     }
   }
 
@@ -366,14 +522,17 @@ function buildTopLevelPolicyCandidate(command: string): string {
 }
 
 function collectShellPolicyCandidates(command: string, depth = 0): string[] {
-  const candidates: string[] = [];
-  const topLevelCandidate = normalizeShellCommandForPolicy(buildTopLevelPolicyCandidate(command));
-  if (topLevelCandidate) {
-    candidates.push(topLevelCandidate);
-  }
+  const candidates = new Map<string, string>();
+  const addCandidate = (candidate: string) => {
+    const key = normalizeShellCommandForPolicy(candidate);
+    if (!key || candidates.has(key)) return;
+    candidates.set(key, candidate);
+  };
+
+  addCandidate(command);
 
   if (depth >= 2) {
-    return [...new Set(candidates)];
+    return [...candidates.values()];
   }
 
   const executedSegments = [
@@ -381,10 +540,12 @@ function collectShellPolicyCandidates(command: string, depth = 0): string[] {
     ...extractShellCommandStringSegments(command),
   ];
   for (const segment of executedSegments) {
-    candidates.push(...collectShellPolicyCandidates(segment, depth + 1));
+    for (const candidate of collectShellPolicyCandidates(segment, depth + 1)) {
+      addCandidate(candidate);
+    }
   }
 
-  return [...new Set(candidates.filter(Boolean))];
+  return [...candidates.values()];
 }
 
 export function getShellCommandPolicyViolation(
@@ -398,7 +559,11 @@ export function getShellCommandPolicyViolation(
   const candidates = collectShellPolicyCandidates(command);
   for (const rule of SHELL_WRITE_RULES) {
     for (const candidate of candidates) {
-      if (rule.matches(candidate)) {
+      const policyInput = normalizeShellCommandForPolicy(
+        rule.input === "raw" ? candidate : buildTopLevelPolicyCandidate(candidate),
+      );
+      if (!policyInput) continue;
+      if (rule.matches(policyInput)) {
         return { shellPolicy: "no_project_write", reason: rule.reason };
       }
     }

@@ -783,6 +783,72 @@ describe("desktop transcript feed mapping", () => {
     });
   });
 
+  test("lets a same-timestamp rerun status replace the prior terminal agent summary", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "agent_status",
+          sessionId: "thread-session",
+          agent: {
+            agentId: "agent-1",
+            parentSessionId: "thread-session",
+            role: "research",
+            mode: "collaborative",
+            depth: 1,
+            effectiveModel: "gpt-5.4",
+            title: "Review notes",
+            provider: "codex-cli",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:03.000Z",
+            lifecycleState: "active",
+            executionState: "completed",
+            busy: false,
+            lastMessagePreview: "Done.",
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "agent_status",
+          sessionId: "thread-session",
+          agent: {
+            agentId: "agent-1",
+            parentSessionId: "thread-session",
+            role: "research",
+            mode: "collaborative",
+            depth: 1,
+            effectiveModel: "gpt-5.4",
+            title: "Review notes",
+            provider: "codex-cli",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:03.000Z",
+            lifecycleState: "active",
+            executionState: "running",
+            busy: true,
+            lastMessagePreview: "Done.",
+          },
+        },
+      },
+    ];
+
+    const agents = extractAgentStateFromTranscript(transcript);
+
+    expect(agents).toEqual([
+      expect.objectContaining({
+        agentId: "agent-1",
+        executionState: "running",
+        busy: true,
+        updatedAt: "2024-01-01T00:00:03.000Z",
+      }),
+    ]);
+  });
+
   test("keeps separate assistant text streams within one turn", () => {
     const transcript: TranscriptEvent[] = [
       {

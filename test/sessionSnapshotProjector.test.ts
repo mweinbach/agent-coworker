@@ -362,4 +362,65 @@ describe("SessionSnapshotProjector", () => {
       updatedAt: "2026-03-20T00:00:04.000Z",
     });
   });
+
+  test("allows same-timestamp rerun updates to replace a prior terminal child summary", () => {
+    const projector = new SessionSnapshotProjector(makeSnapshot());
+
+    projector.applyEvent(
+      {
+        type: "agent_status",
+        sessionId: "session-1",
+        agent: {
+          agentId: "agent-1",
+          parentSessionId: "session-1",
+          role: "worker",
+          mode: "collaborative",
+          depth: 1,
+          title: "Agent one",
+          provider: "openai",
+          effectiveModel: "gpt-5.4",
+          createdAt: "2026-03-20T00:00:00.000Z",
+          updatedAt: "2026-03-20T00:00:03.000Z",
+          lifecycleState: "active",
+          executionState: "completed",
+          busy: false,
+          lastMessagePreview: "done",
+        },
+      },
+      "2026-03-20T00:00:03.000Z",
+    );
+
+    projector.applyEvent(
+      {
+        type: "agent_status",
+        sessionId: "session-1",
+        agent: {
+          agentId: "agent-1",
+          parentSessionId: "session-1",
+          role: "worker",
+          mode: "collaborative",
+          depth: 1,
+          title: "Agent one",
+          provider: "openai",
+          effectiveModel: "gpt-5.4",
+          createdAt: "2026-03-20T00:00:00.000Z",
+          updatedAt: "2026-03-20T00:00:03.000Z",
+          lifecycleState: "active",
+          executionState: "running",
+          busy: true,
+          lastMessagePreview: "done",
+        },
+      },
+      "2026-03-20T00:00:03.500Z",
+    );
+
+    expect(projector.getSnapshot().agents).toEqual([
+      expect.objectContaining({
+        agentId: "agent-1",
+        executionState: "running",
+        busy: true,
+        updatedAt: "2026-03-20T00:00:03.000Z",
+      }),
+    ]);
+  });
 });

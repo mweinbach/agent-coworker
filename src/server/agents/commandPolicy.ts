@@ -183,6 +183,10 @@ const SHELL_WRITE_RULES: ShellCommandRule[] = [
     input: "raw",
     matches: (command) => hasFilesystemMutationCommand(command),
   },
+  regexRule(
+    "in-place editor",
+    /\bsed\b[^\n\r]*\s-i(?:\b|["'])|\bperl\b[^\n\r]*(?:\s-pi\b|\s-p\b[^\n\r]*\s-i\b)/,
+  ),
   {
     reason: "filesystem mutation command",
     input: "raw",
@@ -198,10 +202,6 @@ const SHELL_WRITE_RULES: ShellCommandRule[] = [
     input: "raw",
     matches: (command) => hasTeeWriteCommand(command),
   },
-  regexRule(
-    "in-place editor",
-    /\bsed\b[^\n\r]*\s-i(?:\b|["'])|\bperl\b[^\n\r]*(?:\s-pi\b|\s-p\b[^\n\r]*\s-i\b)/,
-  ),
   {
     reason: "git write command",
     input: "raw",

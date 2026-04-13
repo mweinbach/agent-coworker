@@ -89,6 +89,8 @@
 - The focused regression slice now also covers `if` / `for` / `!` shell forms that previously hid later mutating commands behind control-flow tokens.
 - A sixth follow-up pass switches git mutation detection to a conservative read-only allowlist, skips package-manager global flags before install verbs, and removes the fixed candidate-count cap so long nested shell chains cannot push a later mutating payload out of the scan window.
 - The focused regression slice now also covers mutating `git init` / `git clone` / `git stash`, package-manager option-prefixed installs, and a long `bash -c` chain whose final payload writes to disk.
+- A seventh follow-up pass accepts GNU `env` short options with attached values like `-C.` and extends the shared install classifier to catch `pip` and `python -m pip` invocations even when global flags like `--quiet` appear before `install`.
+- The focused regression slice now also covers `env -C.` plus option-prefixed `pip` install forms.
 - Focused verification passed with:
   - `~/.bun/bin/bun test test/bash.readonly-policy.test.ts test/tools.test.ts`
   - `~/.bun/bin/bun run typecheck`

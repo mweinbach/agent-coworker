@@ -144,6 +144,7 @@ const SHELL_LAUNCHER_OPTIONS_WITH_VALUES: Record<string, Set<string>> = {
 const PACKAGE_MANAGER_OPTIONS_WITH_VALUES: Record<string, Set<string>> = {
   bun: new Set(["--cwd", "-C", "--config", "--filter"]),
   npm: new Set(["--cache", "--prefix", "--userconfig", "--workspace", "-w"]),
+  pip: new Set(["--constraint", "--find-links", "--index-url", "--log", "--proxy", "--requirement", "--src", "--target", "-c", "-i", "-r", "-t"]),
   pnpm: new Set(["--dir", "-C", "--filter", "--workspace-dir"]),
   yarn: new Set(["--cache-folder", "--cwd", "--mutex", "--use-yarnrc"]),
 };
@@ -384,8 +385,13 @@ function findSegmentExecutableIndex(tokens: string[]): number {
           continue;
         }
         const option = (envToken.split("=")[0] ?? envToken).toLowerCase();
+        const attachedShortOption = !option.startsWith("--") && option.length > 2 ? option.slice(0, 2) : null;
         if (ENV_OPTIONS_WITH_VALUES.has(option)) {
           index += envToken.includes("=") ? 1 : 2;
+          continue;
+        }
+        if (attachedShortOption && ENV_OPTIONS_WITH_VALUES.has(attachedShortOption)) {
+          index += 1;
           continue;
         }
         if (/^-[A-Za-z-]+$/.test(envToken)) {
@@ -626,11 +632,20 @@ function hasPackageInstallCommand(command: string): boolean {
     if (executable === "bun" && ["install", "i", "add"].includes(firstArg ?? "")) {
       return true;
     }
-    if ((executable === "pip" || executable === "pip3") && firstArg === "install") {
-      return true;
+    if (executable === "pip" || executable === "pip3") {
+      const pipSubcommandIndex = findPackageManagerSubcommandIndex(segment, executableIndex, "pip");
+      const pipSubcommand = segment[pipSubcommandIndex]?.toLowerCase();
+      if (pipSubcommand === "install") {
+        return true;
+      }
     }
-    if (["python", "python3", "py"].includes(executable) && firstArg === "-m" && secondArg === "pip" && thirdArg === "install") {
-      return true;
+    if (["python", "python3", "py"].includes(executable) && firstArg === "-m" && secondArg === "pip") {
+      const pipExecutableIndex = subcommandIndex + 1;
+      const pipSubcommandIndex = findPackageManagerSubcommandIndex(segment, pipExecutableIndex, "pip");
+      const pipSubcommand = segment[pipSubcommandIndex]?.toLowerCase();
+      if (pipSubcommand === "install") {
+        return true;
+      }
     }
     if (executable === "uv" && firstArg === "pip" && secondArg === "install") {
       return true;

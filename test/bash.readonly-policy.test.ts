@@ -53,8 +53,9 @@ describe("bash read-only shell policy", () => {
       ["touch README.tmp", "filesystem mutation command"],
       ["/bin/touch blocked.txt", "filesystem mutation command"],
       ["env /usr/bin/mkdir scratch", "filesystem mutation command"],
-      ["env -C . touch bypass.txt", "filesystem mutation command"],
-      ["env --chdir=. touch bypass.txt", "filesystem mutation command"],
+     ["env -C . touch bypass.txt", "filesystem mutation command"],
+      ["env -C. touch bypass.txt", "filesystem mutation command"],
+     ["env --chdir=. touch bypass.txt", "filesystem mutation command"],
       ["mkdir scratch", "filesystem mutation command"],
       ["rm -rf output", "filesystem mutation command"],
       ["ls 'x\\'; rm -rf /; echo 'y'", "filesystem mutation command"],
@@ -112,6 +113,8 @@ describe("bash read-only shell policy", () => {
       ["bun --cwd . add zod", "package install command"],
      ["bun i", "package install command"],
      ["python -m pip install requests", "package install command"],
+      ["pip --quiet install requests", "package install command"],
+      ["python -m pip --quiet install requests", "package install command"],
      ["cargo add serde", "package install command"],
    ] as const;
 

@@ -90,6 +90,18 @@ const ENV_OPTIONS_WITH_VALUES = new Set([
   "--split-string",
   "--unset",
 ]);
+const SHELL_LAUNCHER_OPTIONS_WITH_VALUES: Record<string, Set<string>> = {
+  bash: new Set(["--init-file", "--rcfile", "-o"]),
+  dash: new Set(["-o"]),
+  fish: new Set(["-C", "--init-command"]),
+  ksh: new Set(["-o"]),
+  powershell: new Set(["-configurationname", "-custompipename", "-ep", "-executionpolicy", "-file", "-inputformat", "-outputformat", "-settingsfile", "-version", "-workingdirectory"]),
+  "powershell.exe": new Set(["-configurationname", "-custompipename", "-ep", "-executionpolicy", "-file", "-inputformat", "-outputformat", "-settingsfile", "-version", "-workingdirectory"]),
+  pwsh: new Set(["-configurationname", "-custompipename", "-ep", "-executionpolicy", "-file", "-inputformat", "-outputformat", "-settingsfile", "-version", "-workingdirectory"]),
+  sh: new Set(["-o"]),
+  zsh: new Set(["-o"]),
+};
+const MAX_SHELL_POLICY_CANDIDATES = 32;
 
 function regexRule(reason: ShellCommandPolicyViolation["reason"], pattern: RegExp): ShellCommandRule {
   return {
@@ -524,6 +536,8 @@ function extractShellCommandStringSegments(command: string): string[] {
     const launcherIndex = findSegmentExecutableIndex(commandSegment);
     if (launcherIndex < 0) continue;
     if (!isShellCommandLauncherToken(commandSegment[launcherIndex] ?? "")) continue;
+    const launcherBaseName = getShellTokenBaseName(commandSegment[launcherIndex] ?? "");
+    const optionsWithValues = SHELL_LAUNCHER_OPTIONS_WITH_VALUES[launcherBaseName];
 
     for (let j = launcherIndex + 1; j < commandSegment.length; j += 1) {
       const arg = commandSegment[j];
@@ -548,6 +562,14 @@ function extractShellCommandStringSegments(command: string): string[] {
         if (inlineSegment) segments.push(unwrapShellTokenValue(inlineSegment));
         break;
       }
+
+      const option = normalizedArg.split("=")[0] ?? normalizedArg;
+      if (optionsWithValues?.has(option)) {
+        if (!arg.includes("=")) {
+          j += 1;
+        }
+        continue;
+      }
       if (!normalizedArg.startsWith("-")) {
         break;
       }
@@ -565,27 +587,29 @@ function buildTopLevelPolicyCandidate(command: string): string {
   return stripCommandSubstitutionSegments(stripSingleAndDoubleQuotedSegments(command));
 }
 
-function collectShellPolicyCandidates(command: string, depth = 0): string[] {
+function collectShellPolicyCandidates(command: string): string[] {
   const candidates = new Map<string, string>();
-  const addCandidate = (candidate: string) => {
+  const pending = [command];
+  const enqueueCandidate = (candidate: string) => {
     const key = normalizeShellCommandForPolicy(candidate);
-    if (!key || candidates.has(key)) return;
-    candidates.set(key, candidate);
+    if (!key || candidates.has(key) || pending.includes(candidate)) return;
+    pending.push(candidate);
   };
 
-  addCandidate(command);
+  while (pending.length > 0 && candidates.size < MAX_SHELL_POLICY_CANDIDATES) {
+    const candidate = pending.shift();
+    if (!candidate) continue;
 
-  if (depth >= 2) {
-    return [...candidates.values()];
-  }
+    const key = normalizeShellCommandForPolicy(candidate);
+    if (!key || candidates.has(key)) continue;
+    candidates.set(key, candidate);
 
-  const executedSegments = [
-    ...extractCommandSubstitutionSegments(command),
-    ...extractShellCommandStringSegments(command),
-  ];
-  for (const segment of executedSegments) {
-    for (const candidate of collectShellPolicyCandidates(segment, depth + 1)) {
-      addCandidate(candidate);
+    const executedSegments = [
+      ...extractCommandSubstitutionSegments(candidate),
+      ...extractShellCommandStringSegments(candidate),
+    ];
+    for (const segment of executedSegments) {
+      enqueueCandidate(segment);
     }
   }
 

@@ -79,6 +79,8 @@
 - Confirmed the unresolved review comments with direct `getShellCommandPolicyViolation(...)` probes before editing: `env -C . touch bypass.txt` and `powershell -Command "mkdir bypass"` returned `null`, while `grep tee file.txt` incorrectly returned `shell redirection or tee write`.
 - `src/server/agents/commandPolicy.ts` now consumes value-taking `env` options before selecting the executable, recognizes PowerShell `-Command`/`-Command=...` payloads without treating them as short `-c...` inline strings, and checks `tee` through executable-aware token parsing instead of a word-boundary regex.
 - `test/bash.readonly-policy.test.ts` now covers the `env -C` / `--chdir` bypasses, PowerShell `-Command` write path, and read-only commands that merely mention `tee` as an argument or path segment.
+- A second follow-up pass hardened shell launcher parsing so bash option-value pairs like `--rcfile /etc/profile` and `-O extglob` no longer hide later `-c` payloads, and candidate collection now walks nested shell payloads via a bounded queue instead of stopping at a shallow fixed depth.
+- `test/bash.readonly-policy.test.ts` now also covers launcher options with values before `-c` plus a third-level nested `bash -c` payload chain.
 - Focused verification passed with:
   - `~/.bun/bin/bun test test/bash.readonly-policy.test.ts test/tools.test.ts`
   - `~/.bun/bin/bun run typecheck`

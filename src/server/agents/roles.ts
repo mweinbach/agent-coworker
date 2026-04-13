@@ -43,6 +43,16 @@ export const SPAWN_AGENT_ORCHESTRATION_RULES = [
   "Child agents should stay bounded; do not use them for vague or open-ended delegation.",
 ] as const;
 
+export const SPAWN_AGENT_COORDINATION_RULES = [
+  "Use multiple child agents in parallel when research tasks are independent.",
+  "After launching child agents, report only what was launched; do not predict their results.",
+  "After research completes, synthesize the findings yourself into a concrete follow-up prompt.",
+  "Continue with the same child when the next task has high context overlap.",
+  "Spawn a fresh child when the next task is narrow and the previous child carried broad context.",
+  "After non-trivial implementation, run an independent `reviewer` child for verification.",
+  "Prefer one write-capable child per file area at a time to avoid edit collisions.",
+] as const;
+
 export const SPAWN_AGENT_MODEL_OVERRIDE_GUIDANCE = [
   "If `model` is omitted, the child inherits the live parent provider/model unless the role has a fixed model policy.",
   "`model` may be a same-provider model id or a full `provider:modelId` child target ref.",

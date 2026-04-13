@@ -8,6 +8,7 @@ import { loadAgentPrompt, loadSystemPrompt, loadSubAgentPrompt, loadSystemPrompt
 import {
   AGENT_ROLE_DEFINITIONS,
   buildSpawnAgentRolePromptLines,
+  SPAWN_AGENT_COORDINATION_RULES,
   SPAWN_AGENT_MODEL_OVERRIDE_GUIDANCE,
   SPAWN_AGENT_ORCHESTRATION_RULES,
   SPAWN_AGENT_PROMPT_OVERVIEW,
@@ -97,6 +98,9 @@ function expectedSpawnAgentSharedGuidance(): string {
     "Orchestration rules:",
     ...SPAWN_AGENT_ORCHESTRATION_RULES.map((rule) => `- ${rule}`),
     "",
+    "Coordinator rules:",
+    ...SPAWN_AGENT_COORDINATION_RULES.map((rule) => `- ${rule}`),
+    "",
     "Model override guidance:",
     ...SPAWN_AGENT_MODEL_OVERRIDE_GUIDANCE.map((rule) => `- ${rule}`),
   ].join("\n");
@@ -185,6 +189,15 @@ function expectSharedAgentReportContract(prompt: string) {
   expect(prompt).toContain("Required footer fields: `status`, `summary`.");
   expect(prompt).toContain("Optional footer fields: `filesChanged`, `filesRead`, `verification`, `residualRisks`.");
   expect(prompt).toContain("`status` must be one of `completed`, `blocked`, or `failed`.");
+}
+
+function expectCoordinatorRoleMappingGuidance(prompt: string) {
+  expect(prompt).toContain("spawnAgent with `role: \"explorer\"` for read-only discovery");
+  expect(prompt).toContain("use spawnAgent with `role: \"worker\"` for bounded implementation slices");
+  expect(prompt).toContain("use spawnAgent with `role: \"reviewer\"` for independent validation");
+  expect(prompt).toContain(
+    "Use role discipline: `explorer` for discovery, `worker` for implementation, and `reviewer` for verification."
+  );
 }
 
 const IMAGE_GUIDANCE_PROMPT_CONFIGS = [
@@ -290,6 +303,10 @@ describe("loadSystemPrompt", () => {
     const spawnAgentBody = extractSpawnAgentBody(prompt);
 
     expect(spawnAgentBody).toContain("Orchestration rules:");
+    expect(spawnAgentBody).toContain("Coordinator rules:");
+    expect(spawnAgentBody).toContain("Use multiple child agents in parallel when research tasks are independent.");
+    expect(spawnAgentBody).toContain("report only what was launched; do not predict their results.");
+    expect(spawnAgentBody).toContain("run an independent `reviewer` child for verification");
     expect(spawnAgentBody).toContain("Model override guidance:");
     expect(spawnAgentBody).toContain("Available model overrides for the current provider (OpenAI):");
     expect(spawnAgentBody).toContain("**GPT-5.4** (`gpt-5.4`)");
@@ -301,6 +318,20 @@ describe("loadSystemPrompt", () => {
     expect(spawnAgentBody).not.toContain("**explore**: Fast codebase exploration.");
     expect(spawnAgentBody).not.toContain("**general**: Full-capability agent for delegated tasks.");
     expect(prompt).not.toContain("moonshotai/Kimi-K2.5");
+  });
+
+  test("default prompt includes explicit explorer-worker-reviewer plan-mode mapping", async () => {
+    const config = makeConfig({
+      provider: "opencode-go",
+      model: "kimi-k2.5",
+      preferredChildModel: "kimi-k2.5",
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expectCoordinatorRoleMappingGuidance(prompt);
+    expect(prompt).toContain("After launching child agents, only report what was launched; do not report predicted results.");
+    expect(prompt).toContain("Reuse a child when follow-up work has high context overlap.");
+    expect(prompt).toContain("Keep at most one write-capable child per file area at a time");
   });
 
   test("does not list Baseten child models in the spawnAgent summary", async () => {

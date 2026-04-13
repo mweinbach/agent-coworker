@@ -11,6 +11,7 @@ import { MemoryStore } from "./memoryStore";
 import {
   AGENT_ROLE_DEFINITIONS,
   buildSpawnAgentRolePromptLines,
+  SPAWN_AGENT_COORDINATION_RULES,
   SPAWN_AGENT_MODEL_OVERRIDE_GUIDANCE,
   SPAWN_AGENT_ORCHESTRATION_RULES,
   SPAWN_AGENT_PROMPT_OVERVIEW,
@@ -282,6 +283,7 @@ export function buildSpawnAgentPromptBody(config: AgentConfig): string {
   const roleLines = buildSpawnAgentRolePromptLines().join("\n");
   const whenToUseLines = SPAWN_AGENT_WHEN_TO_USE.map((item) => `- **${item.label}**: ${item.description}`);
   const orchestrationRuleLines = SPAWN_AGENT_ORCHESTRATION_RULES.map((rule) => `- ${rule}`);
+  const coordinationRuleLines = SPAWN_AGENT_COORDINATION_RULES.map((rule) => `- ${rule}`);
   const modelOverrideGuidanceLines = SPAWN_AGENT_MODEL_OVERRIDE_GUIDANCE.map((rule) => `- ${rule}`);
 
   const crossProviderRefs = (config.allowedChildModelRefs ?? [])
@@ -316,6 +318,9 @@ export function buildSpawnAgentPromptBody(config: AgentConfig): string {
     "",
     "Orchestration rules:",
     ...orchestrationRuleLines,
+    "",
+    "Coordinator rules:",
+    ...coordinationRuleLines,
     "",
     "Model override guidance:",
     ...modelOverrideGuidanceLines,

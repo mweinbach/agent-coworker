@@ -85,6 +85,8 @@
 - The focused regression slice now also covers newline-delimited writes and brace-grouped mutators under `no_project_write`.
 - A fourth follow-up pass replaced the old stripped-input redirection regex with a quote-aware raw redirection scanner so quoted redirect targets like `> "out.txt"` no longer bypass write detection while quoted `>` literals remain allowed.
 - The focused regression slice now also covers quoted redirect targets for both double-quoted and single-quoted filenames.
+- A fifth follow-up pass treats standalone shell reserved words and `!` as segment boundaries so compound forms like `if touch ...; then ...; fi` and `! touch ...` still expose the mutating executable to shared policy checks.
+- The focused regression slice now also covers `if` / `for` / `!` shell forms that previously hid later mutating commands behind control-flow tokens.
 - Focused verification passed with:
   - `~/.bun/bin/bun test test/bash.readonly-policy.test.ts test/tools.test.ts`
   - `~/.bun/bin/bun run typecheck`

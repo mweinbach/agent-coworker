@@ -28,7 +28,32 @@ const SHELL_COMMAND_LAUNCHERS = new Set([
   "powershell",
   "powershell.exe",
 ]);
-const SHELL_COMMAND_SEPARATORS = new Set([";", "&&", "||", "|", "&", "(", ")", "{", "}"]);
+const SHELL_COMMAND_SEPARATORS = new Set([
+  "!",
+  "&",
+  "&&",
+  "(" ,
+  ")" ,
+  ";",
+  "case",
+  "do",
+  "done",
+  "elif",
+  "else",
+  "esac",
+  "fi",
+  "for",
+  "{",
+  "if",
+  "in",
+  "select",
+  "then",
+  "until",
+  "while",
+  "|",
+  "||",
+  "}",
+]);
 const SHELL_EXECUTION_WRAPPERS = new Set([
   "builtin",
   "command",

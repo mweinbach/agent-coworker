@@ -68,6 +68,21 @@
   - `bun run typecheck`
   - `bun test` on 2026-04-01 (`2913 pass`, `3 skip`, `0 fail`)
 
+## Fix PR #72 Unresolved Shell Policy Comments
+
+- [x] Confirm the three unresolved `src/server/agents/commandPolicy.ts` review threads are still real against current `HEAD`.
+- [x] Fix the shared parser so `env` wrapper options with values still reach the real executable, PowerShell `-Command` payloads are parsed as command strings, and `tee` only counts as a write when it is the executable with output operands.
+- [x] Add focused regressions in `test/bash.readonly-policy.test.ts` and rerun the policy verification slice plus `bun run typecheck`.
+
+## Fix PR #72 Unresolved Shell Policy Comments Review
+
+- Confirmed the unresolved review comments with direct `getShellCommandPolicyViolation(...)` probes before editing: `env -C . touch bypass.txt` and `powershell -Command "mkdir bypass"` returned `null`, while `grep tee file.txt` incorrectly returned `shell redirection or tee write`.
+- `src/server/agents/commandPolicy.ts` now consumes value-taking `env` options before selecting the executable, recognizes PowerShell `-Command`/`-Command=...` payloads without treating them as short `-c...` inline strings, and checks `tee` through executable-aware token parsing instead of a word-boundary regex.
+- `test/bash.readonly-policy.test.ts` now covers the `env -C` / `--chdir` bypasses, PowerShell `-Command` write path, and read-only commands that merely mention `tee` as an argument or path segment.
+- Focused verification passed with:
+  - `~/.bun/bin/bun test test/bash.readonly-policy.test.ts test/tools.test.ts`
+  - `~/.bun/bin/bun run typecheck`
+
 ## Fix Plugin Review Regressions
 
 - [ ] Fix duplicate-scope plugin rendering in the desktop catalog so same-ID workspace/user plugins no longer collide in React state or list identity.

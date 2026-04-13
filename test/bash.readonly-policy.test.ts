@@ -53,6 +53,8 @@ describe("bash read-only shell policy", () => {
       ["touch README.tmp", "filesystem mutation command"],
       ["/bin/touch blocked.txt", "filesystem mutation command"],
       ["env /usr/bin/mkdir scratch", "filesystem mutation command"],
+      ["env -C . touch bypass.txt", "filesystem mutation command"],
+      ["env --chdir=. touch bypass.txt", "filesystem mutation command"],
       ["mkdir scratch", "filesystem mutation command"],
       ["rm -rf output", "filesystem mutation command"],
       ["ls 'x\\'; rm -rf /; echo 'y'", "filesystem mutation command"],
@@ -64,6 +66,8 @@ describe("bash read-only shell policy", () => {
       ['bash --command="touch bypass.txt"', "filesystem mutation command"],
       ["bash -ctouch bypass.txt", "filesystem mutation command"],
       ['bash -c "bash -c \\"touch bypass.txt\\""', "filesystem mutation command"],
+      ['powershell -Command "mkdir bypass"', "filesystem mutation command"],
+      ['pwsh -Command "mkdir bypass"', "filesystem mutation command"],
       ["echo `touch bypass.txt`", "filesystem mutation command"],
       ["echo $(touch bypass.txt)", "filesystem mutation command"],
       ['echo "hello" > out.txt', "shell redirection or tee write"],
@@ -124,7 +128,11 @@ describe("bash read-only shell policy", () => {
       "which yarn",
       "command -v yarn",
       "yarn test",
+      'powershell -Command "git status --short"',
       '/bin/sh -c "git status --short"',
+      "grep tee file.txt",
+      "rg tee src/",
+      "ls tee/",
     ];
 
     for (const command of allowedCommands) {

@@ -16,7 +16,7 @@ type ShellCommandRule = {
   matches: (command: string) => boolean;
 };
 
-const SHELL_COMMAND_ARG_FLAGS = new Set(["-c", "--command"]);
+const SHELL_COMMAND_ARG_FLAGS = new Set(["-c", "-command", "--command"]);
 const SHELL_COMMAND_LAUNCHERS = new Set([
   "sh",
   "bash",
@@ -77,6 +77,19 @@ const WRAPPER_OPTIONS_WITH_VALUES: Record<string, Set<string>> = {
   ]),
   time: new Set(["-f", "-o"]),
 };
+const ENV_OPTIONS_WITH_VALUES = new Set([
+  "-c",
+  "-p",
+  "-s",
+  "-u",
+  "--argv0",
+  "--block-signal",
+  "--chdir",
+  "--default-signal",
+  "--ignore-signal",
+  "--split-string",
+  "--unset",
+]);
 
 function regexRule(reason: ShellCommandPolicyViolation["reason"], pattern: RegExp): ShellCommandRule {
   return {
@@ -92,7 +105,12 @@ const SHELL_WRITE_RULES: ShellCommandRule[] = [
     input: "raw",
     matches: (command) => hasFilesystemMutationCommand(command),
   },
-  regexRule("shell redirection or tee write", /(?<!<)\d*>>?\s*(?!&\d+\b|\/dev\/null\b)\S+|\btee\b/),
+  regexRule("shell redirection or tee write", /(?<!<)\d*>>?\s*(?!&\d+\b|\/dev\/null\b)\S+/),
+  {
+    reason: "shell redirection or tee write",
+    input: "raw",
+    matches: (command) => hasTeeWriteCommand(command),
+  },
   regexRule(
     "in-place editor",
     /\bsed\b[^\n\r]*\s-i(?:\b|["'])|\bperl\b[^\n\r]*(?:\s-pi\b|\s-p\b[^\n\r]*\s-i\b)/,
@@ -292,6 +310,11 @@ function findSegmentExecutableIndex(tokens: string[]): number {
           index += 1;
           continue;
         }
+        const option = (envToken.split("=")[0] ?? envToken).toLowerCase();
+        if (ENV_OPTIONS_WITH_VALUES.has(option)) {
+          index += envToken.includes("=") ? 1 : 2;
+          continue;
+        }
         if (/^-[A-Za-z-]+$/.test(envToken)) {
           index += 1;
           continue;
@@ -352,6 +375,27 @@ function hasFilesystemMutationCommand(command: string): boolean {
     if (executableIndex < 0) continue;
     if (FILESYSTEM_MUTATION_COMMANDS.has(getShellTokenBaseName(segment[executableIndex] ?? ""))) {
       return true;
+    }
+  }
+
+  return false;
+}
+
+function hasTeeWriteCommand(command: string): boolean {
+  for (const segment of splitShellCommandIntoSegments(command)) {
+    const executableIndex = findSegmentExecutableIndex(segment);
+    if (executableIndex < 0) continue;
+    if (getShellTokenBaseName(segment[executableIndex] ?? "") !== "tee") continue;
+
+    for (let index = executableIndex + 1; index < segment.length; index += 1) {
+      const token = segment[index];
+      if (!token) continue;
+      if (token === "--") {
+        return index + 1 < segment.length;
+      }
+      if (!token.startsWith("-") || token === "-") {
+        return true;
+      }
     }
   }
 
@@ -486,15 +530,8 @@ function extractShellCommandStringSegments(command: string): string[] {
       const normalizedArg = arg?.toLowerCase();
       if (!normalizedArg) break;
 
-      if (normalizedArg.startsWith("--command=")) {
+      if (normalizedArg.startsWith("--command=") || normalizedArg.startsWith("-command=")) {
         const inlineSegment = arg.slice(arg.indexOf("=") + 1).trim();
-        if (inlineSegment) segments.push(unwrapShellTokenValue(inlineSegment));
-        break;
-      }
-
-      const shortInlineMatch = arg.match(/^-c(.+)$/i);
-      if (shortInlineMatch) {
-        const inlineSegment = shortInlineMatch[1]?.trim();
         if (inlineSegment) segments.push(unwrapShellTokenValue(inlineSegment));
         break;
       }
@@ -502,6 +539,13 @@ function extractShellCommandStringSegments(command: string): string[] {
       if (SHELL_COMMAND_ARG_FLAGS.has(normalizedArg) || /^-[a-z]*c$/i.test(normalizedArg)) {
         const segment = commandSegment[j + 1]?.trim();
         if (segment) segments.push(segment);
+        break;
+      }
+
+      const shortInlineMatch = arg.match(/^-c(?!ommand\b)(.+)$/i);
+      if (shortInlineMatch) {
+        const inlineSegment = shortInlineMatch[1]?.trim();
+        if (inlineSegment) segments.push(unwrapShellTokenValue(inlineSegment));
         break;
       }
       if (!normalizedArg.startsWith("-")) {

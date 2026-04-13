@@ -28,7 +28,7 @@ const SHELL_COMMAND_LAUNCHERS = new Set([
   "powershell",
   "powershell.exe",
 ]);
-const SHELL_COMMAND_SEPARATORS = new Set([";", "&&", "||", "|", "&", "(", ")"]);
+const SHELL_COMMAND_SEPARATORS = new Set([";", "&&", "||", "|", "&", "(", ")", "{", "}"]);
 const SHELL_EXECUTION_WRAPPERS = new Set([
   "builtin",
   "command",
@@ -187,6 +187,13 @@ function tokenizeShellCommand(command: string): string[] {
     const next = command[index + 1];
     if (!ch) break;
 
+    if (ch === "\r" || ch === "\n") {
+      pushCurrent();
+      tokens.push(";");
+      index += ch === "\r" && next === "\n" ? 2 : 1;
+      continue;
+    }
+
     if (/\s/.test(ch)) {
       pushCurrent();
       index += 1;
@@ -211,6 +218,11 @@ function tokenizeShellCommand(command: string): string[] {
       pushCurrent();
       tokens.push(ch);
       index += 1;
+      continue;
+    }
+
+    if (ch === "\\" && (next === "\n" || next === "\r")) {
+      index += next === "\r" && command[index + 2] === "\n" ? 3 : 2;
       continue;
     }
 
@@ -627,9 +639,10 @@ export function getShellCommandPolicyViolation(
   const candidates = collectShellPolicyCandidates(command);
   for (const rule of SHELL_WRITE_RULES) {
     for (const candidate of candidates) {
-      const policyInput = normalizeShellCommandForPolicy(
-        rule.input === "raw" ? candidate : buildTopLevelPolicyCandidate(candidate),
-      );
+      const policyInput =
+        rule.input === "raw"
+          ? candidate.trim()
+          : normalizeShellCommandForPolicy(buildTopLevelPolicyCandidate(candidate));
       if (!policyInput) continue;
       if (rule.matches(policyInput)) {
         return { shellPolicy: "no_project_write", reason: rule.reason };

@@ -81,6 +81,8 @@
 - `test/bash.readonly-policy.test.ts` now covers the `env -C` / `--chdir` bypasses, PowerShell `-Command` write path, and read-only commands that merely mention `tee` as an argument or path segment.
 - A second follow-up pass hardened shell launcher parsing so bash option-value pairs like `--rcfile /etc/profile` and `-O extglob` no longer hide later `-c` payloads, and candidate collection now walks nested shell payloads via a bounded queue instead of stopping at a shallow fixed depth.
 - `test/bash.readonly-policy.test.ts` now also covers launcher options with values before `-c` plus a third-level nested `bash -c` payload chain.
+- A third follow-up pass treats standalone brace groups as shell separators, preserves newline-delimited raw commands for tokenizer-based policy checks, and ignores escaped line continuations so multiline command sequences cannot hide later filesystem mutators.
+- The focused regression slice now also covers newline-delimited writes and brace-grouped mutators under `no_project_write`.
 - Focused verification passed with:
   - `~/.bun/bin/bun test test/bash.readonly-policy.test.ts test/tools.test.ts`
   - `~/.bun/bin/bun run typecheck`

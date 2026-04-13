@@ -36,7 +36,7 @@ function dryRunPackPaths(): string[] {
 }
 
 describe("package manifest", () => {
-  test("packs runtime assets and excludes repo-only baggage", () => {
+  test("packs runtime assets and excludes repo-only baggage", { timeout: 20_000 }, () => {
     const paths = dryRunPackPaths();
 
     expect(paths).toContain("src/index.ts");

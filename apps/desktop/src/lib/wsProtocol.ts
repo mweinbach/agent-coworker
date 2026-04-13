@@ -76,7 +76,33 @@ const desktopServerEventSchema = z.discriminatedUnion("type", [
   agentWaitResultEventSchema,
 ]);
 
+function normalizeLegacySessionSnapshotEvent(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+
+  const event = raw as Record<string, unknown>;
+  if (event.type !== "session_snapshot") {
+    return raw;
+  }
+
+  const snapshot = event.snapshot;
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    return raw;
+  }
+
+  const snapshotRecord = snapshot as Record<string, unknown>;
+  return {
+    ...event,
+    snapshot: {
+      ...snapshotRecord,
+      ...(Object.hasOwn(snapshotRecord, "taskType") ? {} : { taskType: null }),
+      ...(Object.hasOwn(snapshotRecord, "targetPaths") ? {} : { targetPaths: null }),
+    },
+  };
+}
+
 export function safeParseServerEvent(raw: unknown): CoreServerEvent | null {
-  const parsed = desktopServerEventSchema.safeParse(raw);
+  const parsed = desktopServerEventSchema.safeParse(normalizeLegacySessionSnapshotEvent(raw));
   return parsed.success ? parsed.data as CoreServerEvent : null;
 }

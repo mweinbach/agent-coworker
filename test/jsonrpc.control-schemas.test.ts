@@ -257,6 +257,20 @@ describe("shared JSON-RPC control schemas", () => {
     expect(result.event.parsedReport?.summary).toBe("Task done");
   });
 
+  test("parses spawnAgent request metadata", () => {
+    const request = jsonRpcAgentRequestSchemas["cowork/session/agent/spawn"].parse({
+      threadId: "thread-1",
+      message: "Plan the auth refactor",
+      nickname: " plan-auth ",
+      taskType: "plan",
+      targetPaths: ["src/auth", " test/auth ", "src/auth"],
+    });
+
+    expect(request.nickname).toBe("plan-auth");
+    expect(request.taskType).toBe("plan");
+    expect(request.targetPaths).toEqual(["src/auth", "test/auth", "src/auth"]);
+  });
+
   test("parses waitForAgent any/all request modes and wait-result notifications", () => {
     const waitRequest = jsonRpcAgentRequestSchemas["cowork/session/agent/wait"].parse({
       threadId: "thread-1",
@@ -276,6 +290,9 @@ describe("shared JSON-RPC control schemas", () => {
         role: "worker",
         mode: "collaborative",
         depth: 1,
+        nickname: "verify-auth",
+        taskType: "verify",
+        targetPaths: ["src/auth", "test/auth"],
         effectiveModel: "gpt-5.4",
         title: "child",
         provider: "openai",
@@ -290,6 +307,9 @@ describe("shared JSON-RPC control schemas", () => {
         role: "worker",
         mode: "collaborative",
         depth: 1,
+        nickname: "plan-auth",
+        taskType: "plan",
+        targetPaths: ["src/auth"],
         effectiveModel: "gpt-5.4",
         title: "child 2",
         provider: "openai",

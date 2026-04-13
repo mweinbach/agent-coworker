@@ -1,5 +1,7 @@
 import type { AgentSession } from "../session/AgentSession";
 import {
+  agentTaskTypeSchema,
+  normalizeAgentTargetPaths,
   resolveAgentSpawnContextOptions,
   type AgentExecutionState,
   type AgentInspectResult,
@@ -63,6 +65,15 @@ function buildSeedContextForSpawn(
   });
 }
 
+function normalizeNickname(nickname: string | null | undefined): string | undefined {
+  if (nickname === undefined || nickname === null) return undefined;
+  const trimmed = nickname.trim();
+  if (!trimmed) {
+    throw new Error("nickname must not be empty");
+  }
+  return trimmed;
+}
+
 export class AgentControl {
   private readonly statusBus = new StatusBus();
   private readonly inFlightByAgentId = new Map<string, Promise<void>>();
@@ -110,6 +121,8 @@ export class AgentControl {
       mode: (info.mode ?? overrides.mode ?? "collaborative") as AgentMode,
       depth: typeof info.depth === "number" ? info.depth : (overrides.depth ?? 1),
       ...(info.nickname ? { nickname: info.nickname } : {}),
+      ...(info.taskType ? { taskType: info.taskType } : {}),
+      ...(info.targetPaths !== undefined ? { targetPaths: info.targetPaths } : {}),
       ...(info.requestedModel ? { requestedModel: info.requestedModel } : {}),
       effectiveModel: info.effectiveModel ?? session.getPublicConfig().model,
       ...(info.requestedReasoningEffort ? { requestedReasoningEffort: info.requestedReasoningEffort } : {}),
@@ -177,6 +190,9 @@ export class AgentControl {
     if (routed.fallbackLine) {
       this.deps.emitParentLog(opts.parentSessionId, routed.fallbackLine);
     }
+    const nickname = normalizeNickname(opts.nickname);
+    const taskType = opts.taskType === undefined ? undefined : agentTaskTypeSchema.parse(opts.taskType);
+    const targetPaths = normalizeAgentTargetPaths(opts.targetPaths);
     const childSystem = await this.deps.loadAgentPrompt(routed.config, role);
     const binding: SessionBinding = { session: null, socket: null, sinks: new Map() };
     const built = this.deps.buildSession(binding, undefined, {
@@ -189,6 +205,9 @@ export class AgentControl {
         role,
         mode: roleDefinition.defaultMode,
         depth,
+        ...(nickname ? { nickname } : {}),
+        ...(taskType ? { taskType } : {}),
+        ...(targetPaths !== undefined ? { targetPaths } : {}),
         requestedModel: routed.requestedModel ?? null,
         effectiveModel: routed.effectiveModel,
         requestedReasoningEffort: routed.requestedReasoningEffort ?? null,
@@ -202,6 +221,9 @@ export class AgentControl {
     this.publish(opts.parentSessionId, built.session, {
       mode: roleDefinition.defaultMode,
       depth,
+      ...(nickname ? { nickname } : {}),
+      ...(taskType ? { taskType } : {}),
+      ...(targetPaths !== undefined ? { targetPaths } : {}),
       requestedModel: routed.requestedModel,
       requestedReasoningEffort: routed.requestedReasoningEffort,
       effectiveReasoningEffort: routed.effectiveReasoningEffort,

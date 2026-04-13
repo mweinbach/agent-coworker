@@ -4,6 +4,9 @@ import {
   AGENT_ROLE_VALUES,
   agentContextModeSchema,
   agentReasoningEffortSchema,
+  agentTargetPathsSchema,
+  agentTaskTypeSchema,
+  normalizeAgentTargetPaths,
   resolveAgentSpawnContextOptions,
 } from "../shared/agents";
 
@@ -23,6 +26,9 @@ export function createSpawnAgentTool(ctx: ToolContext) {
     role: z.enum(AGENT_ROLE_VALUES).optional().default("default"),
     model: z.string().trim().min(1).optional(),
     reasoningEffort: agentReasoningEffortSchema.optional(),
+    nickname: z.string().trim().min(1).optional(),
+    taskType: agentTaskTypeSchema.optional(),
+    targetPaths: agentTargetPathsSchema.optional(),
     contextMode: agentContextModeSchema.optional(),
     briefing: z.string().trim().min(1).max(20_000).optional(),
     includeParentTodos: z.boolean().optional(),
@@ -46,6 +52,9 @@ export function createSpawnAgentTool(ctx: ToolContext) {
       role,
       model,
       reasoningEffort,
+      nickname,
+      taskType,
+      targetPaths,
       contextMode,
       briefing,
       includeParentTodos,
@@ -56,6 +65,9 @@ export function createSpawnAgentTool(ctx: ToolContext) {
       role?: (typeof AGENT_ROLE_VALUES)[number];
       model?: string;
       reasoningEffort?: z.infer<typeof agentReasoningEffortSchema>;
+      nickname?: string;
+      taskType?: z.infer<typeof agentTaskTypeSchema>;
+      targetPaths?: z.infer<typeof agentTargetPathsSchema>;
       contextMode?: z.infer<typeof agentContextModeSchema>;
       briefing?: string;
       includeParentTodos?: boolean;
@@ -64,6 +76,11 @@ export function createSpawnAgentTool(ctx: ToolContext) {
     }) => {
       const normalizedMessage = message.trim();
       const normalizedRole = role ?? "default";
+      const normalizedNickname = nickname?.trim();
+      if (nickname !== undefined && !normalizedNickname) {
+        throw new Error("spawnAgent nickname must not be empty");
+      }
+      const normalizedTargetPaths = normalizeAgentTargetPaths(targetPaths);
       const resolvedContext = resolveAgentSpawnContextOptions({
         contextMode,
         briefing,
@@ -78,6 +95,9 @@ export function createSpawnAgentTool(ctx: ToolContext) {
         `tool> spawnAgent ${JSON.stringify({
           role: normalizedRole,
           hasModel: !!model,
+          hasNickname: !!normalizedNickname,
+          taskType: taskType ?? null,
+          targetPathCount: normalizedTargetPaths?.length ?? 0,
           contextMode: resolvedContext.contextMode,
           hasBriefing: !!resolvedContext.briefing,
           includeParentTodos: resolvedContext.includeParentTodos,
@@ -87,6 +107,9 @@ export function createSpawnAgentTool(ctx: ToolContext) {
       const result = await requireAgentControl(ctx).spawn({
         message: normalizedMessage,
         role: normalizedRole,
+        ...(normalizedNickname ? { nickname: normalizedNickname } : {}),
+        ...(taskType ? { taskType } : {}),
+        ...(normalizedTargetPaths !== undefined ? { targetPaths: normalizedTargetPaths } : {}),
         ...(model ? { model } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
         contextMode: resolvedContext.contextMode,

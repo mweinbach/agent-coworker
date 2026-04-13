@@ -5,7 +5,10 @@ import {
   agentModeSchema,
   agentReasoningEffortSchema,
   agentRoleSchema,
+  agentTargetPathsSchema,
+  agentTaskTypeSchema,
   mapLegacyAgentTypeToRole,
+  normalizeAgentTargetPaths,
   persistentAgentSummarySchema,
 } from "../../shared/agents";
 import type { SessionUsageSnapshot } from "../../session/costTracker";
@@ -66,6 +69,8 @@ const subagentSummaryRowSchema = z.object({
   mode: agentModeSchema.nullable().optional(),
   depth: nonNegativeIntegerSchema.nullable().optional(),
   nickname: z.union([nonEmptyStringSchema, z.null()]).optional(),
+  task_type: agentTaskTypeSchema.nullable().optional(),
+  target_paths_json: z.union([z.string(), z.null()]).optional(),
   requested_model: z.union([nonEmptyStringSchema, z.null()]).optional(),
   effective_model: z.union([nonEmptyStringSchema, z.null()]).optional(),
   requested_reasoning_effort: agentReasoningEffortSchema.nullable().optional(),
@@ -87,6 +92,8 @@ const recordRowSchema = z.object({
   mode: agentModeSchema.nullable().optional(),
   depth: nonNegativeIntegerSchema.nullable().optional(),
   nickname: z.union([nonEmptyStringSchema, z.null()]).optional(),
+  task_type: agentTaskTypeSchema.nullable().optional(),
+  target_paths_json: z.union([z.string(), z.null()]).optional(),
   requested_model: z.union([nonEmptyStringSchema, z.null()]).optional(),
   effective_model: z.union([nonEmptyStringSchema, z.null()]).optional(),
   requested_reasoning_effort: agentReasoningEffortSchema.nullable().optional(),
@@ -172,6 +179,11 @@ export function mapPersistedSessionSubagentSummaryRow(row: Record<string, unknow
       ? (lifecycleState === "closed" ? "closed" : "completed")
       : rawExecutionState
         ?? (lifecycleState === "closed" ? "closed" : "completed");
+  const targetPaths = parsed.data.target_paths_json === null || parsed.data.target_paths_json === undefined
+    ? undefined
+    : normalizeAgentTargetPaths(
+        parseJsonStringWithSchema(parsed.data.target_paths_json, agentTargetPathsSchema, "target_paths_json"),
+      );
 
   return persistentAgentSummarySchema.parse({
     agentId: parsed.data.session_id,
@@ -180,6 +192,8 @@ export function mapPersistedSessionSubagentSummaryRow(row: Record<string, unknow
     mode: parsed.data.mode ?? "collaborative",
     depth: parsed.data.depth ?? 1,
     ...(parsed.data.nickname ? { nickname: parsed.data.nickname } : {}),
+    ...(parsed.data.task_type ? { taskType: parsed.data.task_type } : {}),
+    ...(targetPaths !== undefined ? { targetPaths } : {}),
     ...(parsed.data.requested_model ? { requestedModel: parsed.data.requested_model } : {}),
     effectiveModel: parsed.data.effective_model ?? parsed.data.model,
     ...(parsed.data.requested_reasoning_effort ? { requestedReasoningEffort: parsed.data.requested_reasoning_effort } : {}),
@@ -224,6 +238,11 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
   const costTracker = values.cost_tracker_json === null
     ? null
     : parseJsonStringWithSchema(values.cost_tracker_json, costTrackerSchema.nullable(), "cost_tracker_json");
+  const targetPaths = values.target_paths_json === null || values.target_paths_json === undefined
+    ? null
+    : normalizeAgentTargetPaths(
+        parseJsonStringWithSchema(values.target_paths_json, agentTargetPathsSchema, "target_paths_json"),
+      ) ?? null;
 
   return {
     sessionId: values.session_id,
@@ -233,6 +252,8 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
     mode: values.mode ?? null,
     depth: values.depth ?? null,
     nickname: values.nickname ?? null,
+    taskType: values.task_type ?? null,
+    targetPaths,
     requestedModel: values.requested_model ?? null,
     effectiveModel: values.effective_model ?? null,
     requestedReasoningEffort: values.requested_reasoning_effort ?? null,

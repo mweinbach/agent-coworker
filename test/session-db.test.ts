@@ -31,6 +31,8 @@ function makeSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot
     mode: null,
     depth: null,
     nickname: null,
+    taskType: null,
+    targetPaths: null,
     requestedModel: null,
     effectiveModel: null,
     requestedReasoningEffort: null,
@@ -621,6 +623,8 @@ describe("sessionDb", () => {
           mode: "collaborative",
           depth: 1,
           nickname: null,
+          taskType: "verify",
+          targetPaths: ["src/auth", "test/auth"],
           requestedModel: null,
           effectiveModel: "gpt-5.2",
           requestedReasoningEffort: null,
@@ -662,6 +666,8 @@ describe("sessionDb", () => {
           textVerbosity: "low",
         },
       });
+      expect(persisted?.taskType).toBe("verify");
+      expect(persisted?.targetPaths).toEqual(["src/auth", "test/auth"]);
       expect(db.listAgentSessions("root-1")[0]?.executionState).toBe("completed");
     } finally {
       db.close();
@@ -707,6 +713,9 @@ describe("sessionDb", () => {
           sessionKind: "agent",
           parentSessionId: "root-1",
           role: "worker",
+          nickname: "verify-auth",
+          taskType: "verify",
+          targetPaths: ["src/auth", "test/auth"],
           title: "Child Session",
           titleSource: "default",
           titleModel: null,
@@ -735,6 +744,9 @@ describe("sessionDb", () => {
         agentId: "child-1",
         parentSessionId: "root-1",
         role: "worker",
+        nickname: "verify-auth",
+        taskType: "verify",
+        targetPaths: ["src/auth", "test/auth"],
         mode: "collaborative",
         depth: 1,
         lifecycleState: "active",

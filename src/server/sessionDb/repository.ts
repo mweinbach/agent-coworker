@@ -111,6 +111,8 @@ export class SessionDbRepository {
            mode,
            depth,
            nickname,
+           task_type,
+           target_paths_json,
            requested_model,
            effective_model,
            requested_reasoning_effort,
@@ -172,6 +174,8 @@ export class SessionDbRepository {
            s.mode,
            s.depth,
            s.nickname,
+           s.task_type,
+           s.target_paths_json,
            s.requested_model,
            s.effective_model,
            s.requested_reasoning_effort,
@@ -218,7 +222,17 @@ export class SessionDbRepository {
       .query("SELECT snapshot_json FROM session_snapshots WHERE session_id = ? LIMIT 1")
       .get(sessionId) as Record<string, unknown> | null;
     if (!row) return null;
-    return parseJsonStringWithSchema(row.snapshot_json, sessionSnapshotSchema, "session_snapshots.snapshot_json");
+    const rawSnapshot = parseJsonStringWithSchema(row.snapshot_json, z.unknown(), "session_snapshots.snapshot_json");
+    if (rawSnapshot && typeof rawSnapshot === "object") {
+      const snapshotRecord = rawSnapshot as Record<string, unknown>;
+      if (!("taskType" in snapshotRecord)) {
+        snapshotRecord.taskType = null;
+      }
+      if (!("targetPaths" in snapshotRecord)) {
+        snapshotRecord.targetPaths = null;
+      }
+    }
+    return sessionSnapshotSchema.parse(rawSnapshot);
   }
 
   persistSessionMutation(opts: PersistedSessionMutation): number {
@@ -245,6 +259,11 @@ export class SessionDbRepository {
       const mode = snapshot.mode ?? null;
       const depth = snapshot.depth ?? null;
       const nickname = snapshot.nickname ?? null;
+      const taskType = snapshot.taskType ?? null;
+      const targetPathsJson =
+        snapshot.targetPaths === null || snapshot.targetPaths === undefined
+          ? null
+          : toJsonString(snapshot.targetPaths);
       const requestedModel = snapshot.requestedModel ?? null;
       const effectiveModel = snapshot.effectiveModel ?? null;
       const requestedReasoningEffort = snapshot.requestedReasoningEffort ?? null;
@@ -268,6 +287,8 @@ export class SessionDbRepository {
              mode,
              depth,
              nickname,
+             task_type,
+             target_paths_json,
              requested_model,
              effective_model,
              requested_reasoning_effort,
@@ -291,7 +312,7 @@ export class SessionDbRepository {
              has_pending_approval,
              message_count,
              last_event_seq
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET
              session_kind = excluded.session_kind,
              parent_session_id = excluded.parent_session_id,
@@ -300,6 +321,8 @@ export class SessionDbRepository {
              mode = excluded.mode,
              depth = excluded.depth,
              nickname = excluded.nickname,
+             task_type = excluded.task_type,
+             target_paths_json = excluded.target_paths_json,
              requested_model = excluded.requested_model,
              effective_model = excluded.effective_model,
              requested_reasoning_effort = excluded.requested_reasoning_effort,
@@ -332,6 +355,8 @@ export class SessionDbRepository {
           mode,
           depth,
           nickname,
+          taskType,
+          targetPathsJson,
           requestedModel,
           effectiveModel,
           requestedReasoningEffort,
@@ -616,6 +641,8 @@ export class SessionDbRepository {
          mode TEXT NULL,
          depth INTEGER NULL,
          nickname TEXT NULL,
+         task_type TEXT NULL,
+         target_paths_json TEXT NULL,
          requested_model TEXT NULL,
          effective_model TEXT NULL,
          requested_reasoning_effort TEXT NULL,
@@ -775,6 +802,12 @@ export class SessionDbRepository {
     if (!this.hasSessionsColumn("nickname")) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN nickname TEXT NULL");
     }
+    if (!this.hasSessionsColumn("task_type")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN task_type TEXT NULL");
+    }
+    if (!this.hasSessionsColumn("target_paths_json")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN target_paths_json TEXT NULL");
+    }
     if (!this.hasSessionsColumn("requested_model")) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN requested_model TEXT NULL");
     }
@@ -915,6 +948,11 @@ export class SessionDbRepository {
       const mode = hasAgentExecutionMetadata ? legacy.session.mode : null;
       const depth = hasAgentExecutionMetadata ? legacy.session.depth : null;
       const nickname = hasAgentExecutionMetadata ? legacy.session.nickname : null;
+      const taskType = hasAgentExecutionMetadata ? legacy.session.taskType ?? null : null;
+      const targetPathsJson =
+        hasAgentExecutionMetadata && legacy.session.targetPaths !== undefined && legacy.session.targetPaths !== null
+          ? toJsonString(legacy.session.targetPaths)
+          : null;
       const executionState =
         hasAgentExecutionMetadata
           ? legacy.session.executionState
@@ -937,6 +975,8 @@ export class SessionDbRepository {
              mode,
              depth,
              nickname,
+             task_type,
+             target_paths_json,
              requested_model,
              effective_model,
              requested_reasoning_effort,
@@ -960,7 +1000,7 @@ export class SessionDbRepository {
              has_pending_approval,
              message_count,
              last_event_seq
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET
              session_kind = excluded.session_kind,
              parent_session_id = excluded.parent_session_id,
@@ -969,6 +1009,8 @@ export class SessionDbRepository {
              mode = excluded.mode,
              depth = excluded.depth,
              nickname = excluded.nickname,
+             task_type = excluded.task_type,
+             target_paths_json = excluded.target_paths_json,
              requested_model = excluded.requested_model,
              effective_model = excluded.effective_model,
              requested_reasoning_effort = excluded.requested_reasoning_effort,
@@ -1002,6 +1044,8 @@ export class SessionDbRepository {
           mode,
           depth,
           nickname,
+          taskType,
+          targetPathsJson,
           requestedModel,
           effectiveModel,
           requestedReasoningEffort,

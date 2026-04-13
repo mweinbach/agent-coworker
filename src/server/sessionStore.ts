@@ -10,12 +10,15 @@ import {
   agentModeSchema,
   agentReasoningEffortSchema,
   agentRoleSchema,
+  agentTargetPathsSchema,
+  agentTaskTypeSchema,
   mapLegacyAgentTypeToRole,
   sessionKindSchema,
   type AgentExecutionState,
   type AgentMode,
   type AgentReasoningEffort,
   type AgentRole,
+  type AgentTaskType,
   type SessionKind,
 } from "../shared/agents";
 import {
@@ -214,6 +217,8 @@ export type PersistedSessionSnapshotV6 = {
     mode: AgentMode | null;
     depth: number | null;
     nickname: string | null;
+    taskType?: AgentTaskType | null;
+    targetPaths?: string[] | null;
     requestedModel: string | null;
     effectiveModel: string | null;
     requestedReasoningEffort: AgentReasoningEffort | null;
@@ -483,6 +488,8 @@ const persistedSessionSnapshotV6Schema = z.object({
     mode: agentModeSchema.nullable(),
     depth: z.number().int().min(0).nullable(),
     nickname: z.string().trim().min(1).nullable(),
+    taskType: agentTaskTypeSchema.nullable().optional(),
+    targetPaths: agentTargetPathsSchema.nullable().optional(),
     requestedModel: z.string().trim().min(1).nullable(),
     effectiveModel: z.string().trim().min(1).nullable(),
     requestedReasoningEffort: agentReasoningEffortSchema.nullable(),
@@ -584,6 +591,8 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
         mode: snapshot.session.mode,
         depth: snapshot.session.depth,
         nickname: snapshot.session.nickname,
+        taskType: snapshot.session.taskType ?? null,
+        targetPaths: snapshot.session.targetPaths ?? null,
         requestedModel: snapshot.session.requestedModel,
         effectiveModel: snapshot.session.effectiveModel,
         requestedReasoningEffort: snapshot.session.requestedReasoningEffort,
@@ -631,6 +640,8 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
         mode: snapshot.session.mode,
         depth: snapshot.session.depth,
         nickname: snapshot.session.nickname,
+        taskType: snapshot.session.taskType ?? null,
+        targetPaths: snapshot.session.targetPaths ?? null,
         requestedModel: snapshot.session.requestedModel,
         effectiveModel: snapshot.session.effectiveModel,
         requestedReasoningEffort: snapshot.session.requestedReasoningEffort,

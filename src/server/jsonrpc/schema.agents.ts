@@ -5,6 +5,8 @@ import {
   agentInspectResultSchema,
   agentReasoningEffortSchema,
   agentRoleSchema,
+  agentTargetPathsSchema,
+  agentTaskTypeSchema,
   persistentAgentSummarySchema,
   resolveAgentSpawnContextOptions,
 } from "../../shared/agents";
@@ -54,6 +56,9 @@ const agentSpawnRequestSchema = z.object({
   role: agentRoleSchema.optional(),
   model: optionalNonEmptyTrimmedStringSchema,
   reasoningEffort: agentReasoningEffortSchema.optional(),
+  nickname: optionalNonEmptyTrimmedStringSchema,
+  taskType: agentTaskTypeSchema.optional(),
+  targetPaths: agentTargetPathsSchema.optional(),
   contextMode: agentContextModeSchema.optional(),
   briefing: optionalNonEmptyTrimmedStringSchema,
   includeParentTodos: z.boolean().optional(),

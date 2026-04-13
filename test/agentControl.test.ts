@@ -88,6 +88,8 @@ function makePersistedChildRecord(config: AgentConfig, overrides: Partial<Persis
     mode: "collaborative",
     depth: 1,
     nickname: null,
+    taskType: null,
+    targetPaths: null,
     requestedModel: null,
     effectiveModel: config.model,
     requestedReasoningEffort: null,
@@ -300,6 +302,27 @@ describe("AgentControl.spawn", () => {
     const parentConfig = makeConfig();
     const childSession = makeChildSession(parentConfig);
     childSession.sendUserMessage = mock(() => new Promise<void>(() => {}));
+    childSession.getSessionInfoEvent = () => ({
+      type: "session_info",
+      sessionId: "child-1",
+      title: "Child session",
+      titleSource: "default",
+      titleModel: null,
+      provider: parentConfig.provider,
+      model: parentConfig.model,
+      sessionKind: "agent",
+      parentSessionId: "root-1",
+      role: "worker",
+      mode: "collaborative",
+      depth: 1,
+      nickname: "plan-auth",
+      taskType: "plan",
+      targetPaths: ["src/auth", "test/auth"],
+      createdAt: "2026-03-16T15:00:00.000Z",
+      updatedAt: "2026-03-16T15:00:00.000Z",
+      effectiveModel: parentConfig.model,
+      executionState: "pending_init",
+    });
     const buildSession = mock((binding: SessionBinding) => {
       binding.session = childSession;
       return { session: childSession, isResume: false, resumedFromStorage: false };
@@ -323,15 +346,35 @@ describe("AgentControl.spawn", () => {
       parentConfig,
       role: "worker",
       message: "Handle the fix",
+      nickname: " plan-auth ",
+      taskType: "plan",
+      targetPaths: ["src/auth", " test/auth ", "src/auth"],
     });
 
     expect(summary.executionState).toBe("running");
     expect(summary.busy).toBe(true);
+    expect(summary.nickname).toBe("plan-auth");
+    expect(summary.taskType).toBe("plan");
+    expect(summary.targetPaths).toEqual(["src/auth", "test/auth"]);
     expect(childSession.isBusy).toBe(false);
+    expect(buildSession).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      expect.objectContaining({
+        sessionInfoPatch: expect.objectContaining({
+          nickname: "plan-auth",
+          taskType: "plan",
+          targetPaths: ["src/auth", "test/auth"],
+        }),
+      }),
+    );
     expect(emitParentAgentStatus).toHaveBeenLastCalledWith(
       "root-1",
       expect.objectContaining({
         agentId: "child-1",
+        nickname: "plan-auth",
+        taskType: "plan",
+        targetPaths: ["src/auth", "test/auth"],
         executionState: "running",
         busy: true,
       }),

@@ -36,6 +36,7 @@ import type {
   AgentMode,
   AgentReasoningEffort,
   AgentRole,
+  AgentTaskType,
   PersistentAgentSummary,
   SessionKind,
 } from "../shared/agents";
@@ -116,6 +117,8 @@ export type ServerEvent =
     mode?: AgentMode;
     depth?: number;
     nickname?: string;
+    taskType?: AgentTaskType;
+    targetPaths?: string[];
     requestedModel?: string;
     effectiveModel?: string;
     requestedReasoningEffort?: AgentReasoningEffort;
@@ -140,6 +143,8 @@ export type ServerEvent =
     mode?: AgentMode;
     depth?: number;
     nickname?: string;
+    taskType?: AgentTaskType;
+    targetPaths?: string[];
     requestedModel?: string;
     effectiveModel?: string;
     requestedReasoningEffort?: AgentReasoningEffort;

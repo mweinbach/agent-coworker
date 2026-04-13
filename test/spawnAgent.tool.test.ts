@@ -61,6 +61,9 @@ describe("spawnAgent tool", () => {
   test("forwards explicit context mode fields to agentControl.spawn", async () => {
     const summary = makeSummary({
       role: "research",
+      nickname: "plan-auth",
+      taskType: "plan",
+      targetPaths: ["src/auth", "test/auth"],
       effectiveModel: "gpt-5.4",
       requestedModel: "gpt-5.4",
       requestedReasoningEffort: "high",
@@ -88,6 +91,9 @@ describe("spawnAgent tool", () => {
     const result = await tool.execute({
       message: "Investigate this failure",
       role: "research",
+      nickname: " plan-auth ",
+      taskType: "plan",
+      targetPaths: ["src/auth", " test/auth ", "src/auth"],
       model: "gpt-5.4",
       reasoningEffort: "high",
       contextMode: "brief",
@@ -99,6 +105,9 @@ describe("spawnAgent tool", () => {
     expect(spawn).toHaveBeenCalledWith({
       message: "Investigate this failure",
       role: "research",
+      nickname: "plan-auth",
+      taskType: "plan",
+      targetPaths: ["src/auth", "test/auth"],
       model: "gpt-5.4",
       reasoningEffort: "high",
       contextMode: "brief",
@@ -107,6 +116,31 @@ describe("spawnAgent tool", () => {
       includeHarnessContext: true,
     });
     expect(result).toEqual(summary);
+  });
+
+  test("rejects empty targetPaths entries", async () => {
+    const tool: any = createSpawnAgentTool(makeCtx({
+      agentControl: {
+        spawn: async () => makeSummary(),
+        list: async () => [],
+        sendInput: async () => {},
+        wait: async () => ({ timedOut: false, mode: "any" as const, agents: [], readyAgentIds: [] }),
+        inspect: async () => ({
+          agent: makeSummary(),
+          latestAssistantText: null,
+          parsedReport: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+        }),
+        resume: async () => makeSummary(),
+        close: async () => makeSummary(),
+      },
+    }));
+
+    await expect(tool.execute({
+      message: "Investigate this failure",
+      targetPaths: ["src/auth", "   "],
+    })).rejects.toThrow("targetPaths entries must not be empty");
   });
 
   test("maps deprecated forkContext to explicit contextMode for direct compatibility", async () => {

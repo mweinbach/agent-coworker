@@ -23,6 +23,9 @@ export type AgentLifecycleState = (typeof AGENT_LIFECYCLE_STATE_VALUES)[number];
 export const AGENT_EXECUTION_STATE_VALUES = ["pending_init", "running", "completed", "errored", "closed"] as const;
 export type AgentExecutionState = (typeof AGENT_EXECUTION_STATE_VALUES)[number];
 
+export const AGENT_TASK_TYPE_VALUES = ["research", "plan", "implement", "verify"] as const;
+export type AgentTaskType = (typeof AGENT_TASK_TYPE_VALUES)[number];
+
 export type AgentReasoningEffort = OpenAiReasoningEffort;
 
 export const sessionKindSchema = z.enum(SESSION_KIND_VALUES);
@@ -31,7 +34,34 @@ export const agentModeSchema = z.enum(AGENT_MODE_VALUES);
 export const agentContextModeSchema = z.enum(AGENT_CONTEXT_MODE_VALUES);
 export const agentLifecycleStateSchema = z.enum(AGENT_LIFECYCLE_STATE_VALUES);
 export const agentExecutionStateSchema = z.enum(AGENT_EXECUTION_STATE_VALUES);
+export const agentTaskTypeSchema = z.enum(AGENT_TASK_TYPE_VALUES);
 export const agentReasoningEffortSchema = z.enum(OPENAI_REASONING_EFFORT_VALUES);
+
+function dedupeStringsPreserveOrder(values: readonly string[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    normalized.push(value);
+  }
+  return normalized;
+}
+
+export function normalizeAgentTargetPaths(targetPaths: readonly string[] | null | undefined): string[] | undefined {
+  if (targetPaths === undefined || targetPaths === null) return undefined;
+  const normalized: string[] = [];
+  for (const rawPath of targetPaths) {
+    const trimmed = rawPath.trim();
+    if (!trimmed) {
+      throw new Error("targetPaths entries must not be empty");
+    }
+    normalized.push(trimmed);
+  }
+  return dedupeStringsPreserveOrder(normalized);
+}
+
+export const agentTargetPathsSchema = z.array(z.string().trim().min(1));
 
 export type AgentSpawnContextOptions = {
   contextMode?: AgentContextMode;
@@ -39,6 +69,9 @@ export type AgentSpawnContextOptions = {
   includeParentTodos?: boolean;
   includeHarnessContext?: boolean;
   forkContext?: boolean;
+  nickname?: string;
+  taskType?: AgentTaskType;
+  targetPaths?: string[];
 };
 
 export type ResolvedAgentSpawnContextOptions = {
@@ -71,6 +104,8 @@ export type PersistentAgentSummary = {
   mode: AgentMode;
   depth: number;
   nickname?: string;
+  taskType?: AgentTaskType;
+  targetPaths?: string[];
   requestedModel?: string;
   effectiveModel: string;
   requestedReasoningEffort?: AgentReasoningEffort;
@@ -92,6 +127,8 @@ export const persistentAgentSummarySchema = z.object({
   mode: agentModeSchema,
   depth: z.number().int().min(0),
   nickname: z.string().trim().min(1).optional(),
+  taskType: agentTaskTypeSchema.optional(),
+  targetPaths: agentTargetPathsSchema.optional(),
   requestedModel: z.string().trim().min(1).optional(),
   effectiveModel: z.string().trim().min(1),
   requestedReasoningEffort: agentReasoningEffortSchema.optional(),

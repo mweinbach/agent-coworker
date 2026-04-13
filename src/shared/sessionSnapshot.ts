@@ -5,12 +5,15 @@ import {
   agentModeSchema,
   agentReasoningEffortSchema,
   agentRoleSchema,
+  agentTargetPathsSchema,
+  agentTaskTypeSchema,
   persistentAgentSummarySchema,
   sessionKindSchema,
   type AgentExecutionState,
   type AgentMode,
   type AgentReasoningEffort,
   type AgentRole,
+  type AgentTaskType,
   type PersistentAgentSummary,
   type SessionKind,
 } from "./agents";
@@ -100,6 +103,8 @@ export type SessionSnapshot = {
   mode: AgentMode | null;
   depth: number | null;
   nickname: string | null;
+  taskType: AgentTaskType | null;
+  targetPaths: string[] | null;
   requestedModel: string | null;
   effectiveModel: string | null;
   requestedReasoningEffort: AgentReasoningEffort | null;
@@ -204,6 +209,8 @@ export const sessionSnapshotSchema: z.ZodType<SessionSnapshot> = z.object({
   mode: agentModeSchema.nullable(),
   depth: z.number().int().nonnegative().nullable(),
   nickname: z.string().nullable(),
+  taskType: agentTaskTypeSchema.nullable(),
+  targetPaths: agentTargetPathsSchema.nullable(),
   requestedModel: z.string().nullable(),
   effectiveModel: z.string().nullable(),
   requestedReasoningEffort: agentReasoningEffortSchema.nullable(),

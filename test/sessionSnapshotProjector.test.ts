@@ -17,6 +17,8 @@ function makeSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot
     mode: null,
     depth: null,
     nickname: null,
+    taskType: null,
+    targetPaths: null,
     requestedModel: null,
     effectiveModel: null,
     requestedReasoningEffort: null,

@@ -212,6 +212,8 @@ function buildInitialSessionSnapshot(opts: {
     mode: opts.state.sessionInfo.mode ?? null,
     depth: typeof opts.state.sessionInfo.depth === "number" ? opts.state.sessionInfo.depth : null,
     nickname: opts.state.sessionInfo.nickname ?? null,
+    taskType: opts.state.sessionInfo.taskType ?? null,
+    targetPaths: opts.state.sessionInfo.targetPaths ?? null,
     requestedModel: opts.state.sessionInfo.requestedModel ?? null,
     effectiveModel: opts.state.sessionInfo.effectiveModel ?? null,
     requestedReasoningEffort: opts.state.sessionInfo.requestedReasoningEffort ?? null,
@@ -380,6 +382,8 @@ export class AgentSession {
         ...(opts.sessionInfoPatch?.mode ? { mode: opts.sessionInfoPatch.mode } : {}),
         ...(typeof opts.sessionInfoPatch?.depth === "number" ? { depth: opts.sessionInfoPatch.depth } : {}),
         ...(opts.sessionInfoPatch?.nickname ? { nickname: opts.sessionInfoPatch.nickname } : {}),
+        ...(opts.sessionInfoPatch?.taskType ? { taskType: opts.sessionInfoPatch.taskType } : {}),
+        ...(opts.sessionInfoPatch?.targetPaths !== undefined ? { targetPaths: opts.sessionInfoPatch.targetPaths } : {}),
         ...(opts.sessionInfoPatch?.requestedModel ? { requestedModel: opts.sessionInfoPatch.requestedModel } : {}),
         ...(opts.sessionInfoPatch?.effectiveModel ? { effectiveModel: opts.sessionInfoPatch.effectiveModel } : {}),
         ...(opts.sessionInfoPatch?.requestedReasoningEffort
@@ -726,6 +730,8 @@ export class AgentSession {
       ...(persisted.mode ? { mode: persisted.mode } : {}),
       ...(typeof persisted.depth === "number" ? { depth: persisted.depth } : {}),
       ...(persisted.nickname ? { nickname: persisted.nickname } : {}),
+      ...(persisted.taskType ? { taskType: persisted.taskType } : {}),
+      ...(persisted.targetPaths !== undefined && persisted.targetPaths !== null ? { targetPaths: persisted.targetPaths } : {}),
       ...(persisted.requestedModel ? { requestedModel: persisted.requestedModel } : {}),
       ...(persisted.effectiveModel ? { effectiveModel: persisted.effectiveModel } : {}),
       ...(persisted.requestedReasoningEffort ? { requestedReasoningEffort: persisted.requestedReasoningEffort } : {}),
@@ -808,6 +814,8 @@ export class AgentSession {
     snapshot.mode = this.state.sessionInfo.mode ?? null;
     snapshot.depth = typeof this.state.sessionInfo.depth === "number" ? this.state.sessionInfo.depth : null;
     snapshot.nickname = this.state.sessionInfo.nickname ?? null;
+    snapshot.taskType = this.state.sessionInfo.taskType ?? null;
+    snapshot.targetPaths = this.state.sessionInfo.targetPaths ?? null;
     snapshot.requestedModel = this.state.sessionInfo.requestedModel ?? null;
     snapshot.effectiveModel = this.state.sessionInfo.effectiveModel ?? null;
     snapshot.requestedReasoningEffort = this.state.sessionInfo.requestedReasoningEffort ?? null;
@@ -844,6 +852,8 @@ export class AgentSession {
     snapshot.mode = this.state.sessionInfo.mode ?? null;
     snapshot.depth = typeof this.state.sessionInfo.depth === "number" ? this.state.sessionInfo.depth : null;
     snapshot.nickname = this.state.sessionInfo.nickname ?? null;
+    snapshot.taskType = this.state.sessionInfo.taskType ?? null;
+    snapshot.targetPaths = this.state.sessionInfo.targetPaths ?? null;
     snapshot.requestedModel = this.state.sessionInfo.requestedModel ?? null;
     snapshot.effectiveModel = this.state.sessionInfo.effectiveModel ?? null;
     snapshot.requestedReasoningEffort = this.state.sessionInfo.requestedReasoningEffort ?? null;

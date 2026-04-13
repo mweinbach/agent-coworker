@@ -7,6 +7,7 @@ import type {
   AgentMode,
   AgentReasoningEffort,
   AgentRole,
+  AgentTaskType,
   PersistentAgentSummary,
   SessionKind,
 } from "../shared/agents";
@@ -38,6 +39,8 @@ export type PersistedSessionRecord = {
   mode?: AgentMode | null;
   depth?: number | null;
   nickname?: string | null;
+  taskType?: AgentTaskType | null;
+  targetPaths?: string[] | null;
   requestedModel?: string | null;
   effectiveModel?: string | null;
   requestedReasoningEffort?: AgentReasoningEffort | null;
@@ -83,6 +86,8 @@ export type PersistedSessionMutation = {
     mode?: AgentMode | null;
     depth?: number | null;
     nickname?: string | null;
+    taskType?: AgentTaskType | null;
+    targetPaths?: string[] | null;
     requestedModel?: string | null;
     effectiveModel?: string | null;
     requestedReasoningEffort?: AgentReasoningEffort | null;

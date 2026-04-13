@@ -17,6 +17,17 @@ type ShellCommandRule = {
 };
 
 const SHELL_COMMAND_ARG_FLAGS = new Set(["-c", "-command", "--command"]);
+const SHELL_SHORT_NO_VALUE_COMMAND_FLAGS = new Set([
+  "a",
+  "c",
+  "e",
+  "i",
+  "l",
+  "r",
+  "s",
+  "v",
+  "x",
+]);
 const SHELL_COMMAND_LAUNCHERS = new Set([
   "sh",
   "bash",
@@ -64,7 +75,16 @@ const SHELL_EXECUTION_WRAPPERS = new Set([
   "sudo",
   "time",
 ]);
-const FILESYSTEM_MUTATION_COMMANDS = new Set(["rm", "mv", "cp", "touch", "mkdir"]);
+const FILESYSTEM_MUTATION_COMMANDS = new Set(["chmod", "cp", "ln", "mkdir", "mv", "rm", "touch", "truncate", "tar"]);
+const INLINE_INTERPRETER_COMMANDS = new Set([
+  "node",
+  "nodejs",
+  "perl",
+  "python",
+  "python3",
+  "py",
+  "ruby",
+]);
 const GIT_READ_ONLY_SUBCOMMANDS = new Set([
   "cat-file",
   "describe",
@@ -163,16 +183,21 @@ const SHELL_WRITE_RULES: ShellCommandRule[] = [
     input: "raw",
     matches: (command) => hasFilesystemMutationCommand(command),
   },
- {
-   reason: "shell redirection or tee write",
-   input: "raw",
+  {
+    reason: "filesystem mutation command",
+    input: "raw",
+    matches: (command) => hasInlineInterpreterWriteCommand(command),
+  },
+  {
+    reason: "shell redirection or tee write",
+    input: "raw",
     matches: (command) => hasShellWriteRedirection(command),
   },
   {
     reason: "shell redirection or tee write",
     input: "raw",
-   matches: (command) => hasTeeWriteCommand(command),
- },
+    matches: (command) => hasTeeWriteCommand(command),
+  },
   regexRule(
     "in-place editor",
     /\bsed\b[^\n\r]*\s-i(?:\b|["'])|\bperl\b[^\n\r]*(?:\s-pi\b|\s-p\b[^\n\r]*\s-i\b)/,
@@ -537,6 +562,9 @@ function hasTeeWriteCommand(command: string): boolean {
         return index + 1 < segment.length;
       }
       if (!token.startsWith("-") || token === "-") {
+        if (token === "/dev/null") {
+          continue;
+        }
         return true;
       }
     }
@@ -651,13 +679,17 @@ function hasPackageInstallCommand(command: string): boolean {
         return true;
       }
     }
-    if (["python", "python3", "py"].includes(executable) && firstArg === "-m" && secondArg === "pip") {
-      const pipExecutableIndex = subcommandIndex + 1;
-      const pipSubcommandIndex = findPackageManagerSubcommandIndex(segment, pipExecutableIndex, "pip");
-      const pipSubcommand = segment[pipSubcommandIndex]?.toLowerCase();
-      if (pipSubcommand === "install") {
-        return true;
+    if (["python", "python3", "py"].includes(executable)) {
+      const pipExecutableIndex = findPythonSubcommandIndex(segment, executableIndex);
+      const pipSubcommand = segment[pipExecutableIndex]?.toLowerCase();
+      if (pipSubcommand === "pip") {
+        const pipSubcommandIndex = findPackageManagerSubcommandIndex(segment, pipExecutableIndex, "pip");
+        const pipInstallSubcommand = segment[pipSubcommandIndex]?.toLowerCase();
+        if (pipInstallSubcommand === "install") {
+          return true;
+        }
       }
+      continue;
     }
     if (executable === "uv" && firstArg === "pip" && secondArg === "install") {
       return true;
@@ -668,6 +700,37 @@ function hasPackageInstallCommand(command: string): boolean {
   }
 
   return false;
+}
+
+function findPythonSubcommandIndex(segment: string[], executableIndex: number): number {
+  let index = executableIndex + 1;
+
+  while (index < segment.length) {
+    const token = segment[index];
+    if (!token) break;
+
+    if (token === "--") {
+      return index + 1;
+    }
+    if (!token.startsWith("-") || token === "-") {
+      return index;
+    }
+
+    const normalizedArg = token.toLowerCase();
+    if (normalizedArg === "-m") {
+      return index + 1;
+    }
+    if (normalizedArg.startsWith("-m=")) {
+      return index + 1;
+    }
+    if (normalizedArg.startsWith("-c")) {
+      return segment.length;
+    }
+
+    index += 1;
+  }
+
+  return index;
 }
 
 function stripSingleAndDoubleQuotedSegments(command: string): string {
@@ -751,6 +814,7 @@ function extractShellCommandStringSegments(command: string): string[] {
       const arg = commandSegment[j];
       const normalizedArg = arg?.toLowerCase();
       if (!normalizedArg) break;
+      let hasStandaloneCFlag = false;
 
       if (normalizedArg.startsWith("--command=") || normalizedArg.startsWith("-command=")) {
         const inlineSegment = arg.slice(arg.indexOf("=") + 1).trim();
@@ -767,7 +831,19 @@ function extractShellCommandStringSegments(command: string): string[] {
         continue;
       }
 
-      if (SHELL_COMMAND_ARG_FLAGS.has(normalizedArg) || /^-[a-z]*c$/i.test(normalizedArg)) {
+      if (/^-[a-z]{2,}$/i.test(normalizedArg) && normalizedArg.includes("c")) {
+        const compactFlags = normalizedArg.slice(1);
+        const cIndex = compactFlags.indexOf("c");
+        if (cIndex !== -1 && cIndex < compactFlags.length - 1) {
+          const trailingFlags = compactFlags.slice(cIndex + 1).split("");
+          if (trailingFlags.every((flag) => SHELL_SHORT_NO_VALUE_COMMAND_FLAGS.has(flag))) {
+            hasStandaloneCFlag = true;
+            // Combined short flags (e.g., -ce) should treat the next token as the command payload.
+          }
+        }
+      }
+
+      if (SHELL_COMMAND_ARG_FLAGS.has(normalizedArg) || /^-[a-z]*c$/i.test(normalizedArg) || hasStandaloneCFlag) {
         const segment = commandSegment[j + 1]?.trim();
         if (segment) segments.push(segment);
         break;
@@ -784,6 +860,73 @@ function extractShellCommandStringSegments(command: string): string[] {
         break;
       }
     }
+  }
+
+  return segments;
+}
+
+function hasInlineInterpreterWriteCommand(command: string): boolean {
+  for (const segment of splitShellCommandIntoSegments(command)) {
+    if (isInlineInterpreterInvocationSegment(segment)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isInlineInterpreterInvocationSegment(segment: string[]): boolean {
+  const executableIndex = findSegmentExecutableIndex(segment);
+  if (executableIndex < 0) return false;
+
+  const executable = getShellTokenBaseName(segment[executableIndex] ?? "");
+  if (!INLINE_INTERPRETER_COMMANDS.has(executable)) {
+    return false;
+  }
+
+  for (let index = executableIndex + 1; index < segment.length; index += 1) {
+    const token = segment[index];
+    if (!token) continue;
+
+    if (token === "--") {
+      break;
+    }
+
+    const normalizedToken = token.toLowerCase();
+    if (normalizedToken === "--command" || normalizedToken === "--eval") {
+      return true;
+    }
+    if (normalizedToken === "-c" || normalizedToken === "-e") {
+      return true;
+    }
+    if (
+      (normalizedToken.startsWith("-c") && normalizedToken !== "-c")
+      || (normalizedToken.startsWith("-e") && normalizedToken !== "-e")
+    ) {
+      return true;
+    }
+    if (normalizedToken === "-" && (segment[index + 1]?.startsWith("<<") ?? false)) {
+      return true;
+    }
+    if (normalizedToken.startsWith("<<")) {
+      return true;
+    }
+    if (!normalizedToken.startsWith("-") || normalizedToken === "-") {
+      break;
+    }
+  }
+
+  return false;
+}
+
+function extractInlineInterpreterCommandStringSegments(command: string): string[] {
+  const segments: string[] = [];
+
+  for (const commandSegment of splitShellCommandIntoSegments(command)) {
+    if (!isInlineInterpreterInvocationSegment(commandSegment)) {
+      continue;
+    }
+    segments.push(commandSegment.join(" "));
   }
 
   return segments;
@@ -818,6 +961,7 @@ function collectShellPolicyCandidates(command: string): string[] {
       ...extractCommandSubstitutionSegments(candidate),
       ...extractEnvSplitStringSegments(candidate),
       ...extractShellCommandStringSegments(candidate),
+      ...extractInlineInterpreterCommandStringSegments(candidate),
     ];
     for (const segment of executedSegments) {
       enqueueCandidate(segment);

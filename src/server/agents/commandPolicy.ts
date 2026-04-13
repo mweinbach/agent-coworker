@@ -117,12 +117,16 @@ const SHELL_WRITE_RULES: ShellCommandRule[] = [
     input: "raw",
     matches: (command) => hasFilesystemMutationCommand(command),
   },
-  regexRule("shell redirection or tee write", /(?<!<)\d*>>?\s*(?!&\d+\b|\/dev\/null\b)\S+/),
+ {
+   reason: "shell redirection or tee write",
+   input: "raw",
+    matches: (command) => hasShellWriteRedirection(command),
+  },
   {
     reason: "shell redirection or tee write",
     input: "raw",
-    matches: (command) => hasTeeWriteCommand(command),
-  },
+   matches: (command) => hasTeeWriteCommand(command),
+ },
   regexRule(
     "in-place editor",
     /\bsed\b[^\n\r]*\s-i(?:\b|["'])|\bperl\b[^\n\r]*(?:\s-pi\b|\s-p\b[^\n\r]*\s-i\b)/,
@@ -400,6 +404,57 @@ function hasFilesystemMutationCommand(command: string): boolean {
     if (FILESYSTEM_MUTATION_COMMANDS.has(getShellTokenBaseName(segment[executableIndex] ?? ""))) {
       return true;
     }
+  }
+
+  return false;
+}
+
+function hasShellWriteRedirection(command: string): boolean {
+  let index = 0;
+
+  while (index < command.length) {
+    const ch = command[index];
+    const next = command[index + 1];
+    if (!ch) break;
+
+    if (ch === "\\" && next) {
+      index += next === "\r" && command[index + 2] === "\n" ? 3 : 2;
+      continue;
+    }
+
+    if (ch === "$" && (next === "'" || next === "\"")) {
+      const quoted = consumeQuotedShellToken(command, index + 2, next);
+      index = quoted.endIndex;
+      continue;
+    }
+
+    if (ch === "'" || ch === "\"" || ch === "`") {
+      const quoted = consumeQuotedShellToken(command, index + 1, ch);
+      index = quoted.endIndex;
+      continue;
+    }
+
+    if (ch === ">" && command[index - 1] !== "<") {
+      index += next === ">" ? 2 : 1;
+      while (/\s/.test(command[index] ?? "")) index += 1;
+
+      const target = command[index];
+      if (!target) return false;
+      if (target === "&") {
+        const fdRedirect = command.slice(index + 1).match(/^\d+\b/);
+        if (fdRedirect) {
+          index += 1 + fdRedirect[0].length;
+          continue;
+        }
+      }
+      if (command.slice(index).startsWith("/dev/null")) {
+        index += "/dev/null".length;
+        continue;
+      }
+      return true;
+    }
+
+    index += 1;
   }
 
   return false;

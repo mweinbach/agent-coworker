@@ -83,6 +83,8 @@
 - `test/bash.readonly-policy.test.ts` now also covers launcher options with values before `-c` plus a third-level nested `bash -c` payload chain.
 - A third follow-up pass treats standalone brace groups as shell separators, preserves newline-delimited raw commands for tokenizer-based policy checks, and ignores escaped line continuations so multiline command sequences cannot hide later filesystem mutators.
 - The focused regression slice now also covers newline-delimited writes and brace-grouped mutators under `no_project_write`.
+- A fourth follow-up pass replaced the old stripped-input redirection regex with a quote-aware raw redirection scanner so quoted redirect targets like `> "out.txt"` no longer bypass write detection while quoted `>` literals remain allowed.
+- The focused regression slice now also covers quoted redirect targets for both double-quoted and single-quoted filenames.
 - Focused verification passed with:
   - `~/.bun/bin/bun test test/bash.readonly-policy.test.ts test/tools.test.ts`
   - `~/.bun/bin/bun run typecheck`

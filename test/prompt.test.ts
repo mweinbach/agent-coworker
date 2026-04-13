@@ -192,12 +192,18 @@ function expectSharedAgentReportContract(prompt: string) {
 }
 
 function expectCoordinatorRoleMappingGuidance(prompt: string) {
-  expect(prompt).toContain("spawnAgent with `role: \"explorer\"` for read-only discovery");
-  expect(prompt).toContain("use spawnAgent with `role: \"worker\"` for bounded implementation slices");
-  expect(prompt).toContain("use spawnAgent with `role: \"reviewer\"` for independent validation");
-  expect(prompt).toContain(
-    "Use role discipline: `explorer` for discovery, `worker` for implementation, and `reviewer` for verification."
-  );
+  expect(prompt).toContain("choose a read-only discovery role from the available sub-agent types");
+  expect(prompt).toContain("choose a write-capable implementation role from the available sub-agent types");
+  expect(prompt).toContain("choose an independent read-only verification role from the available sub-agent types");
+  expect(prompt).toContain("Use role discipline based on the currently available sub-agent types:");
+  expect(prompt).toContain("default: `explorer`");
+  expect(prompt).toContain("default: `worker`");
+  expect(prompt).toContain("default: `reviewer`");
+  expect(prompt).toContain("spawn an independent read-only verification child (default: `reviewer`)");
+
+  for (const role of Object.values(AGENT_ROLE_DEFINITIONS)) {
+    expect(prompt).toContain(`- \`${role.id}\`: ${role.description}`);
+  }
 }
 
 const IMAGE_GUIDANCE_PROMPT_CONFIGS = [
@@ -306,7 +312,7 @@ describe("loadSystemPrompt", () => {
     expect(spawnAgentBody).toContain("Coordinator rules:");
     expect(spawnAgentBody).toContain("Use multiple child agents in parallel when research tasks are independent.");
     expect(spawnAgentBody).toContain("report only what was launched; do not predict their results.");
-    expect(spawnAgentBody).toContain("run an independent `reviewer` child for verification");
+    expect(spawnAgentBody).toContain("run an independent read-only verifier role for validation");
     expect(spawnAgentBody).toContain("Model override guidance:");
     expect(spawnAgentBody).toContain("Available model overrides for the current provider (OpenAI):");
     expect(spawnAgentBody).toContain("**GPT-5.4** (`gpt-5.4`)");

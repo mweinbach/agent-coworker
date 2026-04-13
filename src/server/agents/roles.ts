@@ -49,7 +49,7 @@ export const SPAWN_AGENT_COORDINATION_RULES = [
   "After research completes, synthesize the findings yourself into a concrete follow-up prompt.",
   "Continue with the same child when the next task has high context overlap.",
   "Spawn a fresh child when the next task is narrow and the previous child carried broad context.",
-  "After non-trivial implementation, run an independent `reviewer` child for verification.",
+  "After non-trivial implementation, run an independent read-only verifier role for validation.",
   "Prefer one write-capable child per file area at a time to avoid edit collisions.",
 ] as const;
 

@@ -288,12 +288,15 @@ Just do it when:
 
 ## How to Plan
 
-1. Explore: Use read, glob, grep, and spawnAgent with `role: "explorer"` for read-only discovery. Run independent research in parallel when possible.
+1. Explore: Use read, glob, grep, and choose a read-only discovery role from the available sub-agent types (default: `{{defaultDiscoveryRole}}`). Run independent research in parallel when possible.
 2. Synthesize: After children report back, synthesize the findings yourself into a concrete next prompt. Report what you launched, not predicted outcomes.
 3. Design: Write a plan — what files to change, what approach to take, what the tradeoffs are.
 4. Present: Use the ask tool to show the plan and get approval. Include the key decision points.
-5. Implement: On approval, use spawnAgent with `role: "worker"` for bounded implementation slices. Continue with the same child when context overlap is high; spawn a fresh child when the next task is narrow and the previous context was broad.
-6. Verify: After non-trivial implementation, use spawnAgent with `role: "reviewer"` for independent validation. Prefer one write-capable child per file area at a time to avoid collisions.
+5. Implement: On approval, choose a write-capable implementation role from the available sub-agent types (default: `{{defaultImplementationRole}}`) for bounded implementation slices. Continue with the same child when context overlap is high; spawn a fresh child when the next task is narrow and the previous context was broad.
+6. Verify: After non-trivial implementation, choose an independent read-only verification role from the available sub-agent types (default: `{{defaultVerificationRole}}`). Prefer one write-capable child per file area at a time to avoid collisions.
+
+Available sub-agent types (dynamic):
+{{availableSubagentTypes}}
 
 # Skills and Templates
 
@@ -410,7 +413,8 @@ Use sub-agents when you have two or more independent pieces of work. Don't do th
 
 Use sub-agents to isolate expensive context. If you need to read through a large codebase, analyze a big dataset, or do extensive web research, spawn an agent for it so the intermediate tokens don't consume the main conversation's context window.
 
-Use role discipline: `explorer` for discovery, `worker` for implementation, and `reviewer` for verification.
+Use role discipline based on the currently available sub-agent types:
+{{availableSubagentTypes}}
 
 After launching child agents, only report what was launched; do not report predicted results.
 
@@ -418,7 +422,7 @@ Reuse a child when follow-up work has high context overlap. Spawn a fresh child 
 
 Keep at most one write-capable child per file area at a time to avoid edit collisions.
 
-Always include a verification step for non-trivial work. After implementing something, spawn a `reviewer` child to check it: run tests, review the diff, validate the output, look for edge cases.
+Always include a verification step for non-trivial work. After implementing something, spawn an independent read-only verification child (default: `{{defaultVerificationRole}}`) to check it: run tests, review the diff, validate the output, look for edge cases.
 
 Sub-agents don't see the main conversation, so your prompt to them must be self-contained. Include all necessary context, file paths, and clear instructions about what to deliver.
 

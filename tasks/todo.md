@@ -87,6 +87,8 @@
 - The focused regression slice now also covers quoted redirect targets for both double-quoted and single-quoted filenames.
 - A fifth follow-up pass treats standalone shell reserved words and `!` as segment boundaries so compound forms like `if touch ...; then ...; fi` and `! touch ...` still expose the mutating executable to shared policy checks.
 - The focused regression slice now also covers `if` / `for` / `!` shell forms that previously hid later mutating commands behind control-flow tokens.
+- A sixth follow-up pass switches git mutation detection to a conservative read-only allowlist, skips package-manager global flags before install verbs, and removes the fixed candidate-count cap so long nested shell chains cannot push a later mutating payload out of the scan window.
+- The focused regression slice now also covers mutating `git init` / `git clone` / `git stash`, package-manager option-prefixed installs, and a long `bash -c` chain whose final payload writes to disk.
 - Focused verification passed with:
   - `~/.bun/bin/bun test test/bash.readonly-policy.test.ts test/tools.test.ts`
   - `~/.bun/bin/bun run typecheck`

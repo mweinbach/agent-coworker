@@ -92,21 +92,37 @@ describe("bash read-only shell policy", () => {
       ["/usr/bin/git -C . reset --hard HEAD", "git write command"],
       ['git -c "user.name=test" add .', "git write command"],
       ['git --work-tree "/tmp/worktree" commit -m "msg"', "git write command"],
-      ["git checkout main", "git write command"],
-      ["git reset --hard HEAD", "git write command"],
-      ["npm install", "package install command"],
-      ["/usr/bin/npm install", "package install command"],
-      ["npm ci", "package install command"],
-      ["pnpm add zod", "package install command"],
-      ["pnpm i", "package install command"],
-      ["yarn", "package install command"],
-      ["yarn install", "package install command"],
-      ["yarn add lodash", "package install command"],
-      ["bun add zod", "package install command"],
-      ["bun i", "package install command"],
-      ["python -m pip install requests", "package install command"],
-      ["cargo add serde", "package install command"],
-    ] as const;
+     ["git checkout main", "git write command"],
+     ["git reset --hard HEAD", "git write command"],
+      ["git init", "git write command"],
+      ["git clone foo bar", "git write command"],
+      ["git stash", "git write command"],
+     ["npm install", "package install command"],
+      ["npm --no-audit install", "package install command"],
+     ["/usr/bin/npm install", "package install command"],
+     ["npm ci", "package install command"],
+     ["pnpm add zod", "package install command"],
+      ["pnpm --dir . add zod", "package install command"],
+     ["pnpm i", "package install command"],
+     ["yarn", "package install command"],
+     ["yarn install", "package install command"],
+     ["yarn add lodash", "package install command"],
+      ["yarn --cwd . add lodash", "package install command"],
+     ["bun add zod", "package install command"],
+      ["bun --cwd . add zod", "package install command"],
+     ["bun i", "package install command"],
+     ["python -m pip install requests", "package install command"],
+     ["cargo add serde", "package install command"],
+   ] as const;
+
+    const longNestedShellChain =
+      Array.from({ length: 40 }, (_, i) => `bash -c "echo ${i}"`).join(" && ") +
+      ' && bash -c "touch bypass.txt"';
+
+    expect(getShellCommandPolicyViolation(longNestedShellChain, "no_project_write")).toEqual({
+      shellPolicy: "no_project_write",
+      reason: "filesystem mutation command",
+    });
 
     for (const [command, reason] of blockedCommands) {
       expect(getShellCommandPolicyViolation(command, "no_project_write")).toEqual({

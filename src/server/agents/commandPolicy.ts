@@ -65,7 +65,22 @@ const SHELL_EXECUTION_WRAPPERS = new Set([
   "time",
 ]);
 const FILESYSTEM_MUTATION_COMMANDS = new Set(["rm", "mv", "cp", "touch", "mkdir"]);
-const GIT_WRITE_SUBCOMMANDS = new Set(["add", "commit", "checkout", "switch", "restore", "clean"]);
+const GIT_READ_ONLY_SUBCOMMANDS = new Set([
+  "cat-file",
+  "describe",
+  "diff",
+  "grep",
+  "help",
+  "log",
+  "ls-files",
+  "ls-tree",
+  "rev-list",
+  "rev-parse",
+  "show",
+  "show-ref",
+  "status",
+  "version",
+]);
 const GIT_GLOBAL_OPTIONS_WITH_VALUES = new Set([
   "-c",
   "-C",
@@ -126,7 +141,12 @@ const SHELL_LAUNCHER_OPTIONS_WITH_VALUES: Record<string, Set<string>> = {
   sh: new Set(["-o"]),
   zsh: new Set(["-o"]),
 };
-const MAX_SHELL_POLICY_CANDIDATES = 32;
+const PACKAGE_MANAGER_OPTIONS_WITH_VALUES: Record<string, Set<string>> = {
+  bun: new Set(["--cwd", "-C", "--config", "--filter"]),
+  npm: new Set(["--cache", "--prefix", "--userconfig", "--workspace", "-w"]),
+  pnpm: new Set(["--dir", "-C", "--filter", "--workspace-dir"]),
+  yarn: new Set(["--cache-folder", "--cwd", "--mutex", "--use-yarnrc"]),
+};
 
 function regexRule(reason: ShellCommandPolicyViolation["reason"], pattern: RegExp): ShellCommandRule {
   return {
@@ -547,18 +567,38 @@ function hasGitWriteCommand(command: string): boolean {
     const subcommandIndex = findGitSubcommandIndex(segment, executableIndex);
     const subcommand = segment[subcommandIndex]?.toLowerCase();
     if (!subcommand) continue;
-    if (GIT_WRITE_SUBCOMMANDS.has(subcommand)) {
+    if (!GIT_READ_ONLY_SUBCOMMANDS.has(subcommand)) {
       return true;
-    }
-    if (subcommand === "reset") {
-      const args = segment.slice(subcommandIndex + 1).map((arg) => arg.toLowerCase());
-      if (args.includes("--hard")) {
-        return true;
-      }
     }
   }
 
   return false;
+}
+
+function findPackageManagerSubcommandIndex(segment: string[], executableIndex: number, executable: string): number {
+  const optionsWithValues = PACKAGE_MANAGER_OPTIONS_WITH_VALUES[executable] ?? new Set<string>();
+  let index = executableIndex + 1;
+
+  while (index < segment.length) {
+    const token = segment[index]?.toLowerCase();
+    if (!token) break;
+    if (token === "--") {
+      index += 1;
+      break;
+    }
+    if (token.startsWith("-") && token !== "-") {
+      const option = token.split("=")[0] ?? token;
+      if (optionsWithValues.has(option) && !token.includes("=")) {
+        index += 2;
+      } else {
+        index += 1;
+      }
+      continue;
+    }
+    return index;
+  }
+
+  return index;
 }
 
 function hasPackageInstallCommand(command: string): boolean {
@@ -567,9 +607,12 @@ function hasPackageInstallCommand(command: string): boolean {
     if (executableIndex < 0) continue;
 
     const executable = getShellTokenBaseName(segment[executableIndex] ?? "");
-    const firstArg = segment[executableIndex + 1]?.toLowerCase();
-    const secondArg = segment[executableIndex + 2]?.toLowerCase();
-    const thirdArg = segment[executableIndex + 3]?.toLowerCase();
+    const subcommandIndex = ["npm", "pnpm", "yarn", "bun"].includes(executable)
+      ? findPackageManagerSubcommandIndex(segment, executableIndex, executable)
+      : executableIndex + 1;
+    const firstArg = segment[subcommandIndex]?.toLowerCase();
+    const secondArg = segment[subcommandIndex + 1]?.toLowerCase();
+    const thirdArg = segment[subcommandIndex + 2]?.toLowerCase();
 
     if (executable === "npm" && ["install", "i", "ci"].includes(firstArg ?? "")) {
       return true;
@@ -688,7 +731,7 @@ function collectShellPolicyCandidates(command: string): string[] {
     pending.push(candidate);
   };
 
-  while (pending.length > 0 && candidates.size < MAX_SHELL_POLICY_CANDIDATES) {
+  while (pending.length > 0) {
     const candidate = pending.shift();
     if (!candidate) continue;
 

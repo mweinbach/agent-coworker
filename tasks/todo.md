@@ -93,6 +93,8 @@
 - The focused regression slice now also covers `env -C.` plus option-prefixed `pip` install forms.
 - An eighth follow-up pass normalizes package-manager `-C` option matching to lowercase, treats `<>` redirections as writes, and verifies nested escaped-backtick substitutions using an exact constructed shell string so recursive command-substitution scans cannot miss the inner mutator.
 - The focused regression slice now also covers `pnpm -C` / `bun -C`, `true <> file`, and the exact escaped-backtick nesting form reported in review.
+- A ninth follow-up pass makes shell-specific option-with-value parsing run before generic `-c` command extraction so Fish init-command forms like `fish -C "echo ok" -c "touch secret.txt"` no longer mask the real executed payload.
+- The focused regression slice now also covers the Fish `-C ... -c ...` launcher form.
 - Focused verification passed with:
   - `~/.bun/bin/bun test test/bash.readonly-policy.test.ts test/tools.test.ts`
   - `~/.bun/bin/bun run typecheck`

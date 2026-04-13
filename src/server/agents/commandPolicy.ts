@@ -631,7 +631,6 @@ function hasPackageInstallCommand(command: string): boolean {
       : executableIndex + 1;
     const firstArg = segment[subcommandIndex]?.toLowerCase();
     const secondArg = segment[subcommandIndex + 1]?.toLowerCase();
-    const thirdArg = segment[subcommandIndex + 2]?.toLowerCase();
 
     if (executable === "npm" && ["install", "i", "ci"].includes(firstArg ?? "")) {
       return true;
@@ -713,6 +712,15 @@ function extractShellCommandStringSegments(command: string): string[] {
         break;
       }
 
+      const rawOption = arg.split("=")[0] ?? arg;
+      const option = normalizedArg.split("=")[0] ?? normalizedArg;
+      if (optionsWithValues?.has(rawOption) || optionsWithValues?.has(option)) {
+        if (!arg.includes("=")) {
+          j += 1;
+        }
+        continue;
+      }
+
       if (SHELL_COMMAND_ARG_FLAGS.has(normalizedArg) || /^-[a-z]*c$/i.test(normalizedArg)) {
         const segment = commandSegment[j + 1]?.trim();
         if (segment) segments.push(segment);
@@ -726,13 +734,6 @@ function extractShellCommandStringSegments(command: string): string[] {
         break;
       }
 
-      const option = normalizedArg.split("=")[0] ?? normalizedArg;
-      if (optionsWithValues?.has(option)) {
-        if (!arg.includes("=")) {
-          j += 1;
-        }
-        continue;
-      }
       if (!normalizedArg.startsWith("-")) {
         break;
       }

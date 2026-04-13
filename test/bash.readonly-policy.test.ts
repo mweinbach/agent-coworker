@@ -54,7 +54,7 @@ describe("bash read-only shell policy", () => {
       ["/bin/touch blocked.txt", "filesystem mutation command"],
       ["env /usr/bin/mkdir scratch", "filesystem mutation command"],
      ["env -C . touch bypass.txt", "filesystem mutation command"],
-      ["env -C. touch bypass.txt", "filesystem mutation command"],
+     ["env -C. touch bypass.txt", "filesystem mutation command"],
      ["env --chdir=. touch bypass.txt", "filesystem mutation command"],
       ["mkdir scratch", "filesystem mutation command"],
       ["rm -rf output", "filesystem mutation command"],
@@ -80,7 +80,8 @@ describe("bash read-only shell policy", () => {
       ["for item in 1; do touch bypass.txt; done", "filesystem mutation command"],
      ['echo "hello" > out.txt', "shell redirection or tee write"],
       ['echo "hello" > "out.txt"', "shell redirection or tee write"],
-      ["echo hello > 'out.txt'", "shell redirection or tee write"],
+     ["echo hello > 'out.txt'", "shell redirection or tee write"],
+      ["true <> bypass.txt", "shell redirection or tee write"],
      ["{ touch bypass.txt; }", "filesystem mutation command"],
       ["echo hi>out.txt", "shell redirection or tee write"],
       ["echo hi>>out.txt", "shell redirection or tee write"],
@@ -103,14 +104,16 @@ describe("bash read-only shell policy", () => {
      ["/usr/bin/npm install", "package install command"],
      ["npm ci", "package install command"],
      ["pnpm add zod", "package install command"],
-      ["pnpm --dir . add zod", "package install command"],
+     ["pnpm --dir . add zod", "package install command"],
+      ["pnpm -C . add zod", "package install command"],
      ["pnpm i", "package install command"],
      ["yarn", "package install command"],
      ["yarn install", "package install command"],
      ["yarn add lodash", "package install command"],
       ["yarn --cwd . add lodash", "package install command"],
      ["bun add zod", "package install command"],
-      ["bun --cwd . add zod", "package install command"],
+     ["bun --cwd . add zod", "package install command"],
+      ["bun -C /tmp install", "package install command"],
      ["bun i", "package install command"],
      ["python -m pip install requests", "package install command"],
       ["pip --quiet install requests", "package install command"],
@@ -118,14 +121,23 @@ describe("bash read-only shell policy", () => {
      ["cargo add serde", "package install command"],
    ] as const;
 
-    const longNestedShellChain =
-      Array.from({ length: 40 }, (_, i) => `bash -c "echo ${i}"`).join(" && ") +
-      ' && bash -c "touch bypass.txt"';
+   const longNestedShellChain =
+     Array.from({ length: 40 }, (_, i) => `bash -c "echo ${i}"`).join(" && ") +
+     ' && bash -c "touch bypass.txt"';
+    const backtick = String.fromCharCode(96);
+    const backslash = String.fromCharCode(92);
+    const nestedBacktickCommand =
+      "echo " + backtick + "echo " + backslash + backtick + "touch bypass.txt" + backslash + backtick + backtick;
 
-    expect(getShellCommandPolicyViolation(longNestedShellChain, "no_project_write")).toEqual({
-      shellPolicy: "no_project_write",
-      reason: "filesystem mutation command",
-    });
+  expect(getShellCommandPolicyViolation(longNestedShellChain, "no_project_write")).toEqual({
+    shellPolicy: "no_project_write",
+    reason: "filesystem mutation command",
+  });
+
+    expect(getShellCommandPolicyViolation(nestedBacktickCommand, "no_project_write")).toEqual({
+     shellPolicy: "no_project_write",
+     reason: "filesystem mutation command",
+   });
 
     for (const [command, reason] of blockedCommands) {
       expect(getShellCommandPolicyViolation(command, "no_project_write")).toEqual({

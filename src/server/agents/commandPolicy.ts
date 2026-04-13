@@ -142,10 +142,10 @@ const SHELL_LAUNCHER_OPTIONS_WITH_VALUES: Record<string, Set<string>> = {
   zsh: new Set(["-o"]),
 };
 const PACKAGE_MANAGER_OPTIONS_WITH_VALUES: Record<string, Set<string>> = {
-  bun: new Set(["--cwd", "-C", "--config", "--filter"]),
+  bun: new Set(["--cwd", "-c", "--config", "--filter"]),
   npm: new Set(["--cache", "--prefix", "--userconfig", "--workspace", "-w"]),
   pip: new Set(["--constraint", "--find-links", "--index-url", "--log", "--proxy", "--requirement", "--src", "--target", "-c", "-i", "-r", "-t"]),
-  pnpm: new Set(["--dir", "-C", "--filter", "--workspace-dir"]),
+  pnpm: new Set(["--dir", "-c", "--filter", "--workspace-dir"]),
   yarn: new Set(["--cache-folder", "--cwd", "--mutex", "--use-yarnrc"]),
 };
 
@@ -485,6 +485,19 @@ function hasShellWriteRedirection(command: string): boolean {
       continue;
     }
 
+    if (ch === "<" && next === ">") {
+      index += 2;
+      while (/\s/.test(command[index] ?? "")) index += 1;
+
+      const target = command[index];
+      if (!target) return false;
+      if (command.slice(index).startsWith("/dev/null")) {
+        index += "/dev/null".length;
+        continue;
+      }
+      return true;
+    }
+
     if (ch === ">" && command[index - 1] !== "<") {
       index += next === ">" ? 2 : 1;
       while (/\s/.test(command[index] ?? "")) index += 1;
@@ -668,7 +681,7 @@ function extractCommandSubstitutionSegments(command: string): string[] {
   let match: RegExpExecArray | null = null;
 
   while ((match = re.exec(command)) !== null) {
-    const segment = (match[1] ?? match[2] ?? "").trim();
+    const segment = ((match[1] ?? match[2] ?? "").replace(/\\`/g, "`")).trim();
     if (segment) segments.push(segment);
   }
 

@@ -91,6 +91,8 @@
 - The focused regression slice now also covers mutating `git init` / `git clone` / `git stash`, package-manager option-prefixed installs, and a long `bash -c` chain whose final payload writes to disk.
 - A seventh follow-up pass accepts GNU `env` short options with attached values like `-C.` and extends the shared install classifier to catch `pip` and `python -m pip` invocations even when global flags like `--quiet` appear before `install`.
 - The focused regression slice now also covers `env -C.` plus option-prefixed `pip` install forms.
+- An eighth follow-up pass normalizes package-manager `-C` option matching to lowercase, treats `<>` redirections as writes, and verifies nested escaped-backtick substitutions using an exact constructed shell string so recursive command-substitution scans cannot miss the inner mutator.
+- The focused regression slice now also covers `pnpm -C` / `bun -C`, `true <> file`, and the exact escaped-backtick nesting form reported in review.
 - Focused verification passed with:
   - `~/.bun/bin/bun test test/bash.readonly-policy.test.ts test/tools.test.ts`
   - `~/.bun/bin/bun run typecheck`

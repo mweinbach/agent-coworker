@@ -17,6 +17,7 @@ import {
   SPAWN_AGENT_PROMPT_OVERVIEW,
   SPAWN_AGENT_WHEN_TO_USE,
 } from "./server/agents/roles";
+import type { AgentRoleDefinition } from "./server/agents/roles";
 import type { AgentRole } from "./shared/agents";
 import {
   getCodexWebSearchBackendFromProviderOptions,

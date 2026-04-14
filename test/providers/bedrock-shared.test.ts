@@ -7,6 +7,7 @@ import { getAiCoworkerPaths, writeConnectionStore } from "../../src/connect";
 import { Bedrock } from "@aws-sdk/client-bedrock";
 
 import {
+  bedrockClientConfig,
   maskBedrockFieldValues,
   readBedrockCatalogSnapshot,
   refreshBedrockDiscoveryCache,
@@ -63,6 +64,19 @@ describe("providers/bedrockShared", () => {
       profile: "sandbox",
       region: "us-west-2",
     });
+  });
+
+  test("keeps aws_profile on the Bedrock client config for profile-scoped discovery", () => {
+    const client = new Bedrock(bedrockClientConfig({
+      methodId: "aws_profile",
+      source: "saved",
+      profile: "sandbox",
+      region: "us-west-2",
+    }));
+
+    expect(client.config.profile).toBe("sandbox");
+    expect(typeof client.config.region).toBe("function");
+    expect(typeof client.config.credentialDefaultProvider).toBe("function");
   });
 
   test("does not force a default region for saved aws_default auth", async () => {

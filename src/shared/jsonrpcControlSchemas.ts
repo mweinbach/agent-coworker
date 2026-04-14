@@ -798,6 +798,7 @@ export const providerAuthMethodsReadRequestSchema = z.object({
 
 export const providerStatusRefreshRequestSchema = z.object({
   cwd: optionalNonEmptyTrimmedStringSchema,
+  refreshBedrockDiscovery: z.boolean().optional(),
 }).strict();
 
 export const providerAuthAuthorizeRequestSchema = z.object({

@@ -1,5 +1,6 @@
 import type { ProviderName, ServerEvent } from "./wsProtocol";
 import { PROVIDER_NAMES } from "./wsProtocol";
+import { getDefaultProviderAuthMethods } from "../../../../src/shared/providerAuthMethods";
 
 type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
 
@@ -27,27 +28,8 @@ export function isProviderNameString(value: string): value is ProviderName {
 }
 
 export function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
-  if (provider === "google") {
-    return [
-      { id: "api_key", type: "api", label: "API key" },
-    ];
-  }
-  if (provider === "codex-cli") {
-    return [
-      { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
-      { id: "api_key", type: "api", label: "API key" },
-    ];
-  }
-  if (provider === "bedrock") {
-    return [
-      { id: "aws_default", type: "api", label: "AWS default credentials" },
-      { id: "aws_profile", type: "api", label: "AWS profile" },
-      { id: "aws_keys", type: "api", label: "AWS access keys" },
-      { id: "api_key", type: "api", label: "Bedrock API key" },
-    ];
-  }
   if (provider === "lmstudio") {
     return [];
   }
-  return [{ id: "api_key", type: "api", label: "API key" }];
+  return getDefaultProviderAuthMethods(provider);
 }

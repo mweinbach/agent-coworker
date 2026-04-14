@@ -29,20 +29,7 @@ function normalizeAccount(value: unknown): PersistedProviderStatus["account"] {
   };
 }
 
-function normalizeSavedApiKeyMasks(value: unknown): PersistedProviderStatus["savedApiKeyMasks"] {
-  if (!isRecord(value)) return undefined;
-  const entries: Array<readonly [string, string]> = [];
-  for (const [key, rawMask] of Object.entries(value)) {
-    const normalizedKey = asNonEmptyString(key);
-    const normalizedMask = asNonEmptyString(rawMask);
-    if (!normalizedKey || !normalizedMask) continue;
-    entries.push([normalizedKey, normalizedMask] as const);
-  }
-  if (entries.length === 0) return undefined;
-  return Object.fromEntries(entries);
-}
-
-function normalizeSavedFieldMasks(value: unknown): PersistedProviderStatus["savedFieldMasks"] {
+function normalizeSavedMaskMap(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) return undefined;
   const entries: Array<readonly [string, string]> = [];
   for (const [key, rawMask] of Object.entries(value)) {
@@ -77,8 +64,8 @@ export function normalizePersistedProviderStatus(
     (authorized || verified ? "Connected." : "Not connected.");
   const checkedAt = asNonEmptyString(value.checkedAt) ?? DEFAULT_CHECKED_AT;
   const methodId = asNonEmptyString(value.methodId);
-  const savedApiKeyMasks = normalizeSavedApiKeyMasks(value.savedApiKeyMasks);
-  const savedFieldMasks = normalizeSavedFieldMasks(value.savedFieldMasks);
+  const savedApiKeyMasks = normalizeSavedMaskMap(value.savedApiKeyMasks);
+  const savedFieldMasks = normalizeSavedMaskMap(value.savedFieldMasks);
 
   return {
     provider: expectedProvider,

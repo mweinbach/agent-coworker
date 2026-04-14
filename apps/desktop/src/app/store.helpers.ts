@@ -1,5 +1,6 @@
 import { startWorkspaceServer } from "../lib/desktopCommands";
 import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
+import { fallbackAuthMethods } from "../lib/providerDisplayNames";
 import type { MCPServerConfig, ProviderName, ServerEvent, TodoItem } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 
@@ -123,68 +124,10 @@ function isProviderName(v: unknown): v is ProviderName {
   return typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);
 }
 
-function defaultProviderAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
-  if (provider === "google") {
-    return [
-      { id: "api_key", type: "api", label: "API key" },
-      { id: "exa_api_key", type: "api", label: "Exa API key (web search)" },
-    ];
-  }
-  if (provider === "bedrock") {
-    return [
-      {
-        id: "aws_default",
-        type: "api",
-        label: "AWS default credentials",
-        fields: [{ id: "region", label: "AWS region", kind: "text", placeholder: "us-east-1" }],
-      },
-      {
-        id: "aws_profile",
-        type: "api",
-        label: "AWS profile",
-        fields: [
-          { id: "profile", label: "AWS profile", kind: "text", required: true, placeholder: "default" },
-          { id: "region", label: "AWS region", kind: "text", placeholder: "us-east-1" },
-        ],
-      },
-      {
-        id: "aws_keys",
-        type: "api",
-        label: "AWS access keys",
-        fields: [
-          { id: "accessKeyId", label: "Access key ID", kind: "text", required: true, placeholder: "AKIA..." },
-          { id: "secretAccessKey", label: "Secret access key", kind: "password", required: true, secret: true },
-          { id: "sessionToken", label: "Session token", kind: "password", secret: true },
-          { id: "region", label: "AWS region", kind: "text", required: true, placeholder: "us-east-1" },
-        ],
-      },
-      {
-        id: "api_key",
-        type: "api",
-        label: "Bedrock API key",
-        fields: [
-          { id: "apiKey", label: "Bedrock API key", kind: "password", required: true, secret: true },
-          { id: "region", label: "AWS region", kind: "text", required: true, placeholder: "us-east-1" },
-        ],
-      },
-    ];
-  }
-  if (provider === "codex-cli") {
-    return [
-      { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
-      { id: "api_key", type: "api", label: "API key" },
-    ];
-  }
-  if (provider === "lmstudio") {
-    return [];
-  }
-  return [{ id: "api_key", type: "api", label: "API key" }];
-}
-
 function providerAuthMethodsFor(state: AppStoreState, provider: ProviderName): ProviderAuthMethod[] {
   const fromState = state.providerAuthMethodsByProvider[provider];
   if (Array.isArray(fromState) && fromState.length > 0) return fromState;
-  return defaultProviderAuthMethods(provider);
+  return fallbackAuthMethods(provider);
 }
 
 export type AppStoreState = {
@@ -344,7 +287,7 @@ export type AppStoreState = {
   callbackProviderAuth: (provider: ProviderName, methodId: string, code?: string) => Promise<void>;
   requestProviderCatalog: () => Promise<void>;
   requestProviderAuthMethods: () => Promise<void>;
-  refreshProviderStatus: () => Promise<void>;
+  refreshProviderStatus: (opts?: { refreshBedrockDiscovery?: boolean }) => Promise<void>;
   setLmStudioEnabled: (enabled: boolean) => Promise<void>;
   setLmStudioModelVisible: (modelId: string, visible: boolean) => Promise<void>;
 

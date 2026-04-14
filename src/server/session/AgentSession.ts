@@ -493,7 +493,7 @@ export class AgentSession {
       updateSessionInfo: (patch, infoOpts) => this.metadataManager.updateSessionInfo(patch, infoOpts),
       emitConfigUpdated: () => this.metadataManager.emitConfigUpdated(),
       syncSessionBackupAvailability: async () => {},
-      refreshProviderStatus: async () => await this.getProviderCatalogManager().refreshProviderStatus(),
+      refreshProviderStatus: async (opts) => await this.getProviderCatalogManager().refreshProviderStatus(opts),
       emitProviderCatalog: async () => await this.getProviderCatalogManager().emitProviderCatalog(),
       emitMcpServers: async () => await this.getMcpManager().emitMcpServers(),
       getSkillMutationBlockReason: () =>
@@ -657,7 +657,7 @@ export class AgentSession {
         queuePersistSessionSnapshot: (reason) => this.queuePersistSessionSnapshot(reason),
         emitConfigUpdated: () => this.metadataManager.emitConfigUpdated(),
         emitProviderCatalog: async () => await this.getProviderCatalogManager().emitProviderCatalog(),
-        refreshProviderStatus: async () => await this.getProviderCatalogManager().refreshProviderStatus(),
+        refreshProviderStatus: async (opts) => await this.getProviderCatalogManager().refreshProviderStatus(opts),
         getGlobalAuthPaths: () => this.getGlobalAuthPaths(),
         runProviderConnect: async (providerOpts) => await this.runProviderConnect(providerOpts),
       });
@@ -1440,8 +1440,8 @@ export class AgentSession {
     await this.getProviderAuthManager().copyProviderApiKey(providerRaw, sourceProviderRaw);
   }
 
-  async refreshProviderStatus() {
-    await this.getProviderCatalogManager().refreshProviderStatus();
+  async refreshProviderStatus(opts: { refreshBedrockDiscovery?: boolean } = {}) {
+    await this.getProviderCatalogManager().refreshProviderStatus(opts);
   }
 
   handleAskResponse(requestId: string, answer: string) {

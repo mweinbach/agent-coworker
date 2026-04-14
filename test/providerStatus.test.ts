@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Bedrock } from "@aws-sdk/client-bedrock";
 
 import { getAiCoworkerPaths, writeConnectionStore } from "../src/connect";
+import { refreshBedrockDiscoveryCache } from "../src/providers/bedrockShared";
 import { getProviderStatuses } from "../src/providerStatus";
 
 function b64url(input: string): string {
@@ -18,6 +20,47 @@ function makeJwt(payload: Record<string, unknown>): string {
 
 async function makeTmpHome(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "cowork-provider-status-test-"));
+}
+
+function mockBedrockDiscovery(modelId = "custom.bedrock-model-v1") {
+  const originalListFoundationModels = Bedrock.prototype.listFoundationModels;
+  const originalListInferenceProfiles = Bedrock.prototype.listInferenceProfiles;
+  const originalListCustomModelDeployments = Bedrock.prototype.listCustomModelDeployments;
+  const originalListProvisionedModelThroughputs = Bedrock.prototype.listProvisionedModelThroughputs;
+  const originalListImportedModels = Bedrock.prototype.listImportedModels;
+  let listFoundationModelsCalls = 0;
+
+  Bedrock.prototype.listFoundationModels = async () => {
+    listFoundationModelsCalls += 1;
+    return {
+      modelSummaries: [
+        {
+          modelId,
+          modelName: "Custom Bedrock Model",
+          responseStreamingSupported: true,
+          inputModalities: ["TEXT"],
+        } as any,
+      ],
+    } as any;
+  };
+  Bedrock.prototype.listInferenceProfiles = async () => ({ inferenceProfileSummaries: [] }) as any;
+  Bedrock.prototype.listCustomModelDeployments = async () => ({ modelDeploymentSummaries: [] }) as any;
+  Bedrock.prototype.listProvisionedModelThroughputs = async () => ({ provisionedModelSummaries: [] }) as any;
+  Bedrock.prototype.listImportedModels = async () => ({ modelSummaries: [] }) as any;
+
+  return {
+    getListFoundationModelsCalls: () => listFoundationModelsCalls,
+    resetCalls: () => {
+      listFoundationModelsCalls = 0;
+    },
+    restore: () => {
+      Bedrock.prototype.listFoundationModels = originalListFoundationModels;
+      Bedrock.prototype.listInferenceProfiles = originalListInferenceProfiles;
+      Bedrock.prototype.listCustomModelDeployments = originalListCustomModelDeployments;
+      Bedrock.prototype.listProvisionedModelThroughputs = originalListProvisionedModelThroughputs;
+      Bedrock.prototype.listImportedModels = originalListImportedModels;
+    },
+  };
 }
 
 describe("getProviderStatuses", () => {
@@ -143,6 +186,77 @@ describe("getProviderStatuses", () => {
     expect(google?.mode).toBe("missing");
     expect(google?.savedApiKeyMasks?.api_key).toBeUndefined();
     expect(google?.savedApiKeyMasks?.exa_api_key).toBe("exa-...5678");
+  });
+
+  test("reads cached Bedrock snapshot by default without live discovery", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await writeConnectionStore(paths, {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        bedrock: {
+          service: "bedrock",
+          mode: "credentials",
+          methodId: "aws_default",
+          values: {},
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const mockedDiscovery = mockBedrockDiscovery();
+    try {
+      await refreshBedrockDiscoveryCache({ paths, env: {} as NodeJS.ProcessEnv });
+      mockedDiscovery.resetCalls();
+
+      const statuses = await getProviderStatuses({ paths, env: {} as NodeJS.ProcessEnv });
+      const bedrock = statuses.find((s) => s.provider === "bedrock");
+
+      expect(mockedDiscovery.getListFoundationModelsCalls()).toBe(0);
+      expect(bedrock?.authorized).toBe(true);
+      expect(bedrock?.verified).toBe(false);
+      expect(bedrock?.mode).toBe("credentials");
+      expect(bedrock?.message).toBe("Credentials saved.");
+    } finally {
+      mockedDiscovery.restore();
+    }
+  });
+
+  test("runs live Bedrock discovery only when explicitly requested", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await writeConnectionStore(paths, {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        bedrock: {
+          service: "bedrock",
+          mode: "credentials",
+          methodId: "aws_default",
+          values: {},
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const mockedDiscovery = mockBedrockDiscovery();
+    try {
+      const statuses = await getProviderStatuses({
+        paths,
+        env: {} as NodeJS.ProcessEnv,
+        refreshBedrockDiscovery: true,
+      });
+      const bedrock = statuses.find((s) => s.provider === "bedrock");
+
+      expect(mockedDiscovery.getListFoundationModelsCalls()).toBe(1);
+      expect(bedrock?.authorized).toBe(true);
+      expect(bedrock?.verified).toBe(true);
+      expect(bedrock?.mode).toBe("credentials");
+      expect(bedrock?.message).toBe("Amazon Bedrock credentials verified.");
+    } finally {
+      mockedDiscovery.restore();
+    }
   });
 
   test("codex-cli: verified via Codex usage endpoint and exposes usage snapshots", async () => {

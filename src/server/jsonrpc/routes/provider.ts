@@ -48,10 +48,11 @@ export function createProviderRouteHandlers(
     "cowork/provider/status/refresh": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const refreshBedrockDiscovery = params.refreshBedrockDiscovery === true;
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.refreshProviderStatus(),
+        async (session) => await session.refreshProviderStatus({ refreshBedrockDiscovery }),
         (event): event is Extract<ServerEvent, { type: "provider_status" }> => event.type === "provider_status",
       );
       if (context.utils.isSessionError(outcome)) {

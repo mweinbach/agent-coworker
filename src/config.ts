@@ -117,12 +117,14 @@ async function resolveConfiguredModelMetadata(
   source: string,
   providerOptions: Record<string, unknown> | undefined,
   env: Record<string, string | undefined>,
+  home?: string,
 ) {
   if (isDynamicModelProvider(provider)) {
     return await resolveModelMetadata(provider, modelId, {
       allowPlaceholder: true,
       providerOptions,
       env,
+      home,
       source,
       log: (line) => console.warn(`[config] ${line}`),
     });
@@ -414,8 +416,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asNonEmptyString(userConfig.model) ||
     (asProviderName(builtInDefaults.provider) === provider && asNonEmptyString(builtInDefaults.model));
   const supportedModel = configuredModel
-    ? await resolveConfiguredModelMetadata(provider, configuredModel, "model", providerOptions, env)
-    : await resolveDefaultModelMetadata(provider, { providerOptions, env });
+    ? await resolveConfiguredModelMetadata(provider, configuredModel, "model", providerOptions, env, homedir)
+    : await resolveDefaultModelMetadata(provider, { providerOptions, env, home: homedir });
 
   const childModelRoutingMode =
     resolveChildModelRoutingMode(projectConfig.childModelRoutingMode) ||

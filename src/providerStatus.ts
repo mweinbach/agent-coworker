@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { getAiCoworkerPaths, maskApiKey, readConnectionStore, type AiCoworkerPaths, type ConnectionStore } from "./connect";
-import { maskBedrockFieldValues, refreshBedrockDiscoveryCache } from "./providers/bedrockShared";
+import { maskBedrockFieldValues, readBedrockCatalogSnapshot, refreshBedrockDiscoveryCache } from "./providers/bedrockShared";
 import { CODEX_BACKEND_BASE_URL, decodeJwtPayload, isTokenExpiring, readCodexAuthMaterial, refreshCodexAuthMaterial } from "./providers/codex-auth";
 import { listLmStudioLlms } from "./providers/lmstudio/catalog";
 import { isLmStudioError, listLmStudioModels, resolveLmStudioProviderOptions } from "./providers/lmstudio/client";
@@ -209,24 +209,33 @@ async function getBedrockStatus(opts: {
   store: ConnectionStore;
   checkedAt: string;
   env?: NodeJS.ProcessEnv;
+  refreshDiscovery?: boolean;
 }): Promise<ProviderStatus> {
   const base = statusFromConnectionStore({ provider: "bedrock", store: opts.store, checkedAt: opts.checkedAt });
-  const discovery = await refreshBedrockDiscoveryCache({
-    paths: opts.paths,
-    env: opts.env,
-  });
+  const discovery = opts.refreshDiscovery
+    ? await refreshBedrockDiscoveryCache({
+      paths: opts.paths,
+      env: opts.env,
+    })
+    : await readBedrockCatalogSnapshot({
+      paths: opts.paths,
+      env: opts.env,
+    });
 
   if (!discovery.auth) {
     return base;
   }
 
+  const verified = opts.refreshDiscovery && "ok" in discovery ? discovery.ok && !discovery.usedCache : false;
+  const message = discovery.message ?? (base.mode === "missing" ? "Amazon Bedrock credentials detected." : base.message);
+
   return {
     provider: "bedrock",
     authorized: true,
-    verified: discovery.ok && !discovery.usedCache,
+    verified,
     mode: base.mode === "missing" ? "credentials" : base.mode,
     account: null,
-    message: discovery.message,
+    message,
     checkedAt: opts.checkedAt,
     methodId: base.methodId ?? discovery.auth.methodId,
     ...(base.savedApiKeyMasks ? { savedApiKeyMasks: base.savedApiKeyMasks } : {}),
@@ -567,6 +576,7 @@ export async function getProviderStatuses(opts: {
   now?: () => Date;
   providerOptions?: unknown;
   env?: NodeJS.ProcessEnv;
+  refreshBedrockDiscovery?: boolean;
 } = {}): Promise<ProviderStatus[]> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const fetchImpl = opts.fetchImpl ?? fetch;
@@ -582,7 +592,13 @@ export async function getProviderStatuses(opts: {
       continue;
     }
     if (provider === "bedrock") {
-      out.push(await getBedrockStatus({ paths, store, checkedAt, env: opts.env }));
+      out.push(await getBedrockStatus({
+        paths,
+        store,
+        checkedAt,
+        env: opts.env,
+        refreshDiscovery: opts.refreshBedrockDiscovery,
+      }));
       continue;
     }
     if (provider === "lmstudio") {

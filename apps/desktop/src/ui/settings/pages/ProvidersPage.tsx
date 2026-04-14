@@ -15,6 +15,7 @@ import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 import { cn } from "../../../lib/utils";
 import {
   displayProviderName,
+  fallbackAuthMethods,
   isProviderNameString,
 } from "../../../lib/providerDisplayNames";
 
@@ -231,63 +232,6 @@ function siblingOpenCodeProvider(provider: ProviderName): ProviderName | null {
 
 function fallbackExaAuthMethod(): ProviderAuthMethod {
   return { id: EXA_AUTH_METHOD_ID, type: "api", label: "Exa API key (web search)" };
-}
-
-function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
-  if (provider === "google") {
-    return [
-      { id: "api_key", type: "api", label: "API key" },
-      fallbackExaAuthMethod(),
-    ];
-  }
-  if (provider === "bedrock") {
-    return [
-      {
-        id: "aws_default",
-        type: "api",
-        label: "AWS default credentials",
-        fields: [{ id: "region", label: "AWS region", kind: "text", placeholder: "us-east-1" }],
-      },
-      {
-        id: "aws_profile",
-        type: "api",
-        label: "AWS profile",
-        fields: [
-          { id: "profile", label: "AWS profile", kind: "text", required: true, placeholder: "default" },
-          { id: "region", label: "AWS region", kind: "text", placeholder: "us-east-1" },
-        ],
-      },
-      {
-        id: "aws_keys",
-        type: "api",
-        label: "AWS access keys",
-        fields: [
-          { id: "accessKeyId", label: "Access key ID", kind: "text", required: true, placeholder: "AKIA..." },
-          { id: "secretAccessKey", label: "Secret access key", kind: "password", required: true, secret: true },
-          { id: "sessionToken", label: "Session token", kind: "password", secret: true },
-          { id: "region", label: "AWS region", kind: "text", required: true, placeholder: "us-east-1" },
-        ],
-      },
-      {
-        id: "api_key",
-        type: "api",
-        label: "Bedrock API key",
-        fields: [
-          { id: "apiKey", label: "Bedrock API key", kind: "password", required: true, secret: true },
-          { id: "region", label: "AWS region", kind: "text", required: true, placeholder: "us-east-1" },
-        ],
-      },
-    ];
-  }
-  if (provider === "codex-cli") {
-    return [
-      { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
-    ];
-  }
-  if (provider === "lmstudio") {
-    return [];
-  }
-  return [{ id: "api_key", type: "api", label: "API key" }];
 }
 
 function methodStateKey(provider: ProviderName, methodId: string): string {
@@ -820,7 +764,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                 <Button
                   variant="outline"
                   type="button"
-                  onClick={() => void refreshProviderStatus()}
+                  onClick={() => void refreshProviderStatus({ refreshBedrockDiscovery: true })}
                   disabled={providerStatusRefreshing}
                 >
                   {providerStatusRefreshing ? "Refreshing..." : "Refresh"}
@@ -1124,7 +1068,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
             variant="link"
             className="h-auto px-0"
             type="button"
-            onClick={() => void refreshProviderStatus()}
+            onClick={() => void refreshProviderStatus({ refreshBedrockDiscovery: true })}
             disabled={providerStatusRefreshing}
           >
             {providerStatusRefreshing ? "Refreshing..." : "Refresh status"}

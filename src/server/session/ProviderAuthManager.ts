@@ -74,7 +74,7 @@ export class ProviderAuthManager {
       queuePersistSessionSnapshot: (reason: string) => void;
       emitConfigUpdated: () => void;
       emitProviderCatalog: () => Promise<void>;
-      refreshProviderStatus: () => Promise<void>;
+      refreshProviderStatus: (opts?: { refreshBedrockDiscovery?: boolean }) => Promise<void>;
       getGlobalAuthPaths: () => ReturnType<typeof getAiCoworkerPaths>;
       runProviderConnect: ConnectProviderHandler;
     }
@@ -320,7 +320,7 @@ export class ProviderAuthManager {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.callback");
-        await this.opts.refreshProviderStatus();
+        await this.opts.refreshProviderStatus({ refreshBedrockDiscovery: true });
         await this.opts.emitProviderCatalog();
       }
       this.opts.emitTelemetry(
@@ -381,7 +381,7 @@ export class ProviderAuthManager {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.logout");
-        await this.opts.refreshProviderStatus();
+        await this.opts.refreshProviderStatus({ refreshBedrockDiscovery: true });
         await this.opts.emitProviderCatalog();
       }
 
@@ -455,7 +455,7 @@ export class ProviderAuthManager {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.api_key");
-        await this.opts.refreshProviderStatus();
+        await this.opts.refreshProviderStatus({ refreshBedrockDiscovery: true });
         await this.opts.emitProviderCatalog();
       }
       this.opts.emitTelemetry(
@@ -533,7 +533,7 @@ export class ProviderAuthManager {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.config");
-        await this.opts.refreshProviderStatus();
+        await this.opts.refreshProviderStatus({ refreshBedrockDiscovery: true });
         await this.opts.emitProviderCatalog();
       }
       this.opts.emitTelemetry(
@@ -628,7 +628,7 @@ export class ProviderAuthManager {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.api_key_copy");
-        await this.opts.refreshProviderStatus();
+        await this.opts.refreshProviderStatus({ refreshBedrockDiscovery: true });
         await this.opts.emitProviderCatalog();
       }
       this.opts.emitTelemetry(

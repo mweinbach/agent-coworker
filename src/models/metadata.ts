@@ -72,6 +72,7 @@ export async function resolveModelMetadata(
     allowPlaceholder?: boolean;
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
+    home?: string;
     fetchImpl?: typeof fetch;
     source?: string;
     log?: (line: string) => void;
@@ -83,7 +84,11 @@ export async function resolveModelMetadata(
 
   const normalizedModelId = normalizeModelIdForProvider(provider, modelId, opts.source);
   if (provider === "bedrock") {
-    return await resolveBedrockModelMetadata({ modelId: normalizedModelId });
+    return await resolveBedrockModelMetadata({
+      modelId: normalizedModelId,
+      home: opts.home,
+      env: opts.env,
+    });
   }
   try {
     return await resolveLmStudioDiscoveredModelMetadata({
@@ -108,6 +113,7 @@ export async function resolveDefaultModelMetadata(
   opts: {
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
+    home?: string;
     fetchImpl?: typeof fetch;
   } = {},
 ): Promise<ResolvedModelMetadata> {
@@ -115,7 +121,10 @@ export async function resolveDefaultModelMetadata(
     return await resolveDefaultLmStudioModelMetadata(opts);
   }
   if (provider === "bedrock") {
-    return await resolveDefaultBedrockModelMetadata();
+    return await resolveDefaultBedrockModelMetadata({
+      home: opts.home,
+      env: opts.env,
+    });
   }
   const model = defaultSupportedModel(provider);
   return {

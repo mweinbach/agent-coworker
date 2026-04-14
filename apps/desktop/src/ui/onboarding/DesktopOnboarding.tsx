@@ -387,7 +387,11 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                         >
                           {lmStudioEnabled ? "Disable" : "Connect"}
                         </Button>
-                        <Button type="button" variant="outline" onClick={() => void refreshProviderStatus()}>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => void refreshProviderStatus({ refreshBedrockDiscovery: true })}
+                        >
                           Refresh
                         </Button>
                       </div>

@@ -53,13 +53,29 @@ type RefreshProviderStatusHelperOverrides = {
   requestJsonRpcControlEvent?: typeof requestJsonRpcControlEvent;
 };
 
+type RefreshProviderStatusOptions = {
+  refreshBedrockDiscovery?: boolean;
+};
+
+function isRefreshProviderStatusHelperOverrides(
+  value: RefreshProviderStatusOptions | RefreshProviderStatusHelperOverrides,
+): value is RefreshProviderStatusHelperOverrides {
+  return "makeId" in value
+    || "nowIso" in value
+    || "pushNotification" in value
+    || "requestJsonRpcControlEvent" in value;
+}
+
 export async function refreshProviderStatusForWorkspace(
   get: StoreGet,
   set: StoreSet,
   workspaceId: string,
   path: string | undefined,
-  overrides: RefreshProviderStatusHelperOverrides = {},
+  optsOrOverrides: RefreshProviderStatusOptions | RefreshProviderStatusHelperOverrides = {},
+  overridesArg: RefreshProviderStatusHelperOverrides = {},
 ): Promise<void> {
+  const opts = isRefreshProviderStatusHelperOverrides(optsOrOverrides) ? {} : optsOrOverrides;
+  const overrides = isRefreshProviderStatusHelperOverrides(optsOrOverrides) ? optsOrOverrides : overridesArg;
   const createId = overrides.makeId ?? makeId;
   const getNowIso = overrides.nowIso ?? nowIso;
   const addNotification = overrides.pushNotification ?? pushNotification;
@@ -67,7 +83,10 @@ export async function refreshProviderStatusForWorkspace(
   const refreshGeneration = ++RUNTIME.providerStatusRefreshGeneration;
   set({ providerStatusRefreshing: true });
   const results = await Promise.allSettled([
-    sendControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", { cwd: path }),
+    sendControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", {
+      cwd: path,
+      ...(opts.refreshBedrockDiscovery ? { refreshBedrockDiscovery: true } : {}),
+    }),
     sendControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", { cwd: path }),
     sendControlEvent(get, set, workspaceId, "cowork/provider/authMethods/read", { cwd: path }),
   ]);
@@ -465,12 +484,12 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
     },
   
 
-    refreshProviderStatus: async () => {
+    refreshProviderStatus: async (opts) => {
       const workspaceId = await ensureProviderControlReady();
       if (!workspaceId) return;
 
       const path = get().workspaces.find((workspace) => workspace.id === workspaceId)?.path;
-      await refreshProviderStatusForWorkspace(get, set, workspaceId, path);
+      await refreshProviderStatusForWorkspace(get, set, workspaceId, path, opts);
     },
 
     setLmStudioEnabled: async (enabled) => {

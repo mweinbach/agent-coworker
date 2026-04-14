@@ -16,6 +16,7 @@ export const jsonRpcProviderRequestSchemas = {
   "cowork/provider/auth/logout": jsonRpcControlRequestSchemas["cowork/provider/auth/logout"],
   "cowork/provider/auth/callback": jsonRpcControlRequestSchemas["cowork/provider/auth/callback"],
   "cowork/provider/auth/setApiKey": jsonRpcControlRequestSchemas["cowork/provider/auth/setApiKey"],
+  "cowork/provider/auth/setConfig": jsonRpcControlRequestSchemas["cowork/provider/auth/setConfig"],
   "cowork/provider/auth/copyApiKey": jsonRpcControlRequestSchemas["cowork/provider/auth/copyApiKey"],
 } as const;
 
@@ -27,5 +28,6 @@ export const jsonRpcProviderResultSchemas = {
   "cowork/provider/auth/logout": jsonRpcControlResultSchemas["cowork/provider/auth/logout"],
   "cowork/provider/auth/callback": jsonRpcControlResultSchemas["cowork/provider/auth/callback"],
   "cowork/provider/auth/setApiKey": jsonRpcControlResultSchemas["cowork/provider/auth/setApiKey"],
+  "cowork/provider/auth/setConfig": jsonRpcControlResultSchemas["cowork/provider/auth/setConfig"],
   "cowork/provider/auth/copyApiKey": jsonRpcControlResultSchemas["cowork/provider/auth/copyApiKey"],
 } as const;

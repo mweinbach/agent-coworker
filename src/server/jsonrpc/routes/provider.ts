@@ -184,6 +184,43 @@ export function createProviderRouteHandlers(
       context.jsonrpc.sendResult(ws, message.id, { event: outcome });
     },
 
+    "cowork/provider/auth/setConfig": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const provider = typeof params.provider === "string"
+        ? params.provider as AgentConfig["provider"]
+        : undefined;
+      const methodId = typeof params.methodId === "string" ? params.methodId.trim() : "";
+      const values = params.values && typeof params.values === "object"
+        ? Object.fromEntries(
+            Object.entries(params.values as Record<string, unknown>)
+              .filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+          )
+        : null;
+      if (!provider || !methodId || !values) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} requires provider, methodId, and values`,
+        });
+        return;
+      }
+      const outcome = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (session) => await session.setProviderConfig(provider, methodId, values),
+        (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => (
+          event.type === "provider_auth_result"
+          && event.provider === provider
+          && event.methodId === methodId
+        ),
+      );
+      if (context.utils.isSessionError(outcome)) {
+        sendSessionMutationError(context, ws, message.id, outcome);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+    },
+
     "cowork/provider/auth/copyApiKey": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);

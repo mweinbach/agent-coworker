@@ -88,7 +88,7 @@ export async function refreshProviderStatusForWorkspace(
   }));
 }
 
-export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "connectProvider" | "setProviderApiKey" | "copyProviderApiKey" | "authorizeProviderAuth" | "logoutProviderAuth" | "callbackProviderAuth" | "requestProviderCatalog" | "requestProviderAuthMethods" | "refreshProviderStatus" | "setLmStudioEnabled" | "setLmStudioModelVisible"> {
+export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "connectProvider" | "setProviderApiKey" | "setProviderConfig" | "copyProviderApiKey" | "authorizeProviderAuth" | "logoutProviderAuth" | "callbackProviderAuth" | "requestProviderCatalog" | "requestProviderAuthMethods" | "refreshProviderStatus" | "setLmStudioEnabled" | "setLmStudioModelVisible"> {
   const resolveProviderWorkspaceId = (): string | null =>
     get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
 
@@ -186,6 +186,42 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
       if (!ok) {
         set((s) => ({
           notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to send provider_auth_set_api_key." }),
+        }));
+      }
+    },
+
+    setProviderConfig: async (provider, methodId, values) => {
+      const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+      if (!workspaceId) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "info",
+            title: "Workspace required",
+            detail: "Add or select a workspace first.",
+          }),
+        }));
+        return;
+      }
+
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+      const ok = await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/auth/setConfig", {
+        cwd: get().workspaces.find((workspace) => workspace.id === workspaceId)?.path,
+        provider,
+        methodId: methodId.trim(),
+        values,
+      });
+      if (!ok) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to send provider_auth_set_config.",
+          }),
         }));
       }
     },

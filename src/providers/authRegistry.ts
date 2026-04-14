@@ -2,6 +2,7 @@ import {
   getAiCoworkerPaths,
   disconnectProvider,
   readConnectionStore,
+  saveProviderConnectionConfig,
   writeToolApiKey,
   type AiCoworkerPaths,
   type ConnectProviderResult,
@@ -12,12 +13,23 @@ import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { resolveAuthHomeDir } from "../utils/authHome";
 
 export type ProviderAuthMethodType = "api" | "oauth";
+export type ProviderAuthFieldKind = "text" | "password";
+
+export type ProviderAuthMethodField = {
+  id: string;
+  label: string;
+  kind: ProviderAuthFieldKind;
+  required?: boolean;
+  secret?: boolean;
+  placeholder?: string;
+};
 
 export type ProviderAuthMethod = {
   id: string;
   type: ProviderAuthMethodType;
   label: string;
   oauthMode?: "auto" | "code";
+  fields?: ProviderAuthMethodField[];
 };
 
 export type ProviderAuthChallenge = {
@@ -43,6 +55,52 @@ export type DisconnectProviderHandler = (opts: {
   paths?: AiCoworkerPaths;
 }) => Promise<DisconnectProviderResult>;
 
+const bedrockRegionField: ProviderAuthMethodField = {
+  id: "region",
+  label: "AWS region",
+  kind: "text",
+  placeholder: "us-east-1",
+};
+
+const bedrockProfileField: ProviderAuthMethodField = {
+  id: "profile",
+  label: "AWS profile",
+  kind: "text",
+  required: true,
+  placeholder: "default",
+};
+
+const bedrockAccessKeyIdField: ProviderAuthMethodField = {
+  id: "accessKeyId",
+  label: "Access key ID",
+  kind: "text",
+  required: true,
+  placeholder: "AKIA...",
+};
+
+const bedrockSecretAccessKeyField: ProviderAuthMethodField = {
+  id: "secretAccessKey",
+  label: "Secret access key",
+  kind: "password",
+  required: true,
+  secret: true,
+};
+
+const bedrockSessionTokenField: ProviderAuthMethodField = {
+  id: "sessionToken",
+  label: "Session token",
+  kind: "password",
+  secret: true,
+};
+
+const bedrockApiKeyField: ProviderAuthMethodField = {
+  id: "apiKey",
+  label: "Bedrock API key",
+  kind: "password",
+  required: true,
+  secret: true,
+};
+
 const PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> = {
   google: [
     { id: "api_key", type: "api", label: "API key" },
@@ -50,6 +108,40 @@ const PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> = {
   ],
   openai: [{ id: "api_key", type: "api", label: "API key" }],
   anthropic: [{ id: "api_key", type: "api", label: "API key" }],
+  bedrock: [
+    {
+      id: "aws_default",
+      type: "api",
+      label: "AWS default credentials",
+      fields: [bedrockRegionField],
+    },
+    {
+      id: "aws_profile",
+      type: "api",
+      label: "AWS profile",
+      fields: [bedrockProfileField, bedrockRegionField],
+    },
+    {
+      id: "aws_keys",
+      type: "api",
+      label: "AWS access keys",
+      fields: [
+        bedrockAccessKeyIdField,
+        bedrockSecretAccessKeyField,
+        bedrockSessionTokenField,
+        { ...bedrockRegionField, required: true },
+      ],
+    },
+    {
+      id: "api_key",
+      type: "api",
+      label: "Bedrock API key",
+      fields: [
+        bedrockApiKeyField,
+        { ...bedrockRegionField, required: true },
+      ],
+    },
+  ],
   baseten: [{ id: "api_key", type: "api", label: "API key" }],
   together: [{ id: "api_key", type: "api", label: "API key" }],
   fireworks: [{ id: "api_key", type: "api", label: "API key" }],
@@ -77,6 +169,51 @@ export function resolveProviderAuthMethod(provider: ProviderName, methodId: stri
 export function requiresProviderAuthCode(provider: ProviderName, methodId: string): boolean {
   const method = resolveProviderAuthMethod(provider, methodId);
   return method?.type === "oauth" && method.oauthMode === "code";
+}
+
+function normalizeFieldValues(
+  method: ProviderAuthMethod,
+  values: Record<string, string>,
+): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  const allowedFields = new Set((method.fields ?? []).map((field) => field.id));
+  for (const [rawKey, rawValue] of Object.entries(values)) {
+    const key = rawKey.trim();
+    if (!key || (allowedFields.size > 0 && !allowedFields.has(key))) continue;
+    normalized[key] = rawValue.trim();
+  }
+  return normalized;
+}
+
+function validateStructuredProviderConfig(
+  provider: ProviderName,
+  method: ProviderAuthMethod,
+  values: Record<string, string>,
+): string | null {
+  const normalized = normalizeFieldValues(method, values);
+  for (const field of method.fields ?? []) {
+    if (field.required && !normalized[field.id]) {
+      return `${field.label} is required.`;
+    }
+  }
+  if (provider !== "bedrock") return null;
+
+  if (method.id === "aws_default") {
+    return null;
+  }
+  if (method.id === "aws_profile" && !normalized.profile) {
+    return "AWS profile is required.";
+  }
+  if (method.id === "aws_keys") {
+    if (!normalized.accessKeyId) return "Access key ID is required.";
+    if (!normalized.secretAccessKey) return "Secret access key is required.";
+    if (!normalized.region) return "AWS region is required.";
+  }
+  if (method.id === "api_key") {
+    if (!normalized.apiKey) return "Bedrock API key is required.";
+    if (!normalized.region) return "AWS region is required.";
+  }
+  return null;
 }
 
 export function authorizeProviderAuth(opts: {
@@ -120,6 +257,13 @@ export async function setProviderApiKey(opts: {
   if (method.type !== "api") {
     return { ok: false, provider: opts.provider, message: `Method "${opts.methodId}" is not an API key method.` };
   }
+  if ((method.fields?.length ?? 0) > 0 && !(opts.provider === "google" && method.id === "exa_api_key")) {
+    return {
+      ok: false,
+      provider: opts.provider,
+      message: `Method "${opts.methodId}" requires structured credential fields and cannot be saved as a raw API key.`,
+    };
+  }
   const apiKey = opts.apiKey.trim();
   if (!apiKey) {
     return { ok: false, provider: opts.provider, message: "API key is required." };
@@ -153,6 +297,42 @@ export async function setProviderApiKey(opts: {
     provider: opts.provider,
     apiKey,
     cwd: opts.cwd,
+    paths,
+  });
+}
+
+export async function setProviderConfig(opts: {
+  provider: ProviderName;
+  methodId: string;
+  values: Record<string, string>;
+  paths?: AiCoworkerPaths;
+}): Promise<ConnectProviderResult> {
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
+  const method = resolveProviderAuthMethod(opts.provider, opts.methodId);
+  if (!method) {
+    return { ok: false, provider: opts.provider, message: `Unsupported auth method "${opts.methodId}".` };
+  }
+  if (method.type !== "api") {
+    return { ok: false, provider: opts.provider, message: `Method "${opts.methodId}" is not a credential method.` };
+  }
+  if ((method.fields?.length ?? 0) === 0) {
+    return {
+      ok: false,
+      provider: opts.provider,
+      message: `Method "${opts.methodId}" does not define structured fields.`,
+    };
+  }
+
+  const normalized = normalizeFieldValues(method, opts.values);
+  const validationError = validateStructuredProviderConfig(opts.provider, method, normalized);
+  if (validationError) {
+    return { ok: false, provider: opts.provider, message: validationError };
+  }
+
+  return await saveProviderConnectionConfig({
+    provider: opts.provider,
+    methodId: opts.methodId,
+    values: normalized,
     paths,
   });
 }

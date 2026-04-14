@@ -59,6 +59,7 @@
     "typecheck:desktop": "bunx tsc --noEmit -p apps/desktop/tsconfig.json"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock": "^3.999.0",
     "@google/genai": "^1.50.0",
     "@langfuse/otel": "^4.6.1",
     "@mariozechner/pi-ai": "^0.67.1",

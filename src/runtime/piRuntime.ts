@@ -1,5 +1,5 @@
 import { SpanStatusCode, trace, type AttributeValue, type Span } from "@opentelemetry/api";
-import { stream as piStream } from "@mariozechner/pi-ai";
+import { setBedrockProviderModule, stream as piStream } from "@mariozechner/pi-ai";
 import {
   asFiniteNumber,
   asNonEmptyString,
@@ -17,6 +17,7 @@ import { mapPiEventToRawParts } from "./piStreamParts";
 
 import { getSavedProviderApiKey } from "../config";
 import { getBasetenModelSpec, resolveBasetenApiKey } from "../providers/basetenShared";
+import { bedrockClientConfig, resolveBedrockAuthConfig } from "../providers/bedrockShared";
 import { prepareLmStudioModelMetadataForInference } from "../providers/lmstudio/catalog";
 import { lmStudioOpenAiBaseUrl } from "../providers/lmstudio/client";
 import { getNvidiaModelSpec, resolveNvidiaApiKey } from "../providers/nvidiaShared";
@@ -39,6 +40,7 @@ import {
   type OpenAiContinuationProvider,
   type OpenAiContinuationState,
 } from "../shared/openaiContinuation";
+import { streamBedrock as coworkStreamBedrock, streamSimpleBedrock as coworkStreamSimpleBedrock } from "./bedrockProviderModule";
 
 import {
   extractPiAssistantText,
@@ -53,6 +55,11 @@ import { maybeSpillToolOutputToWorkspace } from "./toolOutputOverflow";
 import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeStepOverride, RuntimeToolDefinition } from "./types";
 
 const LM_STUDIO_LOCAL_SENTINEL_API_KEY = "lmstudio-local";
+
+setBedrockProviderModule({
+  streamBedrock: coworkStreamBedrock,
+  streamSimpleBedrock: coworkStreamSimpleBedrock,
+});
 
 function safeJsonStringify(value: unknown): string {
   try {
@@ -137,6 +144,7 @@ export function buildStepState(
   );
   const streamOptions = {
     ...baseStreamOptions,
+    ...(resolved.streamOptions ?? {}),
     ...(overrides.streamOptions ?? {}),
   };
   return {
@@ -162,6 +170,7 @@ export type ResolvedPiRuntimeModel = {
   apiKey?: string;
   headers?: Record<string, string>;
   accountId?: string;
+  streamOptions?: Record<string, unknown>;
 };
 
 const PI_PLACEHOLDER_COST = Object.freeze({
@@ -288,6 +297,29 @@ function getBasetenPiModel(modelId: string): PiModel | null {
       : {}),
     contextWindow: modelSpec.contextWindow,
     maxTokens: modelSpec.maxTokens,
+  };
+}
+
+function getBedrockPiModel(modelId: string): PiModel {
+  const model = pickKnownPiModel("amazon-bedrock", modelId);
+  if (model) {
+    return {
+      ...model,
+      api: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+    };
+  }
+
+  return {
+    id: modelId,
+    name: modelId,
+    api: "bedrock-converse-stream",
+    provider: "amazon-bedrock",
+    baseUrl: "https://bedrock-runtime",
+    reasoning: modelId.toLowerCase().includes("claude"),
+    input: ["text"],
+    contextWindow: 131_072,
+    maxTokens: 8_192,
   };
 }
 
@@ -517,6 +549,15 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: getSavedProviderApiKey(params.config, "anthropic"),
+    };
+  }
+
+  if (provider === "bedrock") {
+    const auth = await resolveBedrockAuthConfig({ config: params.config });
+    const streamOptions = auth ? bedrockClientConfig(auth) : undefined;
+    return {
+      model: applySupportedModelMetadata(getBedrockPiModel(modelId), provider, modelId),
+      ...(streamOptions ? { streamOptions } : {}),
     };
   }
 

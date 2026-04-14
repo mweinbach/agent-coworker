@@ -1,13 +1,14 @@
 import { z } from "zod";
 
 import { getAiCoworkerPaths, maskApiKey, readConnectionStore, type AiCoworkerPaths, type ConnectionStore } from "./connect";
+import { maskBedrockFieldValues, refreshBedrockDiscoveryCache } from "./providers/bedrockShared";
 import { CODEX_BACKEND_BASE_URL, decodeJwtPayload, isTokenExpiring, readCodexAuthMaterial, refreshCodexAuthMaterial } from "./providers/codex-auth";
 import { listLmStudioLlms } from "./providers/lmstudio/catalog";
 import { isLmStudioError, listLmStudioModels, resolveLmStudioProviderOptions } from "./providers/lmstudio/client";
 import { PROVIDER_NAMES, type ProviderName } from "./types";
 import { resolveAuthHomeDir } from "./utils/authHome";
 
-export type ProviderStatusMode = "missing" | "error" | "api_key" | "oauth" | "oauth_pending" | "local";
+export type ProviderStatusMode = "missing" | "error" | "api_key" | "oauth" | "oauth_pending" | "local" | "credentials";
 
 export type ProviderAccount = {
   email?: string;
@@ -52,7 +53,9 @@ export type ProviderStatus = {
   account: ProviderAccount | null;
   message: string;
   checkedAt: string;
+  methodId?: string;
   savedApiKeyMasks?: Partial<Record<string, string>>;
+  savedFieldMasks?: Partial<Record<string, string>>;
   usage?: ProviderUsageStatus;
   /** True when the token is expired but a refresh token exists (i.e. recovery is possible). */
   tokenRecoverable?: boolean;
@@ -60,7 +63,7 @@ export type ProviderStatus = {
 
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const finiteNumberSchema = z.number().finite();
-const providerStatusModeSchema = z.enum(["api_key", "oauth", "oauth_pending", "local"]);
+const providerStatusModeSchema = z.enum(["api_key", "oauth", "oauth_pending", "local", "credentials"]);
 
 function normalizeProviderStatusMode(mode: unknown): ProviderStatusMode {
   const parsed = providerStatusModeSchema.safeParse(mode);
@@ -92,6 +95,17 @@ function buildSavedApiKeyMasks(opts: {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+function buildSavedFieldMasks(opts: {
+  provider: ProviderName;
+  store: ConnectionStore;
+}): Partial<Record<string, string>> | undefined {
+  if (opts.provider !== "bedrock") return undefined;
+  const entry = opts.store.services[opts.provider];
+  if (entry?.mode !== "credentials" || !entry.values) return undefined;
+  const out = maskBedrockFieldValues(entry.values);
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function storedProviderApiKey(store: ConnectionStore, provider: ProviderName): string | undefined {
   const entry = store.services[provider];
   const apiKey = entry?.mode === "api_key" ? entry.apiKey?.trim() : "";
@@ -105,6 +119,7 @@ function statusFromConnectionStore(opts: {
 }): ProviderStatus {
   const entry = opts.store.services[opts.provider];
   const savedApiKeyMasks = buildSavedApiKeyMasks({ provider: opts.provider, store: opts.store });
+  const savedFieldMasks = buildSavedFieldMasks({ provider: opts.provider, store: opts.store });
   if (!entry) {
     return {
       provider: opts.provider,
@@ -115,6 +130,7 @@ function statusFromConnectionStore(opts: {
       message: "Not connected.",
       checkedAt: opts.checkedAt,
       ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
+      ...(savedFieldMasks ? { savedFieldMasks } : {}),
     };
   }
 
@@ -128,6 +144,7 @@ function statusFromConnectionStore(opts: {
       message: entry.apiKey ? "API key saved." : "API key missing.",
       checkedAt: opts.checkedAt,
       ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
+      ...(savedFieldMasks ? { savedFieldMasks } : {}),
     };
   }
 
@@ -141,6 +158,7 @@ function statusFromConnectionStore(opts: {
       message: "Pending connection (no credentials).",
       checkedAt: opts.checkedAt,
       ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
+      ...(savedFieldMasks ? { savedFieldMasks } : {}),
     };
   }
 
@@ -154,6 +172,22 @@ function statusFromConnectionStore(opts: {
       message: "OAuth connected.",
       checkedAt: opts.checkedAt,
       ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
+      ...(savedFieldMasks ? { savedFieldMasks } : {}),
+    };
+  }
+
+  if (entry.mode === "credentials") {
+    return {
+      provider: opts.provider,
+      authorized: true,
+      verified: false,
+      mode: "credentials",
+      account: null,
+      message: "Credentials saved.",
+      checkedAt: opts.checkedAt,
+      ...(entry.methodId ? { methodId: entry.methodId } : {}),
+      ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
+      ...(savedFieldMasks ? { savedFieldMasks } : {}),
     };
   }
 
@@ -166,6 +200,37 @@ function statusFromConnectionStore(opts: {
     message: "Configured.",
     checkedAt: opts.checkedAt,
     ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
+    ...(savedFieldMasks ? { savedFieldMasks } : {}),
+  };
+}
+
+async function getBedrockStatus(opts: {
+  paths: AiCoworkerPaths;
+  store: ConnectionStore;
+  checkedAt: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ProviderStatus> {
+  const base = statusFromConnectionStore({ provider: "bedrock", store: opts.store, checkedAt: opts.checkedAt });
+  const discovery = await refreshBedrockDiscoveryCache({
+    paths: opts.paths,
+    env: opts.env,
+  });
+
+  if (!discovery.auth) {
+    return base;
+  }
+
+  return {
+    provider: "bedrock",
+    authorized: true,
+    verified: discovery.ok && !discovery.usedCache,
+    mode: base.mode === "missing" ? "credentials" : base.mode,
+    account: null,
+    message: discovery.message,
+    checkedAt: opts.checkedAt,
+    methodId: base.methodId ?? discovery.auth.methodId,
+    ...(base.savedApiKeyMasks ? { savedApiKeyMasks: base.savedApiKeyMasks } : {}),
+    ...(base.savedFieldMasks ? { savedFieldMasks: base.savedFieldMasks } : {}),
   };
 }
 
@@ -514,6 +579,10 @@ export async function getProviderStatuses(opts: {
   for (const provider of PROVIDER_NAMES) {
     if (provider === "codex-cli") {
       out.push(await getCodexCliStatus({ paths, store, checkedAt, fetchImpl }));
+      continue;
+    }
+    if (provider === "bedrock") {
+      out.push(await getBedrockStatus({ paths, store, checkedAt, env: opts.env }));
       continue;
     }
     if (provider === "lmstudio") {

@@ -160,6 +160,64 @@ export function buildPiStreamOptions(
     options.reasoningEffort = "high";
   }
 
+  if (params.config.provider === "bedrock") {
+    const region = asNonEmptyString(providerSection.region);
+    if (region) options.region = region;
+
+    const profile = asNonEmptyString(providerSection.profile);
+    if (profile) options.profile = profile;
+
+    const toolChoice = providerSection.toolChoice;
+    if (
+      toolChoice === "auto"
+      || toolChoice === "any"
+      || toolChoice === "none"
+      || (asRecord(toolChoice)?.type === "tool" && asNonEmptyString(asRecord(toolChoice)?.name))
+    ) {
+      options.toolChoice = toolChoice;
+    }
+
+    const reasoning = asNonEmptyString(providerSection.reasoning);
+    if (reasoning) options.reasoning = reasoning;
+
+    const thinkingBudgets = asRecord(providerSection.thinkingBudgets);
+    if (thinkingBudgets) {
+      const mappedBudgets = {
+        ...(asFiniteNumber(thinkingBudgets.minimal) !== undefined ? { minimal: asFiniteNumber(thinkingBudgets.minimal)! } : {}),
+        ...(asFiniteNumber(thinkingBudgets.low) !== undefined ? { low: asFiniteNumber(thinkingBudgets.low)! } : {}),
+        ...(asFiniteNumber(thinkingBudgets.medium) !== undefined ? { medium: asFiniteNumber(thinkingBudgets.medium)! } : {}),
+        ...(asFiniteNumber(thinkingBudgets.high) !== undefined ? { high: asFiniteNumber(thinkingBudgets.high)! } : {}),
+      };
+      if (Object.keys(mappedBudgets).length > 0) {
+        options.thinkingBudgets = mappedBudgets;
+      }
+    }
+
+    if (providerSection.interleavedThinking === true || providerSection.interleavedThinking === false) {
+      options.interleavedThinking = providerSection.interleavedThinking;
+    }
+
+    const requestMetadata = asRecord(providerSection.requestMetadata);
+    if (requestMetadata) {
+      const mappedMetadata: Record<string, string> = {};
+      for (const [key, value] of Object.entries(requestMetadata)) {
+        const normalizedKey = asNonEmptyString(key);
+        const normalizedValue = asNonEmptyString(value);
+        if (normalizedKey && normalizedValue) {
+          mappedMetadata[normalizedKey] = normalizedValue;
+        }
+      }
+      if (Object.keys(mappedMetadata).length > 0) {
+        options.requestMetadata = mappedMetadata;
+      }
+    }
+
+    const temperature = asFiniteNumber(providerSection.temperature);
+    if (temperature !== undefined) options.temperature = temperature;
+    const maxTokens = asFiniteNumber(providerSection.maxTokens);
+    if (maxTokens !== undefined) options.maxTokens = maxTokens;
+  }
+
   return options;
 }
 

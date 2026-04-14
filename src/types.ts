@@ -4,6 +4,7 @@ export const PROVIDER_NAMES = [
   "google",
   "openai",
   "anthropic",
+  "bedrock",
   "baseten",
   "together",
   "fireworks",

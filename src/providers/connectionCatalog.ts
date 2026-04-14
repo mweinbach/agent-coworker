@@ -1,6 +1,7 @@
 import { getAiCoworkerPaths, readConnectionStore, type AiCoworkerPaths } from "../connect";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { defaultSupportedModel, listSupportedModels, type SupportedModel } from "../models/registry";
+import { readBedrockCatalogSnapshot } from "./bedrockShared";
 import { readCodexAuthMaterial } from "./codex-auth";
 import {
   listLmStudioLlms,
@@ -42,6 +43,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   google: "Google",
   openai: "OpenAI",
   anthropic: "Anthropic",
+  bedrock: "Amazon Bedrock",
   baseten: "Baseten",
   together: "Together AI",
   fireworks: "Fireworks AI",
@@ -63,6 +65,35 @@ function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): Provid
       supportsImageInput: model.supportsImageInput,
     })),
     defaultModel: defaultSupportedModel(provider).id,
+  };
+}
+
+async function bedrockCatalogEntry(opts: {
+  providerOptions?: unknown;
+  env?: NodeJS.ProcessEnv;
+  homedir?: string;
+  paths?: AiCoworkerPaths;
+}): Promise<{ entry: ProviderCatalogEntry; connected: boolean }> {
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
+  const snapshot = await readBedrockCatalogSnapshot({
+    paths,
+    env: opts.env,
+  });
+  return {
+    entry: {
+      id: "bedrock",
+      name: PROVIDER_LABELS.bedrock,
+      models: snapshot.models.map((model) => ({
+        id: model.id,
+        displayName: model.displayName,
+        knowledgeCutoff: model.knowledgeCutoff,
+        supportsImageInput: model.supportsImageInput,
+      })),
+      defaultModel: snapshot.defaultModel,
+      ...(snapshot.state ? { state: snapshot.state } : {}),
+      ...(snapshot.message ? { message: snapshot.message } : {}),
+    },
+    connected: snapshot.connected,
   };
 }
 
@@ -136,8 +167,13 @@ export async function listProviderCatalogEntries(opts: {
   env?: NodeJS.ProcessEnv;
   lmstudioFetchImpl?: typeof fetch;
 } = {}): Promise<ProviderCatalogEntry[]> {
+  const bedrock = await bedrockCatalogEntry({
+    providerOptions: opts.providerOptions,
+    env: opts.env,
+  });
   const lmstudio = await lmStudioCatalogEntry(opts);
   return PROVIDER_NAMES.map((provider) => {
+    if (provider === "bedrock") return bedrock.entry;
     if (provider === "lmstudio") return lmstudio.entry;
     return staticCatalogEntry(provider);
   });
@@ -156,6 +192,11 @@ export async function getProviderCatalog(opts: {
   const readStore = opts.readStore ?? readConnectionStore;
   const readCodexAuthMaterialImpl = opts.readCodexAuthMaterialImpl ?? readCodexAuthMaterial;
   const store = await readStore(paths);
+  const bedrock = await bedrockCatalogEntry({
+    paths,
+    providerOptions: opts.providerOptions,
+    env: opts.env,
+  });
   const lmstudio = await lmStudioCatalogEntry({
     store,
     providerOptions: opts.providerOptions,
@@ -163,6 +204,7 @@ export async function getProviderCatalog(opts: {
     lmstudioFetchImpl: opts.lmstudioFetchImpl,
   });
   const all = PROVIDER_NAMES.map((provider) => {
+    if (provider === "bedrock") return bedrock.entry;
     if (provider === "lmstudio") return lmstudio.entry;
     return staticCatalogEntry(provider);
   });
@@ -172,6 +214,9 @@ export async function getProviderCatalog(opts: {
   const connected = PROVIDER_NAMES.filter((provider) => {
     if (provider === "lmstudio") {
       return lmstudio.connected;
+    }
+    if (provider === "bedrock") {
+      return bedrock.connected;
     }
     const entry = store.services[provider];
     if (entry?.mode === "api_key" || entry?.mode === "oauth") return true;

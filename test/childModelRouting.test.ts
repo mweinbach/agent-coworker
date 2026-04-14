@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { normalizeChildRoutingConfig } from "../src/models/childModelRouting";
+import { normalizeChildRoutingConfig, parseChildModelRef } from "../src/models/childModelRouting";
 
 describe("normalizeChildRoutingConfig", () => {
   test("cross-provider routing treats preferredChildModelRef as canonical", () => {
@@ -51,5 +51,13 @@ describe("normalizeChildRoutingConfig", () => {
     });
     expect(fallback.preferredChildModelRef).toBe("openai:gpt-5.2");
     expect(fallback.preferredChildModel).toBe("gpt-5.2");
+  });
+
+  test("same-provider parsing accepts model ids that contain colons", () => {
+    const parsed = parseChildModelRef("amazon.nova-lite-v1:0", "bedrock", "test child model");
+    expect(parsed.provider).toBe("bedrock");
+    expect(parsed.modelId).toBe("amazon.nova-lite-v1:0");
+    expect(parsed.ref).toBe("bedrock:amazon.nova-lite-v1:0");
+    expect(parsed.explicitProvider).toBe(false);
   });
 });

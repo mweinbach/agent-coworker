@@ -1,7 +1,7 @@
 import { PROVIDER_NAMES, type ProviderName } from "../lib/wsProtocol";
 import type { PersistedProviderState, PersistedProviderStatus } from "./types";
 
-const PROVIDER_STATUS_MODES = new Set(["missing", "error", "api_key", "oauth", "oauth_pending", "local"]);
+const PROVIDER_STATUS_MODES = new Set(["missing", "error", "api_key", "oauth", "oauth_pending", "local", "credentials"]);
 const DEFAULT_CHECKED_AT = new Date(0).toISOString();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -42,6 +42,19 @@ function normalizeSavedApiKeyMasks(value: unknown): PersistedProviderStatus["sav
   return Object.fromEntries(entries);
 }
 
+function normalizeSavedFieldMasks(value: unknown): PersistedProviderStatus["savedFieldMasks"] {
+  if (!isRecord(value)) return undefined;
+  const entries: Array<readonly [string, string]> = [];
+  for (const [key, rawMask] of Object.entries(value)) {
+    const normalizedKey = asNonEmptyString(key);
+    const normalizedMask = asNonEmptyString(rawMask);
+    if (!normalizedKey || !normalizedMask) continue;
+    entries.push([normalizedKey, normalizedMask] as const);
+  }
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(entries);
+}
+
 export function normalizePersistedProviderStatus(
   expectedProvider: ProviderName,
   value: unknown,
@@ -63,7 +76,9 @@ export function normalizePersistedProviderStatus(
     asNonEmptyString(value.message) ??
     (authorized || verified ? "Connected." : "Not connected.");
   const checkedAt = asNonEmptyString(value.checkedAt) ?? DEFAULT_CHECKED_AT;
+  const methodId = asNonEmptyString(value.methodId);
   const savedApiKeyMasks = normalizeSavedApiKeyMasks(value.savedApiKeyMasks);
+  const savedFieldMasks = normalizeSavedFieldMasks(value.savedFieldMasks);
 
   return {
     provider: expectedProvider,
@@ -73,7 +88,9 @@ export function normalizePersistedProviderStatus(
     account,
     message,
     checkedAt,
+    ...(methodId ? { methodId } : {}),
     ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
+    ...(savedFieldMasks ? { savedFieldMasks } : {}),
     ...(isRecord(value.usage) ? { usage: value.usage as PersistedProviderStatus["usage"] } : {}),
   };
 }

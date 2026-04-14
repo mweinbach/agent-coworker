@@ -2,6 +2,7 @@ import type { AgentConfig, ProviderName } from "../types";
 import { normalizeModelIdForProvider } from "../models/metadata";
 
 import { anthropicProvider } from "./anthropic";
+import { bedrockProvider } from "./bedrock";
 import { basetenProvider } from "./baseten";
 import { PROVIDER_MODEL_CATALOG } from "./catalog";
 import { codexCliProvider } from "./codex-cli";
@@ -20,6 +21,7 @@ export {
   listProviderAuthMethods,
   requiresProviderAuthCode,
   resolveProviderAuthMethod,
+  setProviderConfig,
   setProviderApiKey,
   type ProviderAuthChallenge,
   type ProviderAuthMethod,
@@ -49,6 +51,7 @@ export type ProviderDefinition = {
 
 const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   anthropic: anthropicProvider,
+  bedrock: bedrockProvider,
   baseten: basetenProvider,
   together: togetherProvider,
   fireworks: fireworksProvider,
@@ -63,6 +66,7 @@ const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
 
 export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   anthropic: { ...PROVIDER_RUNTIMES.anthropic, ...PROVIDER_MODEL_CATALOG.anthropic },
+  bedrock: { ...PROVIDER_RUNTIMES.bedrock, ...PROVIDER_MODEL_CATALOG.bedrock },
   baseten: { ...PROVIDER_RUNTIMES.baseten, ...PROVIDER_MODEL_CATALOG.baseten },
   together: { ...PROVIDER_RUNTIMES.together, ...PROVIDER_MODEL_CATALOG.together },
   fireworks: { ...PROVIDER_RUNTIMES.fireworks, ...PROVIDER_MODEL_CATALOG.fireworks },

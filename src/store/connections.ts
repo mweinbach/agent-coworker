@@ -10,12 +10,14 @@ export type ConnectService = ProviderName;
 export const TOOL_API_KEY_NAMES = ["exa"] as const;
 export type ToolApiKeyName = (typeof TOOL_API_KEY_NAMES)[number];
 
-export type ConnectionMode = "api_key" | "oauth" | "oauth_pending";
+export type ConnectionMode = "api_key" | "oauth" | "oauth_pending" | "credentials";
 
 export type StoredConnection = {
   service: ConnectService;
   mode: ConnectionMode;
+  methodId?: string;
   apiKey?: string;
+  values?: Record<string, string>;
   updatedAt: string;
 };
 
@@ -40,8 +42,10 @@ const isoTimestampSchema = z.string().datetime({ offset: true });
 
 const storedConnectionSchema = z.object({
   service: z.string().trim().min(1),
-  mode: z.enum(["api_key", "oauth", "oauth_pending"]),
+  mode: z.enum(["api_key", "oauth", "oauth_pending", "credentials"]),
+  methodId: z.string().trim().min(1).optional(),
   apiKey: z.string().trim().min(1).optional(),
+  values: z.record(z.string().trim().min(1), z.string()).optional(),
   updatedAt: isoTimestampSchema,
 }).passthrough();
 

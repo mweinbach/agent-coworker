@@ -1428,6 +1428,14 @@ export class AgentSession {
     await this.getProviderAuthManager().setProviderApiKey(providerRaw, methodIdRaw, apiKeyRaw);
   }
 
+  async setProviderConfig(
+    providerRaw: AgentConfig["provider"],
+    methodIdRaw: string,
+    values: Record<string, string>,
+  ) {
+    await this.getProviderAuthManager().setProviderConfig(providerRaw, methodIdRaw, values);
+  }
+
   async copyProviderApiKey(providerRaw: AgentConfig["provider"], sourceProviderRaw: AgentConfig["provider"]) {
     await this.getProviderAuthManager().copyProviderApiKey(providerRaw, sourceProviderRaw);
   }

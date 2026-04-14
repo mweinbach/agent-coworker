@@ -353,7 +353,7 @@ The remainder of this document describes the **legacy Cowork protocol**, which r
 - [Client -> Server Messages](#client---server-messages)
   - Handshake: [client_hello](#client_hello)
   - Conversation: [user_message](#user_message) | [steer_message](#steer_message) | [ask_response](#ask_response) | [approval_response](#approval_response) | [cancel](#cancel) | [reset](#reset)
-  - Model & Provider: [set_model](#set_model) | [apply_session_defaults](#apply_session_defaults) | [refresh_provider_status](#refresh_provider_status) | [provider_catalog_get](#provider_catalog_get) | [provider_auth_methods_get](#provider_auth_methods_get) | [provider_auth_authorize](#provider_auth_authorize) | [provider_auth_logout](#provider_auth_logout) | [provider_auth_callback](#provider_auth_callback) | [provider_auth_set_api_key](#provider_auth_set_api_key) | [provider_auth_copy_api_key](#provider_auth_copy_api_key)
+  - Model & Provider: [set_model](#set_model) | [apply_session_defaults](#apply_session_defaults) | [refresh_provider_status](#refresh_provider_status) | [provider_catalog_get](#provider_catalog_get) | [provider_auth_methods_get](#provider_auth_methods_get) | [provider_auth_authorize](#provider_auth_authorize) | [provider_auth_logout](#provider_auth_logout) | [provider_auth_callback](#provider_auth_callback) | [provider_auth_set_api_key](#provider_auth_set_api_key) | [provider_auth_set_config](#provider_auth_set_config) | [provider_auth_copy_api_key](#provider_auth_copy_api_key)
   - Tools & Commands: [list_tools](#list_tools) | [list_commands](#list_commands) | [execute_command](#execute_command)
   - Skills: [list_skills](#list_skills) | [read_skill](#read_skill) | [disable_skill](#disable_skill) | [enable_skill](#enable_skill) | [delete_skill](#delete_skill) | [skills_catalog_get](#skills_catalog_get) | [skill_installation_get](#skill_installation_get) | [skill_install_preview](#skill_install_preview) | [skill_install](#skill_install) | [skill_installation_enable](#skill_installation_enable) | [skill_installation_disable](#skill_installation_disable) | [skill_installation_delete](#skill_installation_delete) | [skill_installation_copy](#skill_installation_copy) | [skill_installation_check_update](#skill_installation_check_update) | [skill_installation_update](#skill_installation_update)
   - MCP: [set_enable_mcp](#set_enable_mcp) | [mcp_servers_get](#mcp_servers_get) | [mcp_server_upsert](#mcp_server_upsert) | [mcp_server_delete](#mcp_server_delete) | [mcp_server_validate](#mcp_server_validate) | [mcp_server_auth_authorize](#mcp_server_auth_authorize) | [mcp_server_auth_callback](#mcp_server_auth_callback) | [mcp_server_auth_set_api_key](#mcp_server_auth_set_api_key) | [mcp_servers_migrate_legacy](#mcp_servers_migrate_legacy)
@@ -640,7 +640,7 @@ Types referenced across multiple messages.
 ### ProviderName
 
 ```
-"google" | "openai" | "anthropic" | "baseten" | "together" | "nvidia" | "lmstudio" | "opencode-go" | "opencode-zen" | "codex-cli"
+"google" | "openai" | "anthropic" | "bedrock" | "baseten" | "together" | "fireworks" | "nvidia" | "lmstudio" | "opencode-go" | "opencode-zen" | "codex-cli"
 ```
 
 ### PublicConfig
@@ -684,7 +684,10 @@ Returned in `server_hello` and `config_updated`:
   "id": "api_key",
   "type": "api",
   "label": "API Key",
-  "oauthMode": null
+  "oauthMode": null,
+  "fields": [
+    { "id": "apiKey", "label": "API key", "kind": "password", "required": true, "secret": true }
+  ]
 }
 ```
 
@@ -694,6 +697,7 @@ Returned in `server_hello` and `config_updated`:
 | `type` | `"api" \| "oauth"` | Auth method category |
 | `label` | `string` | Human-readable label |
 | `oauthMode` | `"auto" \| "code"` | Optional. Only present for OAuth methods |
+| `fields` | `Array<{ id, label, kind, required?, secret?, placeholder? }>?` | Optional structured credential fields for non-OAuth methods |
 
 ### ProviderAuthChallenge
 
@@ -724,7 +728,9 @@ Returned in `server_hello` and `config_updated`:
   "account": { "email": "user@example.com", "name": "User" },
   "message": "Connected",
   "checkedAt": "2026-02-19T18:00:00.000Z",
+  "methodId": "api_key",
   "savedApiKeyMasks": { "api_key": "sk-...xxxx" },
+  "savedFieldMasks": { "region": "us-west-2" },
   "usage": {
     "planType": "pro",
     "accountId": "acct-123",
@@ -750,11 +756,13 @@ Returned in `server_hello` and `config_updated`:
 | `provider` | `ProviderName` | Provider identifier |
 | `authorized` | `boolean` | Whether the provider is immediately usable. For local providers like LM Studio this can be `true` based on reachability rather than stored auth |
 | `verified` | `boolean` | Whether credentials have been verified working |
-| `mode` | `"missing" \| "error" \| "api_key" \| "oauth" \| "oauth_pending" \| "local"` | Current auth/connection mode |
+| `mode` | `"missing" \| "error" \| "api_key" \| "oauth" \| "oauth_pending" \| "local" \| "credentials"` | Current auth/connection mode |
 | `account` | `{ email?: string, name?: string } \| null` | Account info if available |
 | `message` | `string` | Human-readable status message |
 | `checkedAt` | `string` | ISO 8601 timestamp of last check |
+| `methodId` | `string?` | Optional active auth/config method identifier |
 | `savedApiKeyMasks` | `Record<string, string>?` | Optional masked key values keyed by method id. Never includes raw secrets |
+| `savedFieldMasks` | `Record<string, string>?` | Optional masked saved structured credential values keyed by field id |
 | `usage` | `{ planType?: string, accountId?: string, email?: string, rateLimits: ProviderRateLimitSnapshot[] }?` | Optional backend usage snapshot data, currently populated for Codex OAuth verification |
 | `tokenRecoverable` | `boolean?` | When `authorized` is `false`, indicates the token is expired but a refresh token exists. Clients should avoid persisting a "not connected" state when this is `true`, since the next refresh attempt may succeed |
 
@@ -1547,6 +1555,32 @@ Set a provider API key.
 | `provider` | `ProviderName` | Yes | Must be a valid provider |
 | `methodId` | `string` | Yes | Non-empty. Must be a registered auth method for the given provider |
 | `apiKey` | `string` | Yes | Non-empty API key value |
+
+**Response:** `provider_auth_result`, then `provider_status` and `provider_catalog` on success.
+
+---
+
+### provider_auth_set_config
+
+Persist structured provider credential/config values for a provider auth method.
+
+```json
+{
+  "type": "provider_auth_set_config",
+  "sessionId": "...",
+  "provider": "bedrock",
+  "methodId": "aws_profile",
+  "values": { "profile": "sandbox", "region": "us-west-2" }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"provider_auth_set_config"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `provider` | `ProviderName` | Yes | Must be a valid provider |
+| `methodId` | `string` | Yes | Non-empty. Must be a registered auth method for the given provider |
+| `values` | `Record<string, string>` | Yes | Structured credential/config values keyed by field id |
 
 **Response:** `provider_auth_result`, then `provider_status` and `provider_catalog` on success.
 
@@ -3197,6 +3231,7 @@ Current provider connection/auth status list. Sent on connection, after auth cha
 
 Notes:
 - `savedApiKeyMasks` values are always masked and never include raw secret values.
+- `savedFieldMasks` values are always masked or pre-redacted summaries; raw credential values are never emitted.
 
 ---
 

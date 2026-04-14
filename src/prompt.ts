@@ -263,6 +263,7 @@ const PROVIDER_DISPLAY_NAMES: Record<ProviderName, string> = {
   google: "Google",
   openai: "OpenAI",
   anthropic: "Anthropic",
+  bedrock: "Amazon Bedrock",
   baseten: "Baseten",
   together: "Together AI",
   fireworks: "Fireworks AI",

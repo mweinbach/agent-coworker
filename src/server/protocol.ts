@@ -232,7 +232,7 @@ export type ServerEvent =
     provider: AgentConfig["provider"];
     methodId: string;
     ok: boolean;
-    mode?: "api_key" | "oauth" | "oauth_pending";
+    mode?: "api_key" | "oauth" | "oauth_pending" | "credentials";
     message: string;
   }
   | { type: "provider_status"; sessionId: string; providers: ProviderStatus[] }

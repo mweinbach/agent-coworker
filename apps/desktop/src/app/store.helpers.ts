@@ -130,6 +130,45 @@ function defaultProviderAuthMethods(provider: ProviderName): ProviderAuthMethod[
       { id: "exa_api_key", type: "api", label: "Exa API key (web search)" },
     ];
   }
+  if (provider === "bedrock") {
+    return [
+      {
+        id: "aws_default",
+        type: "api",
+        label: "AWS default credentials",
+        fields: [{ id: "region", label: "AWS region", kind: "text", placeholder: "us-east-1" }],
+      },
+      {
+        id: "aws_profile",
+        type: "api",
+        label: "AWS profile",
+        fields: [
+          { id: "profile", label: "AWS profile", kind: "text", required: true, placeholder: "default" },
+          { id: "region", label: "AWS region", kind: "text", placeholder: "us-east-1" },
+        ],
+      },
+      {
+        id: "aws_keys",
+        type: "api",
+        label: "AWS access keys",
+        fields: [
+          { id: "accessKeyId", label: "Access key ID", kind: "text", required: true, placeholder: "AKIA..." },
+          { id: "secretAccessKey", label: "Secret access key", kind: "password", required: true, secret: true },
+          { id: "sessionToken", label: "Session token", kind: "password", secret: true },
+          { id: "region", label: "AWS region", kind: "text", required: true, placeholder: "us-east-1" },
+        ],
+      },
+      {
+        id: "api_key",
+        type: "api",
+        label: "Bedrock API key",
+        fields: [
+          { id: "apiKey", label: "Bedrock API key", kind: "password", required: true, secret: true },
+          { id: "region", label: "AWS region", kind: "text", required: true, placeholder: "us-east-1" },
+        ],
+      },
+    ];
+  }
   if (provider === "codex-cli") {
     return [
       { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
@@ -298,6 +337,7 @@ export type AppStoreState = {
 
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
   setProviderApiKey: (provider: ProviderName, methodId: string, apiKey: string) => Promise<void>;
+  setProviderConfig: (provider: ProviderName, methodId: string, values: Record<string, string>) => Promise<void>;
   copyProviderApiKey: (provider: ProviderName, sourceProvider: ProviderName) => Promise<void>;
   authorizeProviderAuth: (provider: ProviderName, methodId: string) => Promise<void>;
   logoutProviderAuth: (provider: ProviderName) => Promise<void>;

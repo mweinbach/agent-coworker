@@ -7,6 +7,7 @@ const DISPLAY_NAMES: Partial<Record<ProviderName, string>> = {
   google: "Google",
   openai: "OpenAI",
   anthropic: "Anthropic",
+  bedrock: "Amazon Bedrock",
   baseten: "Baseten",
   together: "Together AI",
   fireworks: "Fireworks AI",
@@ -35,6 +36,14 @@ export function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[
     return [
       { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
       { id: "api_key", type: "api", label: "API key" },
+    ];
+  }
+  if (provider === "bedrock") {
+    return [
+      { id: "aws_default", type: "api", label: "AWS default credentials" },
+      { id: "aws_profile", type: "api", label: "AWS profile" },
+      { id: "aws_keys", type: "api", label: "AWS access keys" },
+      { id: "api_key", type: "api", label: "Bedrock API key" },
     ];
   }
   if (provider === "lmstudio") {

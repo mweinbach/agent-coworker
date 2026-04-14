@@ -39,7 +39,19 @@ export function parseChildModelRef(raw: string, defaultProvider?: ProviderName, 
 
   const providerRaw = trimmed.slice(0, colonIndex).trim();
   const modelRaw = trimmed.slice(colonIndex + 1).trim();
-  if (!isProviderName(providerRaw) || !modelRaw) {
+  if (!isProviderName(providerRaw)) {
+    if (!defaultProvider) {
+      throw new Error(`Unsupported ${source} "${trimmed}". Expected provider:modelId.`);
+    }
+    const modelId = normalizeModelIdForProvider(defaultProvider, trimmed, source);
+    return {
+      provider: defaultProvider,
+      modelId,
+      ref: childModelRef(defaultProvider, modelId),
+      explicitProvider: false,
+    };
+  }
+  if (!modelRaw) {
     throw new Error(`Unsupported ${source} "${trimmed}". Expected provider:modelId.`);
   }
 

@@ -240,6 +240,45 @@ function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
       fallbackExaAuthMethod(),
     ];
   }
+  if (provider === "bedrock") {
+    return [
+      {
+        id: "aws_default",
+        type: "api",
+        label: "AWS default credentials",
+        fields: [{ id: "region", label: "AWS region", kind: "text", placeholder: "us-east-1" }],
+      },
+      {
+        id: "aws_profile",
+        type: "api",
+        label: "AWS profile",
+        fields: [
+          { id: "profile", label: "AWS profile", kind: "text", required: true, placeholder: "default" },
+          { id: "region", label: "AWS region", kind: "text", placeholder: "us-east-1" },
+        ],
+      },
+      {
+        id: "aws_keys",
+        type: "api",
+        label: "AWS access keys",
+        fields: [
+          { id: "accessKeyId", label: "Access key ID", kind: "text", required: true, placeholder: "AKIA..." },
+          { id: "secretAccessKey", label: "Secret access key", kind: "password", required: true, secret: true },
+          { id: "sessionToken", label: "Session token", kind: "password", secret: true },
+          { id: "region", label: "AWS region", kind: "text", required: true, placeholder: "us-east-1" },
+        ],
+      },
+      {
+        id: "api_key",
+        type: "api",
+        label: "Bedrock API key",
+        fields: [
+          { id: "apiKey", label: "Bedrock API key", kind: "password", required: true, secret: true },
+          { id: "region", label: "AWS region", kind: "text", required: true, placeholder: "us-east-1" },
+        ],
+      },
+    ];
+  }
   if (provider === "codex-cli") {
     return [
       { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
@@ -294,6 +333,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const canConnectProvider = hasWorkspace || selectedWorkspaceId !== null;
 
   const setProviderApiKey = useAppStore((s) => s.setProviderApiKey);
+  const setProviderConfig = useAppStore((s) => s.setProviderConfig);
   const copyProviderApiKey = useAppStore((s) => s.copyProviderApiKey);
   const authorizeProviderAuth = useAppStore((s) => s.authorizeProviderAuth);
   const logoutProviderAuth = useAppStore((s) => s.logoutProviderAuth);
@@ -317,9 +357,12 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const providerUiState = serverState?.providerUiState ?? providerUiStateFromStore;
 
   const [apiKeysByMethod, setApiKeysByMethod] = useState<Record<string, string>>({});
+  const [credentialValuesByMethod, setCredentialValuesByMethod] = useState<Record<string, Record<string, string>>>({});
   const [apiKeyEditingByMethod, setApiKeyEditingByMethod] = useState<Record<string, boolean>>({});
+  const [credentialEditingByMethod, setCredentialEditingByMethod] = useState<Record<string, boolean>>({});
   const [revealApiKeyByMethod, setRevealApiKeyByMethod] = useState<Record<string, boolean>>({});
   const [optimisticApiKeyMaskByMethod, setOptimisticApiKeyMaskByMethod] = useState<Record<string, string>>({});
+  const [optimisticFieldMasksByMethod, setOptimisticFieldMasksByMethod] = useState<Record<string, Record<string, string>>>({});
   const [oauthCodesByMethod, setOauthCodesByMethod] = useState<Record<string, string>>({});
   const [expandedSectionId, setExpandedSectionId] = useState<string | null>(initialExpandedSectionId);
 
@@ -385,6 +428,18 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     const method = providerMethods.find((candidate) => candidate.id === providerLastAuthResult.methodId);
     if (method?.type !== "api") return;
     const stateKey = methodStateKey(providerLastAuthResult.provider, providerLastAuthResult.methodId);
+    if ((method.fields?.length ?? 0) > 0) {
+      const rawMasks = providerStatusByName[providerLastAuthResult.provider]?.methodId === providerLastAuthResult.methodId
+        ? providerStatusByName[providerLastAuthResult.provider]?.savedFieldMasks
+        : undefined;
+      const nextMasks = Object.fromEntries(
+        Object.entries(rawMasks ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+      );
+      setCredentialValuesByMethod((s) => ({ ...s, [stateKey]: {} }));
+      setCredentialEditingByMethod((s) => ({ ...s, [stateKey]: false }));
+      setOptimisticFieldMasksByMethod((s) => ({ ...s, [stateKey]: nextMasks }));
+      return;
+    }
     const refreshedMask = providerStatusByName[providerLastAuthResult.provider]?.savedApiKeyMasks?.[providerLastAuthResult.methodId];
     const nextMask = typeof refreshedMask === "string" && refreshedMask.trim().length > 0 ? refreshedMask : "••••••••";
     setApiKeysByMethod((s) => ({ ...s, [stateKey]: "" }));
@@ -409,11 +464,18 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     method: ProviderAuthMethod;
   }) => {
     const stateKey = methodStateKey(opts.provider, opts.method.id);
+    const isStructuredMethod = (opts.method.fields?.length ?? 0) > 0;
     const apiKeyValue = apiKeysByMethod[stateKey] ?? "";
+    const credentialValues = credentialValuesByMethod[stateKey] ?? {};
     const codeValue = oauthCodesByMethod[stateKey] ?? "";
     const savedApiKeyMask = opts.status?.savedApiKeyMasks?.[opts.method.id] ?? optimisticApiKeyMaskByMethod[stateKey];
+    const savedFieldMasks = opts.status?.methodId === opts.method.id
+      ? (opts.status?.savedFieldMasks ?? optimisticFieldMasksByMethod[stateKey])
+      : optimisticFieldMasksByMethod[stateKey];
     const hasSavedApiKey = typeof savedApiKeyMask === "string" && savedApiKeyMask.trim().length > 0;
+    const hasSavedFields = Boolean(savedFieldMasks && Object.keys(savedFieldMasks).length > 0);
     const isEditingApiKey = apiKeyEditingByMethod[stateKey] ?? !hasSavedApiKey;
+    const isEditingCredentials = credentialEditingByMethod[stateKey] ?? !hasSavedFields;
     const revealApiKey = Boolean(revealApiKeyByMethod[stateKey]);
     const challengeMatch =
       providerLastAuthChallenge?.provider === opts.provider && providerLastAuthChallenge?.methodId === opts.method.id
@@ -433,7 +495,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       opts.status?.mode === "oauth" &&
       Boolean(opts.status?.authorized);
     const siblingProvider =
-      opts.method.type === "api" && opts.method.id === "api_key"
+      opts.method.type === "api" && opts.method.id === "api_key" && !isStructuredMethod
         ? siblingOpenCodeProvider(opts.provider)
         : null;
     const siblingStatus = siblingProvider ? providerStatusByName[siblingProvider] : null;
@@ -446,12 +508,88 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       && typeof siblingSavedApiKeyMask === "string"
       && siblingSavedApiKeyMask.trim().length > 0
       && !hasSavedApiKey;
+    const canSaveStructuredMethod = (opts.method.fields ?? []).every((field) =>
+      !field.required || (credentialValues[field.id] ?? "").trim().length > 0,
+    );
 
     return (
       <div key={stateKey} className="space-y-2 border-t border-border/70 pt-4 first:border-t-0 first:pt-0">
         <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{opts.method.label}</div>
 
-        {opts.method.type === "api" ? (
+        {opts.method.type === "api" ? isStructuredMethod ? (
+          <div className="space-y-3">
+            <div className="grid gap-2 md:grid-cols-2">
+              {(opts.method.fields ?? []).map((field) => {
+                const savedValue = savedFieldMasks?.[field.id] ?? "";
+                const fieldValue = credentialValues[field.id] ?? "";
+                return (
+                  <Input
+                    key={`${stateKey}:${field.id}`}
+                    className="max-w-md"
+                    value={isEditingCredentials ? fieldValue : savedValue}
+                    onChange={(e) => {
+                      if (!isEditingCredentials) return;
+                      const nextValue = e.currentTarget.value;
+                      setCredentialValuesByMethod((s) => ({
+                        ...s,
+                        [stateKey]: {
+                          ...(s[stateKey] ?? {}),
+                          [field.id]: nextValue,
+                        },
+                      }));
+                    }}
+                    placeholder={isEditingCredentials ? (field.placeholder ?? field.label) : "Saved value"}
+                    type={field.kind === "password" ? "password" : "text"}
+                    readOnly={!isEditingCredentials}
+                    aria-label={`${opts.providerDisplayName} ${field.label}`}
+                  />
+                );
+              })}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {!isEditingCredentials ? (
+                <Button
+                  type="button"
+                  disabled={!canConnectProvider}
+                  title={!canConnectProvider ? "Add a workspace first." : undefined}
+                  onClick={() => {
+                    setCredentialEditingByMethod((s) => ({ ...s, [stateKey]: true }));
+                    setCredentialValuesByMethod((s) => ({ ...s, [stateKey]: {} }));
+                  }}
+                >
+                  Update credentials
+                </Button>
+              ) : null}
+              {isEditingCredentials && hasSavedFields ? (
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={() => {
+                    setCredentialEditingByMethod((s) => ({ ...s, [stateKey]: false }));
+                    setCredentialValuesByMethod((s) => ({ ...s, [stateKey]: {} }));
+                  }}
+                >
+                  Cancel
+                </Button>
+              ) : null}
+              {isEditingCredentials ? (
+                <Button
+                  type="button"
+                  disabled={!canConnectProvider || !canSaveStructuredMethod}
+                  title={!canConnectProvider ? "Add a workspace first." : undefined}
+                  onClick={() => {
+                    const nextValues = Object.fromEntries(
+                      (opts.method.fields ?? []).map((field) => [field.id, (credentialValues[field.id] ?? "").trim()]),
+                    );
+                    void setProviderConfig(opts.provider, opts.method.id, nextValues);
+                  }}
+                >
+                  Save
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : (
           <div className="flex flex-wrap items-center gap-2">
             <Input
               className="max-w-md"

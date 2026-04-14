@@ -12,6 +12,7 @@ import {
   logoutProviderAuth,
   requiresProviderAuthCode,
   resolveProviderAuthMethod,
+  setProviderConfig,
   setProviderApiKey,
 } from "../../src/providers/authRegistry";
 
@@ -20,6 +21,9 @@ describe("providers/authRegistry", () => {
     const methods = listProviderAuthMethods();
     expect(methods.openai?.some((m) => m.id === "api_key")).toBe(true);
     expect(methods.google?.some((m) => m.id === "exa_api_key")).toBe(true);
+    expect(methods.bedrock?.some((m) => m.id === "aws_default")).toBe(true);
+    expect(methods.bedrock?.some((m) => m.id === "aws_profile")).toBe(true);
+    expect(methods.bedrock?.some((m) => m.id === "aws_keys")).toBe(true);
     expect(methods.baseten?.some((m) => m.id === "api_key")).toBe(true);
     expect(methods.together?.some((m) => m.id === "api_key")).toBe(true);
     expect(methods.nvidia?.some((m) => m.id === "api_key")).toBe(true);
@@ -158,6 +162,46 @@ describe("providers/authRegistry", () => {
 
     const store = await readConnectionStore(paths);
     expect(store.toolApiKeys?.exa).toBe("exa-secret-key");
+  });
+
+  test("setProviderConfig stores structured Bedrock credentials", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-auth-registry-bedrock-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+
+    const result = await setProviderConfig({
+      provider: "bedrock",
+      methodId: "aws_keys",
+      paths,
+      values: {
+        accessKeyId: "AKIA_TEST_1234",
+        secretAccessKey: "secret-test-1234",
+        region: "us-west-2",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.mode).toBe("credentials");
+
+    const store = await readConnectionStore(paths);
+    expect(store.services.bedrock?.mode).toBe("credentials");
+    expect(store.services.bedrock?.methodId).toBe("aws_keys");
+    expect(store.services.bedrock?.values?.region).toBe("us-west-2");
+  });
+
+  test("setProviderConfig validates required Bedrock fields", async () => {
+    const result = await setProviderConfig({
+      provider: "bedrock",
+      methodId: "api_key",
+      values: {
+        apiKey: "bedrock-api-key",
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain("AWS region is required");
+    }
   });
 
   test("callbackProviderAuth calls connect handler for oauth method", async () => {

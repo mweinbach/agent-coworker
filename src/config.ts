@@ -21,6 +21,7 @@ import { defaultSupportedModel, describeModelProviderMismatch, getSupportedModel
 import { normalizeChildRoutingConfig } from "./models/childModelRouting";
 import {
   getResolvedModelMetadataSync,
+  isDynamicModelProvider,
   normalizeModelIdForProvider,
   resolveDefaultModelMetadata,
   resolveModelMetadata,
@@ -117,7 +118,7 @@ async function resolveConfiguredModelMetadata(
   providerOptions: Record<string, unknown> | undefined,
   env: Record<string, string | undefined>,
 ) {
-  if (provider === "lmstudio") {
+  if (isDynamicModelProvider(provider)) {
     return await resolveModelMetadata(provider, modelId, {
       allowPlaceholder: true,
       providerOptions,

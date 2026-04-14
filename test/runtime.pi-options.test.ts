@@ -154,6 +154,44 @@ describe("pi runtime provider option mapping", () => {
     expect(mapped.maxTokens).toBeUndefined();
   });
 
+  test("maps Bedrock provider options into PI stream options", () => {
+    const params = makeParams(makeConfig({
+      provider: "bedrock",
+      model: "amazon.nova-lite-v1:0",
+      preferredChildModel: "amazon.nova-lite-v1:0",
+      providerOptions: {
+        bedrock: {
+          region: "us-west-2",
+          profile: "sandbox",
+          toolChoice: { type: "tool", name: "webSearch" },
+          reasoning: "medium",
+          thinkingBudgets: {
+            low: 1024,
+            medium: 4096,
+          },
+          interleavedThinking: false,
+          requestMetadata: {
+            environment: "dev",
+            team: "core",
+          },
+          temperature: 0.3,
+          maxTokens: 2048,
+        },
+      },
+    }));
+
+    const mapped = __internal.buildPiStreamOptions(params) as any;
+    expect(mapped.region).toBe("us-west-2");
+    expect(mapped.profile).toBe("sandbox");
+    expect(mapped.toolChoice).toEqual({ type: "tool", name: "webSearch" });
+    expect(mapped.reasoning).toBe("medium");
+    expect(mapped.thinkingBudgets).toEqual({ low: 1024, medium: 4096 });
+    expect(mapped.interleavedThinking).toBe(false);
+    expect(mapped.requestMetadata).toEqual({ environment: "dev", team: "core" });
+    expect(mapped.temperature).toBe(0.3);
+    expect(mapped.maxTokens).toBe(2048);
+  });
+
   test("uses codex-cli options with openai fallback", () => {
     const codexParams = makeParams(makeConfig({
       provider: "codex-cli",

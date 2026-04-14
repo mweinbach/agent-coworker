@@ -487,6 +487,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   google: "Google",
   openai: "OpenAI",
   anthropic: "Anthropic",
+  bedrock: "Amazon Bedrock",
   baseten: "Baseten",
   together: "Together AI",
   fireworks: "Fireworks AI",
@@ -536,12 +537,23 @@ function DraftThreadModelSelector({
     [providerCatalog, providerConnected, provider, chatCatalogVisibility, choices],
   );
   const value = encodeProviderModelSelection(provider, model);
+  const bedrockCustomSelection = encodeProviderModelSelection("bedrock", "__custom__");
 
   return (
     <Select
       value={value}
       disabled={disabled}
       onValueChange={(val) => {
+        if (val === bedrockCustomSelection) {
+          const customModel = typeof window !== "undefined"
+            ? window.prompt("Enter a Bedrock model ID or ARN", provider === "bedrock" ? model : "")
+            : null;
+          const normalized = customModel?.trim();
+          if (normalized) {
+            setThreadModel(threadId, "bedrock", normalized);
+          }
+          return;
+        }
         const parsed = decodeProviderModelSelection(val);
         if (!parsed) return;
         setThreadModel(threadId, parsed.provider, parsed.modelId);
@@ -573,6 +585,11 @@ function DraftThreadModelSelector({
                 className="pl-6 text-xs"
               >
                 <span title={model}>{resolveModelDisplayLabel(p, model, modelDisplayNames)} (custom)</span>
+              </SelectItem>
+            ) : null}
+            {p === "bedrock" ? (
+              <SelectItem key={bedrockCustomSelection} value={bedrockCustomSelection} className="pl-6 text-xs">
+                <span>Custom model ID / ARN...</span>
               </SelectItem>
             ) : null}
           </SelectGroup>

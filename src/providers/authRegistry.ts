@@ -44,7 +44,6 @@ export type DisconnectProviderHandler = (opts: {
   provider: ProviderName;
   paths?: AiCoworkerPaths;
 }) => Promise<DisconnectProviderResult>;
-
 export function listProviderAuthMethods(): Record<string, ProviderAuthMethod[]> {
   return listDefaultProviderAuthMethods();
 }
@@ -157,10 +156,15 @@ export async function setProviderApiKey(opts: {
     return { ok: false, provider: opts.provider, message: "API key is required." };
   }
 
-  if (opts.provider === "google" && method.id === "exa_api_key") {
+  if (
+    opts.provider === "google"
+    && (method.id === "exa_api_key" || method.id === "parallel_api_key")
+  ) {
     try {
+      const toolName = method.id === "parallel_api_key" ? "parallel" : "exa";
+      const providerLabel = method.id === "parallel_api_key" ? "Parallel" : "Exa";
       const saved = await writeToolApiKey({
-        name: "exa",
+        name: toolName,
         apiKey,
         paths,
       });
@@ -169,7 +173,7 @@ export async function setProviderApiKey(opts: {
         provider: opts.provider,
         mode: "api_key",
         storageFile: saved.storageFile,
-        message: "Exa API key saved for Google webSearch.",
+        message: `${providerLabel} API key saved for web search.`,
         maskedApiKey: saved.maskedApiKey,
       };
     } catch (error) {

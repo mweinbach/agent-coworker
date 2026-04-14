@@ -4,6 +4,7 @@ import { getDefaultProviderAuthMethods } from "../../../../src/shared/providerAu
 
 type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
 const EXA_AUTH_METHOD_ID = "exa_api_key";
+const PARALLEL_AUTH_METHOD_ID = "parallel_api_key";
 
 const DISPLAY_NAMES: Partial<Record<ProviderName, string>> = {
   google: "Google",
@@ -37,7 +38,7 @@ export function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[
 
 export function visibleAuthMethods(provider: ProviderName, methods: ProviderAuthMethod[]): ProviderAuthMethod[] {
   if (provider === "google") {
-    return methods.filter((method) => method.id !== EXA_AUTH_METHOD_ID);
+    return methods.filter((method) => method.id !== EXA_AUTH_METHOD_ID && method.id !== PARALLEL_AUTH_METHOD_ID);
   }
   if (provider === "codex-cli") {
     return methods.filter((method) => method.id !== "api_key");

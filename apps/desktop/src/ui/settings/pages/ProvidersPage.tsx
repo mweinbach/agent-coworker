@@ -25,7 +25,9 @@ type ProviderCatalogEntry = Extract<ServerEvent, { type: "provider_catalog" }>["
 type ProviderStatus = Extract<ServerEvent, { type: "provider_status" }>["providers"][number];
 
 const EXA_AUTH_METHOD_ID = "exa_api_key";
+const PARALLEL_AUTH_METHOD_ID = "parallel_api_key";
 export const EXA_SECTION_ID = "provider:exa-search";
+export const PARALLEL_SECTION_ID = "provider:parallel-search";
 
 type ProvidersPageProps = {
   initialExpandedSectionId?: string | null;
@@ -234,7 +236,9 @@ function siblingOpenCodeProvider(provider: ProviderName): ProviderName | null {
 function fallbackExaAuthMethod(): ProviderAuthMethod {
   return { id: EXA_AUTH_METHOD_ID, type: "api", label: "Exa API key (web search)" };
 }
-
+function fallbackParallelAuthMethod(): ProviderAuthMethod {
+  return { id: PARALLEL_AUTH_METHOD_ID, type: "api", label: "Parallel API key (web search)" };
+}
 function methodStateKey(provider: ProviderName, methodId: string): string {
   return `${provider}:${methodId}`;
 }
@@ -242,16 +246,15 @@ function methodStateKey(provider: ProviderName, methodId: string): string {
 function providerSectionId(provider: ProviderName): string {
   return `provider:${provider}`;
 }
-
-function exaConnectionSummary(hasSavedApiKey: boolean): string {
-  return hasSavedApiKey ? "Web search API key saved" : "Add a key to use Exa-backed web search";
+function toolProviderConnectionSummary(label: string, hasSavedApiKey: boolean): string {
+  return hasSavedApiKey ? "Web search API key saved" : `Add a key to use ${label} for local web search`;
 }
 
 function initialTabForSection(
   initialExpandedSectionId: string | null,
   toolProviders: ProviderName[],
 ): "models" | "tools" {
-  if (initialExpandedSectionId === EXA_SECTION_ID) return "tools";
+  if (initialExpandedSectionId === EXA_SECTION_ID || initialExpandedSectionId === PARALLEL_SECTION_ID) return "tools";
   if (!initialExpandedSectionId?.startsWith("provider:")) return "models";
 
   const requestedProvider = initialExpandedSectionId.slice("provider:".length);
@@ -538,6 +541,8 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                 isEditingApiKey
                   ? opts.method.id === EXA_AUTH_METHOD_ID
                     ? "Paste your Exa API key"
+                    : opts.method.id === PARALLEL_AUTH_METHOD_ID
+                      ? "Paste your Parallel API key"
                     : "Paste your API key"
                   : "Saved key (hidden)"
               }
@@ -973,20 +978,25 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     );
   };
 
-  const renderExaCard = () => {
+  const renderSearchToolCard = (opts: {
+    key: string;
+    title: string;
+    description: string;
+    sectionId: string;
+    panelId: string;
+    methodId: string;
+    fallbackMethod: ProviderAuthMethod;
+  }) => {
     const provider = "google";
-    const exaMethod = authMethodsForProvider(provider).find((method) => method.id === EXA_AUTH_METHOD_ID) ?? fallbackExaAuthMethod();
-    const exaSavedApiKeyMask = providerStatusByName.google?.savedApiKeyMasks?.[EXA_AUTH_METHOD_ID] ??
-      optimisticApiKeyMaskByMethod[methodStateKey("google", EXA_AUTH_METHOD_ID)];
-    const exaConnected = typeof exaSavedApiKeyMask === "string" && exaSavedApiKeyMask.trim().length > 0;
-    const exaExpanded = expandedSectionId === EXA_SECTION_ID;
-
-    // To place Exa properly with the same top-level "connected" sorting as providers, we calculate its status here
-    // But since the user wants sections split visually, we just always render it in Tool Providers
+    const method = authMethodsForProvider(provider).find((entry) => entry.id === opts.methodId) ?? opts.fallbackMethod;
+    const savedApiKeyMask = providerStatusByName.google?.savedApiKeyMasks?.[opts.methodId] ??
+      optimisticApiKeyMaskByMethod[methodStateKey("google", opts.methodId)];
+    const connected = typeof savedApiKeyMask === "string" && savedApiKeyMask.trim().length > 0;
+    const expanded = expandedSectionId === opts.sectionId;
 
     return (
-      <Card key="exa" className={cn("provider-settings-card border-border/80 bg-card/85", exaExpanded && "border-primary/35")}>
-        <Collapsible open={exaExpanded} onOpenChange={(nextOpen) => setExpandedSectionId(nextOpen ? EXA_SECTION_ID : null)}>
+      <Card key={opts.key} className={cn("provider-settings-card border-border/80 bg-card/85", expanded && "border-primary/35")}>
+        <Collapsible open={expanded} onOpenChange={(nextOpen) => setExpandedSectionId(nextOpen ? opts.sectionId : null)}>
           <CollapsibleTrigger asChild>
             <Button
               type="button"
@@ -994,28 +1004,26 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
               className="h-auto w-full justify-between gap-3 rounded-none px-5 py-4 text-left hover:bg-transparent"
             >
               <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-foreground">Exa Search</div>
-                <div className="mt-0.5 truncate text-xs text-muted-foreground">{exaConnectionSummary(exaConnected)}</div>
+                <div className="truncate text-sm font-semibold text-foreground">{opts.title}</div>
+                <div className="mt-0.5 truncate text-xs text-muted-foreground">{toolProviderConnectionSummary(opts.title, connected)}</div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                <Badge variant={exaConnected ? "default" : "secondary"}>
-                  {exaConnected ? "Connected" : "Not connected"}
+                <Badge variant={connected ? "default" : "secondary"}>
+                  {connected ? "Connected" : "Not connected"}
                 </Badge>
-                <span className="text-xs text-muted-foreground">{exaExpanded ? "▾" : "▸"}</span>
+                <span className="text-xs text-muted-foreground">{expanded ? "▾" : "▸"}</span>
               </div>
             </Button>
           </CollapsibleTrigger>
 
           <CollapsibleContent>
-            <CardContent id="provider-panel-exa-search" className="space-y-4 border-t border-border/70 px-5 py-4">
-              <div className="text-sm text-muted-foreground">
-                Use Exa for better web search results when Cowork searches the web.
-              </div>
+            <CardContent id={opts.panelId} className="space-y-4 border-t border-border/70 px-5 py-4">
+              <div className="text-sm text-muted-foreground">{opts.description}</div>
               {renderAuthMethod({
                 provider: "google",
-                providerDisplayName: "Exa Search",
+                providerDisplayName: opts.title,
                 status: providerStatusByName.google,
-                method: exaMethod,
+                method,
               })}
             </CardContent>
           </CollapsibleContent>
@@ -1024,8 +1032,30 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     );
   };
 
+  const renderExaCard = () => renderSearchToolCard({
+    key: "exa",
+    title: "Exa Search",
+    description: "Use Exa for better web search results when Cowork searches the web.",
+    sectionId: EXA_SECTION_ID,
+    panelId: "provider-panel-exa-search",
+    methodId: EXA_AUTH_METHOD_ID,
+    fallbackMethod: fallbackExaAuthMethod(),
+  });
+
+  const renderParallelCard = () => renderSearchToolCard({
+    key: "parallel",
+    title: "Parallel Search",
+    description: "Use Parallel for local web search when Cowork needs fresh web results.",
+    sectionId: PARALLEL_SECTION_ID,
+    panelId: "provider-panel-parallel-search",
+    methodId: PARALLEL_AUTH_METHOD_ID,
+    fallbackMethod: fallbackParallelAuthMethod(),
+  });
+
   const exaSavedApiKeyMask = providerStatusByName.google?.savedApiKeyMasks?.[EXA_AUTH_METHOD_ID] ?? optimisticApiKeyMaskByMethod[methodStateKey("google", EXA_AUTH_METHOD_ID)];
   const isExaConnected = typeof exaSavedApiKeyMask === "string" && exaSavedApiKeyMask.trim().length > 0;
+  const parallelSavedApiKeyMask = providerStatusByName.google?.savedApiKeyMasks?.[PARALLEL_AUTH_METHOD_ID] ?? optimisticApiKeyMaskByMethod[methodStateKey("google", PARALLEL_AUTH_METHOD_ID)];
+  const isParallelConnected = typeof parallelSavedApiKeyMask === "string" && parallelSavedApiKeyMask.trim().length > 0;
 
   // Add Exa manually into tool providers sorting if we want, but it's easier to just split render arrays based on connected state.
   // Since we want connected first, we split toolProviders + exa into connected / disconnected
@@ -1041,8 +1071,10 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const allToolElements = [
     ...connectedToolProviders.map(renderProviderCard),
     ...(isExaConnected ? [renderExaCard()] : []),
+    ...(isParallelConnected ? [renderParallelCard()] : []),
     ...disconnectedToolProviders.map(renderProviderCard),
     ...(!isExaConnected ? [renderExaCard()] : []),
+    ...(!isParallelConnected ? [renderParallelCard()] : []),
   ];
 
   const [activeTab, setActiveTab] = useState<"models" | "tools">(() =>

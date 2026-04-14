@@ -302,6 +302,11 @@ export async function loadOverflowCitationContext(
   const urlsByMessageId = new Map<string, Map<number, string>>();
   const sourcesByMessageId = new Map<string, CitationSource[]>();
   const textByPath = new Map<string, string>();
+  const latestMessageIdByPath = new Map<string, string>();
+
+  for (const [messageId, filePath] of entries) {
+    latestMessageIdByPath.set(filePath, messageId);
+  }
 
   for (const [messageId, filePath] of entries) {
     try {
@@ -314,7 +319,7 @@ export async function loadOverflowCitationContext(
       urlsByMessageId.set(messageId, extractCitationUrlsFromWebSearchResult(content));
 
       const sources = extractCitationSourcesFromWebSearchResult(content);
-      if (sources.length > 0) {
+      if (sources.length > 0 && latestMessageIdByPath.get(filePath) === messageId) {
         sourcesByMessageId.set(messageId, sources);
       }
     } catch {

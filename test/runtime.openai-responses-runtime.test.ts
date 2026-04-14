@@ -760,6 +760,44 @@ describe("openai responses runtime", () => {
     expect(request.include).toBeUndefined();
   });
 
+  test("request builder keeps legacy webSearch when codex is explicitly configured for parallel", () => {
+    const request = openAiNativeInternal.buildOpenAiNativeRequest({
+      provider: "codex-cli",
+      model: {
+        id: "gpt-5.2",
+        name: "gpt-5.2",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 32768,
+      },
+      systemPrompt: "You are helpful.",
+      piMessages: [{ role: "user", content: "hello" }],
+      tools: [{
+        name: "webSearch",
+        description: "Search the web",
+        parameters: { type: "object", properties: {}, required: [] },
+      }],
+      streamOptions: {
+        webSearchBackend: "parallel",
+        webSearchMode: "live",
+      },
+    });
+
+    expect(request.tools).toEqual([{
+      type: "function",
+      name: "webSearch",
+      description: "Search the web",
+      parameters: { type: "object", properties: {}, required: [] },
+      strict: false,
+    }]);
+    expect(request.include).toBeUndefined();
+  });
+
   test("request builder sends cached native web search with normalized filters and merged include fields", () => {
     const request = openAiNativeInternal.buildOpenAiNativeRequest({
       provider: "codex-cli",
@@ -850,6 +888,7 @@ describe("openai responses runtime", () => {
         },
       ],
       streamOptions: {
+        webSearchBackend: "native",
         webSearchMode: "live",
       },
     });
@@ -867,6 +906,7 @@ describe("openai responses runtime", () => {
         external_web_access: true,
       },
     ]);
+    expect(request.include).toEqual(["web_search_call.action.sources"]);
   });
 
   test("request builder marks OpenAI tools as non-strict so optional parameters remain valid", () => {

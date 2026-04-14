@@ -7,7 +7,7 @@ import { resolveProviderName, type ProviderName } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 
 export type ConnectService = ProviderName;
-export const TOOL_API_KEY_NAMES = ["exa"] as const;
+export const TOOL_API_KEY_NAMES = ["exa", "parallel"] as const;
 export type ToolApiKeyName = (typeof TOOL_API_KEY_NAMES)[number];
 
 export type ConnectionMode = "api_key" | "oauth" | "oauth_pending" | "credentials";
@@ -51,6 +51,7 @@ const storedConnectionSchema = z.object({
 
 const toolApiKeysSchema = z.object({
   exa: z.string().trim().min(1).optional(),
+  parallel: z.string().trim().min(1).optional(),
 }).strict();
 
 const connectionStoreSchema = z.object({

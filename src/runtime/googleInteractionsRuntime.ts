@@ -27,6 +27,7 @@ import {
   type RunGoogleNativeInteractionStep,
 } from "./googleNativeInteractions";
 import { normalizeGoogleThinkingLevelForModel } from "../shared/googleThinking";
+import { getGoogleNativeWebSearchFromProviderOptions } from "../shared/openaiCompatibleOptions";
 import { isGoogleContinuationState, type GoogleContinuationState } from "../shared/providerContinuation";
 
 import type { ModelMessage } from "../types";
@@ -96,7 +97,7 @@ function buildGoogleStreamOptions(
   const toolChoice = asNonEmptyString(googleSection.toolChoice);
   if (toolChoice) options.toolChoice = toolChoice;
 
-  if (googleSection.nativeWebSearch === true) {
+  if (getGoogleNativeWebSearchFromProviderOptions(providerOptions) === true) {
     options.nativeWebSearch = true;
   }
 

@@ -8,6 +8,8 @@ import { z } from "zod";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 import { fetchExaContents, resolveExaApiKey } from "./exa";
+import { getLocalWebSearchProviderFromProviderOptions } from "../shared/openaiCompatibleOptions";
+import { fetchParallelContents, resolveParallelApiKey } from "./parallel";
 import { resolveMaybeRelative, truncateText } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
 import { resolveSafeWebUrl } from "../utils/webSafety";
@@ -605,11 +607,31 @@ function shouldTreatAsHtml(contentType: string | null, resolvedUrl: string, body
   return looksLikeHtmlDocument(body);
 }
 
-async function maybeFetchExaEnrichment(ctx: ToolContext, finalUrl: string): Promise<{
+type WebFetchEnrichment = {
   text: string;
   links: string[];
   imageLinks: string[];
-} | null> {
+};
+
+async function maybeFetchSearchEnrichment(ctx: ToolContext, finalUrl: string): Promise<WebFetchEnrichment | null> {
+  const provider = getLocalWebSearchProviderFromProviderOptions(ctx.config.providerOptions);
+  if (provider === "parallel") {
+    const parallelApiKey = await resolveParallelApiKey(ctx);
+    if (!parallelApiKey) return null;
+
+    try {
+      return await fetchParallelContents({
+        apiKey: parallelApiKey,
+        url: finalUrl,
+        objective: `Extract the most relevant content from ${finalUrl} for browsing and follow-up reading.`,
+        abortSignal: ctx.abortSignal,
+      });
+    } catch (error) {
+      ctx.log(`tool! webFetch parallel enrichment skipped ${JSON.stringify({ reason: String(error) })}`);
+      return null;
+    }
+  }
+
   const exaApiKey = await resolveExaApiKey(ctx);
   if (!exaApiKey) return null;
 
@@ -627,21 +649,21 @@ async function maybeFetchExaEnrichment(ctx: ToolContext, finalUrl: string): Prom
 
 function formatFetchedText(
   baseText: string,
-  exaContent: { text: string; links: string[]; imageLinks: string[] } | null
+  enrichment: WebFetchEnrichment | null
 ): string {
   const sections: string[] = [];
   const trimmedBase = baseText.trim();
   if (trimmedBase) {
     sections.push(trimmedBase);
-  } else if (exaContent?.text.trim()) {
-    sections.push(exaContent.text.trim());
+  } else if (enrichment?.text.trim()) {
+    sections.push(enrichment.text.trim());
   }
 
-  if (exaContent?.links.length) {
-    sections.push(`Links:\n${exaContent.links.map((link) => `- ${link}`).join("\n")}`);
+  if (enrichment?.links.length) {
+    sections.push(`Links:\n${enrichment.links.map((link) => `- ${link}`).join("\n")}`);
   }
-  if (exaContent?.imageLinks.length) {
-    sections.push(`Image Links:\n${exaContent.imageLinks.map((link) => `- ${link}`).join("\n")}`);
+  if (enrichment?.imageLinks.length) {
+    sections.push(`Image Links:\n${enrichment.imageLinks.map((link) => `- ${link}`).join("\n")}`);
   }
 
   return sections.join("\n\n").trim();
@@ -726,17 +748,18 @@ export function createWebFetchTool(ctx: ToolContext) {
       const baseText = isHtml
         ? await (htmlToMarkdownOverrideForTests ?? htmlToMarkdown)(bodyText, finalUrl, ctx)
         : bodyText;
-      const exaContent = isHtml ? await maybeFetchExaEnrichment(ctx, finalUrl) : null;
-      const out = truncateText(formatFetchedText(baseText, exaContent), maxLength);
+      const enrichment = isHtml ? await maybeFetchSearchEnrichment(ctx, finalUrl) : null;
+      const out = truncateText(formatFetchedText(baseText, enrichment), maxLength);
 
       ctx.log(
         `tool< webFetch ${JSON.stringify({
           chars: out.length,
           finalUrl,
           kind: isHtml ? "html" : "text",
-          exa: Boolean(exaContent),
-          links: exaContent?.links.length ?? 0,
-          imageLinks: exaContent?.imageLinks.length ?? 0,
+          enrichmentProvider: isHtml ? getLocalWebSearchProviderFromProviderOptions(ctx.config.providerOptions) : null,
+          enriched: Boolean(enrichment),
+          links: enrichment?.links.length ?? 0,
+          imageLinks: enrichment?.imageLinks.length ?? 0,
         })}`
       );
       return out;

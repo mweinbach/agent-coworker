@@ -342,6 +342,47 @@ describe("desktop reasoning UI helpers", () => {
     ]));
   });
 
+  test("hydrates duplicate spill files for each cited block but keeps sources on the latest block", async () => {
+    const spillContent = JSON.stringify({
+      provider: "exa",
+      count: 2,
+      response: {
+        results: [
+          { title: "NVIDIA Blog", url: "https://blogs.nvidia.com/gtc" },
+          { title: "CNBC", url: "https://www.cnbc.com/gtc" },
+        ],
+      },
+    }, null, 2);
+
+    const result = await loadOverflowCitationContext(
+      [
+        ["assistant-1", "/tmp/exa-results.json"],
+        ["assistant-3", "/tmp/exa-results.json"],
+      ],
+      async ({ path }) => {
+        expect(path).toBe("/tmp/exa-results.json");
+        return spillContent;
+      },
+    );
+
+    expect(result.urlsByMessageId).toEqual(new Map([
+      ["assistant-1", new Map([
+        [1, "https://blogs.nvidia.com/gtc"],
+        [2, "https://www.cnbc.com/gtc"],
+      ])],
+      ["assistant-3", new Map([
+        [1, "https://blogs.nvidia.com/gtc"],
+        [2, "https://www.cnbc.com/gtc"],
+      ])],
+    ]));
+    expect(result.sourcesByMessageId).toEqual(new Map([
+      ["assistant-3", [
+        { title: "NVIDIA Blog", url: "https://blogs.nvidia.com/gtc" },
+        { title: "CNBC", url: "https://www.cnbc.com/gtc" },
+      ]],
+    ]));
+  });
+
   test("renders usage stats as a title hover/focus reveal instead of an always-on header row", () => {
     const sessionUsage = {
       sessionId: "session-1",

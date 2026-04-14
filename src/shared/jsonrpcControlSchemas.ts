@@ -5,6 +5,7 @@ import {
   CODEX_WEB_SEARCH_BACKEND_VALUES,
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
+  LOCAL_WEB_SEARCH_PROVIDER_VALUES,
   OPENAI_REASONING_EFFORT_VALUES,
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
@@ -48,6 +49,7 @@ const providerOptionsOpenAiSchema = z.object({
 
 const providerOptionsCodexSchema = providerOptionsOpenAiSchema.extend({
   webSearchBackend: z.enum(CODEX_WEB_SEARCH_BACKEND_VALUES).optional(),
+  webSearchFallbackBackend: z.enum(LOCAL_WEB_SEARCH_PROVIDER_VALUES).optional(),
   webSearchMode: z.enum(CODEX_WEB_SEARCH_MODE_VALUES).optional(),
   webSearch: z.object({
     contextSize: z.enum(CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES).optional(),

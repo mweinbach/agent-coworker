@@ -70,6 +70,7 @@ const DEFAULT_PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> 
   google: [
     { id: "api_key", type: "api", label: "API key" },
     { id: "exa_api_key", type: "api", label: "Exa API key (web search)" },
+    { id: "parallel_api_key", type: "api", label: "Parallel API key (web search)" },
   ],
   openai: [{ id: "api_key", type: "api", label: "API key" }],
   anthropic: [{ id: "api_key", type: "api", label: "API key" }],

@@ -3,8 +3,10 @@ import {
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
   getCodexWebSearchBackendFromProviderOptions,
+  getLocalWebSearchProviderFromProviderOptions,
   getGoogleNativeWebSearchFromProviderOptions,
   getGoogleThinkingLevelFromProviderOptions,
+  LOCAL_WEB_SEARCH_PROVIDER_VALUES,
   mergeEditableOpenAiCompatibleProviderOptions,
   OPENAI_COMPATIBLE_PROVIDER_NAMES,
   OPENAI_REASONING_EFFORT_VALUES,
@@ -17,6 +19,7 @@ import {
   type CodexWebSearchLocation,
   type CodexWebSearchMode,
   type GoogleProviderOptions as SharedGoogleProviderOptions,
+  type LocalWebSearchProvider,
   type OpenAiCompatibleProviderName as SharedOpenAiCompatibleProviderName,
   type OpenAiCompatibleProviderOptions as SharedOpenAiCompatibleProviderOptions,
   type OpenAiCompatibleProviderOptionsByProvider,
@@ -39,15 +42,18 @@ export const TEXT_VERBOSITY_VALUES = OPENAI_TEXT_VERBOSITY_VALUES;
 export const WEB_SEARCH_BACKEND_VALUES = CODEX_WEB_SEARCH_BACKEND_VALUES;
 export const WEB_SEARCH_MODE_VALUES = CODEX_WEB_SEARCH_MODE_VALUES;
 export const WEB_SEARCH_CONTEXT_SIZE_VALUES = CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES;
+export const LOCAL_WEB_SEARCH_PROVIDERS = LOCAL_WEB_SEARCH_PROVIDER_VALUES;
 export const GOOGLE_DYNAMIC_REASONING_VALUE = GOOGLE_DYNAMIC_REASONING_EFFORT;
 export const DEFAULT_CODEX_WEB_SEARCH_BACKEND: CodexWebSearchBackend = "native";
 export const DEFAULT_CODEX_WEB_SEARCH_MODE: CodexWebSearchMode = "live";
+export const DEFAULT_LOCAL_WEB_SEARCH_PROVIDER: LocalWebSearchProvider = "exa";
 
 export type OpenAICompatibleProviderName = SharedOpenAiCompatibleProviderName;
 export type ReasoningEffortValue = OpenAiReasoningEffort;
 export type ReasoningSummaryValue = OpenAiReasoningSummary;
 export type TextVerbosityValue = OpenAiTextVerbosity;
 export type WebSearchBackendValue = CodexWebSearchBackend;
+export type LocalWebSearchProviderValue = LocalWebSearchProvider;
 export type WebSearchModeValue = CodexWebSearchMode;
 export type WebSearchContextSizeValue = CodexWebSearchContextSize;
 export type WebSearchLocationValue = CodexWebSearchLocation;
@@ -130,6 +136,13 @@ export function getWorkspaceWebSearchBackend(
   fallback: WebSearchBackendValue = DEFAULT_CODEX_WEB_SEARCH_BACKEND,
 ): WebSearchBackendValue {
   return getCodexWebSearchBackendFromProviderOptions(options, fallback);
+}
+
+export function getWorkspaceLocalWebSearchProvider(
+  options: WorkspaceProviderOptions | undefined,
+  fallback: LocalWebSearchProviderValue = DEFAULT_LOCAL_WEB_SEARCH_PROVIDER,
+): LocalWebSearchProviderValue {
+  return getLocalWebSearchProviderFromProviderOptions(options, fallback);
 }
 
 export function getWorkspaceWebSearchContextSize(

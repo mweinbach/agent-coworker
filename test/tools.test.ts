@@ -1662,6 +1662,76 @@ describe("webFetch tool", () => {
     }
   });
 
+  test("returns cleaned local HTML and appends Parallel extract links when configured", async () => {
+    const dir = await tmpDir();
+    const oldParallel = process.env.PARALLEL_API_KEY;
+    process.env.PARALLEL_API_KEY = "parallel_test_key";
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      const fetchUrl = toFetchUrl(input);
+      if (fetchUrl.includes("api.parallel.ai/v1beta/extract")) {
+        const body = JSON.parse(String(init?.body));
+        expect(body.urls).toEqual(["https://example.com/"]);
+        expect(body.objective).toBe(
+          "Extract the most relevant content from https://example.com/ for browsing and follow-up reading."
+        );
+        expect(body.excerpts).toEqual({ max_chars_per_result: 4000, max_chars_total: 4000 });
+        expect(body.full_content).toBe(false);
+        return new Response(
+          JSON.stringify({
+            results: [
+              {
+                url: "https://example.com/",
+                excerpts: ["# Hello from Parallel\n\nFetched remotely."],
+                links: ["https://example.com/about", "https://example.com/contact"],
+                image_links: ["https://cdn.example.com/hero.png"],
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      return new Response(
+        "<!doctype html><html><body><main><article><h1>Hello world</h1><p>Local HTML should win.</p></article></main></body></html>",
+        {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        }
+      );
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(
+        makeCtx(dir, {
+          config: makeConfig(dir, {
+            providerOptions: {
+              "codex-cli": {
+                webSearchBackend: "parallel",
+              },
+            },
+          }),
+        })
+      );
+      const out: string = await t.execute({ url: "https://example.com", maxLength: 50000 });
+      expect(out).toContain("Hello world");
+      expect(out).toContain("Local HTML should win.");
+      expect(out).not.toContain("Hello from Parallel");
+      expect(out).toContain("Links:");
+      expect(out).toContain("https://example.com/about");
+      expect(out).toContain("Image Links:");
+      expect(out).toContain("https://cdn.example.com/hero.png");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldParallel) process.env.PARALLEL_API_KEY = oldParallel;
+      else delete process.env.PARALLEL_API_KEY;
+    }
+  });
+
   test("returns cleaned local HTML without Exa credentials", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;
@@ -3458,7 +3528,6 @@ describe("createTools", () => {
       "edit",
       "glob",
       "grep",
-      "webSearch",
       "webFetch",
       "ask",
       "AskUserQuestion",
@@ -3476,7 +3545,7 @@ describe("createTools", () => {
   test("returns exactly 15 tools without child-agent control", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));
-    expect(Object.keys(tools).length).toBe(15);
+    expect(Object.keys(tools).length).toBe(14);
   });
 
   test("hides legacy webSearch for codex-cli by default", async () => {
@@ -3536,7 +3605,7 @@ describe("createTools", () => {
     expect(tools).toHaveProperty("webFetch");
   });
 
-  test("keeps local webSearch and webFetch for google when native web search is disabled", async () => {
+  test("keeps local webSearch and webFetch for google when native web search is explicitly disabled", async () => {
     const dir = await tmpDir();
     const tools = createTools(
       makeCtx(dir, {
@@ -3544,6 +3613,11 @@ describe("createTools", () => {
           provider: "google",
           model: "gemini-3-flash-preview",
           preferredChildModel: "gemini-3-flash-preview",
+          providerOptions: {
+            google: {
+              nativeWebSearch: false,
+            },
+          },
         }),
       }),
     );
@@ -3556,7 +3630,7 @@ describe("createTools", () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir, { config: makeConfig(dir, { enableMemory: false }) }));
     expect(tools).not.toHaveProperty("memory");
-    expect(Object.keys(tools).length).toBe(14);
+    expect(Object.keys(tools).length).toBe(13);
   });
 
   test("listSessionToolNames includes root-session agent controls when requested", () => {

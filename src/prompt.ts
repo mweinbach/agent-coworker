@@ -21,6 +21,7 @@ import type { AgentRoleDefinition } from "./server/agents/roles";
 import type { AgentRole } from "./shared/agents";
 import {
   getCodexWebSearchBackendFromProviderOptions,
+  getLocalWebSearchProviderFromProviderOptions,
   getGoogleNativeWebSearchFromProviderOptions,
   isCodexWebSearchMode,
 } from "./shared/openaiCompatibleOptions";
@@ -223,8 +224,9 @@ function renderCodexNativeWebSearchPrompt(prompt: string, config: AgentConfig): 
   }
 
   const backend = getCodexWebSearchBackendFromProviderOptions(config.providerOptions);
-  if (backend === "exa") {
-    return `${prompt}\n\n## Codex Web Search Backend\n\nThis Codex CLI session is configured to use the local Exa-backed webSearch tool instead of provider-native web search.\n\n- Use the local webSearch tool for current web lookup.\n- Use local webFetch when you need the full contents of a specific page or need to download a direct file.\n- Do not assume provider-native citations or provider-native web-search actions are available in this session.`;
+  if (backend !== "native") {
+    const providerName = backend === "parallel" ? "Parallel" : "Exa";
+    return `${prompt}\n\n## Codex Web Search Backend\n\nThis Codex CLI session is configured to use the local ${providerName}-backed webSearch tool instead of provider-native web search.\n\n- Use the local webSearch tool for current web lookup.\n- Use local webFetch when you need the full contents of a specific page or need to download a direct file.\n- Do not assume provider-native citations or provider-native web-search actions are available in this session.`;
   }
 
   const mode = configuredCodexWebSearchMode(config) ?? "live";
@@ -242,7 +244,9 @@ function renderGoogleNativeToolsPrompt(prompt: string, config: AgentConfig): str
 
   const nativeWebSearch = getGoogleNativeWebSearchFromProviderOptions(config.providerOptions);
   if (!nativeWebSearch) {
-    return prompt;
+    const localProvider = getLocalWebSearchProviderFromProviderOptions(config.providerOptions);
+    const providerName = localProvider === "parallel" ? "Parallel" : "Exa";
+    return `${prompt}\n\n## Gemini Web Search Fallback\n\nThis Gemini API session is configured to use the local ${providerName}-backed webSearch tool when current web search is needed.\n\n- Use the local webSearch tool for current web lookup instead of Gemini built-in Google Search.\n- Use local webFetch when you need the full contents of a specific page or need to download a direct file.\n- Do not assume provider-native citations or provider-native URL Context are available in this session.`;
   }
 
   const sections: string[] = [

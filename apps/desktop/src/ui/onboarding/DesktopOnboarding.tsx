@@ -34,6 +34,7 @@ import coworkIconSvg from "../../../build/icon.icon/Assets/svgviewer-output.svg"
 
 const PROVIDER_STATUS_POLL_MS = 4000;
 const WORKSPACE_SERVER_TIMEOUT_MS = 30_000;
+const ONBOARDING_HIDDEN_PROVIDERS: readonly ProviderName[] = ["bedrock"];
 
 type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
 
@@ -258,14 +259,20 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [oauthCodes, setOauthCodes] = useState<Record<string, string>>({});
 
-  const modelChoices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
+  const providerVisibility = useMemo<CatalogVisibilityOptions>(() => ({
+    hiddenProviders: ONBOARDING_HIDDEN_PROVIDERS,
+  }), []);
+  const modelChoices = useMemo(
+    () => modelChoicesFromCatalog(providerCatalog, providerVisibility),
+    [providerCatalog, providerVisibility],
+  );
 
   const modelProviders = useMemo(() => {
     const fromCatalog = providerCatalog
       .map((entry) => entry.id)
       .filter((p): p is ProviderName => isProviderNameString(p));
     const source = fromCatalog.length > 0 ? fromCatalog : [...PROVIDER_NAMES];
-    const filtered = source.filter((p) => !UI_DISABLED_PROVIDERS.has(p));
+    const filtered = source.filter((p) => !UI_DISABLED_PROVIDERS.has(p) && !ONBOARDING_HIDDEN_PROVIDERS.includes(p));
     return filtered.filter((p) => {
       if (p === "lmstudio") return true;
       const models = modelChoices[p];
@@ -542,7 +549,10 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
   const backupsEnabled = workspace?.defaultBackupsEnabled ?? true;
 
   const modelSelectorVisibility = useMemo<CatalogVisibilityOptions>(() => ({
-    hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
+    hiddenProviders: [
+      ...(providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const)),
+      ...ONBOARDING_HIDDEN_PROVIDERS,
+    ],
     hiddenModelsByProvider: {
       lmstudio: providerUiState.lmstudio.hiddenModels,
     },

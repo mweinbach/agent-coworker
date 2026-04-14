@@ -62,6 +62,55 @@ describe("providers/bedrockShared", () => {
     });
   });
 
+  test("does not force a default region for saved aws_default auth", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await writeConnectionStore(paths, {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        bedrock: {
+          service: "bedrock",
+          mode: "credentials",
+          methodId: "aws_default",
+          values: {},
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const auth = await resolveBedrockAuthConfig({ paths, env: {} as NodeJS.ProcessEnv });
+    expect(auth).toEqual({
+      methodId: "aws_default",
+      source: "saved",
+    });
+  });
+
+  test("recognizes a standard shared-config default AWS profile as ambient Bedrock auth", async () => {
+    const home = await makeTmpHome();
+    const awsDir = path.join(home, ".aws");
+    await fs.mkdir(awsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(awsDir, "credentials"),
+      "[default]\naws_access_key_id = AKIADEFAULT1234\naws_secret_access_key = secret-default-1234\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(awsDir, "config"),
+      "[default]\nregion = us-west-2\n",
+      "utf-8",
+    );
+
+    const auth = await resolveBedrockAuthConfig({
+      paths: getAiCoworkerPaths({ homedir: home }),
+      env: { HOME: home } as NodeJS.ProcessEnv,
+    });
+    expect(auth).toEqual({
+      methodId: "aws_default",
+      source: "env",
+    });
+  });
+
   test("returns curated fallback catalog state when Bedrock is not configured", async () => {
     const home = await makeTmpHome();
     const snapshot = await readBedrockCatalogSnapshot({

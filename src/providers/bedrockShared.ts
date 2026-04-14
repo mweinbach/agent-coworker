@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import os from "node:os";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -63,7 +64,6 @@ type BedrockDiscoveryCacheFile = {
 };
 
 const BEDROCK_DISCOVERY_CACHE_VERSION = 1;
-const DEFAULT_BEDROCK_REGION = "us-east-1";
 const BEDROCK_DISCOVERY_CACHE_NAME = "bedrock-models.json";
 const MODEL_PROMPT_TEMPLATE = "system.md";
 
@@ -109,17 +109,39 @@ function savedBedrockConnection(store: ConnectionStore): StoredConnection | null
 }
 
 function normalizeRegionForMethod(
-  methodId: BedrockAuthMethodId,
+  _methodId: BedrockAuthMethodId,
   region: string | undefined,
   env: NodeJS.ProcessEnv,
 ): string | undefined {
   if (region) return region;
-  const envRegion = asNonEmptyString(env.AWS_REGION) ?? asNonEmptyString(env.AWS_DEFAULT_REGION);
-  if (envRegion) return envRegion;
-  if (methodId === "aws_profile" || asNonEmptyString(env.AWS_PROFILE)) {
-    return undefined;
+  return asNonEmptyString(env.AWS_REGION) ?? asNonEmptyString(env.AWS_DEFAULT_REGION) ?? undefined;
+}
+
+function sharedAwsConfigPaths(home: string): { credentials: string; config: string } {
+  const awsDir = path.join(home, ".aws");
+  return {
+    credentials: path.join(awsDir, "credentials"),
+    config: path.join(awsDir, "config"),
+  };
+}
+
+function fileHasAwsDefaultProfile(filePath: string, patterns: RegExp[]): boolean {
+  try {
+    const raw = fsSync.readFileSync(filePath, "utf-8");
+    return patterns.some((pattern) => pattern.test(raw));
+  } catch (error) {
+    const code = asNonEmptyString(asRecord(error)?.code);
+    if (code === "ENOENT") return false;
+    return false;
   }
-  return DEFAULT_BEDROCK_REGION;
+}
+
+function hasAmbientDefaultAwsProfile(home: string): boolean {
+  const paths = sharedAwsConfigPaths(home);
+  return (
+    fileHasAwsDefaultProfile(paths.credentials, [/^\s*\[default\]\s*$/m])
+    || fileHasAwsDefaultProfile(paths.config, [/^\s*\[profile\s+default\]\s*$/m, /^\s*\[default\]\s*$/m])
+  );
 }
 
 function valuesFromConnection(entry: StoredConnection | null): Record<string, string> {
@@ -158,7 +180,10 @@ function resolveSavedBedrockAuthFromStore(
   return base;
 }
 
-function resolveAmbientBedrockAuth(env: NodeJS.ProcessEnv = process.env): ResolvedBedrockAuthConfig | null {
+function resolveAmbientBedrockAuth(
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = env.HOME?.trim() || os.homedir(),
+): ResolvedBedrockAuthConfig | null {
   const region = asNonEmptyString(env.AWS_REGION) ?? asNonEmptyString(env.AWS_DEFAULT_REGION);
   const apiKey = asNonEmptyString(env.AWS_BEARER_TOKEN_BEDROCK);
   if (apiKey) {
@@ -197,6 +222,7 @@ function resolveAmbientBedrockAuth(env: NodeJS.ProcessEnv = process.env): Resolv
     asNonEmptyString(env.AWS_WEB_IDENTITY_TOKEN_FILE)
     || asNonEmptyString(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI)
     || asNonEmptyString(env.AWS_CONTAINER_CREDENTIALS_FULL_URI)
+    || hasAmbientDefaultAwsProfile(home)
   ) {
     return {
       methodId: "aws_default",
@@ -214,9 +240,10 @@ export async function resolveBedrockAuthConfig(opts: {
   config?: Pick<AgentConfig, "skillsDirs">;
 } = {}): Promise<ResolvedBedrockAuthConfig | null> {
   const env = opts.env ?? process.env;
-  const paths = opts.paths ?? bedrockConfigPaths(resolveAuthHomeDir(opts.config));
+  const home = opts.paths ? path.dirname(opts.paths.rootDir) : resolveAuthHomeDir(opts.config);
+  const paths = opts.paths ?? bedrockConfigPaths(home);
   const store = await readConnectionStore(paths);
-  return resolveSavedBedrockAuthFromStore(store, env) ?? resolveAmbientBedrockAuth(env);
+  return resolveSavedBedrockAuthFromStore(store, env) ?? resolveAmbientBedrockAuth(env, home);
 }
 
 export function resolveBedrockAuthConfigSync(opts: {
@@ -228,7 +255,7 @@ export function resolveBedrockAuthConfigSync(opts: {
   const home = opts.home ?? resolveAuthHomeDir(opts.config);
   const paths = bedrockConfigPaths(home);
   const store = readConnectionStoreSync(paths);
-  return resolveSavedBedrockAuthFromStore(store, env) ?? resolveAmbientBedrockAuth(env);
+  return resolveSavedBedrockAuthFromStore(store, env) ?? resolveAmbientBedrockAuth(env, home);
 }
 
 export function bedrockDiscoveryCachePath(paths: AiCoworkerPaths): string {

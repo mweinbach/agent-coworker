@@ -393,7 +393,7 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                         <Button
                           type="button"
                           variant="outline"
-                          onClick={() => void refreshProviderStatus({ refreshBedrockDiscovery: true })}
+                          onClick={() => void refreshProviderStatus()}
                         >
                           Refresh
                         </Button>

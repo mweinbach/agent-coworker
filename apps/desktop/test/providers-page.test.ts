@@ -876,7 +876,7 @@ describe("desktop providers page", () => {
       await act(async () => {
         refreshButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
-      expect(refreshProviderStatus).toHaveBeenCalled();
+      expect(refreshProviderStatus).toHaveBeenCalledWith();
 
       const modelCheckbox = container.querySelector('[aria-label="Show LM Studio model qwen/qwen3-30b-a3b in chat"]');
       if (!(modelCheckbox instanceof harness.dom.window.HTMLElement)) {

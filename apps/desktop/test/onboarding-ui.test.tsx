@@ -348,6 +348,13 @@ describe("DeveloperPage rerun onboarding button", () => {
 
       const connectButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Connect");
       if (!connectButton) throw new Error("missing LM Studio connect button");
+      const refreshButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Refresh");
+      if (!refreshButton) throw new Error("missing LM Studio refresh button");
+      await act(async () => {
+        refreshButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+      expect(refreshProviderStatus).toHaveBeenCalledWith();
+
       await act(async () => {
         connectButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });

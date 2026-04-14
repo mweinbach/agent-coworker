@@ -755,7 +755,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                 <Button
                   variant="outline"
                   type="button"
-                  onClick={() => void refreshProviderStatus({ refreshBedrockDiscovery: true })}
+                  onClick={() => void refreshProviderStatus()}
                   disabled={providerStatusRefreshing}
                 >
                   {providerStatusRefreshing ? "Refreshing..." : "Refresh"}

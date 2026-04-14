@@ -1145,32 +1145,41 @@ export function extractCitationOverflowFilePathFromWebSearchResult(result: unkno
 export function buildCitationOverflowFilePathsByMessageId<T extends CitationFeedItem>(feed: readonly T[]): Map<string, string> {
   const overflowFilePathByMessageId = new Map<string, string>();
   let currentOverflowFilePath: string | null = null;
+  let latestAssistantId: string | null = null;
+  let latestAssistantNeedsInlineCitationContext = false;
 
   for (const item of feed) {
     const itemKind = item.kind ?? item.type ?? "";
 
     if (itemKind === "message" && item.role === "user") {
       currentOverflowFilePath = null;
+      latestAssistantId = null;
+      latestAssistantNeedsInlineCitationContext = false;
       continue;
     }
 
     if (itemKind === "tool" && item.name === "webSearch") {
       currentOverflowFilePath = extractCitationOverflowFilePathFromWebSearchResult(item.result);
+      latestAssistantId = null;
+      latestAssistantNeedsInlineCitationContext = false;
       continue;
     }
 
     if (breaksContiguousAssistantStretch(itemKind)) {
       currentOverflowFilePath = null;
+      latestAssistantId = null;
+      latestAssistantNeedsInlineCitationContext = false;
       continue;
     }
 
-    if (
-      itemKind === "message"
-      && item.role === "assistant"
-      && currentOverflowFilePath
-      && assistantMessageNeedsToolCitationContext(item)
-    ) {
+    if (itemKind === "message" && item.role === "assistant" && currentOverflowFilePath) {
+      if (latestAssistantId && !latestAssistantNeedsInlineCitationContext) {
+        overflowFilePathByMessageId.delete(latestAssistantId);
+      }
+      const needsInlineCitationContext = assistantMessageNeedsToolCitationContext(item);
       overflowFilePathByMessageId.set(item.id, currentOverflowFilePath);
+      latestAssistantId = item.id;
+      latestAssistantNeedsInlineCitationContext = needsInlineCitationContext;
     }
   }
 

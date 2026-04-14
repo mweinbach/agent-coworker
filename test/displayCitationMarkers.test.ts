@@ -302,6 +302,37 @@ describe("display citation markers", () => {
     ]));
   });
 
+  test("keeps overflow spill mappings on the latest assistant block even without inline citations", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "webSearch",
+        result: {
+          provider: "exa",
+          count: 2,
+          response: {
+            results: [
+              { title: "Source One", url: "https://example.com/one" },
+              { title: "Source Two", url: "https://example.com/two" },
+            ],
+          },
+          overflow: true,
+          filePath: "/tmp/search-results.txt",
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const, text: "First block[1†L1-L3]" },
+      { id: "reasoning-1", kind: "reasoning" as const },
+      { id: "assistant-2", kind: "message", role: "assistant" as const, text: "Final summary without inline markers" },
+    ];
+
+    expect(buildCitationOverflowFilePathsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", "/tmp/search-results.txt"],
+      ["assistant-2", "/tmp/search-results.txt"],
+    ]));
+  });
+
   test("stops carrying tool-derived citations after a non-search tool breaks the assistant stretch", () => {
     const feed = [
       { id: "user-1", kind: "message", role: "user" as const },

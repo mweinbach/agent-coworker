@@ -237,7 +237,7 @@ function normalizeWebSearchLocation(value: unknown): Record<string, string> | un
 
 function resolveCodexWebSearchBackend(opts: OpenAiNativeStepRequest): "native" | "local" {
   const configured = asNonEmptyString(opts.streamOptions.webSearchBackend)?.toLowerCase();
-  return configured === "native" ? "native" : "local";
+  return configured === "exa" || configured === "parallel" ? "local" : "native";
 }
 
 function resolveCodexNativeWebSearchMode(opts: OpenAiNativeStepRequest): "disabled" | "cached" | "live" {

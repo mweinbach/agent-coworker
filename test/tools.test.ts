@@ -3528,7 +3528,6 @@ describe("createTools", () => {
       "edit",
       "glob",
       "grep",
-      "webSearch",
       "webFetch",
       "ask",
       "AskUserQuestion",
@@ -3546,7 +3545,7 @@ describe("createTools", () => {
   test("returns exactly 15 tools without child-agent control", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));
-    expect(Object.keys(tools).length).toBe(15);
+    expect(Object.keys(tools).length).toBe(14);
   });
 
   test("hides legacy webSearch for codex-cli by default", async () => {
@@ -3606,7 +3605,7 @@ describe("createTools", () => {
     expect(tools).toHaveProperty("webFetch");
   });
 
-  test("keeps local webSearch and webFetch for google when native web search is disabled", async () => {
+  test("keeps local webSearch and webFetch for google when native web search is explicitly disabled", async () => {
     const dir = await tmpDir();
     const tools = createTools(
       makeCtx(dir, {
@@ -3614,6 +3613,11 @@ describe("createTools", () => {
           provider: "google",
           model: "gemini-3-flash-preview",
           preferredChildModel: "gemini-3-flash-preview",
+          providerOptions: {
+            google: {
+              nativeWebSearch: false,
+            },
+          },
         }),
       }),
     );
@@ -3626,7 +3630,7 @@ describe("createTools", () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir, { config: makeConfig(dir, { enableMemory: false }) }));
     expect(tools).not.toHaveProperty("memory");
-    expect(Object.keys(tools).length).toBe(14);
+    expect(Object.keys(tools).length).toBe(13);
   });
 
   test("listSessionToolNames includes root-session agent controls when requested", () => {

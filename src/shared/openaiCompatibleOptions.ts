@@ -344,6 +344,7 @@ export function getGoogleNativeWebSearchFromProviderOptions(
   providerOptions: unknown,
   fallback = false,
 ): boolean {
+  if (providerOptions == null) return true;
   if (!isPlainObject(providerOptions)) return fallback;
 
   const rawGoogle = isPlainObject(providerOptions.google) ? providerOptions.google : undefined;

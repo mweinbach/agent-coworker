@@ -254,6 +254,91 @@ describe("display citation markers", () => {
     ]));
   });
 
+  test("keeps tool-derived citations on only the latest assistant message in a contiguous assistant stretch", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "webSearch",
+        result: {
+          provider: "exa",
+          count: 2,
+          response: {
+            results: [
+              { title: "Source One", url: "https://example.com/one" },
+              { title: "Source Two", url: "https://example.com/two" },
+            ],
+          },
+          overflow: true,
+          filePath: "/tmp/search-results.txt",
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const },
+      { id: "reasoning-1", kind: "reasoning" as const },
+      { id: "assistant-2", kind: "message", role: "assistant" as const },
+      { id: "assistant-3", kind: "message", role: "assistant" as const },
+    ];
+
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
+      ["assistant-3", new Map([
+        [1, "https://example.com/one"],
+        [2, "https://example.com/two"],
+      ])],
+    ]));
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
+      ["assistant-3", [
+        { title: "Source One", url: "https://example.com/one" },
+        { title: "Source Two", url: "https://example.com/two" },
+      ]],
+    ]));
+    expect(buildCitationOverflowFilePathsByMessageId(feed)).toEqual(new Map([
+      ["assistant-3", "/tmp/search-results.txt"],
+    ]));
+  });
+
+  test("stops carrying tool-derived citations after a non-search tool breaks the assistant stretch", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "webSearch",
+        result: {
+          provider: "exa",
+          count: 2,
+          response: {
+            results: [
+              { title: "Source One", url: "https://example.com/one" },
+              { title: "Source Two", url: "https://example.com/two" },
+            ],
+          },
+          overflow: true,
+          filePath: "/tmp/search-results.txt",
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const },
+      { id: "tool-2", kind: "tool" as const, name: "bash", result: "ok" },
+      { id: "assistant-2", kind: "message", role: "assistant" as const },
+    ];
+
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", new Map([
+        [1, "https://example.com/one"],
+        [2, "https://example.com/two"],
+      ])],
+    ]));
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", [
+        { title: "Source One", url: "https://example.com/one" },
+        { title: "Source Two", url: "https://example.com/two" },
+      ]],
+    ]));
+    expect(buildCitationOverflowFilePathsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", "/tmp/search-results.txt"],
+    ]));
+  });
+
   test("clears stale webSearch citations when a later search returns no results", () => {
     const feed = [
       { id: "user-1", kind: "message", role: "user" as const },

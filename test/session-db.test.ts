@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -175,6 +176,160 @@ describe("sessionDb", () => {
 
       await db.deleteSession("s-1");
       expect(db.getSessionRecord("s-1")).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  test("backfills late-added agent task metadata columns for existing session dbs", async () => {
+    const paths = await makeTmpCoworkHome();
+    const dbPath = path.join(paths.rootDir, "sessions.db");
+    const seededAt = "2026-04-07T17:16:57.053Z";
+    const seedDb = new Database(dbPath, { create: true, strict: false });
+    try {
+      seedDb.exec(
+        `CREATE TABLE schema_migrations (
+           version INTEGER PRIMARY KEY,
+           applied_at TEXT NOT NULL
+         );
+         CREATE TABLE sessions (
+           session_id TEXT PRIMARY KEY,
+           session_kind TEXT NOT NULL DEFAULT 'root',
+           parent_session_id TEXT NULL,
+           role TEXT NULL,
+           agent_type TEXT NULL,
+           mode TEXT NULL,
+           depth INTEGER NULL,
+           nickname TEXT NULL,
+           requested_model TEXT NULL,
+           effective_model TEXT NULL,
+           requested_reasoning_effort TEXT NULL,
+           effective_reasoning_effort TEXT NULL,
+           execution_state TEXT NULL,
+           last_message_preview TEXT NULL,
+           title TEXT NOT NULL,
+           title_source TEXT NOT NULL,
+           title_model TEXT NULL,
+           provider TEXT NOT NULL,
+           model TEXT NOT NULL,
+           working_directory TEXT NOT NULL,
+           output_directory TEXT NULL,
+           uploads_directory TEXT NULL,
+           enable_mcp INTEGER NOT NULL,
+           backups_enabled_override INTEGER NULL,
+           created_at TEXT NOT NULL,
+           updated_at TEXT NOT NULL,
+           status TEXT NOT NULL,
+           has_pending_ask INTEGER NOT NULL,
+           has_pending_approval INTEGER NOT NULL,
+           message_count INTEGER NOT NULL,
+           last_event_seq INTEGER NOT NULL
+         );
+         CREATE TABLE session_state (
+           session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+           system_prompt TEXT NOT NULL,
+           messages_json TEXT NOT NULL,
+           provider_state_json TEXT NULL,
+           provider_options_json TEXT NULL,
+           todos_json TEXT NOT NULL,
+           harness_context_json TEXT NULL,
+           cost_tracker_json TEXT NULL
+         );
+         CREATE TABLE session_events (
+           session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+           seq INTEGER NOT NULL,
+           ts TEXT NOT NULL,
+           direction TEXT NOT NULL,
+           event_type TEXT NOT NULL,
+           payload_json TEXT NOT NULL,
+           PRIMARY KEY(session_id, seq)
+         );
+         CREATE TABLE session_model_stream_chunks (
+           session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+           turn_id TEXT NOT NULL,
+           chunk_index INTEGER NOT NULL,
+           ts TEXT NOT NULL,
+           provider TEXT NOT NULL,
+           model TEXT NOT NULL,
+           raw_format TEXT NOT NULL,
+           normalizer_version INTEGER NOT NULL,
+           raw_event_json TEXT NOT NULL,
+           PRIMARY KEY(session_id, turn_id, chunk_index)
+         );
+         CREATE TABLE session_snapshots (
+           session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+           updated_at TEXT NOT NULL,
+           snapshot_json TEXT NOT NULL
+         );
+         CREATE TABLE thread_journal_events (
+           thread_id TEXT NOT NULL,
+           seq INTEGER NOT NULL,
+           ts TEXT NOT NULL,
+           event_type TEXT NOT NULL,
+           turn_id TEXT NULL,
+           item_id TEXT NULL,
+           request_id TEXT NULL,
+           payload_json TEXT NOT NULL,
+           PRIMARY KEY(thread_id, seq)
+         );`,
+      );
+      const insertMigration = seedDb.query(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+      );
+      for (let version = 1; version <= 11; version += 1) {
+        insertMigration.run(version, seededAt);
+      }
+    } finally {
+      seedDb.close();
+    }
+
+    const db = await SessionDb.create({ paths });
+    try {
+      const inspectDb = new Database(dbPath, { create: false, strict: false });
+      try {
+        const sessionColumns = (
+          inspectDb.query("PRAGMA table_info(sessions)").all() as Array<Record<string, unknown>>
+        ).map((row) => String(row.name));
+        expect(sessionColumns).toContain("task_type");
+        expect(sessionColumns).toContain("target_paths_json");
+      } finally {
+        inspectDb.close();
+      }
+
+      await db.persistSessionMutation({
+        sessionId: "child-1",
+        eventType: "session.created",
+        snapshot: {
+          sessionKind: "agent",
+          parentSessionId: "root-1",
+          role: "worker",
+          nickname: "verify-auth",
+          taskType: "verify",
+          targetPaths: ["src/auth", "test/auth"],
+          title: "Child Session",
+          titleSource: "default",
+          titleModel: null,
+          provider: "openai",
+          model: "gpt-5.2-mini",
+          workingDirectory: "/tmp/project",
+          enableMcp: false,
+          createdAt: seededAt,
+          updatedAt: seededAt,
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          systemPrompt: "child-system",
+          messages: [{ role: "assistant", content: "child hello" }],
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+      });
+
+      const persisted = db.getSessionRecord("child-1");
+      expect(persisted?.taskType).toBe("verify");
+      expect(persisted?.targetPaths).toEqual(["src/auth", "test/auth"]);
     } finally {
       db.close();
     }

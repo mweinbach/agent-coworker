@@ -209,7 +209,8 @@ describe("OpenAI compatible provider option helpers", () => {
     expect(getGoogleThinkingLevelFromProviderOptions(providerOptions)).toBe("medium");
   });
 
-  test("google native web search defaults to shared native backend when unset", () => {
+  test("google native web search defaults to provider-native search when unset", () => {
+    expect(getGoogleNativeWebSearchFromProviderOptions(undefined)).toBe(true);
     expect(getGoogleNativeWebSearchFromProviderOptions({
       "codex-cli": {
         webSearchBackend: "native",

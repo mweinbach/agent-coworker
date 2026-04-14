@@ -13,6 +13,7 @@ const AGENT_REALIGNMENT_MIGRATION = 8;
 const PROVIDER_OPTIONS_MIGRATION = 9;
 const SESSION_SNAPSHOTS_MIGRATION = 10;
 const THREAD_JOURNAL_MIGRATION = 11;
+const AGENT_TASK_METADATA_MIGRATION = 12;
 
 type BootstrapSessionDbOptions = {
   db: Database;
@@ -30,6 +31,7 @@ type BootstrapSessionDbOptions = {
     | "addProviderOptionsColumn"
     | "addSessionSnapshotsTable"
     | "addThreadJournalEventsTable"
+    | "addAgentTaskMetadataColumns"
   >;
   importLegacySnapshots: () => Promise<void>;
 };
@@ -97,6 +99,11 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   if (!appliedMigrations.has(THREAD_JOURNAL_MIGRATION)) {
     opts.repository.addThreadJournalEventsTable();
     opts.repository.markMigration(THREAD_JOURNAL_MIGRATION);
+  }
+
+  if (!appliedMigrations.has(AGENT_TASK_METADATA_MIGRATION)) {
+    opts.repository.addAgentTaskMetadataColumns();
+    opts.repository.markMigration(AGENT_TASK_METADATA_MIGRATION);
   }
 
   if (!appliedMigrations.has(LEGACY_IMPORT_MIGRATION)) {

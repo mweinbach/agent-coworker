@@ -21,6 +21,10 @@ type CitationFeedItem = {
   annotations?: unknown;
 };
 
+function breaksContiguousAssistantStretch(itemKind: string): boolean {
+  return itemKind !== "message" && itemKind !== "reasoning";
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1136,22 +1140,35 @@ export function extractCitationOverflowFilePathFromWebSearchResult(result: unkno
 export function buildCitationOverflowFilePathsByMessageId<T extends CitationFeedItem>(feed: readonly T[]): Map<string, string> {
   const overflowFilePathByMessageId = new Map<string, string>();
   let currentOverflowFilePath: string | null = null;
+  let latestAssistantId: string | null = null;
 
   for (const item of feed) {
     const itemKind = item.kind ?? item.type ?? "";
 
     if (itemKind === "message" && item.role === "user") {
       currentOverflowFilePath = null;
+      latestAssistantId = null;
       continue;
     }
 
     if (itemKind === "tool" && item.name === "webSearch") {
       currentOverflowFilePath = extractCitationOverflowFilePathFromWebSearchResult(item.result);
+      latestAssistantId = null;
+      continue;
+    }
+
+    if (breaksContiguousAssistantStretch(itemKind)) {
+      currentOverflowFilePath = null;
+      latestAssistantId = null;
       continue;
     }
 
     if (itemKind === "message" && item.role === "assistant" && currentOverflowFilePath) {
+      if (latestAssistantId) {
+        overflowFilePathByMessageId.delete(latestAssistantId);
+      }
       overflowFilePathByMessageId.set(item.id, currentOverflowFilePath);
+      latestAssistantId = item.id;
     }
   }
 
@@ -1161,42 +1178,61 @@ export function buildCitationOverflowFilePathsByMessageId<T extends CitationFeed
 export function buildCitationUrlsByMessageId<T extends CitationFeedItem>(feed: readonly T[]): Map<string, Map<number, string>> {
   const citationUrlsByMessageId = new Map<string, Map<number, string>>();
   let currentCitationUrls = new Map<number, string>();
+  let latestAssistantId: string | null = null;
 
   for (const item of feed) {
     const itemKind = item.kind ?? item.type ?? "";
 
     if (itemKind === "message" && item.role === "user") {
       currentCitationUrls = new Map();
+      latestAssistantId = null;
       continue;
     }
 
     if (itemKind === "tool" && item.name === "webSearch") {
       const nextCitationUrls = extractCitationUrlsFromWebSearchResult(item.result);
       currentCitationUrls = nextCitationUrls;
+      latestAssistantId = null;
       continue;
     }
 
     if (itemKind === "tool" && item.name === "nativeWebSearch") {
       const nextCitationUrls = extractCitationUrlsFromNativeWebSearchResult(item.result);
       currentCitationUrls = nextCitationUrls;
+      latestAssistantId = null;
       continue;
     }
 
     if (itemKind === "tool" && item.name === "nativeUrlContext") {
       const nextCitationUrls = extractCitationUrlsFromNativeUrlContextResult(item.result);
       currentCitationUrls = nextCitationUrls;
+      latestAssistantId = null;
+      continue;
+    }
+
+    if (breaksContiguousAssistantStretch(itemKind)) {
+      currentCitationUrls = new Map();
+      latestAssistantId = null;
       continue;
     }
 
     if (itemKind === "message" && item.role === "assistant") {
       const annotationCitationUrls = extractCitationUrlsFromAnnotations(item.annotations);
       if (annotationCitationUrls.size > 0) {
+        if (latestAssistantId) {
+          citationUrlsByMessageId.delete(latestAssistantId);
+        }
         citationUrlsByMessageId.set(item.id, annotationCitationUrls);
         currentCitationUrls = annotationCitationUrls;
+        latestAssistantId = item.id;
         continue;
       }
       if (currentCitationUrls.size > 0) {
+        if (latestAssistantId) {
+          citationUrlsByMessageId.delete(latestAssistantId);
+        }
         citationUrlsByMessageId.set(item.id, new Map(currentCitationUrls));
+        latestAssistantId = item.id;
       }
     }
   }
@@ -1207,35 +1243,50 @@ export function buildCitationUrlsByMessageId<T extends CitationFeedItem>(feed: r
 export function buildCitationSourcesByMessageId<T extends CitationFeedItem>(feed: readonly T[]): Map<string, CitationSource[]> {
   const sourcesByMessageId = new Map<string, CitationSource[]>();
   let currentSources: CitationSource[] = [];
+  let latestAssistantId: string | null = null;
 
   for (const item of feed) {
     const itemKind = item.kind ?? item.type ?? "";
 
     if (itemKind === "message" && item.role === "user") {
       currentSources = [];
+      latestAssistantId = null;
       continue;
     }
 
     if (itemKind === "tool" && item.name === "nativeWebSearch") {
       const nextSources = extractCitationSourcesFromNativeWebSearchResult(item.result);
       currentSources = [...nextSources.values()];
+      latestAssistantId = null;
       continue;
     }
 
     if (itemKind === "tool" && item.name === "nativeUrlContext") {
       const nextSources = extractCitationSourcesFromNativeUrlContextResult(item.result);
       currentSources = [...nextSources.values()];
+      latestAssistantId = null;
       continue;
     }
 
     if (itemKind === "tool" && item.name === "webSearch") {
       const nextSources = extractCitationSourcesFromWebSearchResult(item.result);
       currentSources = nextSources;
+      latestAssistantId = null;
+      continue;
+    }
+
+    if (breaksContiguousAssistantStretch(itemKind)) {
+      currentSources = [];
+      latestAssistantId = null;
       continue;
     }
 
     if (itemKind === "message" && item.role === "assistant" && currentSources.length > 0) {
+      if (latestAssistantId) {
+        sourcesByMessageId.delete(latestAssistantId);
+      }
       sourcesByMessageId.set(item.id, [...currentSources]);
+      latestAssistantId = item.id;
     }
   }
 

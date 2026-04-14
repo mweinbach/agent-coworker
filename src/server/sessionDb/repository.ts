@@ -811,12 +811,7 @@ export class SessionDbRepository {
     if (!this.hasSessionsColumn("nickname")) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN nickname TEXT NULL");
     }
-    if (!this.hasSessionsColumn("task_type")) {
-      this.db.exec("ALTER TABLE sessions ADD COLUMN task_type TEXT NULL");
-    }
-    if (!this.hasSessionsColumn("target_paths_json")) {
-      this.db.exec("ALTER TABLE sessions ADD COLUMN target_paths_json TEXT NULL");
-    }
+    this.addAgentTaskMetadataColumns();
     if (!this.hasSessionsColumn("requested_model")) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN requested_model TEXT NULL");
     }
@@ -857,6 +852,15 @@ export class SessionDbRepository {
        END`,
     );
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_parent_updated ON sessions(parent_session_id, updated_at DESC)");
+  }
+
+  addAgentTaskMetadataColumns(): void {
+    if (!this.hasSessionsColumn("task_type")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN task_type TEXT NULL");
+    }
+    if (!this.hasSessionsColumn("target_paths_json")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN target_paths_json TEXT NULL");
+    }
   }
 
   addBackupsEnabledOverrideColumn(): void {

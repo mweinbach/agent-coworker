@@ -236,6 +236,47 @@ describe("DeveloperPage rerun onboarding button", () => {
     }
   });
 
+  test("provider step does not expose the Exa API key fallback for Google", async () => {
+    const harness = setupOnboardingJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          onboardingVisible: true,
+          onboardingStep: "provider",
+          providerCatalog: [
+            {
+              id: "google",
+              name: "Google",
+              models: [{ id: "gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro", knowledgeCutoff: "Unknown", supportsImageInput: true }],
+              defaultModel: "gemini-3.1-pro-preview",
+            },
+          ] as any,
+          providerConnected: [],
+          providerAuthMethodsByProvider: {},
+          ...defaultProviderActions,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(DesktopOnboarding));
+      });
+
+      expect(container.textContent).toContain("Google");
+      expect(container.textContent).not.toContain("Exa API key (web search)");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("provider step shows LM Studio local connect controls instead of an API key field", async () => {
     const harness = setupOnboardingJsdom();
     const setLmStudioEnabled = mock(async () => {});

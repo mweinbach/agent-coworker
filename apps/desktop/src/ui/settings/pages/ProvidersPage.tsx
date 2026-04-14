@@ -17,6 +17,7 @@ import {
   displayProviderName,
   fallbackAuthMethods,
   isProviderNameString,
+  visibleAuthMethods,
 } from "../../../lib/providerDisplayNames";
 
 type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
@@ -240,16 +241,6 @@ function methodStateKey(provider: ProviderName, methodId: string): string {
 
 function providerSectionId(provider: ProviderName): string {
   return `provider:${provider}`;
-}
-
-function visibleAuthMethods(provider: ProviderName, methods: ProviderAuthMethod[]): ProviderAuthMethod[] {
-  if (provider === "google") {
-    return methods.filter((method) => method.id !== EXA_AUTH_METHOD_ID);
-  }
-  if (provider === "codex-cli") {
-    return methods.filter((method) => method.id !== "api_key");
-  }
-  return methods;
 }
 
 function exaConnectionSummary(hasSavedApiKey: boolean): string {

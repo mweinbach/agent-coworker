@@ -475,6 +475,17 @@ describe("shared provider display utilities", () => {
     expect(methods.length).toBeGreaterThan(1);
     expect(methods[0]!.type).toBe("oauth");
   });
+
+  test("visibleAuthMethods hides Exa for Google and raw API key fallback for codex-cli", async () => {
+    const { fallbackAuthMethods, visibleAuthMethods } = await import("../src/lib/providerDisplayNames");
+
+    expect(visibleAuthMethods("google", fallbackAuthMethods("google")).map((method) => method.id)).toEqual([
+      "api_key",
+    ]);
+    expect(visibleAuthMethods("codex-cli", fallbackAuthMethods("codex-cli")).map((method) => method.id)).toEqual([
+      "oauth_cli",
+    ]);
+  });
 });
 
 // ── Protocol guard ──

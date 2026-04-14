@@ -29,6 +29,7 @@ import {
   displayProviderName,
   fallbackAuthMethods,
   isProviderNameString,
+  visibleAuthMethods,
 } from "../../lib/providerDisplayNames";
 import coworkIconSvg from "../../../build/icon.icon/Assets/svgviewer-output.svg";
 
@@ -313,8 +314,10 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
 
   const authMethodsFor = (provider: ProviderName): ProviderAuthMethod[] => {
     const fromStore = providerAuthMethodsByProvider[provider];
-    if (Array.isArray(fromStore) && fromStore.length > 0) return fromStore;
-    return fallbackAuthMethods(provider);
+    if (Array.isArray(fromStore) && fromStore.length > 0) {
+      return visibleAuthMethods(provider, fromStore);
+    }
+    return visibleAuthMethods(provider, fallbackAuthMethods(provider));
   };
 
   const startOauthSignIn = (provider: ProviderName, method: ProviderAuthMethod) => {

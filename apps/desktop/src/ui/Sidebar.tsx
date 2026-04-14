@@ -293,7 +293,7 @@ export const Sidebar = memo(function Sidebar() {
             onClick={toggleSidebar}
             title="Hide sidebar"
             aria-label="Hide sidebar"
-            className="app-sidebar__collapse-toggle sidebar-lift shrink-0 text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground"
+            className="app-sidebar__collapse-toggle sidebar-lift ml-auto shrink-0 text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground"
             {...win32TitlebandButtonDragHandle}
           >
             <PanelLeftIcon className="h-4 w-4" />

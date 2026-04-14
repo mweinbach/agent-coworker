@@ -55,6 +55,8 @@
 
 :root[data-platform="win32"] .app-topbar__win32-left-strip {
   pointer-events: none;
+  align-items: center;
+  padding-top: 11px;
 }
 
 :root[data-platform="win32"] .app-topbar__win32-left-strip > * {
@@ -109,6 +111,7 @@
   display: flex;
   align-items: center;
   min-height: 48px;
+  padding-top: 4px;
 }
 
 :root[data-platform="win32"] .app-sidebar__titleband-drag-zone {
@@ -136,12 +139,19 @@
 
 /* Tighter than macOS: no traffic lights in the top-left; no-drag keeps controls clickable in the title band. */
 :root[data-platform="win32"] .settings-shell__nav {
+  position: relative;
+  z-index: 81;
   padding-top: 0.75rem;
   -webkit-app-region: no-drag;
 }
 
 :root[data-platform="win32"] .settings-shell__back-button {
   margin-top: 0;
+}
+
+:root[data-platform="win32"] .settings-shell__main {
+  position: relative;
+  z-index: 81;
 }
 
 :root[data-platform="win32"] .settings-shell__drag-zone {

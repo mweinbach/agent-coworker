@@ -193,7 +193,7 @@ const ChatShell = memo(function ChatShell({
         lastTurnUsage={view === "chat" ? (runtime?.lastTurnUsage ?? null) : null}
         canClearHardCap={canClearHardCap}
         onClearHardCap={selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined}
-        showContextToggle={view === "chat"}
+        showContextToggle={showContextSidebar}
       />
       <div className="app-chat-body flex min-h-0 min-w-0 flex-1 flex-row">
         <LeftSidebarPane collapsed={sidebarCollapsed} />

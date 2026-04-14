@@ -32,7 +32,10 @@ interface AppTopBarProps {
   onSelectManagementWorkspace?: (workspaceId: string | null) => void;
 }
 
-const WIN32_COLLAPSED_LEFT_RAIL_WIDTH = 96;
+const WIN32_LEFT_CORNER_PADDING = 8;
+const WIN32_LEFT_CORNER_BUTTON_SIZE = 28;
+const WIN32_LEFT_CORNER_BUTTON_GAP = 4;
+const WIN32_COLLAPSED_LEFT_RAIL_WIDTH = (WIN32_LEFT_CORNER_PADDING * 2) + (WIN32_LEFT_CORNER_BUTTON_SIZE * 2) + WIN32_LEFT_CORNER_BUTTON_GAP;
 const WIN32_CAPTION_BUTTON_RESERVE = 136;
 const WIN32_RIGHT_TOOLBAR_GAP = 6;
 
@@ -181,7 +184,7 @@ export function AppTopBar({
       {showWin32CollapsedStrip ? (
         <div className="app-topbar__win32-left-rail absolute inset-y-0 left-0">
           <div className="app-topbar__win32-left-drag-zone" aria-hidden="true" />
-          <div className="app-topbar__sidebar-strip app-topbar__win32-left-strip app-topbar__toolbar app-topbar__controls absolute inset-0 flex min-w-0 items-center justify-between px-2">
+          <div className="app-topbar__sidebar-strip app-topbar__win32-left-strip app-topbar__toolbar app-topbar__controls absolute inset-0 flex min-w-0 items-center gap-1 px-2">
             <Button
               size="icon-sm"
               variant="ghost"

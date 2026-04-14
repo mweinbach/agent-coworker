@@ -4,9 +4,51 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.1.42 - 2026-04-13
+
+### Added
+
+- **Plugin System** (#67) — Full plugin install management flow with desktop UI:
+  - Plugin runtime foundation with MCP transport and scoped auth
+  - Desktop plugin management UI with install, preview, enable/disable, and uninstall
+  - Plugin-bundled skills and MCP server configs with scoped discovery
+  - JSON-RPC control-plane events for real-time plugin state updates
+  - Support for GitHub, local, and URL plugin sources
+  - Hardened install validation, rollback, and symlinked bundle discovery
+
+- **Child Agent Inspection** (#69) — `inspectAgent` tool for real-time child agent state inspection during orchestration
+
+- **Explicit Child Agent Context Modes** (#70) — Configurable context modes for spawned child agents with dynamic role defaults from available subagent definitions
+
+- **Parent Orchestration Guidance** (#73) — Strengthened parent child-agent orchestration with explicit coordinator rules, plan-mode explorer/worker/reviewer roles, and dynamic subagent role defaults
+
 ### Changed
 
-- Removed legacy external Codex auth import so Cowork now relies only on its own `~/.cowork/auth/codex-cli/auth.json` credentials.
+- **Child-Agent Report Parsing** (#71) — Made child-agent reports parseable with explicit tagged footers, server-owned parsing module, and backward-compatible fallback for legacy plain/fenced JSON reports
+
+- **Read-Only Shell Policy** (#72) — Comprehensive read-only shell enforcement:
+  - Syntax-aware command tokenizer covering bash, fish, zsh, and sh
+  - Detection of write operations through redirections, pipes, subshells, env/prefix commands, and package managers
+  - Quote-aware redirect scanning to block quoted write targets without regressing benign inspection commands
+  - Centralized shared parser as the single enforcement boundary
+
+- **Child-Agent Wait Semantics** — StatusBus wait results now support explicit any/all semantics and always return the latest known status snapshot for every requested child. Default omitted mode is `any` with `readyAgentIds` for terminal subset consumers
+
+- Removed legacy GPT-5 model entries and aliased persisted sessions to `gpt-5.4`
+
+- Removed legacy external Codex auth import so Cowork now relies only on its own `~/.cowork/auth/codex-cli/auth.json` credentials
+
+### Fixed
+
+- **Child-Agent Snapshot Replay** — Multiple fixes for child-agent state replay during reruns:
+  - Equal-timestamp follow-up status events now replace (not reject) existing snapshots during reruns
+  - Newer child-agent states preserved during wait replay
+  - Cached session snapshots preserved without task metadata
+  - Predictable child-agent waits across timeout boundaries
+
+- **Desktop** — Windows compatibility tweaks and ChatView update
+- Fixed raw-loop child todo seeding for delegated agents
+- Clarified provider mismatch errors for custom model IDs with better OpenAI-vs-Anthropic guidance
 
 ## 0.1.41 - 2026-03-30
 

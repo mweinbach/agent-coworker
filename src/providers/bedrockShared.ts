@@ -441,6 +441,7 @@ function inferenceProfileToCachedModel(
   const referenced = summary.models
     ?.map((model) => foundationLookup.get(model.modelArn ?? "") ?? foundationLookup.get(modelIdFromArn(model.modelArn) ?? ""))
     .filter((entry): entry is CachedBedrockModel => !!entry) ?? [];
+  if (referenced.length === 0) return null;
   return {
     id: inferenceProfileId,
     displayName: asNonEmptyString(summary.inferenceProfileName) ?? inferenceProfileId,
@@ -463,6 +464,7 @@ function provisionedModelToCachedModel(
     ?? foundationLookup.get(modelIdFromArn(summary.foundationModelArn) ?? "")
     ?? foundationLookup.get(summary.modelArn ?? "")
     ?? foundationLookup.get(modelIdFromArn(summary.modelArn) ?? "");
+  if (!reference) return null;
   return {
     id,
     displayName: asNonEmptyString(summary.provisionedModelName) ?? id,

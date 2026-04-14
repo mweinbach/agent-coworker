@@ -195,4 +195,74 @@ describe("providers/bedrockShared", () => {
       Bedrock.prototype.listImportedModels = originalListImportedModels;
     }
   });
+
+  test("drops derived Bedrock entries whose backing model was filtered out", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await writeConnectionStore(paths, {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        bedrock: {
+          service: "bedrock",
+          mode: "credentials",
+          methodId: "aws_default",
+          values: {},
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const originalListFoundationModels = Bedrock.prototype.listFoundationModels;
+    const originalListInferenceProfiles = Bedrock.prototype.listInferenceProfiles;
+    const originalListCustomModelDeployments = Bedrock.prototype.listCustomModelDeployments;
+    const originalListProvisionedModelThroughputs = Bedrock.prototype.listProvisionedModelThroughputs;
+    const originalListImportedModels = Bedrock.prototype.listImportedModels;
+
+    Bedrock.prototype.listFoundationModels = async () => ({
+      modelSummaries: [
+        {
+          modelId: "non-streaming-model",
+          modelName: "Non Streaming Model",
+          responseStreamingSupported: false,
+          inputModalities: ["TEXT"],
+          modelArn: "arn:aws:bedrock:us-east-1::foundation-model/non-streaming-model",
+        } as any,
+      ],
+    }) as any;
+    Bedrock.prototype.listInferenceProfiles = async () => ({
+      inferenceProfileSummaries: [
+        {
+          inferenceProfileId: "profile-1",
+          inferenceProfileName: "Profile One",
+          status: "ACTIVE",
+          models: [{ modelArn: "arn:aws:bedrock:us-east-1::foundation-model/non-streaming-model" }],
+        } as any,
+      ],
+    }) as any;
+    Bedrock.prototype.listProvisionedModelThroughputs = async () => ({
+      provisionedModelSummaries: [
+        {
+          provisionedModelArn: "arn:aws:bedrock:us-east-1:123:provisioned-model/prov-1",
+          provisionedModelName: "Provisioned One",
+          status: "InService",
+          foundationModelArn: "arn:aws:bedrock:us-east-1::foundation-model/non-streaming-model",
+          modelArn: "arn:aws:bedrock:us-east-1::foundation-model/non-streaming-model",
+        } as any,
+      ],
+    }) as any;
+    Bedrock.prototype.listCustomModelDeployments = async () => ({ modelDeploymentSummaries: [] }) as any;
+    Bedrock.prototype.listImportedModels = async () => ({ modelSummaries: [] }) as any;
+
+    try {
+      const snapshot = await refreshBedrockDiscoveryCache({ paths, env: {} as NodeJS.ProcessEnv });
+      expect(snapshot.models).toEqual([]);
+    } finally {
+      Bedrock.prototype.listFoundationModels = originalListFoundationModels;
+      Bedrock.prototype.listInferenceProfiles = originalListInferenceProfiles;
+      Bedrock.prototype.listCustomModelDeployments = originalListCustomModelDeployments;
+      Bedrock.prototype.listProvisionedModelThroughputs = originalListProvisionedModelThroughputs;
+      Bedrock.prototype.listImportedModels = originalListImportedModels;
+    }
+  });
 });

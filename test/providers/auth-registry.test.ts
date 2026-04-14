@@ -157,7 +157,7 @@ describe("providers/authRegistry", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.mode).toBe("api_key");
-    expect(result.message).toContain("Google webSearch");
+    expect(result.message).toContain("Exa API key saved for web search.");
     expect(connect).toHaveBeenCalledTimes(0);
 
     const store = await readConnectionStore(paths);

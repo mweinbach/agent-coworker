@@ -611,7 +611,7 @@ export function SearchSettingsCard({
                     </SelectContent>
                   </Select>
                 </div>
-                <div className={cn("text-xs", selectedLocalProviderConnected ? "text-muted-foreground" : "text-amber-600 dark:text-amber-400")}>
+                <div className={cn("text-xs", selectedLocalProviderConnected ? "text-muted-foreground" : "text-warning")}>
                   {selectedLocalProviderConnected
                     ? `${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} is ready as the fallback local search tool.`
                     : `Add a ${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} API key in Providers > Tool Providers to use it as the fallback local search tool.`}

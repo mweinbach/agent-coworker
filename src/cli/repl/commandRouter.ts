@@ -9,7 +9,7 @@ import {
   isOpenAiReasoningSummary,
   isOpenAiTextVerbosity,
 } from "../../shared/openaiCompatibleOptions";
-import { promptForApiKey, promptForProviderMethod } from "./authPrompts";
+import { promptForApiKey, promptForProviderFields, promptForProviderMethod } from "./authPrompts";
 import { normalizeProviderAuthMethods, type ProviderAuthMethod } from "../parser";
 import { defaultModelForProvider } from "../../config";
 import { listSessionToolNames } from "../../tools";
@@ -310,6 +310,11 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
         ctx.activateNextPrompt();
         return true;
       }
+      if ((apiMethod.fields?.length ?? 0) > 0) {
+        console.log(`Provider ${serviceToken} requires structured credential fields. Run /connect ${serviceToken} and fill in the prompts.`);
+        ctx.activateNextPrompt();
+        return true;
+      }
       const ok = await ctx.tryRequest("cowork/provider/auth/setApiKey", {
         cwd: cwd(),
         provider: serviceToken,
@@ -330,6 +335,24 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
     }
 
     if (method.type === "api") {
+      if ((method.fields?.length ?? 0) > 0) {
+        const fieldValues = await promptForProviderFields(ctx.rl, serviceToken, method);
+        if (!fieldValues) {
+          console.log(`Credentials are required for ${serviceToken}.`);
+          ctx.activateNextPrompt();
+          return true;
+        }
+        const ok = await ctx.tryRequest("cowork/provider/auth/setConfig", {
+          cwd: cwd(),
+          provider: serviceToken,
+          methodId: method.id,
+          values: fieldValues,
+        });
+        if (!ok) return true;
+        console.log(`saving credentials for ${serviceToken}...`);
+        ctx.activateNextPrompt();
+        return true;
+      }
       const promptedKey = await promptForApiKey(ctx.rl, serviceToken);
       if (!promptedKey) {
         console.log(`API key is required for ${serviceToken}.`);

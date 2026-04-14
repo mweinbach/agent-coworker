@@ -48,10 +48,11 @@ export function createProviderRouteHandlers(
     "cowork/provider/status/refresh": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const refreshBedrockDiscovery = params.refreshBedrockDiscovery === true;
       const outcome = await captureWorkspaceControlOutcome(
         context,
         cwd,
-        async (session) => await session.refreshProviderStatus(),
+        async (session) => await session.refreshProviderStatus({ refreshBedrockDiscovery }),
         (event): event is Extract<ServerEvent, { type: "provider_status" }> => event.type === "provider_status",
       );
       if (context.utils.isSessionError(outcome)) {
@@ -171,6 +172,43 @@ export function createProviderRouteHandlers(
         context,
         cwd,
         async (session) => await session.setProviderApiKey(provider, methodId, apiKey),
+        (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => (
+          event.type === "provider_auth_result"
+          && event.provider === provider
+          && event.methodId === methodId
+        ),
+      );
+      if (context.utils.isSessionError(outcome)) {
+        sendSessionMutationError(context, ws, message.id, outcome);
+        return;
+      }
+      context.jsonrpc.sendResult(ws, message.id, { event: outcome });
+    },
+
+    "cowork/provider/auth/setConfig": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const cwd = context.utils.resolveWorkspacePath(params, message.method);
+      const provider = typeof params.provider === "string"
+        ? params.provider as AgentConfig["provider"]
+        : undefined;
+      const methodId = typeof params.methodId === "string" ? params.methodId.trim() : "";
+      const values = params.values && typeof params.values === "object"
+        ? Object.fromEntries(
+            Object.entries(params.values as Record<string, unknown>)
+              .filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+          )
+        : null;
+      if (!provider || !methodId || !values) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method} requires provider, methodId, and values`,
+        });
+        return;
+      }
+      const outcome = await captureWorkspaceControlOutcome(
+        context,
+        cwd,
+        async (session) => await session.setProviderConfig(provider, methodId, values),
         (event): event is Extract<ServerEvent, { type: "provider_auth_result" }> => (
           event.type === "provider_auth_result"
           && event.provider === provider

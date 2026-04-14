@@ -92,6 +92,13 @@ export function createAnthropicModelAdapter(modelId: string, savedKey?: string):
   });
 }
 
+export function createBedrockModelAdapter(
+  _config: AgentConfig,
+  modelId: string,
+): ProviderModelAdapter {
+  return createModelAdapter(modelId, "amazon-bedrock.converse", async () => ({}));
+}
+
 export function createBasetenModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
   return createModelAdapter(modelId, "baseten.completions", async () => {
     const key = firstNonEmpty(savedKey, envKey("BASETEN_API_KEY"));

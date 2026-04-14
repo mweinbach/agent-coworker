@@ -1,5 +1,6 @@
 import { startWorkspaceServer } from "../lib/desktopCommands";
 import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
+import { fallbackAuthMethods } from "../lib/providerDisplayNames";
 import type { MCPServerConfig, ProviderName, ServerEvent, TodoItem } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 
@@ -123,29 +124,10 @@ function isProviderName(v: unknown): v is ProviderName {
   return typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);
 }
 
-function defaultProviderAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
-  if (provider === "google") {
-    return [
-      { id: "api_key", type: "api", label: "API key" },
-      { id: "exa_api_key", type: "api", label: "Exa API key (web search)" },
-    ];
-  }
-  if (provider === "codex-cli") {
-    return [
-      { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
-      { id: "api_key", type: "api", label: "API key" },
-    ];
-  }
-  if (provider === "lmstudio") {
-    return [];
-  }
-  return [{ id: "api_key", type: "api", label: "API key" }];
-}
-
 function providerAuthMethodsFor(state: AppStoreState, provider: ProviderName): ProviderAuthMethod[] {
   const fromState = state.providerAuthMethodsByProvider[provider];
   if (Array.isArray(fromState) && fromState.length > 0) return fromState;
-  return defaultProviderAuthMethods(provider);
+  return fallbackAuthMethods(provider);
 }
 
 export type AppStoreState = {
@@ -298,13 +280,14 @@ export type AppStoreState = {
 
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
   setProviderApiKey: (provider: ProviderName, methodId: string, apiKey: string) => Promise<void>;
+  setProviderConfig: (provider: ProviderName, methodId: string, values: Record<string, string>) => Promise<void>;
   copyProviderApiKey: (provider: ProviderName, sourceProvider: ProviderName) => Promise<void>;
   authorizeProviderAuth: (provider: ProviderName, methodId: string) => Promise<void>;
   logoutProviderAuth: (provider: ProviderName) => Promise<void>;
   callbackProviderAuth: (provider: ProviderName, methodId: string, code?: string) => Promise<void>;
   requestProviderCatalog: () => Promise<void>;
   requestProviderAuthMethods: () => Promise<void>;
-  refreshProviderStatus: () => Promise<void>;
+  refreshProviderStatus: (opts?: { refreshBedrockDiscovery?: boolean }) => Promise<void>;
   setLmStudioEnabled: (enabled: boolean) => Promise<void>;
   setLmStudioModelVisible: (modelId: string, visible: boolean) => Promise<void>;
 

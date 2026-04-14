@@ -6,6 +6,7 @@ export const SETTINGS_PROVIDER_ORDER: readonly ProviderName[] = [
   "opencode-go",
   "google",
   "anthropic",
+  "bedrock",
   "opencode-zen",
   "fireworks",
   "nvidia",

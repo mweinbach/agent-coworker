@@ -841,6 +841,7 @@ describe("server JSON-RPC control methods", () => {
       const rpc = await connectJsonRpc(url);
       const response = await rpc.request("cowork/provider/status/refresh", {
         cwd: tmpDir,
+        refreshBedrockDiscovery: true,
       });
 
       expect(response.result.event.type).toBe("provider_status");

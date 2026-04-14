@@ -5,14 +5,15 @@ import { isProviderName, PROVIDER_NAMES, resolveProviderName } from "../src/type
 // PROVIDER_NAMES
 // ---------------------------------------------------------------------------
 describe("PROVIDER_NAMES", () => {
-  test("contains exactly 11 providers", () => {
-    expect(PROVIDER_NAMES).toHaveLength(11);
+  test("contains exactly 12 providers", () => {
+    expect(PROVIDER_NAMES).toHaveLength(12);
   });
 
   test("contains expected provider names", () => {
     expect(PROVIDER_NAMES).toContain("google");
     expect(PROVIDER_NAMES).toContain("openai");
     expect(PROVIDER_NAMES).toContain("anthropic");
+    expect(PROVIDER_NAMES).toContain("bedrock");
     expect(PROVIDER_NAMES).toContain("baseten");
     expect(PROVIDER_NAMES).toContain("together");
     expect(PROVIDER_NAMES).toContain("fireworks");
@@ -29,6 +30,7 @@ describe("resolveProviderName", () => {
     expect(resolveProviderName("google")).toBe("google");
     expect(resolveProviderName("openai")).toBe("openai");
     expect(resolveProviderName("anthropic")).toBe("anthropic");
+    expect(resolveProviderName("bedrock")).toBe("bedrock");
     expect(resolveProviderName("baseten")).toBe("baseten");
     expect(resolveProviderName("together")).toBe("together");
     expect(resolveProviderName("fireworks")).toBe("fireworks");
@@ -65,6 +67,10 @@ describe("isProviderName", () => {
 
     test("baseten", () => {
       expect(isProviderName("baseten")).toBe(true);
+    });
+
+    test("bedrock", () => {
+      expect(isProviderName("bedrock")).toBe(true);
     });
 
     test("together", () => {

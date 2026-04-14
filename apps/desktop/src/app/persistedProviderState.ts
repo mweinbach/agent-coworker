@@ -1,7 +1,7 @@
 import { PROVIDER_NAMES, type ProviderName } from "../lib/wsProtocol";
 import type { PersistedProviderState, PersistedProviderStatus } from "./types";
 
-const PROVIDER_STATUS_MODES = new Set(["missing", "error", "api_key", "oauth", "oauth_pending", "local"]);
+const PROVIDER_STATUS_MODES = new Set(["missing", "error", "api_key", "oauth", "oauth_pending", "local", "credentials"]);
 const DEFAULT_CHECKED_AT = new Date(0).toISOString();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -29,7 +29,7 @@ function normalizeAccount(value: unknown): PersistedProviderStatus["account"] {
   };
 }
 
-function normalizeSavedApiKeyMasks(value: unknown): PersistedProviderStatus["savedApiKeyMasks"] {
+function normalizeSavedMaskMap(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) return undefined;
   const entries: Array<readonly [string, string]> = [];
   for (const [key, rawMask] of Object.entries(value)) {
@@ -63,7 +63,9 @@ export function normalizePersistedProviderStatus(
     asNonEmptyString(value.message) ??
     (authorized || verified ? "Connected." : "Not connected.");
   const checkedAt = asNonEmptyString(value.checkedAt) ?? DEFAULT_CHECKED_AT;
-  const savedApiKeyMasks = normalizeSavedApiKeyMasks(value.savedApiKeyMasks);
+  const methodId = asNonEmptyString(value.methodId);
+  const savedApiKeyMasks = normalizeSavedMaskMap(value.savedApiKeyMasks);
+  const savedFieldMasks = normalizeSavedMaskMap(value.savedFieldMasks);
 
   return {
     provider: expectedProvider,
@@ -73,7 +75,9 @@ export function normalizePersistedProviderStatus(
     account,
     message,
     checkedAt,
+    ...(methodId ? { methodId } : {}),
     ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
+    ...(savedFieldMasks ? { savedFieldMasks } : {}),
     ...(isRecord(value.usage) ? { usage: value.usage as PersistedProviderStatus["usage"] } : {}),
   };
 }

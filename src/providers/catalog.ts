@@ -18,6 +18,10 @@ const STATIC_PROVIDER_MODEL_CATALOG = {
     defaultModel: defaultModelIdForProvider("anthropic"),
     availableModels: listSupportedModelIds("anthropic"),
   },
+  bedrock: {
+    defaultModel: defaultModelIdForProvider("bedrock"),
+    availableModels: listSupportedModelIds("bedrock"),
+  },
   baseten: {
     defaultModel: defaultModelIdForProvider("baseten"),
     availableModels: listSupportedModelIds("baseten"),
@@ -78,6 +82,7 @@ export function userFacingAvailableModelsForProvider(provider: ProviderName): re
 
 export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
   anthropic: PROVIDER_MODEL_CATALOG.anthropic.availableModels,
+  bedrock: PROVIDER_MODEL_CATALOG.bedrock.availableModels,
   baseten: PROVIDER_MODEL_CATALOG.baseten.availableModels,
   together: PROVIDER_MODEL_CATALOG.together.availableModels,
   fireworks: PROVIDER_MODEL_CATALOG.fireworks.availableModels,

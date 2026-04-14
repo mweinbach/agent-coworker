@@ -1,4 +1,10 @@
 import {
+  getKnownBedrockResolvedModelMetadataSync,
+  buildBedrockPlaceholderMetadata,
+  resolveBedrockModelMetadata,
+  resolveDefaultBedrockModelMetadata,
+} from "../providers/bedrockShared";
+import {
   buildLmStudioPlaceholderMetadata,
   resolveDefaultLmStudioModelMetadata,
   resolveLmStudioDiscoveredModelMetadata,
@@ -25,8 +31,8 @@ function toResolvedStaticModel(provider: ProviderName, modelId: string, source =
   };
 }
 
-export function isDynamicModelProvider(provider: ProviderName): provider is "lmstudio" {
-  return provider === "lmstudio";
+export function isDynamicModelProvider(provider: ProviderName): provider is "lmstudio" | "bedrock" {
+  return provider === "lmstudio" || provider === "bedrock";
 }
 
 export function normalizeModelIdForProvider(
@@ -38,7 +44,7 @@ export function normalizeModelIdForProvider(
   if (!trimmed) {
     throw new Error(`${source} is required.`);
   }
-  if (provider === "lmstudio") {
+  if (provider === "lmstudio" || provider === "bedrock") {
     return trimmed;
   }
   return assertSupportedModel(provider, trimmed, source).id;
@@ -52,6 +58,10 @@ export function getResolvedModelMetadataSync(
   if (provider === "lmstudio") {
     return buildLmStudioPlaceholderMetadata(normalizeModelIdForProvider(provider, modelId, source));
   }
+  if (provider === "bedrock") {
+    return getKnownBedrockResolvedModelMetadataSync({ modelId: normalizeModelIdForProvider(provider, modelId, source) })
+      ?? buildBedrockPlaceholderMetadata(normalizeModelIdForProvider(provider, modelId, source));
+  }
   return toResolvedStaticModel(provider, modelId, source);
 }
 
@@ -62,16 +72,24 @@ export async function resolveModelMetadata(
     allowPlaceholder?: boolean;
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
+    home?: string;
     fetchImpl?: typeof fetch;
     source?: string;
     log?: (line: string) => void;
   } = {},
 ): Promise<ResolvedModelMetadata> {
-  if (provider !== "lmstudio") {
+  if (provider !== "lmstudio" && provider !== "bedrock") {
     return toResolvedStaticModel(provider, modelId, opts.source);
   }
 
   const normalizedModelId = normalizeModelIdForProvider(provider, modelId, opts.source);
+  if (provider === "bedrock") {
+    return await resolveBedrockModelMetadata({
+      modelId: normalizedModelId,
+      home: opts.home,
+      env: opts.env,
+    });
+  }
   try {
     return await resolveLmStudioDiscoveredModelMetadata({
       modelId: normalizedModelId,
@@ -95,11 +113,18 @@ export async function resolveDefaultModelMetadata(
   opts: {
     providerOptions?: unknown;
     env?: NodeJS.ProcessEnv;
+    home?: string;
     fetchImpl?: typeof fetch;
   } = {},
 ): Promise<ResolvedModelMetadata> {
   if (provider === "lmstudio") {
     return await resolveDefaultLmStudioModelMetadata(opts);
+  }
+  if (provider === "bedrock") {
+    return await resolveDefaultBedrockModelMetadata({
+      home: opts.home,
+      env: opts.env,
+    });
   }
   const model = defaultSupportedModel(provider);
   return {
@@ -120,6 +145,9 @@ export function getKnownResolvedModelMetadata(
 ): ResolvedModelMetadata | null {
   if (provider === "lmstudio") {
     return buildLmStudioPlaceholderMetadata(modelId);
+  }
+  if (provider === "bedrock") {
+    return getKnownBedrockResolvedModelMetadataSync({ modelId });
   }
   const model = getSupportedModel(provider, modelId);
   if (!model) return null;

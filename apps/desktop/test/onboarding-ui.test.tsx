@@ -201,6 +201,82 @@ describe("DeveloperPage rerun onboarding button", () => {
     }
   });
 
+  test("provider step hides Bedrock and keeps it out of onboarding setup", async () => {
+    const harness = setupOnboardingJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          onboardingVisible: true,
+          onboardingStep: "provider",
+          providerCatalog: [
+            { id: "bedrock", name: "Amazon Bedrock", models: [{ id: "amazon.nova-lite-v1:0", displayName: "Amazon Nova Lite", knowledgeCutoff: "Unknown", supportsImageInput: true }], defaultModel: "amazon.nova-lite-v1:0" },
+            { id: "openai", name: "OpenAI", models: [{ id: "gpt-5.4", displayName: "GPT-5.4", knowledgeCutoff: "Unknown", supportsImageInput: true }], defaultModel: "gpt-5.4" },
+          ] as any,
+          providerConnected: [],
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(DesktopOnboarding));
+      });
+
+      expect(container.textContent).not.toContain("Amazon Bedrock");
+      expect(container.textContent).toContain("OpenAI");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("provider step does not expose the Exa API key fallback for Google", async () => {
+    const harness = setupOnboardingJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          onboardingVisible: true,
+          onboardingStep: "provider",
+          providerCatalog: [
+            {
+              id: "google",
+              name: "Google",
+              models: [{ id: "gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro", knowledgeCutoff: "Unknown", supportsImageInput: true }],
+              defaultModel: "gemini-3.1-pro-preview",
+            },
+          ] as any,
+          providerConnected: [],
+          providerAuthMethodsByProvider: {},
+          ...defaultProviderActions,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(DesktopOnboarding));
+      });
+
+      expect(container.textContent).toContain("Google");
+      expect(container.textContent).not.toContain("Exa API key (web search)");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("provider step shows LM Studio local connect controls instead of an API key field", async () => {
     const harness = setupOnboardingJsdom();
     const setLmStudioEnabled = mock(async () => {});
@@ -272,6 +348,13 @@ describe("DeveloperPage rerun onboarding button", () => {
 
       const connectButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Connect");
       if (!connectButton) throw new Error("missing LM Studio connect button");
+      const refreshButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Refresh");
+      if (!refreshButton) throw new Error("missing LM Studio refresh button");
+      await act(async () => {
+        refreshButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+      expect(refreshProviderStatus).toHaveBeenCalledWith();
+
       await act(async () => {
         connectButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });

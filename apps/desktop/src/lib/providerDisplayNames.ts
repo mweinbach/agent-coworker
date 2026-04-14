@@ -1,12 +1,15 @@
 import type { ProviderName, ServerEvent } from "./wsProtocol";
 import { PROVIDER_NAMES } from "./wsProtocol";
+import { getDefaultProviderAuthMethods } from "../../../../src/shared/providerAuthMethods";
 
 type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
+const EXA_AUTH_METHOD_ID = "exa_api_key";
 
 const DISPLAY_NAMES: Partial<Record<ProviderName, string>> = {
   google: "Google",
   openai: "OpenAI",
   anthropic: "Anthropic",
+  bedrock: "Amazon Bedrock",
   baseten: "Baseten",
   together: "Together AI",
   fireworks: "Fireworks AI",
@@ -26,19 +29,18 @@ export function isProviderNameString(value: string): value is ProviderName {
 }
 
 export function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
-  if (provider === "google") {
-    return [
-      { id: "api_key", type: "api", label: "API key" },
-    ];
-  }
-  if (provider === "codex-cli") {
-    return [
-      { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
-      { id: "api_key", type: "api", label: "API key" },
-    ];
-  }
   if (provider === "lmstudio") {
     return [];
   }
-  return [{ id: "api_key", type: "api", label: "API key" }];
+  return getDefaultProviderAuthMethods(provider);
+}
+
+export function visibleAuthMethods(provider: ProviderName, methods: ProviderAuthMethod[]): ProviderAuthMethod[] {
+  if (provider === "google") {
+    return methods.filter((method) => method.id !== EXA_AUTH_METHOD_ID);
+  }
+  if (provider === "codex-cli") {
+    return methods.filter((method) => method.id !== "api_key");
+  }
+  return methods;
 }

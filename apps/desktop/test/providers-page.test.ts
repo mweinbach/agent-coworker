@@ -360,6 +360,45 @@ describe("desktop providers page", () => {
     expect(html).not.toContain("Baseten");
   });
 
+  test("renders structured Bedrock credential methods", () => {
+    useAppStore.setState({
+      providerStatusByName: {
+        bedrock: {
+          provider: "bedrock",
+          authorized: false,
+          verified: false,
+          mode: "missing",
+          account: null,
+          message: "Not connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+      } as any,
+      providerCatalog: [
+        {
+          id: "bedrock",
+          name: "Amazon Bedrock",
+          models: [{ id: "amazon.nova-lite-v1:0", displayName: "Amazon Nova Lite", knowledgeCutoff: "Unknown", supportsImageInput: true }],
+          defaultModel: "amazon.nova-lite-v1:0",
+        },
+      ] as any,
+      providerAuthMethodsByProvider: {
+        bedrock: [
+          { id: "aws_default", type: "api", label: "AWS default credentials", fields: [{ id: "region", label: "AWS region", kind: "text" }] },
+          { id: "aws_profile", type: "api", label: "AWS profile", fields: [{ id: "profile", label: "AWS profile", kind: "text", required: true }] },
+          { id: "aws_keys", type: "api", label: "AWS access keys", fields: [{ id: "accessKeyId", label: "Access key ID", kind: "text", required: true }] },
+          { id: "api_key", type: "api", label: "Bedrock API key", fields: [{ id: "apiKey", label: "Bedrock API key", kind: "password", required: true, secret: true }] },
+        ],
+      } as any,
+    });
+
+    const html = renderToStaticMarkup(createElement(ProvidersPage, { initialExpandedSectionId: "provider:bedrock" }));
+    expect(html).toContain("Amazon Bedrock");
+    expect(html).toContain("AWS default credentials");
+    expect(html).toContain("AWS profile");
+    expect(html).toContain("AWS access keys");
+    expect(html).toContain("Bedrock API key");
+  });
+
   test("codex browser auth ignores stale challenge URLs", () => {
     useAppStore.setState({
       ...useAppStore.getState(),
@@ -837,7 +876,7 @@ describe("desktop providers page", () => {
       await act(async () => {
         refreshButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
-      expect(refreshProviderStatus).toHaveBeenCalled();
+      expect(refreshProviderStatus).toHaveBeenCalledWith();
 
       const modelCheckbox = container.querySelector('[aria-label="Show LM Studio model qwen/qwen3-30b-a3b in chat"]');
       if (!(modelCheckbox instanceof harness.dom.window.HTMLElement)) {

@@ -1,0 +1,10 @@
+{
+  "id": "amazon.nova-lite-v1:0",
+  "provider": "bedrock",
+  "displayName": "Amazon Nova Lite",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": true
+}

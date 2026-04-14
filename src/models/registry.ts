@@ -4,6 +4,9 @@ import anthropicClaudeHaiku45 from "../../config/models/anthropic/claude-haiku-4
 import anthropicClaudeOpus46 from "../../config/models/anthropic/claude-opus-4-6.json";
 import anthropicClaudeSonnet45 from "../../config/models/anthropic/claude-sonnet-4-5.json";
 import anthropicClaudeSonnet46 from "../../config/models/anthropic/claude-sonnet-4-6.json";
+import bedrockAmazonNovaLiteV10 from "../../config/models/bedrock/amazon.nova-lite-v1-0.json";
+import bedrockAmazonNovaMicroV10 from "../../config/models/bedrock/amazon.nova-micro-v1-0.json";
+import bedrockAnthropicClaude35Haiku20241022V10 from "../../config/models/bedrock/anthropic.claude-3-5-haiku-20241022-v1-0.json";
 import basetenMoonshotAiKimiK25 from "../../config/models/baseten/moonshotai-kimi-k2.5.json";
 import basetenNvidiaNemotron120bA12b from "../../config/models/baseten/nvidia-nemotron-120b-a12b.json";
 import basetenZaiOrgGlm5 from "../../config/models/baseten/zai-org-glm-5.json";
@@ -41,6 +44,7 @@ export const STATIC_MODEL_PROVIDER_NAMES = [
   "google",
   "openai",
   "anthropic",
+  "bedrock",
   "baseten",
   "together",
   "fireworks",
@@ -73,6 +77,9 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   anthropicClaudeOpus46,
   anthropicClaudeSonnet45,
   anthropicClaudeSonnet46,
+  bedrockAmazonNovaLiteV10,
+  bedrockAmazonNovaMicroV10,
+  bedrockAnthropicClaude35Haiku20241022V10,
   basetenMoonshotAiKimiK25,
   basetenNvidiaNemotron120bA12b,
   basetenZaiOrgGlm5,
@@ -113,6 +120,7 @@ function buildRegistry(entries: SupportedModel[]) {
     google: [],
     openai: [],
     anthropic: [],
+    bedrock: [],
     baseten: [],
     together: [],
     fireworks: [],

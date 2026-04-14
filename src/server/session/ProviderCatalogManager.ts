@@ -59,7 +59,7 @@ export class ProviderCatalogManager {
     }
   }
 
-  async refreshProviderStatus() {
+  async refreshProviderStatus(opts: { refreshBedrockDiscovery?: boolean } = {}) {
     if (this.refreshingProviderStatus) return;
     this.refreshingProviderStatus = true;
     const startedAt = Date.now();
@@ -67,12 +67,17 @@ export class ProviderCatalogManager {
       const providers = await this.opts.getProviderStatuses({
         paths: this.opts.getGlobalAuthPaths(),
         providerOptions: this.opts.getConfig().providerOptions,
+        refreshBedrockDiscovery: opts.refreshBedrockDiscovery ?? false,
       });
       this.opts.emit({ type: "provider_status", sessionId: this.opts.sessionId, providers });
       this.opts.emitTelemetry(
         "provider.status.refresh",
         "ok",
-        { sessionId: this.opts.sessionId, providers: providers.length },
+        {
+          sessionId: this.opts.sessionId,
+          providers: providers.length,
+          refreshBedrockDiscovery: opts.refreshBedrockDiscovery ?? false,
+        },
         Date.now() - startedAt
       );
     } catch (err) {

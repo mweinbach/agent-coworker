@@ -37,3 +37,28 @@ export async function promptForApiKey(
 ): Promise<string> {
   return (await askLine(rl, `${provider} API key: `)).trim();
 }
+
+export async function promptForProviderFields(
+  rl: readline.Interface,
+  provider: string,
+  method: ProviderAuthMethod,
+): Promise<Record<string, string> | null> {
+  const fields = method.fields ?? [];
+  if (fields.length === 0) return {};
+
+  const values: Record<string, string> = {};
+  for (const field of fields) {
+    const suffix = field.required ? " (required)" : "";
+    const placeholder = field.placeholder ? ` [${field.placeholder}]` : "";
+    const answer = (await askLine(rl, `${provider} ${field.label}${suffix}${placeholder}: `)).trim();
+    if (!answer && field.required) {
+      console.log(`${field.label} is required.`);
+      return null;
+    }
+    if (answer) {
+      values[field.id] = answer;
+    }
+  }
+
+  return values;
+}

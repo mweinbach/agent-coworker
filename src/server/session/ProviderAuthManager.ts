@@ -6,6 +6,7 @@ import {
   copyProviderApiKey as copyProviderApiKeyMethod,
   logoutProviderAuth as logoutProviderAuthMethod,
   resolveProviderAuthMethod,
+  setProviderConfig as setProviderConfigMethod,
   setProviderApiKey as setProviderApiKeyMethod,
 } from "../../providers/authRegistry";
 import { getOpenCodeDisplayName, isOpenCodeProviderName, isOpenCodeSiblingPair } from "../../providers/opencodeShared";
@@ -73,11 +74,16 @@ export class ProviderAuthManager {
       queuePersistSessionSnapshot: (reason: string) => void;
       emitConfigUpdated: () => void;
       emitProviderCatalog: () => Promise<void>;
-      refreshProviderStatus: () => Promise<void>;
+      refreshProviderStatus: (opts?: { refreshBedrockDiscovery?: boolean }) => Promise<void>;
       getGlobalAuthPaths: () => ReturnType<typeof getAiCoworkerPaths>;
       runProviderConnect: ConnectProviderHandler;
     }
   ) {}
+
+  private async refreshProviderState(provider: AgentConfig["provider"]) {
+    await this.opts.refreshProviderStatus({ refreshBedrockDiscovery: provider === "bedrock" });
+    await this.opts.emitProviderCatalog();
+  }
 
   async prepareModelSelection(
     modelIdRaw: string,
@@ -319,8 +325,7 @@ export class ProviderAuthManager {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.callback");
-        await this.opts.refreshProviderStatus();
-        await this.opts.emitProviderCatalog();
+        await this.refreshProviderState(providerRaw);
       }
       this.opts.emitTelemetry(
         "provider.auth.callback",
@@ -380,8 +385,7 @@ export class ProviderAuthManager {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.logout");
-        await this.opts.refreshProviderStatus();
-        await this.opts.emitProviderCatalog();
+        await this.refreshProviderState(providerRaw);
       }
 
       this.opts.emitTelemetry(
@@ -454,8 +458,7 @@ export class ProviderAuthManager {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.api_key");
-        await this.opts.refreshProviderStatus();
-        await this.opts.emitProviderCatalog();
+        await this.refreshProviderState(providerRaw);
       }
       this.opts.emitTelemetry(
         "provider.auth.api_key",
@@ -480,6 +483,83 @@ export class ProviderAuthManager {
           error: this.opts.formatError(err),
         },
         Date.now() - startedAt
+      );
+    } finally {
+      this.opts.setConnecting(false);
+    }
+  }
+
+  async setProviderConfig(
+    providerRaw: AgentConfig["provider"],
+    methodIdRaw: string,
+    valuesRaw: Record<string, string>,
+  ) {
+    if (!this.opts.guardBusy()) return;
+    if (!isProviderName(providerRaw)) {
+      this.opts.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
+      return;
+    }
+    const methodId = methodIdRaw.trim();
+    if (!methodId) {
+      this.opts.emitError("validation_failed", "provider", "Auth method id is required");
+      return;
+    }
+    const method = resolveProviderAuthMethod(providerRaw, methodId);
+    if (!method) {
+      this.opts.emitError("validation_failed", "provider", `Unsupported auth method "${methodId}" for ${providerRaw}.`);
+      return;
+    }
+
+    this.opts.setConnecting(true);
+    const startedAt = Date.now();
+    try {
+      const result = await setProviderConfigMethod({
+        provider: providerRaw,
+        methodId,
+        values: valuesRaw,
+        paths: this.opts.getGlobalAuthPaths(),
+      });
+
+      this.opts.emit({
+        type: "provider_auth_result",
+        sessionId: this.opts.sessionId,
+        provider: providerRaw,
+        methodId,
+        ok: result.ok,
+        mode: result.ok ? result.mode : undefined,
+        message: result.message,
+      });
+
+      if (result.ok) {
+        if (supportsProviderManagedContinuationProvider(providerRaw)) {
+          this.opts.clearProviderState();
+        }
+        this.opts.queuePersistSessionSnapshot("provider.auth.config");
+        await this.refreshProviderState(providerRaw);
+      }
+      this.opts.emitTelemetry(
+        "provider.auth.config",
+        result.ok ? "ok" : "error",
+        {
+          sessionId: this.opts.sessionId,
+          provider: providerRaw,
+          methodId,
+          mode: result.ok ? result.mode : "unknown",
+        },
+        Date.now() - startedAt,
+      );
+    } catch (err) {
+      this.opts.emitError("provider_error", "provider", `Setting provider credentials failed: ${String(err)}`);
+      this.opts.emitTelemetry(
+        "provider.auth.config",
+        "error",
+        {
+          sessionId: this.opts.sessionId,
+          provider: providerRaw,
+          methodId,
+          error: this.opts.formatError(err),
+        },
+        Date.now() - startedAt,
       );
     } finally {
       this.opts.setConnecting(false);
@@ -549,8 +629,7 @@ export class ProviderAuthManager {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.api_key_copy");
-        await this.opts.refreshProviderStatus();
-        await this.opts.emitProviderCatalog();
+        await this.refreshProviderState(providerRaw);
       }
       this.opts.emitTelemetry(
         "provider.auth.api_key_copy",

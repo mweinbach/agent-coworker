@@ -1,0 +1,10 @@
+{
+  "id": "amazon.nova-micro-v1:0",
+  "provider": "bedrock",
+  "displayName": "Amazon Nova Micro",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

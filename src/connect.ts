@@ -80,6 +80,7 @@ export type ConnectProviderResult =
       storageFile: string;
       message: string;
       maskedApiKey?: string;
+      maskedFieldValues?: Record<string, string>;
       oauthCommand?: string;
       oauthCredentialsFile?: string;
     }
@@ -94,6 +95,60 @@ export type DisconnectProviderResult =
       oauthCredentialsFile?: string;
     }
   | { ok: false; provider: ConnectService; message: string };
+
+function normalizeCredentialValues(values: Record<string, string>): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(values)) {
+    const trimmedKey = key.trim();
+    if (!trimmedKey) continue;
+    normalized[trimmedKey] = value;
+  }
+  return normalized;
+}
+
+function maskCredentialValue(value: string): string {
+  return maskApiKey(value);
+}
+
+export async function saveProviderConnectionConfig(opts: {
+  provider: ConnectService;
+  methodId: string;
+  values: Record<string, string>;
+  paths?: AiCoworkerPaths;
+}): Promise<ConnectProviderResult> {
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
+  const store = await readConnectionStore(paths);
+  const now = new Date().toISOString();
+  const methodId = opts.methodId.trim();
+  if (!methodId) {
+    return { ok: false, provider: opts.provider, message: "Auth method id is required." };
+  }
+
+  const values = normalizeCredentialValues(opts.values);
+  store.services[opts.provider] = {
+    service: opts.provider,
+    mode: "credentials",
+    methodId,
+    values,
+    updatedAt: now,
+  };
+  store.updatedAt = now;
+  await writeConnectionStore(paths, store);
+
+  const maskedFieldValues: Record<string, string> = {};
+  for (const [key, value] of Object.entries(values)) {
+    maskedFieldValues[key] = maskCredentialValue(value);
+  }
+
+  return {
+    ok: true,
+    provider: opts.provider,
+    mode: "credentials",
+    storageFile: paths.connectionsFile,
+    message: "Provider credentials saved.",
+    ...(Object.keys(maskedFieldValues).length > 0 ? { maskedFieldValues } : {}),
+  };
+}
 
 async function runCoworkCodexLogin(opts: {
   paths: AiCoworkerPaths;

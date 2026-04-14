@@ -148,6 +148,14 @@ export const providerAuthMethodSchema = z.object({
   type: z.enum(["api", "oauth"]),
   label: z.string(),
   oauthMode: z.enum(["auto", "code"]).optional(),
+  fields: z.array(z.object({
+    id: nonEmptyTrimmedStringSchema,
+    label: z.string(),
+    kind: z.enum(["text", "password"]),
+    required: z.boolean().optional(),
+    secret: z.boolean().optional(),
+    placeholder: z.string().optional(),
+  }).strict()).optional(),
 }).passthrough();
 
 export const providerAuthMethodsEventSchema = z.object({
@@ -195,11 +203,13 @@ export const providerStatusEntrySchema = z.object({
   provider: providerNameSchema,
   authorized: z.boolean(),
   verified: z.boolean(),
-  mode: z.enum(["missing", "error", "api_key", "oauth", "oauth_pending", "local"]),
+  mode: z.enum(["missing", "error", "api_key", "oauth", "oauth_pending", "local", "credentials"]),
   account: providerAccountSchema.nullable(),
   message: z.string(),
   checkedAt: z.string(),
+  methodId: z.string().optional(),
   savedApiKeyMasks: z.record(z.string(), z.string()).optional(),
+  savedFieldMasks: z.record(z.string(), z.string()).optional(),
   usage: providerUsageStatusSchema.optional(),
   tokenRecoverable: z.boolean().optional(),
 }).passthrough();
@@ -231,7 +241,7 @@ export const providerAuthResultEventSchema = z.object({
   provider: providerNameSchema,
   methodId: nonEmptyTrimmedStringSchema,
   ok: z.boolean(),
-  mode: z.enum(["api_key", "oauth", "oauth_pending"]).optional(),
+  mode: z.enum(["api_key", "oauth", "oauth_pending", "credentials"]).optional(),
   message: z.string(),
 }).passthrough();
 
@@ -779,6 +789,7 @@ export const workspaceBackupDeltaEventSchema = z.object({
 
 export const providerCatalogReadRequestSchema = z.object({
   cwd: optionalNonEmptyTrimmedStringSchema,
+  refresh: z.boolean().optional(),
 }).strict();
 
 export const providerAuthMethodsReadRequestSchema = z.object({
@@ -787,6 +798,7 @@ export const providerAuthMethodsReadRequestSchema = z.object({
 
 export const providerStatusRefreshRequestSchema = z.object({
   cwd: optionalNonEmptyTrimmedStringSchema,
+  refreshBedrockDiscovery: z.boolean().optional(),
 }).strict();
 
 export const providerAuthAuthorizeRequestSchema = z.object({
@@ -812,6 +824,13 @@ export const providerAuthSetApiKeyRequestSchema = z.object({
   provider: providerNameSchema,
   methodId: nonEmptyTrimmedStringSchema,
   apiKey: z.string(),
+}).strict();
+
+export const providerAuthSetConfigRequestSchema = z.object({
+  cwd: optionalNonEmptyTrimmedStringSchema,
+  provider: providerNameSchema,
+  methodId: nonEmptyTrimmedStringSchema,
+  values: z.record(z.string(), z.string()),
 }).strict();
 
 export const providerAuthCopyApiKeyRequestSchema = z.object({
@@ -1018,6 +1037,7 @@ export const jsonRpcControlRequestSchemas = {
   "cowork/provider/auth/logout": providerAuthLogoutRequestSchema,
   "cowork/provider/auth/callback": providerAuthCallbackRequestSchema,
   "cowork/provider/auth/setApiKey": providerAuthSetApiKeyRequestSchema,
+  "cowork/provider/auth/setConfig": providerAuthSetConfigRequestSchema,
   "cowork/provider/auth/copyApiKey": providerAuthCopyApiKeyRequestSchema,
   "cowork/mcp/servers/read": mcpServersReadRequestSchema,
   "cowork/mcp/server/upsert": mcpServerUpsertRequestSchema,
@@ -1072,6 +1092,7 @@ export const jsonRpcControlResultSchemas = {
   "cowork/provider/auth/logout": legacyEventEnvelope(providerAuthResultEventSchema),
   "cowork/provider/auth/callback": legacyEventEnvelope(providerAuthResultEventSchema),
   "cowork/provider/auth/setApiKey": legacyEventEnvelope(providerAuthResultEventSchema),
+  "cowork/provider/auth/setConfig": legacyEventEnvelope(providerAuthResultEventSchema),
   "cowork/provider/auth/copyApiKey": legacyEventEnvelope(providerAuthResultEventSchema),
   "cowork/mcp/servers/read": legacyEventEnvelope(mcpServersEventSchema),
   "cowork/mcp/server/upsert": legacyEventEnvelope(mcpServersEventSchema),

@@ -1995,9 +1995,66 @@ describe("AgentSession", () => {
         expect(authEvt.provider).toBe("openai");
         expect(authEvt.methodId).toBe("api_key");
       }
+      expect(getProviderStatusesImpl).toHaveBeenCalledWith(expect.objectContaining({
+        refreshBedrockDiscovery: false,
+      }));
       expect(events.some((e) => e.type === "provider_status")).toBe(true);
       expect(events.some((e) => e.type === "provider_catalog")).toBe(true);
       expect((session as any).state.providerState).toBeNull();
+    });
+
+    test("setProviderConfig only requests Bedrock discovery refreshes for Bedrock mutations", async () => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "session-bedrock-config-"));
+      const connectionsFile = path.join(home, ".cowork", "auth", "connections.json");
+      const getProviderCatalogImpl = mock(async () => ({
+        all: [{ id: "bedrock", name: "Amazon Bedrock", models: ["amazon.nova-lite-v1:0"], defaultModel: "amazon.nova-lite-v1:0" }],
+        default: { bedrock: "amazon.nova-lite-v1:0" },
+        connected: ["bedrock"],
+      }));
+      const getProviderStatusesImpl = mock(async () => [{
+        provider: "bedrock",
+        authorized: true,
+        verified: false,
+        mode: "credentials",
+        account: null,
+        message: "Credentials saved.",
+        checkedAt: "2026-04-14T00:00:00.000Z",
+        methodId: "aws_default",
+      }]);
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          provider: "bedrock",
+          model: "amazon.nova-lite-v1:0",
+          userAgentDir: path.join(home, ".agent"),
+        },
+        getAiCoworkerPathsImpl: mock(({ homedir }: { homedir?: string } = {}) => ({
+          rootDir: path.join(homedir ?? home, ".cowork"),
+          authDir: path.join(homedir ?? home, ".cowork", "auth"),
+          configDir: path.join(homedir ?? home, ".cowork", "config"),
+          sessionsDir: path.join(homedir ?? home, ".cowork", "sessions"),
+          logsDir: path.join(homedir ?? home, ".cowork", "logs"),
+          skillsDir: path.join(homedir ?? home, ".cowork", "skills"),
+          connectionsFile,
+        })),
+        getProviderCatalogImpl: getProviderCatalogImpl as any,
+        getProviderStatusesImpl: getProviderStatusesImpl as any,
+      });
+
+      await session.setProviderConfig("bedrock", "aws_default", {});
+
+      const authEvt = events.findLast((e) => e.type === "provider_auth_result");
+      expect(authEvt).toBeDefined();
+      if (authEvt && authEvt.type === "provider_auth_result") {
+        expect(authEvt.ok).toBe(true);
+        expect(authEvt.provider).toBe("bedrock");
+        expect(authEvt.methodId).toBe("aws_default");
+      }
+      expect(getProviderStatusesImpl).toHaveBeenCalledWith(expect.objectContaining({
+        refreshBedrockDiscovery: true,
+      }));
+      expect(events.some((e) => e.type === "provider_status")).toBe(true);
+      expect(events.some((e) => e.type === "provider_catalog")).toBe(true);
     });
 
     test("copyProviderApiKey emits provider_auth_result and refreshes status/catalog", async () => {

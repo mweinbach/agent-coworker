@@ -31,7 +31,10 @@ export type OpenAiTextVerbosity = (typeof OPENAI_TEXT_VERBOSITY_VALUES)[number];
 export const CODEX_WEB_SEARCH_MODE_VALUES = ["disabled", "cached", "live"] as const;
 export type CodexWebSearchMode = (typeof CODEX_WEB_SEARCH_MODE_VALUES)[number];
 
-export const CODEX_WEB_SEARCH_BACKEND_VALUES = ["native", "exa"] as const;
+export const LOCAL_WEB_SEARCH_PROVIDER_VALUES = ["exa", "parallel"] as const;
+export type LocalWebSearchProvider = (typeof LOCAL_WEB_SEARCH_PROVIDER_VALUES)[number];
+
+export const CODEX_WEB_SEARCH_BACKEND_VALUES = ["native", ...LOCAL_WEB_SEARCH_PROVIDER_VALUES] as const;
 export type CodexWebSearchBackend = (typeof CODEX_WEB_SEARCH_BACKEND_VALUES)[number];
 
 export const CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES = ["low", "medium", "high"] as const;
@@ -60,6 +63,7 @@ export type OpenAiProviderOptions = OpenAiCompatibleProviderOptions;
 
 export type CodexCliProviderOptions = OpenAiCompatibleProviderOptions & {
   webSearchBackend?: CodexWebSearchBackend;
+  webSearchFallbackBackend?: LocalWebSearchProvider;
   webSearchMode?: CodexWebSearchMode;
   webSearch?: CodexWebSearchOptions;
 };
@@ -115,6 +119,10 @@ export function isCodexWebSearchMode(value: unknown): value is CodexWebSearchMod
 
 export function isCodexWebSearchBackend(value: unknown): value is CodexWebSearchBackend {
   return typeof value === "string" && (CODEX_WEB_SEARCH_BACKEND_VALUES as readonly string[]).includes(value);
+}
+
+export function isLocalWebSearchProvider(value: unknown): value is LocalWebSearchProvider {
+  return typeof value === "string" && (LOCAL_WEB_SEARCH_PROVIDER_VALUES as readonly string[]).includes(value);
 }
 
 export function isCodexWebSearchContextSize(value: unknown): value is CodexWebSearchContextSize {
@@ -217,6 +225,9 @@ function pickCodexCliProviderOptionsSection(value: unknown): CodexCliProviderOpt
   if (isCodexWebSearchBackend(value.webSearchBackend)) {
     next.webSearchBackend = value.webSearchBackend;
   }
+  if (isLocalWebSearchProvider(value.webSearchFallbackBackend)) {
+    next.webSearchFallbackBackend = value.webSearchFallbackBackend;
+  }
   if (isCodexWebSearchMode(value.webSearchMode)) {
     next.webSearchMode = value.webSearchMode;
   }
@@ -318,13 +329,30 @@ export function getCodexWebSearchBackendFromProviderOptions(
   return codex?.webSearchBackend ?? fallback;
 }
 
+export function getLocalWebSearchProviderFromProviderOptions(
+  providerOptions: unknown,
+  fallback: LocalWebSearchProvider = "exa",
+): LocalWebSearchProvider {
+  if (!isPlainObject(providerOptions)) return fallback;
+  const codex = pickCodexCliProviderOptionsSection(providerOptions["codex-cli"]);
+  const backend = codex?.webSearchBackend ?? "native";
+  if (backend === "exa" || backend === "parallel") return backend;
+  return codex?.webSearchFallbackBackend ?? fallback;
+}
+
 export function getGoogleNativeWebSearchFromProviderOptions(
   providerOptions: unknown,
   fallback = false,
 ): boolean {
   if (!isPlainObject(providerOptions)) return fallback;
-  const google = pickGoogleProviderOptionsSection(providerOptions.google);
-  return google?.nativeWebSearch ?? fallback;
+
+  const rawGoogle = isPlainObject(providerOptions.google) ? providerOptions.google : undefined;
+  const explicit = rawGoogle ? pickBoolean(rawGoogle.nativeWebSearch) : undefined;
+  if (explicit !== undefined) {
+    return explicit;
+  }
+
+  return getCodexWebSearchBackendFromProviderOptions(providerOptions, "native") === "native";
 }
 
 export function getGoogleThinkingLevelFromProviderOptions(

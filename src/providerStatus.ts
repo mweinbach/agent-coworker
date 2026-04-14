@@ -90,6 +90,8 @@ function buildSavedApiKeyMasks(opts: {
   if (opts.provider === "google") {
     const exa = opts.store.toolApiKeys?.exa?.trim();
     if (exa) out.exa_api_key = maskApiKey(exa);
+    const parallel = opts.store.toolApiKeys?.parallel?.trim();
+    if (parallel) out.parallel_api_key = maskApiKey(parallel);
   }
 
   return Object.keys(out).length > 0 ? out : undefined;

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   getCodexWebSearchBackendFromProviderOptions,
+  getLocalWebSearchProviderFromProviderOptions,
   getGoogleNativeWebSearchFromProviderOptions,
   getGoogleThinkingLevelFromProviderOptions,
   mergeEditableOpenAiCompatibleProviderOptions,
@@ -19,6 +20,7 @@ describe("OpenAI compatible provider option helpers", () => {
       },
       "codex-cli": {
         webSearchBackend: "native",
+        webSearchFallbackBackend: "parallel",
         reasoningSummary: "concise",
         textVerbosity: "low",
         webSearchMode: "live",
@@ -51,6 +53,7 @@ describe("OpenAI compatible provider option helpers", () => {
       },
       "codex-cli": {
         webSearchBackend: "native",
+        webSearchFallbackBackend: "parallel",
         reasoningSummary: "concise",
         textVerbosity: "low",
         webSearchMode: "live",
@@ -93,6 +96,7 @@ describe("OpenAI compatible provider option helpers", () => {
       },
       "codex-cli": {
         webSearchBackend: "exa",
+        webSearchFallbackBackend: "parallel",
         reasoningSummary: "detailed",
       },
     };
@@ -109,6 +113,7 @@ describe("OpenAI compatible provider option helpers", () => {
       },
       "codex-cli": {
         webSearchBackend: "exa",
+        webSearchFallbackBackend: "parallel",
         reasoningSummary: "detailed",
       },
     });
@@ -177,6 +182,21 @@ describe("OpenAI compatible provider option helpers", () => {
     })).toBe("exa");
   });
 
+  test("getLocalWebSearchProviderFromProviderOptions resolves explicit and fallback local providers", () => {
+    expect(getLocalWebSearchProviderFromProviderOptions(undefined)).toBe("exa");
+    expect(getLocalWebSearchProviderFromProviderOptions({
+      "codex-cli": {
+        webSearchBackend: "parallel",
+      },
+    })).toBe("parallel");
+    expect(getLocalWebSearchProviderFromProviderOptions({
+      "codex-cli": {
+        webSearchBackend: "native",
+        webSearchFallbackBackend: "parallel",
+      },
+    })).toBe("parallel");
+  });
+
   test("google provider option getters read editable Gemini tool toggles", () => {
     const providerOptions = {
       google: {
@@ -187,6 +207,19 @@ describe("OpenAI compatible provider option helpers", () => {
 
     expect(getGoogleNativeWebSearchFromProviderOptions(providerOptions)).toBe(true);
     expect(getGoogleThinkingLevelFromProviderOptions(providerOptions)).toBe("medium");
+  });
+
+  test("google native web search defaults to shared native backend when unset", () => {
+    expect(getGoogleNativeWebSearchFromProviderOptions({
+      "codex-cli": {
+        webSearchBackend: "native",
+      },
+    })).toBe(true);
+    expect(getGoogleNativeWebSearchFromProviderOptions({
+      "codex-cli": {
+        webSearchBackend: "parallel",
+      },
+    })).toBe(false);
   });
 
   test("mergeEditableOpenAiCompatibleProviderOptions preserves explicit empty Gemini thinkingConfig clears", () => {

@@ -33,7 +33,7 @@ import {
 
 function usesLegacyCodexWebSearch(ctx: ToolContext): boolean {
   if (ctx.config.provider !== "codex-cli") return false;
-  return getCodexWebSearchBackendFromProviderOptions(ctx.config.providerOptions) === "exa";
+  return getCodexWebSearchBackendFromProviderOptions(ctx.config.providerOptions) !== "native";
 }
 
 function usesGoogleNativeWebTools(ctx: ToolContext): boolean {
@@ -43,7 +43,7 @@ function usesGoogleNativeWebTools(ctx: ToolContext): boolean {
 
 function usesLegacyCodexWebSearchConfig(config: Pick<AgentConfig, "provider" | "providerOptions">): boolean {
   if (config.provider !== "codex-cli") return false;
-  return getCodexWebSearchBackendFromProviderOptions(config.providerOptions) === "exa";
+  return getCodexWebSearchBackendFromProviderOptions(config.providerOptions) !== "native";
 }
 
 function usesGoogleNativeWebToolsConfig(config: Pick<AgentConfig, "provider" | "providerOptions">): boolean {

@@ -5,6 +5,7 @@ import {
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
   GOOGLE_THINKING_LEVEL_VALUES,
+  LOCAL_WEB_SEARCH_PROVIDER_VALUES,
   OPENAI_REASONING_EFFORT_VALUES,
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
@@ -87,6 +88,7 @@ const codexWebSearchLocationSchema = z.object({
 
 const codexCliProviderOptionsSchema = providerOptionsSchema.extend({
   webSearchBackend: webSearchBackendSchema.optional(),
+  webSearchFallbackBackend: z.enum(LOCAL_WEB_SEARCH_PROVIDER_VALUES).optional(),
   webSearchMode: webSearchModeSchema.optional(),
   webSearch: z.object({
     contextSize: webSearchContextSizeSchema.optional(),

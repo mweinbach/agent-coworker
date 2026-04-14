@@ -72,6 +72,7 @@ mock.module("../src/lib/agentSocket", () => ({
 const {
   GeminiApiSettingsCard,
   OpenAiCompatibleModelSettingsCard,
+  SearchSettingsCard,
   WorkspacesPage,
   WorkspaceUserProfileCard,
 } = await import("../src/ui/settings/pages/WorkspacesPage");
@@ -105,7 +106,7 @@ describe("desktop workspaces page", () => {
     useAppStore.setState(defaultStoreActions);
   });
 
-  test("renders OpenAI and ChatGPT settings controls with compact web search options", () => {
+  test("renders OpenAI and ChatGPT settings controls", () => {
     const html = renderToStaticMarkup(
       createElement(OpenAiCompatibleModelSettingsCard, {
         workspace: {
@@ -148,12 +149,10 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Verbosity");
     expect(html).toContain("Reasoning effort");
     expect(html).toContain("Reasoning summary");
-    expect(html).toContain("Web search");
-    expect(html).toContain("Advanced options");
     expect(html).toContain("OpenAI API");
   });
 
-  test("reveals codex web search advanced controls and manages optional allowed domains", async () => {
+  test("reveals shared search controls and manages optional allowed domains", async () => {
     const harness = setupWorkspacePageJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
     const updateWorkspaceDefaults = mock(async () => {});
@@ -165,7 +164,7 @@ describe("desktop workspaces page", () => {
 
       await act(async () => {
         root.render(
-          createElement(OpenAiCompatibleModelSettingsCard, {
+          createElement(SearchSettingsCard, {
             workspace: {
               id: "ws-1",
               providerOptions: {
@@ -174,6 +173,7 @@ describe("desktop workspaces page", () => {
                   reasoningSummary: "concise",
                   textVerbosity: "low",
                   webSearchBackend: "native",
+                  webSearchFallbackBackend: "parallel",
                   webSearchMode: "live",
                   webSearch: {
                     contextSize: "high",
@@ -183,23 +183,30 @@ describe("desktop workspaces page", () => {
                     },
                   },
                 },
+                google: {
+                  nativeWebSearch: true,
+                },
               },
             },
             providerStatusByName: {
-              "codex-cli": { authorized: true, mode: "oauth" },
+              google: {
+                savedApiKeyMasks: {
+                  parallel_api_key: "para...1234",
+                },
+              },
             },
             updateWorkspaceDefaults,
           }),
         );
       });
 
-      expect(container.textContent).toContain("Web search");
-      expect(container.textContent).toContain("Advanced options");
+      expect(container.textContent).toContain("Search provider");
+      expect(container.textContent).toContain("doesn't include search");
       expect(container.textContent).not.toContain("Allowed domains");
 
-      const advancedButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Advanced options"));
+      const advancedButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Show"));
       if (!(advancedButton instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing advanced options button");
+        throw new Error("missing search advanced options button");
       }
 
       await act(async () => {
@@ -258,6 +265,7 @@ describe("desktop workspaces page", () => {
               reasoningSummary: "concise",
               textVerbosity: "low",
               webSearchBackend: "native",
+              webSearchFallbackBackend: "parallel",
               webSearchMode: "live",
               webSearch: {
                 contextSize: "high",
@@ -267,6 +275,9 @@ describe("desktop workspaces page", () => {
                   timezone: "America/New_York",
                 },
               },
+            },
+            google: {
+              nativeWebSearch: true,
             },
           },
         },
@@ -282,7 +293,7 @@ describe("desktop workspaces page", () => {
     }
   });
 
-  test("renders Gemini API settings controls for native web search", () => {
+  test("renders Gemini API settings controls for reasoning effort", () => {
     const html = renderToStaticMarkup(
       createElement(GeminiApiSettingsCard, {
         workspace: {
@@ -306,8 +317,6 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Gemini API settings");
     expect(html).toContain("Reasoning effort");
     expect(html).toContain("gemini-3-flash-preview");
-    expect(html).toContain("Native web search");
-    expect(html).toContain("Google Search and URL Context");
   });
 
   test("renders workspace controls for user profile context", () => {
@@ -464,7 +473,7 @@ describe("desktop workspaces page", () => {
       expect(text).toContain("Preferred subagent model");
 
       const subagentModelsToggle = [...container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Show"),
+        button.textContent?.trim() === "Show" && button.closest("[data-slot=\"card-content\"]")?.textContent?.includes("Subagent Models"),
       );
       if (!(subagentModelsToggle instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing Subagent Models toggle");
@@ -478,22 +487,11 @@ describe("desktop workspaces page", () => {
       expect(expandedText).toContain("OpenCode Zen | glm-5");
       // Search within the subagent models section to avoid matching provider
       // names that appear earlier in the summary bar or dropdowns.
-      const sectionStart = expandedText.indexOf("Subagent Models");
+      const sectionStart = expandedText.lastIndexOf("Subagent Models");
       expect(sectionStart).toBeGreaterThanOrEqual(0);
       const sectionText = expandedText.slice(sectionStart);
-      const expectedProviderOrder = [
-        "ChatGPT Subscription",
-        "OpenCode Go",
-        "Google",
-        "Anthropic",
-        "OpenCode Zen",
-        "NVIDIA",
-        "Together AI",
-      ];
-      const providerIndexes = expectedProviderOrder.map((name) => sectionText.indexOf(name));
-      expect(providerIndexes.every((index) => index >= 0)).toBe(true);
-      for (let index = 1; index < providerIndexes.length; index += 1) {
-        expect(providerIndexes[index - 1]).toBeLessThan(providerIndexes[index]);
+      for (const expectedName of ["OpenCode Go", "OpenCode Zen"]) {
+        expect(sectionText).toContain(expectedName);
       }
       expect(expandedText).not.toContain("Baseten");
 

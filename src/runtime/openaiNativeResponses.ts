@@ -235,9 +235,9 @@ function normalizeWebSearchLocation(value: unknown): Record<string, string> | un
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function resolveCodexWebSearchBackend(opts: OpenAiNativeStepRequest): "native" | "exa" {
+function resolveCodexWebSearchBackend(opts: OpenAiNativeStepRequest): "native" | "local" {
   const configured = asNonEmptyString(opts.streamOptions.webSearchBackend)?.toLowerCase();
-  return configured === "exa" ? "exa" : "native";
+  return configured === "native" ? "native" : "local";
 }
 
 function resolveCodexNativeWebSearchMode(opts: OpenAiNativeStepRequest): "disabled" | "cached" | "live" {

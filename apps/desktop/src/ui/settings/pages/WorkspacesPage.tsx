@@ -6,8 +6,8 @@ import { defaultModelForProvider } from "@cowork/providers/catalog";
 
 import {
   getGoogleReasoningEffortValuesForModel,
-  getWorkspaceGoogleNativeWebSearchEnabled,
   getWorkspaceGoogleReasoningEffort,
+  getWorkspaceLocalWebSearchProvider,
   getWorkspaceReasoningEffort,
   getWorkspaceReasoningSummary,
   getWorkspaceTextVerbosity,
@@ -17,6 +17,7 @@ import {
   getWorkspaceWebSearchLocation,
   getWorkspaceWebSearchMode,
   mergeWorkspaceProviderOptions,
+  LOCAL_WEB_SEARCH_PROVIDERS,
   REASONING_EFFORT_VALUES,
   REASONING_SUMMARY_VALUES,
   TEXT_VERBOSITY_VALUES,
@@ -26,6 +27,7 @@ import {
   type CodexCliProviderOptions,
   type GoogleReasoningEffortValue,
   type GoogleProviderOptions,
+  type LocalWebSearchProviderValue,
   type OpenAICompatibleProviderName,
   type ReasoningEffortValue,
   type ReasoningSummaryValue,
@@ -358,24 +360,26 @@ const MODEL_CARD_FIELD_CLASS = "space-y-1.5";
 const MODEL_CARD_PANEL_CLASS = "rounded-lg border border-border/60 bg-background/35 p-3";
 const MODEL_CARD_SELECT_CLASS = "w-full min-w-0 rounded-sm border-border/70 bg-background/80 shadow-none";
 
+const LOCAL_WEB_SEARCH_PROVIDER_LABELS: Record<LocalWebSearchProviderValue, string> = {
+  exa: "Exa",
+  parallel: "Parallel",
+};
+
+function formatWebSearchBackendLabel(value: WebSearchBackendValue): string {
+  return value === "native" ? "Native" : LOCAL_WEB_SEARCH_PROVIDER_LABELS[value];
+}
+
 export function OpenAiCompatibleModelSettingsCard({
   workspace,
   updateWorkspaceDefaults,
   providerStatusByName,
 }: OpenAiCompatibleModelSettingsCardProps) {
-  const [codexWebSearchAdvancedOpen, setCodexWebSearchAdvancedOpen] = useState(false);
   const openAiVerbosity = getWorkspaceTextVerbosity(workspace.providerOptions, "openai");
   const openAiReasoningEffort = getWorkspaceReasoningEffort(workspace.providerOptions, "openai");
   const openAiReasoningSummary = getWorkspaceReasoningSummary(workspace.providerOptions, "openai");
   const codexVerbosity = getWorkspaceTextVerbosity(workspace.providerOptions, "codex-cli");
   const codexReasoningEffort = getWorkspaceReasoningEffort(workspace.providerOptions, "codex-cli");
   const codexReasoningSummary = getWorkspaceReasoningSummary(workspace.providerOptions, "codex-cli");
-  const codexWebSearchBackend = getWorkspaceWebSearchBackend(workspace.providerOptions);
-  const codexUsesNativeWebSearch = codexWebSearchBackend === "native";
-  const codexWebSearchMode = getWorkspaceWebSearchMode(workspace.providerOptions);
-  const codexWebSearchContextSize = getWorkspaceWebSearchContextSize(workspace.providerOptions);
-  const codexWebSearchAllowedDomains = getWorkspaceWebSearchAllowedDomains(workspace.providerOptions);
-  const codexWebSearchLocation = getWorkspaceWebSearchLocation(workspace.providerOptions);
 
   const sections = ([
     {
@@ -491,220 +495,326 @@ export function OpenAiCompatibleModelSettingsCard({
               </div>
             </div>
 
-            {section.key === "codex-cli" ? (
-              <div className="space-y-3 border-t border-border/50 pt-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-[13px] font-medium text-foreground">Web search</div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+type SearchSettingsCardProps = {
+  workspace: Pick<WorkspaceRecord, "id" | "providerOptions">;
+  updateWorkspaceDefaults: (
+    workspaceId: string,
+    patch: { providerOptions?: ReturnType<typeof mergeWorkspaceProviderOptions> },
+  ) => Promise<unknown> | void;
+  providerStatusByName: Record<string, any>;
+};
+
+export function SearchSettingsCard({
+  workspace,
+  updateWorkspaceDefaults,
+  providerStatusByName,
+}: SearchSettingsCardProps) {
+  const [codexNativeAdvancedOpen, setCodexNativeAdvancedOpen] = useState(false);
+  const webSearchBackend = getWorkspaceWebSearchBackend(workspace.providerOptions);
+  const localFallbackProvider = getWorkspaceLocalWebSearchProvider(workspace.providerOptions);
+  const codexUsesNativeWebSearch = webSearchBackend === "native";
+  const codexWebSearchMode = getWorkspaceWebSearchMode(workspace.providerOptions);
+  const codexWebSearchContextSize = getWorkspaceWebSearchContextSize(workspace.providerOptions);
+  const codexWebSearchAllowedDomains = getWorkspaceWebSearchAllowedDomains(workspace.providerOptions);
+  const codexWebSearchLocation = getWorkspaceWebSearchLocation(workspace.providerOptions);
+  const selectedLocalProvider = codexUsesNativeWebSearch ? localFallbackProvider : webSearchBackend;
+  const selectedLocalProviderMethodId = selectedLocalProvider === "parallel" ? "parallel_api_key" : "exa_api_key";
+  const selectedLocalProviderMask = providerStatusByName.google?.savedApiKeyMasks?.[selectedLocalProviderMethodId];
+  const selectedLocalProviderConnected =
+    typeof selectedLocalProviderMask === "string" && selectedLocalProviderMask.trim().length > 0;
+
+  const applySearchProvider = (value: WebSearchBackendValue) => {
+    void updateWorkspaceDefaults(workspace.id, {
+      providerOptions: mergeWorkspaceProviderOptions(workspace.providerOptions, {
+        "codex-cli": {
+          webSearchBackend: value,
+        },
+        google: {
+          nativeWebSearch: value === "native",
+        },
+      }),
+    });
+  };
+
+  const applyLocalFallbackProvider = (value: LocalWebSearchProviderValue) => {
+    void updateWorkspaceDefaults(workspace.id, {
+      providerOptions: mergeWorkspaceProviderOptions(workspace.providerOptions, {
+        "codex-cli": {
+          webSearchFallbackBackend: value,
+        },
+      }),
+    });
+  };
+
+  return (
+    <Card className="border-border/80 bg-card/85">
+      <CardHeader>
+        <CardTitle>Search</CardTitle>
+        <CardDescription>
+          Choose whether Cowork uses provider-native search or a local search tool in this workspace.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="rounded-lg border border-border/60 px-4 py-4">
+          <div className="space-y-3">
+            <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+              <div className="space-y-1">
+                <div className="text-sm font-medium text-foreground">Search provider</div>
+                <div className="text-xs text-muted-foreground">
+                  {codexUsesNativeWebSearch
+                    ? "Use provider-native search when the active model supports it."
+                    : `Use the local webSearch tool backed by ${formatWebSearchBackendLabel(webSearchBackend)}.`}
+                </div>
+              </div>
+              <div className="w-full max-w-52">
+                <Select value={webSearchBackend} onValueChange={(value) => applySearchProvider(value as WebSearchBackendValue)}>
+                  <SelectTrigger aria-label="Workspace search provider" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {WEB_SEARCH_BACKEND_VALUES.map((entry) => (
+                      <SelectItem key={entry} value={entry}>
+                        {formatWebSearchBackendLabel(entry)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {codexUsesNativeWebSearch ? (
+              <div className="grid gap-3 rounded-lg border border-border/60 bg-background/35 p-3">
+                <div className={MODEL_CARD_FIELD_CLASS}>
+                  <div className="text-[13px] font-medium text-foreground">
+                    If your model provider doesn&apos;t include search, which search tool do you want to use?
+                  </div>
                   <Select
-                    value={codexWebSearchBackend}
-                    onValueChange={(value) => {
-                      void updateWorkspaceDefaults(workspace.id, {
-                        providerOptions: updateCodexProviderOption(workspace.providerOptions, {
-                          webSearchBackend: value as WebSearchBackendValue,
-                        }),
-                      });
-                    }}
+                    value={localFallbackProvider}
+                    onValueChange={(value) => applyLocalFallbackProvider(value as LocalWebSearchProviderValue)}
                   >
-                    <SelectTrigger
-                      aria-label="Codex web search backend"
-                      className={cn(MODEL_CARD_SELECT_CLASS, "w-32")}
-                      size="sm"
-                    >
+                    <SelectTrigger aria-label="Workspace local search fallback provider" className={MODEL_CARD_SELECT_CLASS} size="sm">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {WEB_SEARCH_BACKEND_VALUES.map((entry) => (
+                      {LOCAL_WEB_SEARCH_PROVIDERS.map((entry) => (
                         <SelectItem key={entry} value={entry}>
-                          {entry === "native" ? "Built-in" : "Exa"}
+                          {LOCAL_WEB_SEARCH_PROVIDER_LABELS[entry]}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
-
-                <Collapsible open={codexWebSearchAdvancedOpen} onOpenChange={setCodexWebSearchAdvancedOpen}>
-                  <CollapsibleTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-auto justify-between rounded-sm px-0 text-xs text-muted-foreground hover:bg-transparent hover:text-foreground"
-                    >
-                      <span>Advanced options</span>
-                      <ChevronDownIcon
-                        data-icon
-                        className={cn("size-3.5 transition-transform", codexWebSearchAdvancedOpen && "rotate-180")}
-                      />
-                    </Button>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent className="space-y-4 border-t border-border/60 pt-3">
-                    {codexUsesNativeWebSearch ? (
-                      <>
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <div className={MODEL_CARD_FIELD_CLASS}>
-                            <div className="text-[13px] font-medium text-foreground">Search mode</div>
-                            <Select
-                              value={codexWebSearchMode}
-                              onValueChange={(value) => {
-                                void updateWorkspaceDefaults(workspace.id, {
-                                  providerOptions: updateCodexProviderOption(workspace.providerOptions, {
-                                    webSearchMode: value as WebSearchModeValue,
-                                  }),
-                                });
-                              }}
-                            >
-                              <SelectTrigger aria-label="Codex web search mode" className={MODEL_CARD_SELECT_CLASS} size="sm">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {WEB_SEARCH_MODE_VALUES.map((entry) => (
-                                  <SelectItem key={entry} value={entry}>
-                                    {entry}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <div className="text-xs text-muted-foreground">
-                              Cached uses indexed results. Live allows live internet access.
-                            </div>
-                          </div>
-
-                          <div className={MODEL_CARD_FIELD_CLASS}>
-                            <div className="text-[13px] font-medium text-foreground">Context size</div>
-                            <Select
-                              value={codexWebSearchContextSize}
-                              onValueChange={(value) => {
-                                void updateWorkspaceDefaults(workspace.id, {
-                                  providerOptions: updateCodexProviderOption(workspace.providerOptions, {
-                                    webSearch: {
-                                      contextSize: value as WebSearchContextSizeValue,
-                                    },
-                                  }),
-                                });
-                              }}
-                            >
-                              <SelectTrigger aria-label="Codex web search context size" className={MODEL_CARD_SELECT_CLASS} size="sm">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {WEB_SEARCH_CONTEXT_SIZE_VALUES.map((entry) => (
-                                  <SelectItem key={entry} value={entry}>
-                                    {entry}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-
-                        <AllowedDomainsField
-                          domains={codexWebSearchAllowedDomains}
-                          onChange={(allowedDomains) => {
-                            void updateWorkspaceDefaults(workspace.id, {
-                              providerOptions: updateCodexProviderOption(workspace.providerOptions, {
-                                webSearch: {
-                                  allowedDomains,
-                                },
-                              }),
-                            });
-                          }}
-                        />
-
-                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                          <div className={MODEL_CARD_FIELD_CLASS}>
-                            <div className="text-[13px] font-medium text-foreground">Country</div>
-                            <Input
-                              aria-label="Codex web search country"
-                              className={MODEL_SETTINGS_INPUT_CLASS}
-                              autoComplete="off"
-                              value={codexWebSearchLocation.country ?? ""}
-                              onChange={(event) => {
-                                void updateWorkspaceDefaults(workspace.id, {
-                                  providerOptions: updateCodexProviderOption(workspace.providerOptions, {
-                                    webSearch: {
-                                      location: {
-                                        country: event.target.value,
-                                      },
-                                    },
-                                  }),
-                                });
-                              }}
-                            />
-                          </div>
-                          <div className={MODEL_CARD_FIELD_CLASS}>
-                            <div className="text-[13px] font-medium text-foreground">Region</div>
-                            <Input
-                              aria-label="Codex web search region"
-                              className={MODEL_SETTINGS_INPUT_CLASS}
-                              autoComplete="off"
-                              value={codexWebSearchLocation.region ?? ""}
-                              onChange={(event) => {
-                                void updateWorkspaceDefaults(workspace.id, {
-                                  providerOptions: updateCodexProviderOption(workspace.providerOptions, {
-                                    webSearch: {
-                                      location: {
-                                        region: event.target.value,
-                                      },
-                                    },
-                                  }),
-                                });
-                              }}
-                            />
-                          </div>
-                          <div className={MODEL_CARD_FIELD_CLASS}>
-                            <div className="text-[13px] font-medium text-foreground">City</div>
-                            <Input
-                              aria-label="Codex web search city"
-                              className={MODEL_SETTINGS_INPUT_CLASS}
-                              autoComplete="off"
-                              value={codexWebSearchLocation.city ?? ""}
-                              onChange={(event) => {
-                                void updateWorkspaceDefaults(workspace.id, {
-                                  providerOptions: updateCodexProviderOption(workspace.providerOptions, {
-                                    webSearch: {
-                                      location: {
-                                        city: event.target.value,
-                                      },
-                                    },
-                                  }),
-                                });
-                              }}
-                            />
-                          </div>
-                          <div className={MODEL_CARD_FIELD_CLASS}>
-                            <div className="text-[13px] font-medium text-foreground">Timezone</div>
-                            <Input
-                              aria-label="Codex web search timezone"
-                              className={MODEL_SETTINGS_INPUT_CLASS}
-                              autoComplete="off"
-                              placeholder="America/New_York"
-                              value={codexWebSearchLocation.timezone ?? ""}
-                              onChange={(event) => {
-                                void updateWorkspaceDefaults(workspace.id, {
-                                  providerOptions: updateCodexProviderOption(workspace.providerOptions, {
-                                    webSearch: {
-                                      location: {
-                                        timezone: event.target.value,
-                                      },
-                                    },
-                                  }),
-                                });
-                              }}
-                            />
-                          </div>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="rounded-lg border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground">
-                        Context, domain, and location settings appear here when web search is set to Built-in.
-                      </div>
-                    )}
-                  </CollapsibleContent>
-                </Collapsible>
+                <div className={cn("text-xs", selectedLocalProviderConnected ? "text-muted-foreground" : "text-amber-600 dark:text-amber-400")}>
+                  {selectedLocalProviderConnected
+                    ? `${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} is ready as the fallback local search tool.`
+                    : `Add a ${LOCAL_WEB_SEARCH_PROVIDER_LABELS[selectedLocalProvider]} API key in Providers > Tool Providers to use it as the fallback local search tool.`}
+                </div>
               </div>
-            ) : null}
+            ) : (
+              <div className="rounded-lg border border-border/60 bg-background/35 p-3 text-xs text-muted-foreground">
+                Native-search fallback settings appear here when search provider is set to Native.
+              </div>
+            )}
           </div>
-        ))}
+        </div>
+
+        <Collapsible open={codexNativeAdvancedOpen} onOpenChange={setCodexNativeAdvancedOpen}>
+          <div className="rounded-lg border border-border/60 px-4 py-4">
+            <div className="flex items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="text-sm font-medium text-foreground">Codex native advanced options</div>
+                <div className="text-xs text-muted-foreground">
+                  These settings apply when ChatGPT Subscription uses provider-native web search.
+                </div>
+              </div>
+              <CollapsibleTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-auto justify-between rounded-sm px-0 text-xs text-muted-foreground hover:bg-transparent hover:text-foreground"
+                >
+                  <span>{codexNativeAdvancedOpen ? "Hide" : "Show"}</span>
+                  <ChevronDownIcon
+                    data-icon
+                    className={cn("size-3.5 transition-transform", codexNativeAdvancedOpen && "rotate-180")}
+                  />
+                </Button>
+              </CollapsibleTrigger>
+            </div>
+
+            <CollapsibleContent className="space-y-4 border-t border-border/60 pt-3">
+              {codexUsesNativeWebSearch ? (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className={MODEL_CARD_FIELD_CLASS}>
+                      <div className="text-[13px] font-medium text-foreground">Search mode</div>
+                      <Select
+                        value={codexWebSearchMode}
+                        onValueChange={(value) => {
+                          void updateWorkspaceDefaults(workspace.id, {
+                            providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                              webSearchMode: value as WebSearchModeValue,
+                            }),
+                          });
+                        }}
+                      >
+                        <SelectTrigger aria-label="Codex web search mode" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {WEB_SEARCH_MODE_VALUES.map((entry) => (
+                            <SelectItem key={entry} value={entry}>
+                              {entry}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <div className="text-xs text-muted-foreground">
+                        Cached uses indexed results. Live allows live internet access.
+                      </div>
+                    </div>
+
+                    <div className={MODEL_CARD_FIELD_CLASS}>
+                      <div className="text-[13px] font-medium text-foreground">Context size</div>
+                      <Select
+                        value={codexWebSearchContextSize}
+                        onValueChange={(value) => {
+                          void updateWorkspaceDefaults(workspace.id, {
+                            providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                              webSearch: {
+                                contextSize: value as WebSearchContextSizeValue,
+                              },
+                            }),
+                          });
+                        }}
+                      >
+                        <SelectTrigger aria-label="Codex web search context size" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {WEB_SEARCH_CONTEXT_SIZE_VALUES.map((entry) => (
+                            <SelectItem key={entry} value={entry}>
+                              {entry}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <AllowedDomainsField
+                    domains={codexWebSearchAllowedDomains}
+                    onChange={(allowedDomains) => {
+                      void updateWorkspaceDefaults(workspace.id, {
+                        providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                          webSearch: {
+                            allowedDomains,
+                          },
+                        }),
+                      });
+                    }}
+                  />
+
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className={MODEL_CARD_FIELD_CLASS}>
+                      <div className="text-[13px] font-medium text-foreground">Country</div>
+                      <Input
+                        aria-label="Codex web search country"
+                        className={MODEL_SETTINGS_INPUT_CLASS}
+                        autoComplete="off"
+                        value={codexWebSearchLocation.country ?? ""}
+                        onChange={(event) => {
+                          void updateWorkspaceDefaults(workspace.id, {
+                            providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                              webSearch: {
+                                location: {
+                                  country: event.target.value,
+                                },
+                              },
+                            }),
+                          });
+                        }}
+                      />
+                    </div>
+                    <div className={MODEL_CARD_FIELD_CLASS}>
+                      <div className="text-[13px] font-medium text-foreground">Region</div>
+                      <Input
+                        aria-label="Codex web search region"
+                        className={MODEL_SETTINGS_INPUT_CLASS}
+                        autoComplete="off"
+                        value={codexWebSearchLocation.region ?? ""}
+                        onChange={(event) => {
+                          void updateWorkspaceDefaults(workspace.id, {
+                            providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                              webSearch: {
+                                location: {
+                                  region: event.target.value,
+                                },
+                              },
+                            }),
+                          });
+                        }}
+                      />
+                    </div>
+                    <div className={MODEL_CARD_FIELD_CLASS}>
+                      <div className="text-[13px] font-medium text-foreground">City</div>
+                      <Input
+                        aria-label="Codex web search city"
+                        className={MODEL_SETTINGS_INPUT_CLASS}
+                        autoComplete="off"
+                        value={codexWebSearchLocation.city ?? ""}
+                        onChange={(event) => {
+                          void updateWorkspaceDefaults(workspace.id, {
+                            providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                              webSearch: {
+                                location: {
+                                  city: event.target.value,
+                                },
+                              },
+                            }),
+                          });
+                        }}
+                      />
+                    </div>
+                    <div className={MODEL_CARD_FIELD_CLASS}>
+                      <div className="text-[13px] font-medium text-foreground">Timezone</div>
+                      <Input
+                        aria-label="Codex web search timezone"
+                        className={MODEL_SETTINGS_INPUT_CLASS}
+                        autoComplete="off"
+                        placeholder="America/New_York"
+                        value={codexWebSearchLocation.timezone ?? ""}
+                        onChange={(event) => {
+                          void updateWorkspaceDefaults(workspace.id, {
+                            providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                              webSearch: {
+                                location: {
+                                  timezone: event.target.value,
+                                },
+                              },
+                            }),
+                          });
+                        }}
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="rounded-lg border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground">
+                  Switch search provider to Native to use Codex native search mode, domain filters, and location settings.
+                </div>
+              )}
+            </CollapsibleContent>
+          </div>
+        </Collapsible>
       </CardContent>
     </Card>
   );
@@ -730,7 +840,6 @@ export function GeminiApiSettingsCard({
     return null;
   }
 
-  const nativeWebSearchEnabled = getWorkspaceGoogleNativeWebSearchEnabled(workspace.providerOptions);
   const selectedGoogleModel = workspace.defaultProvider === "google"
     ? (workspace.defaultModel?.trim() || googleDefaultModel)
     : googleDefaultModel;
@@ -742,7 +851,7 @@ export function GeminiApiSettingsCard({
       <CardHeader>
         <CardTitle>Gemini API settings</CardTitle>
         <CardDescription>
-          Workspace defaults for Gemini API built-in Google Search and URL Context tools.
+          Workspace defaults for Gemini API reasoning behavior.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -783,29 +892,6 @@ export function GeminiApiSettingsCard({
                 </SelectContent>
               </Select>
             </div>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-border/60 px-4 py-4">
-          <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-            <div className="space-y-1">
-              <div className="text-sm font-medium text-foreground">Native web search</div>
-              <div className="text-xs text-muted-foreground">
-                Enables Gemini built-in Google Search and URL Context. This replaces local `webSearch` and `webFetch`
-                for Google sessions in this workspace.
-              </div>
-            </div>
-            <Checkbox
-              checked={nativeWebSearchEnabled}
-              aria-label="Enable Gemini native web search"
-              onCheckedChange={(checked) => {
-                void updateWorkspaceDefaults(workspace.id, {
-                  providerOptions: updateGoogleProviderOption(workspace.providerOptions, {
-                    nativeWebSearch: toBoolean(checked),
-                  }),
-                });
-              }}
-            />
           </div>
         </div>
       </CardContent>
@@ -1261,6 +1347,12 @@ export function WorkspacesPage() {
                 </div>
               </CardContent>
             </Card>
+
+            <SearchSettingsCard
+              workspace={ws}
+              updateWorkspaceDefaults={updateWorkspaceDefaults}
+              providerStatusByName={providerStatusByName}
+            />
           </div>
 
           <div className={cn("space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300", activeTab !== "models" && "hidden")}>

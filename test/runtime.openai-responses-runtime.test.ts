@@ -668,7 +668,7 @@ describe("openai responses runtime", () => {
     expect(request.text).toEqual({ verbosity: "medium" });
     expect(request.tool_choice).toBe("auto");
     expect(request.parallel_tool_calls).toBe(true);
-    expect(request.include).toEqual(["web_search_call.action.sources"]);
+    expect(request.include).toBeUndefined();
     expect(request.tools).toEqual([
       {
         type: "function",
@@ -683,10 +683,6 @@ describe("openai responses runtime", () => {
           required: ["filePath"],
         },
         strict: false,
-      },
-      {
-        type: "web_search",
-        external_web_access: true,
       },
     ]);
   });
@@ -718,7 +714,15 @@ describe("openai responses runtime", () => {
       },
     });
 
-    expect(request.tools).toBeUndefined();
+    expect(request.tools).toEqual([
+      {
+        type: "function",
+        name: "webSearch",
+        description: "Search the web",
+        parameters: { type: "object", properties: {}, required: [] },
+        strict: false,
+      },
+    ]);
     expect(request.include).toBeUndefined();
   });
 
@@ -800,24 +804,16 @@ describe("openai responses runtime", () => {
       },
     });
 
-    expect(request.include).toEqual([
-      "reasoning.encrypted_content",
-      "web_search_call.action.sources",
+    expect(request.include).toEqual(["reasoning.encrypted_content"]);
+    expect(request.tools).toEqual([
+      {
+        type: "function",
+        name: "webSearch",
+        description: "Search the web",
+        parameters: { type: "object", properties: {}, required: [] },
+        strict: false,
+      },
     ]);
-    expect(request.tools).toEqual([{
-      type: "web_search",
-      external_web_access: false,
-      search_context_size: "high",
-      filters: {
-        allowed_domains: ["openai.com", "example.com"],
-      },
-      user_location: {
-        type: "approximate",
-        country: "US",
-        city: "New York",
-        timezone: "America/New_York",
-      },
-    }]);
   });
 
   test("request builder strips legacy local webSearch when native web search is enabled", () => {
@@ -850,6 +846,7 @@ describe("openai responses runtime", () => {
         },
       ],
       streamOptions: {
+        webSearchBackend: "native",
         webSearchMode: "live",
       },
     });
@@ -867,6 +864,7 @@ describe("openai responses runtime", () => {
         external_web_access: true,
       },
     ]);
+    expect(request.include).toEqual(["web_search_call.action.sources"]);
   });
 
   test("request builder marks OpenAI tools as non-strict so optional parameters remain valid", () => {

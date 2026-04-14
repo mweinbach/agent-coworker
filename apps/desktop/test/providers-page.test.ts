@@ -69,7 +69,7 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
-const { EXA_SECTION_ID, ProvidersPage } = await import("../src/ui/settings/pages/ProvidersPage");
+const { EXA_SECTION_ID, PARALLEL_SECTION_ID, ProvidersPage } = await import("../src/ui/settings/pages/ProvidersPage");
 
 const defaultProviderActions = {
   requestProviderCatalog: useAppStore.getState().requestProviderCatalog,
@@ -143,7 +143,9 @@ describe("desktop providers page", () => {
     expect(html).toContain("Google");
     expect(html).toContain("Paste your API key");
     expect(html).not.toContain("Paste your Exa API key");
+    expect(html).not.toContain("Paste your Parallel API key");
     expect(html).toContain("Exa Search");
+    expect(html).toContain("Parallel Search");
   });
 
   test("renders a dedicated Exa Search settings card", () => {
@@ -156,6 +158,18 @@ describe("desktop providers page", () => {
     expect(html).toContain("Exa Search");
     expect(html).toContain("Paste your Exa API key");
     expect(html).toContain("provider-panel-exa-search");
+  });
+
+  test("renders a dedicated Parallel Search settings card", () => {
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: PARALLEL_SECTION_ID,
+      }),
+    );
+
+    expect(html).toContain("Parallel Search");
+    expect(html).toContain("Paste your Parallel API key");
+    expect(html).toContain("provider-panel-parallel-search");
   });
 
   test("derives the initial active tab from a tool provider deep link", () => {

@@ -3,7 +3,7 @@ import type { AgentConfig } from "../types";
 const TITLE_MODEL_BY_PROVIDER: Partial<Record<AgentConfig["provider"], string>> = {
   anthropic: "claude-haiku-4-5",
   baseten: "moonshotai/Kimi-K2.5",
-  "codex-cli": "gpt-5.2-codex",
+  "codex-cli": "gpt-5.4-mini",
   google: "gemini-3-flash-preview",
   nvidia: "nvidia/nemotron-3-super-120b-a12b",
   openai: "gpt-5-mini",

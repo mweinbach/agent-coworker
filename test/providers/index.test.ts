@@ -122,9 +122,9 @@ describe("src/providers/index.ts", () => {
 
     test("creates codex-cli model with saved key without codex auth files", async () => {
       const config = makeConfig({ provider: "codex-cli" });
-      const model = getModelForProvider(config, "gpt-5.2-codex", "openai-fallback-key") as any;
+      const model = getModelForProvider(config, "gpt-5.4", "openai-fallback-key") as any;
       const headers = await model.config.headers();
-      expect(model.modelId).toBe("gpt-5.2-codex");
+      expect(model.modelId).toBe("gpt-5.4");
       expect(model.provider).toBe("codex-cli.responses");
       expect(headers.authorization).toBe("Bearer openai-fallback-key");
     });

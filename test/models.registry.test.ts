@@ -98,6 +98,35 @@ describe("model registry helpers", () => {
 });
 
 describe("legacy model aliases", () => {
+  test("removed OpenAI model IDs normalize to gpt-5.4", () => {
+    const aliases = ["gpt-5.1", "gpt-5.2-codex"] as const;
+
+    for (const alias of aliases) {
+      const model = getSupportedModel("openai", alias);
+      expect(model).not.toBeNull();
+      expect(model!.id).toBe("gpt-5.4");
+      expect(normalizeModelIdForProvider("openai", alias)).toBe("gpt-5.4");
+    }
+  });
+
+  test("removed Codex CLI model IDs normalize to gpt-5.4", () => {
+    const aliases = [
+      "gpt-5-codex",
+      "gpt-5.1",
+      "gpt-5.1-codex",
+      "gpt-5.1-codex-max",
+      "gpt-5.1-codex-mini",
+      "gpt-5.2-codex",
+    ] as const;
+
+    for (const alias of aliases) {
+      const model = getSupportedModel("codex-cli", alias);
+      expect(model).not.toBeNull();
+      expect(model!.id).toBe("gpt-5.4");
+      expect(normalizeModelIdForProvider("codex-cli", alias)).toBe("gpt-5.4");
+    }
+  });
+
   test("getSupportedModel resolves legacy alias gemini-3-pro-preview", () => {
     const model = getSupportedModel("google", "gemini-3-pro-preview");
     expect(model).not.toBeNull();

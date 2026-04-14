@@ -149,20 +149,10 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     outputPerMillion: 14,
     cachedInputPerMillion: 0.175,
   },
-  "openai:gpt-5.2-codex": {
-    inputPerMillion: 1.75,
-    outputPerMillion: 14,
-    cachedInputPerMillion: 0.175,
-  },
   "openai:gpt-5.2-pro": {
     inputPerMillion: 21,
     outputPerMillion: 168,
     cachedInputPerMillion: 2.1,
-  },
-  "openai:gpt-5.1": {
-    inputPerMillion: 1.25,
-    outputPerMillion: 10,
-    cachedInputPerMillion: 0.125,
   },
   "openai:gpt-5-mini": {
     inputPerMillion: 0.25,
@@ -181,40 +171,10 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     outputPerMillion: 4.5,
     cachedInputPerMillion: 0.075,
   },
-  "codex-cli:gpt-5-codex": {
-    inputPerMillion: 1.25,
-    outputPerMillion: 10,
-    cachedInputPerMillion: 0.125,
-  },
-  "codex-cli:gpt-5.1": {
-    inputPerMillion: 1.25,
-    outputPerMillion: 10,
-    cachedInputPerMillion: 0.125,
-  },
-  "codex-cli:gpt-5.1-codex": {
-    inputPerMillion: 1.25,
-    outputPerMillion: 10,
-    cachedInputPerMillion: 0.125,
-  },
   "codex-cli:gpt-5.3-codex": {
     inputPerMillion: 2.5,
     outputPerMillion: 10,
     cachedInputPerMillion: 1.25,
-  },
-  "codex-cli:gpt-5.1-codex-max": {
-    inputPerMillion: 1.25,
-    outputPerMillion: 10,
-    cachedInputPerMillion: 0.125,
-  },
-  "codex-cli:gpt-5.1-codex-mini": {
-    inputPerMillion: 0.25,
-    outputPerMillion: 2,
-    cachedInputPerMillion: 0.025,
-  },
-  "codex-cli:gpt-5.2-codex": {
-    inputPerMillion: 1.75,
-    outputPerMillion: 14,
-    cachedInputPerMillion: 0.175,
   },
 
   // ── Google ───────────────────────────────────────────────────────────

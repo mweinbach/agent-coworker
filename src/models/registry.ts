@@ -7,12 +7,6 @@ import anthropicClaudeSonnet46 from "../../config/models/anthropic/claude-sonnet
 import basetenMoonshotAiKimiK25 from "../../config/models/baseten/moonshotai-kimi-k2.5.json";
 import basetenNvidiaNemotron120bA12b from "../../config/models/baseten/nvidia-nemotron-120b-a12b.json";
 import basetenZaiOrgGlm5 from "../../config/models/baseten/zai-org-glm-5.json";
-import codexCliGpt5Codex from "../../config/models/codex-cli/gpt-5-codex.json";
-import codexCliGpt51CodexMax from "../../config/models/codex-cli/gpt-5.1-codex-max.json";
-import codexCliGpt51CodexMini from "../../config/models/codex-cli/gpt-5.1-codex-mini.json";
-import codexCliGpt51Codex from "../../config/models/codex-cli/gpt-5.1-codex.json";
-import codexCliGpt51 from "../../config/models/codex-cli/gpt-5.1.json";
-import codexCliGpt52Codex from "../../config/models/codex-cli/gpt-5.2-codex.json";
 import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
 import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
 import fireworksGlm5 from "../../config/models/fireworks/accounts-fireworks-models-glm-5.json";
@@ -24,8 +18,6 @@ import googleGemini31FlashLitePreview from "../../config/models/google/gemini-3.
 import googleGemini31ProPreview from "../../config/models/google/gemini-3.1-pro-preview.json";
 import googleGemini31ProPreviewCustomtools from "../../config/models/google/gemini-3.1-pro-preview-customtools.json";
 import openaiGpt5Mini from "../../config/models/openai/gpt-5-mini.json";
-import openaiGpt51 from "../../config/models/openai/gpt-5.1.json";
-import openaiGpt52Codex from "../../config/models/openai/gpt-5.2-codex.json";
 import openaiGpt52Pro from "../../config/models/openai/gpt-5.2-pro.json";
 import openaiGpt52 from "../../config/models/openai/gpt-5.2.json";
 import openaiGpt54 from "../../config/models/openai/gpt-5.4.json";
@@ -84,12 +76,6 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   basetenMoonshotAiKimiK25,
   basetenNvidiaNemotron120bA12b,
   basetenZaiOrgGlm5,
-  codexCliGpt5Codex,
-  codexCliGpt51CodexMax,
-  codexCliGpt51CodexMini,
-  codexCliGpt51Codex,
-  codexCliGpt51,
-  codexCliGpt52Codex,
   codexCliGpt54,
   codexCliGpt54Mini,
   fireworksGlm5,
@@ -101,8 +87,6 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   googleGemini31ProPreview,
   googleGemini31ProPreviewCustomtools,
   openaiGpt5Mini,
-  openaiGpt51,
-  openaiGpt52Codex,
   openaiGpt52Pro,
   openaiGpt52,
   openaiGpt54,
@@ -178,6 +162,14 @@ const MODEL_REGISTRY = buildRegistry(MODEL_REGISTRY_ENTRIES);
  * Maps deprecated/legacy model IDs to their canonical replacements.
  */
 const LEGACY_MODEL_ALIASES: Record<string, string> = {
+  "openai:gpt-5.1": "openai:gpt-5.4",
+  "openai:gpt-5.2-codex": "openai:gpt-5.4",
+  "codex-cli:gpt-5-codex": "codex-cli:gpt-5.4",
+  "codex-cli:gpt-5.1": "codex-cli:gpt-5.4",
+  "codex-cli:gpt-5.1-codex": "codex-cli:gpt-5.4",
+  "codex-cli:gpt-5.1-codex-max": "codex-cli:gpt-5.4",
+  "codex-cli:gpt-5.1-codex-mini": "codex-cli:gpt-5.4",
+  "codex-cli:gpt-5.2-codex": "codex-cli:gpt-5.4",
   "google:gemini-3-pro-preview": "google:gemini-3.1-pro-preview-customtools",
 };
 

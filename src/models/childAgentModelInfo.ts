@@ -34,18 +34,10 @@ const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo
   [key("openai", "gpt-5.4-mini")]: frontierCoding,
   [key("openai", "gpt-5.2")]: balancedGeneral,
   [key("openai", "gpt-5.2-pro")]: deepReasoning,
-  [key("openai", "gpt-5.2-codex")]: codeAgent,
-  [key("openai", "gpt-5.1")]: balancedGeneral,
   [key("openai", "gpt-5-mini")]: fastGeneral,
 
   [key("codex-cli", "gpt-5.4")]: frontierCoding,
   [key("codex-cli", "gpt-5.4-mini")]: frontierCoding,
-  [key("codex-cli", "gpt-5.2-codex")]: codeAgent,
-  [key("codex-cli", "gpt-5.1")]: balancedGeneral,
-  [key("codex-cli", "gpt-5.1-codex")]: codeAgent,
-  [key("codex-cli", "gpt-5.1-codex-max")]: deepReasoning,
-  [key("codex-cli", "gpt-5.1-codex-mini")]: fastCodeAgent,
-  [key("codex-cli", "gpt-5-codex")]: codeAgent,
 
   [key("anthropic", "claude-opus-4-6")]: claudeFrontier,
   [key("anthropic", "claude-sonnet-4-6")]: claudeBalanced,

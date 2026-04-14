@@ -703,7 +703,12 @@ export class AgentSession {
     const { persisted } = opts;
     const resolvedPersistedModel = getKnownResolvedModelMetadata(persisted.provider, persisted.model);
     const resumedModel = resolvedPersistedModel ?? defaultSupportedModel(persisted.provider);
-    const migratedLegacyModel = resolvedPersistedModel === null && !isDynamicModelProvider(persisted.provider);
+    const migratedUnsupportedModel = resolvedPersistedModel === null && !isDynamicModelProvider(persisted.provider);
+    const migratedAliasedModel =
+      resolvedPersistedModel !== null
+      && resolvedPersistedModel.id !== persisted.model
+      && !isDynamicModelProvider(persisted.provider);
+    const migratedLegacyModel = migratedUnsupportedModel || migratedAliasedModel;
     const clearedContinuationState = migratedLegacyModel && persisted.providerState !== null;
     const config: AgentConfig = {
       ...opts.baseConfig,
@@ -791,10 +796,11 @@ export class AgentSession {
     });
 
     if (migratedLegacyModel) {
+      const migrationDescriptor = migratedUnsupportedModel ? "unsupported model" : "legacy model alias";
       opts.emit({
         type: "log",
         sessionId: persisted.sessionId,
-        line: `[session] Resumed legacy session using unsupported model "${persisted.model}" for provider ${persisted.provider}; migrated to "${resumedModel.id}".${clearedContinuationState ? " Cleared saved continuation state for the old model." : ""}`,
+        line: `[session] Resumed legacy session using ${migrationDescriptor} "${persisted.model}" for provider ${persisted.provider}; migrated to "${resumedModel.id}".${clearedContinuationState ? " Cleared saved continuation state for the old model." : ""}`,
       });
     }
 

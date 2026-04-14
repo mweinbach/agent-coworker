@@ -142,12 +142,12 @@ describe("pricing", () => {
             expect(minimax!.cachedInputPerMillion).toBe(0.06);
         });
 
-        it("resolves exact match for codex-cli gpt-5.2 pricing", () => {
-            const pricing = resolveModelPricing("codex-cli", "gpt-5.2-codex");
+        it("resolves exact match for codex-cli gpt-5.4 pricing", () => {
+            const pricing = resolveModelPricing("codex-cli", "gpt-5.4");
             expect(pricing).not.toBeNull();
-            expect(pricing!.inputPerMillion).toBe(1.75);
-            expect(pricing!.outputPerMillion).toBe(14);
-            expect(pricing!.cachedInputPerMillion).toBe(0.175);
+            expect(pricing!.inputPerMillion).toBe(2.5);
+            expect(pricing!.outputPerMillion).toBe(15);
+            expect(pricing!.cachedInputPerMillion).toBe(0.25);
         });
 
         it("resolves exact match for codex-cli gpt-5.4-mini pricing", () => {

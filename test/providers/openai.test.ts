@@ -23,18 +23,18 @@ describe("OpenAI provider (gpt-5.4 with reasoning)", () => {
   });
 
   test("getModel with explicit gpt-5.4 override", () => {
-    const cfg = makeConfig({ provider: "openai", model: "gpt-5.1" });
+    const cfg = makeConfig({ provider: "openai", model: "gpt-5.2" });
     const model = getModel(cfg, "gpt-5.4");
 
     expect(model.modelId).toBe("gpt-5.4");
     expect(model.provider).toBe("openai.responses");
   });
 
-  test("getModel with gpt-5.1 model ID", () => {
-    const cfg = makeConfig({ provider: "openai", model: "gpt-5.1" });
+  test("getModel with gpt-5.2 model ID", () => {
+    const cfg = makeConfig({ provider: "openai", model: "gpt-5.2" });
     const model = getModel(cfg);
 
-    expect(model.modelId).toBe("gpt-5.1");
+    expect(model.modelId).toBe("gpt-5.2");
     expect(model.provider).toBe("openai.responses");
   });
 

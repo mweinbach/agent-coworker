@@ -6138,6 +6138,80 @@ describe("AgentSession", () => {
       expect(persistedCall.snapshot.config.model).toBe(expectedModel);
       expect(persistedCall.snapshot.context.providerState).toBeNull();
     });
+
+    test("migrates aliased persisted models to canonical ids and persists the upgraded snapshot", async () => {
+      const { emit, events } = makeEmit();
+      const writePersistedSessionSnapshotImpl = mock(async () => "/tmp/mock-home/.cowork/sessions/persisted-aliased.json");
+      const persistedModel = "gpt-5.1";
+      const expectedModel = "gpt-5.4";
+
+      const session = AgentSession.fromPersisted({
+        persisted: {
+          sessionId: "persisted-aliased-model",
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          title: "Legacy alias",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "openai",
+          model: persistedModel,
+          workingDirectory: "/tmp/persisted",
+          enableMcp: true,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          updatedAt: "2026-03-09T00:00:01.000Z",
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          messageCount: 1,
+          lastEventSeq: 1,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello" }] as any,
+          providerState: {
+            provider: "openai",
+            model: persistedModel,
+            responseId: "resp_alias",
+            updatedAt: "2026-03-09T00:00:01.000Z",
+          },
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+        baseConfig: makeConfig("/tmp/persisted"),
+        emit,
+        sessionBackupFactory: makeSessionBackupFactory(),
+        getProviderStatusesImpl: async () => [],
+        writePersistedSessionSnapshotImpl,
+      });
+
+      expect(session.getPublicConfig().provider).toBe("openai");
+      expect(session.getPublicConfig().model).toBe(expectedModel);
+      expect(session.getSessionInfoEvent().model).toBe(expectedModel);
+
+      const migrationLog = events.find(
+        (event): event is Extract<ServerEvent, { type: "log" }> =>
+          event.type === "log" && event.line.includes("legacy model alias")
+      );
+      expect(migrationLog).toBeDefined();
+      expect(migrationLog?.line).toContain(`"${persistedModel}"`);
+      expect(migrationLog?.line).toContain(`"${expectedModel}"`);
+      expect(migrationLog?.line).toContain("Cleared saved continuation state");
+
+      await flushAsyncWork();
+      await flushAsyncWork();
+
+      expect(writePersistedSessionSnapshotImpl).toHaveBeenCalledTimes(1);
+      const persistedCall = writePersistedSessionSnapshotImpl.mock.calls[0]?.[0] as {
+        snapshot: {
+          session: { model: string };
+          config: { model: string };
+          context: { providerState: unknown };
+        };
+      };
+      expect(persistedCall.snapshot.session.model).toBe(expectedModel);
+      expect(persistedCall.snapshot.config.model).toBe(expectedModel);
+      expect(persistedCall.snapshot.context.providerState).toBeNull();
+    });
   });
   // =========================================================================
   // extractAssistantTextFromResponseMessages fallback

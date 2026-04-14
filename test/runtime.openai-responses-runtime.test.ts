@@ -629,8 +629,8 @@ describe("openai responses runtime", () => {
     const request = openAiNativeInternal.buildOpenAiNativeRequest({
       provider: "codex-cli",
       model: {
-        id: "gpt-5-codex",
-        name: "gpt-5-codex",
+        id: "gpt-5.4",
+        name: "gpt-5.4",
         api: "openai-codex-responses",
         provider: "openai-codex",
         baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -945,8 +945,8 @@ describe("openai responses runtime", () => {
     const headers = openAiNativeInternal.resolveOpenAiClientHeaders({
       provider: "codex-cli",
       model: {
-        id: "gpt-5-codex",
-        name: "gpt-5-codex",
+        id: "gpt-5.4",
+        name: "gpt-5.4",
         api: "openai-codex-responses",
         provider: "openai-codex",
         baseUrl: "https://chatgpt.com/backend-api/codex",

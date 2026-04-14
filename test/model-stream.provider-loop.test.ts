@@ -30,7 +30,7 @@ const PROVIDER_CASES: ProviderCase[] = [
   },
   {
     provider: "codex-cli",
-    model: "gpt-5-codex",
+    model: "gpt-5.4",
     reasoningSdkType: "response.reasoning_summary_text.delta",
     expectedReasoningMode: "summary",
   },

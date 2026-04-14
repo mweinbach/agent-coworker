@@ -302,7 +302,7 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
     await withEnv("HOME", home, async () => {
       const cfg = makeConfig({
         provider: "codex-cli",
-        model: "gpt-5.2-codex",
+        model: "gpt-5.4",
         userAgentDir: path.join(home, ".agent"),
       });
 
@@ -327,7 +327,7 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
     await withEnv("HOME", home, async () => {
       const cfg = makeConfig({
         provider: "codex-cli",
-        model: "gpt-5-codex",
+        model: "gpt-5.4-mini",
         userAgentDir: path.join(home, ".agent"),
       });
 

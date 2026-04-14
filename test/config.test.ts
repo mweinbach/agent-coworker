@@ -446,7 +446,7 @@ describe("loadConfig", () => {
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
       provider: "openai",
-      model: "gpt-5.1",
+      model: "gpt-5.4",
     });
 
     const cfg = await loadConfig({
@@ -478,6 +478,50 @@ describe("loadConfig", () => {
     expect(cfg.provider).toBe("google");
     expect(cfg.model).toBe(defaultModelForProvider("google"));
     expect(cfg.preferredChildModel).toBe(cfg.model);
+  });
+
+  test("removed OpenAI model IDs load through legacy aliases", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      provider: "openai",
+      model: "gpt-5.1",
+      preferredChildModel: "gpt-5.2-codex",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.provider).toBe("openai");
+    expect(cfg.model).toBe("gpt-5.4");
+    expect(cfg.preferredChildModel).toBe("gpt-5.4");
+    expect(cfg.preferredChildModelRef).toBe("openai:gpt-5.4");
+  });
+
+  test("removed Codex CLI model IDs load through legacy aliases", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      provider: "codex-cli",
+      model: "gpt-5.1-codex-mini",
+      preferredChildModel: "gpt-5.2-codex",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.provider).toBe("codex-cli");
+    expect(cfg.model).toBe("gpt-5.4");
+    expect(cfg.preferredChildModel).toBe("gpt-5.4");
+    expect(cfg.preferredChildModelRef).toBe("codex-cli:gpt-5.4");
   });
 
   test("AGENT_WORKING_DIR env var overrides cwd", async () => {

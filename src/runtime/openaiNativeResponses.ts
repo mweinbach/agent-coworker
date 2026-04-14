@@ -159,10 +159,6 @@ export function clampCodexReasoningEffort(modelId: string, effort: string): stri
       })()
     : modelId;
   if ((id.startsWith("gpt-5.2") || id.startsWith("gpt-5.3")) && effort === "minimal") return "low";
-  if (id === "gpt-5.1" && effort === "xhigh") return "high";
-  if (id === "gpt-5.1-codex-mini") {
-    return effort === "high" || effort === "xhigh" ? "high" : "medium";
-  }
   return effort;
 }
 

@@ -21,27 +21,15 @@ type SupportedResponsesModelLimits = Pick<PiModel, "contextWindow" | "maxTokens"
 // inherit unrelated fallback values from PI's broader model catalog.
 const SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS: Record<string, SupportedResponsesModelLimits> = {
   "gpt-5-mini": { contextWindow: 400_000, maxTokens: 128_000 },
-  "gpt-5.1": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.2": { contextWindow: 400_000, maxTokens: 128_000 },
-  "gpt-5.2-codex": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.2-pro": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.4": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.4-mini": { contextWindow: 400_000, maxTokens: 128_000 },
-  "gpt-5-codex": { contextWindow: 400_000, maxTokens: 128_000 },
-  "gpt-5.1-codex": { contextWindow: 400_000, maxTokens: 128_000 },
-  "gpt-5.1-codex-mini": { contextWindow: 400_000, maxTokens: 128_000 },
-  "gpt-5.1-codex-max": { contextWindow: 400_000, maxTokens: 128_000 },
 };
 
 const SUPPORTED_CODEX_BACKEND_MODEL_LIMITS: Record<string, SupportedResponsesModelLimits> = {
-  "gpt-5.1": { contextWindow: 272_000, maxTokens: 128_000 },
   "gpt-5.4": { contextWindow: 272_000, maxTokens: 128_000 },
   "gpt-5.4-mini": { contextWindow: 272_000, maxTokens: 128_000 },
-  "gpt-5-codex": { contextWindow: 272_000, maxTokens: 128_000 },
-  "gpt-5.1-codex": { contextWindow: 272_000, maxTokens: 128_000 },
-  "gpt-5.1-codex-mini": { contextWindow: 272_000, maxTokens: 128_000 },
-  "gpt-5.1-codex-max": { contextWindow: 272_000, maxTokens: 128_000 },
-  "gpt-5.2-codex": { contextWindow: 272_000, maxTokens: 128_000 },
 };
 
 type ResolvedOpenAiResponsesModel = {

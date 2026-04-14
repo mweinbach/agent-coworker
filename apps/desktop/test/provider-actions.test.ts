@@ -123,4 +123,59 @@ describe("provider actions", () => {
     ]);
   });
 
+  test("refreshProviderStatus waits for status before reading the catalog when Bedrock discovery is requested", async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let releaseStatusRefresh: ((value: boolean) => void) | null = null;
+    const harness = createHarness();
+
+    const refreshPromise = refreshProviderStatusForWorkspace(
+      harness.get as any,
+      harness.set as any,
+      "ws-1",
+      "/tmp/ws-1",
+      { refreshBedrockDiscovery: true },
+      {
+        makeId: () => "note-1",
+        nowIso: () => "2026-03-21T00:00:00.000Z",
+        pushNotification: (notifications: any[], entry: any) => [...notifications, entry],
+        requestJsonRpcControlEvent: ((...args: any[]) => {
+          const method = String(args[3]);
+          const params = args[4] as Record<string, unknown>;
+          calls.push({ method, params });
+          if (method === "cowork/provider/status/refresh") {
+            return new Promise<boolean>((resolve) => {
+              releaseStatusRefresh = resolve;
+            });
+          }
+          return Promise.resolve(true);
+        }) as any,
+      },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(calls).toEqual([
+      {
+        method: "cowork/provider/status/refresh",
+        params: { cwd: "/tmp/ws-1", refreshBedrockDiscovery: true },
+      },
+      { method: "cowork/provider/authMethods/read", params: { cwd: "/tmp/ws-1" } },
+    ]);
+    expect(harness.state.providerStatusRefreshing).toBe(true);
+
+    releaseStatusRefresh?.(true);
+    await refreshPromise;
+
+    expect(calls).toEqual([
+      {
+        method: "cowork/provider/status/refresh",
+        params: { cwd: "/tmp/ws-1", refreshBedrockDiscovery: true },
+      },
+      { method: "cowork/provider/authMethods/read", params: { cwd: "/tmp/ws-1" } },
+      { method: "cowork/provider/catalog/read", params: { cwd: "/tmp/ws-1" } },
+    ]);
+    expect(harness.state.providerStatusRefreshing).toBe(false);
+    expect(harness.state.notifications).toEqual([]);
+  });
+
 });

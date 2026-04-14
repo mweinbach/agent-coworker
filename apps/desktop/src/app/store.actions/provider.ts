@@ -82,13 +82,19 @@ export async function refreshProviderStatusForWorkspace(
   const sendControlEvent = overrides.requestJsonRpcControlEvent ?? requestJsonRpcControlEvent;
   const refreshGeneration = ++RUNTIME.providerStatusRefreshGeneration;
   set({ providerStatusRefreshing: true });
+  const statusRefreshPromise = sendControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", {
+    cwd: path,
+    ...(opts.refreshBedrockDiscovery ? { refreshBedrockDiscovery: true } : {}),
+  });
+  const catalogPromise = opts.refreshBedrockDiscovery
+    ? statusRefreshPromise.then(() =>
+      sendControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", { cwd: path }))
+    : sendControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", { cwd: path });
+  const authMethodsPromise = sendControlEvent(get, set, workspaceId, "cowork/provider/authMethods/read", { cwd: path });
   const results = await Promise.allSettled([
-    sendControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", {
-      cwd: path,
-      ...(opts.refreshBedrockDiscovery ? { refreshBedrockDiscovery: true } : {}),
-    }),
-    sendControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", { cwd: path }),
-    sendControlEvent(get, set, workspaceId, "cowork/provider/authMethods/read", { cwd: path }),
+    statusRefreshPromise,
+    catalogPromise,
+    authMethodsPromise,
   ]);
   const allSucceeded = results.every((result) => result.status === "fulfilled" && result.value);
   set((s) => ({

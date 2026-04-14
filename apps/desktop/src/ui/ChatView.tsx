@@ -62,6 +62,7 @@ import {
   resolveModelDisplayLabel,
   type CatalogVisibilityOptions,
 } from "../lib/modelChoices";
+import { displayProviderName } from "../lib/providerDisplayNames";
 import { readFile } from "../lib/desktopCommands";
 import { PROVIDER_NAMES, type ProviderName } from "../lib/wsProtocol";
 import { cn } from "../lib/utils";
@@ -483,21 +484,6 @@ const FeedRow = memo(function FeedRow(props: {
   return null;
 });
 
-const PROVIDER_LABELS: Record<ProviderName, string> = {
-  google: "Google",
-  openai: "OpenAI",
-  anthropic: "Anthropic",
-  bedrock: "Amazon Bedrock",
-  baseten: "Baseten",
-  together: "Together AI",
-  fireworks: "Fireworks AI",
-  nvidia: "NVIDIA",
-  lmstudio: "LM Studio",
-  "opencode-go": "OpenCode Go",
-  "opencode-zen": "OpenCode Zen",
-  "codex-cli": "ChatGPT Subscription",
-};
-
 function isChatProviderName(value: unknown): value is ProviderName {
   return typeof value === "string" && (PROVIDER_NAMES as readonly string[]).includes(value);
 }
@@ -568,7 +554,7 @@ function DraftThreadModelSelector({
       <SelectContent>
         {providers.map((p) => (
           <SelectGroup key={p}>
-            <SelectLabel className="px-2 py-1.5 text-xs font-semibold">{PROVIDER_LABELS[p] ?? p}</SelectLabel>
+            <SelectLabel className="px-2 py-1.5 text-xs font-semibold">{displayProviderName(p)}</SelectLabel>
             {(choices[p] ?? []).map((m) => {
               const sel = encodeProviderModelSelection(p, m);
               const label = resolveModelDisplayLabel(p, m, modelDisplayNames);
@@ -612,7 +598,7 @@ function ThreadModelIndicator({
   if (!id) return null;
   const friendly = resolveModelDisplayLabel(provider, id, modelDisplayNames);
   const title =
-    friendly !== id ? `${PROVIDER_LABELS[provider] ?? provider} / ${friendly} (${id})` : `${PROVIDER_LABELS[provider] ?? provider} / ${id}`;
+    friendly !== id ? `${displayProviderName(provider)} / ${friendly} (${id})` : `${displayProviderName(provider)} / ${id}`;
 
   return (
     <Badge

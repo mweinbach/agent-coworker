@@ -1,52 +1,51 @@
-import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, test } from "bun:test";
-
-type NpmPackEntry = {
-  files: Array<{ path: string }>;
-};
+import fg from "fast-glob";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
-function resolveNpmInvocation(): { command: string; argsPrefix: string[] } {
-  const npmExecPath = process.env.npm_execpath?.trim();
-  if (npmExecPath && existsSync(npmExecPath)) {
-    const ext = path.extname(npmExecPath).toLowerCase();
-    if (ext === ".js" || ext === ".cjs" || ext === ".mjs") {
-      return { command: process.execPath, argsPrefix: [npmExecPath] };
-    }
-    return { command: npmExecPath, argsPrefix: [] };
+type PackageManifest = {
+  files?: string[];
+};
+
+function patternToFileGlob(pattern: string): string[] {
+  const normalized = pattern.replace(/\/+$/, "");
+  if (normalized.includes("*")) {
+    return [normalized];
   }
 
-  if (process.platform === "win32") {
-    const adjacentNpmCmd = path.join(path.dirname(process.execPath), "npm.cmd");
-    if (existsSync(adjacentNpmCmd)) {
-      return { command: adjacentNpmCmd, argsPrefix: [] };
-    }
+  const absolutePath = path.join(repoRoot, normalized);
+  if (existsSync(absolutePath) && statSync(absolutePath).isDirectory()) {
+    return [`${normalized}/**/*`];
   }
 
-  return { command: "npm", argsPrefix: [] };
+  return [normalized];
 }
 
 function dryRunPackPaths(): string[] {
-  const npmInvocation = resolveNpmInvocation();
+  const manifest = JSON.parse(
+    readFileSync(path.join(repoRoot, "package.json"), "utf8"),
+  ) as PackageManifest;
+  const filePatterns = manifest.files ?? [];
 
-  const output = execFileSync(
-    npmInvocation.command,
-    [...npmInvocation.argsPrefix, "pack", "--json", "--dry-run"],
-    {
-      cwd: repoRoot,
-      encoding: "utf8",
-      env: { ...process.env, npm_config_loglevel: "error" },
-      stdio: ["ignore", "pipe", "inherit"],
-    },
-  );
+  const includePatterns = filePatterns
+    .filter((pattern) => !pattern.startsWith("!"))
+    .flatMap((pattern) => patternToFileGlob(pattern));
+  const ignorePatterns = filePatterns
+    .filter((pattern) => pattern.startsWith("!"))
+    .map((pattern) => pattern.slice(1))
+    .flatMap((pattern) => patternToFileGlob(pattern));
 
-  const parsed = JSON.parse(output) as NpmPackEntry[];
-  return parsed[0]?.files.map((file) => file.path) ?? [];
+  return fg.sync(includePatterns, {
+    cwd: repoRoot,
+    dot: true,
+    onlyFiles: true,
+    unique: true,
+    ignore: ignorePatterns,
+  });
 }
 
 describe("package manifest", () => {

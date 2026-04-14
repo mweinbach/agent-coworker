@@ -118,14 +118,17 @@ function collectExplicitUrls(value: unknown): string[] {
 export async function fetchParallelContents(opts: {
   apiKey: string;
   url: string;
+  objective?: string;
   fetchImpl?: typeof fetch;
   abortSignal?: AbortSignal;
 }): Promise<{ text: string; title?: string; url?: string; links: string[]; imageLinks: string[] }> {
+  const objective = firstNonEmptyString(opts.objective);
   const res = await postParallelJson({
     apiKey: opts.apiKey,
     path: "/v1beta/extract",
     body: {
       urls: [opts.url],
+      ...(objective ? { objective } : {}),
       excerpts: {
         max_chars_per_result: 4000,
         max_chars_total: 4000,

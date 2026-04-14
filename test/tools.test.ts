@@ -1673,6 +1673,9 @@ describe("webFetch tool", () => {
       if (fetchUrl.includes("api.parallel.ai/v1beta/extract")) {
         const body = JSON.parse(String(init?.body));
         expect(body.urls).toEqual(["https://example.com/"]);
+        expect(body.objective).toBe(
+          "Extract the most relevant content from https://example.com/ for browsing and follow-up reading."
+        );
         expect(body.excerpts).toEqual({ max_chars_per_result: 4000, max_chars_total: 4000 });
         expect(body.full_content).toBe(false);
         return new Response(

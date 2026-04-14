@@ -222,6 +222,8 @@ function resolveAmbientBedrockAuth(
     asNonEmptyString(env.AWS_WEB_IDENTITY_TOKEN_FILE)
     || asNonEmptyString(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI)
     || asNonEmptyString(env.AWS_CONTAINER_CREDENTIALS_FULL_URI)
+    || asNonEmptyString(env.AWS_EC2_METADATA_DISABLED) === "false"
+    || (asNonEmptyString(env.AWS_EXECUTION_ENV)?.toLowerCase().includes("ec2") ?? false)
     || hasAmbientDefaultAwsProfile(home)
   ) {
     return {
@@ -418,6 +420,7 @@ function buildFoundationModelsLookup(entries: readonly CachedBedrockModel[]): Ma
 function foundationSummaryToCachedModel(summary: FoundationModelSummary): CachedBedrockModel | null {
   const modelId = asNonEmptyString(summary.modelId);
   if (!modelId) return null;
+  if (summary.responseStreamingSupported === false) return null;
   return {
     id: modelId,
     displayName: asNonEmptyString(summary.modelName) ?? modelId,

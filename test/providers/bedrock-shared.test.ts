@@ -4,9 +4,12 @@ import os from "node:os";
 import path from "node:path";
 
 import { getAiCoworkerPaths, writeConnectionStore } from "../../src/connect";
+import { Bedrock } from "@aws-sdk/client-bedrock";
+
 import {
   maskBedrockFieldValues,
   readBedrockCatalogSnapshot,
+  refreshBedrockDiscoveryCache,
   resolveBedrockAuthConfig,
 } from "../../src/providers/bedrockShared";
 
@@ -111,6 +114,19 @@ describe("providers/bedrockShared", () => {
     });
   });
 
+  test("recognizes EC2/IMDS-backed ambient auth as aws_default", async () => {
+    const auth = await resolveBedrockAuthConfig({
+      env: {
+        HOME: await makeTmpHome(),
+        AWS_EC2_METADATA_DISABLED: "false",
+      } as NodeJS.ProcessEnv,
+    });
+    expect(auth).toEqual({
+      methodId: "aws_default",
+      source: "env",
+    });
+  });
+
   test("returns curated fallback catalog state when Bedrock is not configured", async () => {
     const home = await makeTmpHome();
     const snapshot = await readBedrockCatalogSnapshot({
@@ -122,5 +138,61 @@ describe("providers/bedrockShared", () => {
     expect(snapshot.defaultModel).toBe("amazon.nova-lite-v1:0");
     expect(snapshot.models.some((model) => model.id === "amazon.nova-lite-v1:0")).toBe(true);
     expect(snapshot.message).toContain("Configure Amazon Bedrock credentials");
+  });
+
+  test("filters non-streaming foundation models during Bedrock discovery", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await writeConnectionStore(paths, {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        bedrock: {
+          service: "bedrock",
+          mode: "credentials",
+          methodId: "aws_default",
+          values: {},
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const originalListFoundationModels = Bedrock.prototype.listFoundationModels;
+    const originalListInferenceProfiles = Bedrock.prototype.listInferenceProfiles;
+    const originalListCustomModelDeployments = Bedrock.prototype.listCustomModelDeployments;
+    const originalListProvisionedModelThroughputs = Bedrock.prototype.listProvisionedModelThroughputs;
+    const originalListImportedModels = Bedrock.prototype.listImportedModels;
+
+    Bedrock.prototype.listFoundationModels = async () => ({
+      modelSummaries: [
+        {
+          modelId: "streaming-model",
+          modelName: "Streaming Model",
+          responseStreamingSupported: true,
+          inputModalities: ["TEXT"],
+        } as any,
+        {
+          modelId: "non-streaming-model",
+          modelName: "Non Streaming Model",
+          responseStreamingSupported: false,
+          inputModalities: ["TEXT"],
+        } as any,
+      ],
+    }) as any;
+    Bedrock.prototype.listInferenceProfiles = async () => ({ inferenceProfileSummaries: [] }) as any;
+    Bedrock.prototype.listCustomModelDeployments = async () => ({ modelDeploymentSummaries: [] }) as any;
+    Bedrock.prototype.listProvisionedModelThroughputs = async () => ({ provisionedModelSummaries: [] }) as any;
+    Bedrock.prototype.listImportedModels = async () => ({ modelSummaries: [] }) as any;
+
+    try {
+      const snapshot = await refreshBedrockDiscoveryCache({ paths, env: {} as NodeJS.ProcessEnv });
+      expect(snapshot.models.map((model) => model.id)).toEqual(["streaming-model"]);
+    } finally {
+      Bedrock.prototype.listFoundationModels = originalListFoundationModels;
+      Bedrock.prototype.listInferenceProfiles = originalListInferenceProfiles;
+      Bedrock.prototype.listCustomModelDeployments = originalListCustomModelDeployments;
+      Bedrock.prototype.listProvisionedModelThroughputs = originalListProvisionedModelThroughputs;
+      Bedrock.prototype.listImportedModels = originalListImportedModels;
+    }
   });
 });

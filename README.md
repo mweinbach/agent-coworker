@@ -291,3 +291,11 @@ If you want to contribute, the safest mental model is:
 - the protocol is a public contract
 - UIs are clients
 - README claims should match the code
+
+## License
+
+This project uses a custom source-available license in [`LICENSE`](./LICENSE).
+
+Forks and modifications are allowed, but you must clearly credit the original
+project and identify your changes. Selling the project, a fork, or a derivative
+product/service requires prior permission from Max Weinbach.

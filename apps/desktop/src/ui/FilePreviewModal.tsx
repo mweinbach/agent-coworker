@@ -501,7 +501,7 @@ export function FilePreviewModal() {
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className="flex max-h-[90vh] max-w-5xl flex-col gap-0 overflow-hidden p-0">
+      <DialogContent className="flex max-h-[90vh] max-w-5xl flex-col gap-0 overflow-hidden !bg-background p-0">
         <DialogHeader className="shrink-0 space-y-2 border-b border-border/60 px-5 py-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 space-y-1">
@@ -531,7 +531,10 @@ export function FilePreviewModal() {
           ) : null}
         </DialogHeader>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        <div className={cn(
+          "min-h-0 flex-1 overflow-y-auto px-5 py-4",
+          kind === "docx" && docxHtml && "bg-muted/30 px-6 py-6",
+        )}>
           {loading ? (
             <div className="py-16 text-center text-sm text-muted-foreground">Loading preview…</div>
           ) : error ? (
@@ -558,7 +561,21 @@ export function FilePreviewModal() {
             )
           ) : kind === "docx" && docxHtml ? (
             <div
-              className="prose-sm max-w-none leading-relaxed [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:mt-6 [&_h1]:mb-3 [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:mt-5 [&_h2]:mb-2 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:mt-4 [&_h3]:mb-2 [&_p]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-1 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1 [&_a]:text-primary [&_a]:underline [&_img]:max-w-full"
+              className={cn(
+                "docx-preview mx-auto w-full max-w-[8.5in] rounded-sm border border-border/60 bg-background px-[1in] py-[0.75in] shadow-sm",
+                "[&_h1]:mb-1 [&_h1]:mt-6 [&_h1]:text-[20pt] [&_h1]:font-bold [&_h1]:leading-snug [&_h1]:tracking-tight",
+                "[&_h2]:mb-1 [&_h2]:mt-5 [&_h2]:text-[16pt] [&_h2]:font-semibold [&_h2]:leading-snug",
+                "[&_h3]:mb-1 [&_h3]:mt-4 [&_h3]:text-[13pt] [&_h3]:font-semibold [&_h3]:leading-snug",
+                "[&_h4]:mb-1 [&_h4]:mt-3 [&_h4]:text-[11pt] [&_h4]:font-semibold",
+                "[&_p]:my-[6pt] [&_p]:text-[11pt] [&_p]:leading-[1.6]",
+                "[&_ul]:my-[6pt] [&_ul]:list-disc [&_ul]:pl-8 [&_ol]:my-[6pt] [&_ol]:list-decimal [&_ol]:pl-8",
+                "[&_li]:my-[2pt] [&_li]:text-[11pt] [&_li]:leading-[1.6]",
+                "[&_table]:my-4 [&_table]:w-full [&_table]:border-collapse",
+                "[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1.5 [&_td]:text-[10pt] [&_th]:border [&_th]:border-border [&_th]:bg-muted/30 [&_th]:px-2 [&_th]:py-1.5 [&_th]:text-[10pt] [&_th]:font-semibold",
+                "[&_a]:text-primary [&_a]:underline [&_img]:max-w-full [&_blockquote]:border-l-[3px] [&_blockquote]:border-border [&_blockquote]:pl-4 [&_blockquote]:italic",
+                "[&_strong]:font-semibold [&_em]:italic",
+              )}
+              style={{ fontFamily: "'Calibri', 'Carlito', 'Segoe UI', system-ui, sans-serif" }}
               dangerouslySetInnerHTML={{ __html: docxHtml }}
             />
           ) : kind === "xlsx" && xlsxHtml ? (

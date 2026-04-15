@@ -103,6 +103,27 @@ describe("loadProjectAgentsFiles and section", () => {
     expect(section).toContain("NESTED INSTRUCTION");
   });
 
+  test("keeps only a contiguous suffix of the most specific AGENTS files under the byte cap", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agents-cap-contiguous-"));
+    await fs.mkdir(path.join(tmp, ".git"), { recursive: true });
+    await fs.writeFile(path.join(tmp, "AGENTS.md"), "ROOT SHOULD DROP\n", "utf-8");
+
+    const apps = path.join(tmp, "apps");
+    await fs.mkdir(apps, { recursive: true });
+    await fs.writeFile(path.join(apps, "AGENTS.md"), "M".repeat(PROJECT_INSTRUCTIONS_MAX_BYTES), "utf-8");
+
+    const web = path.join(apps, "web");
+    await fs.mkdir(web, { recursive: true });
+    await fs.writeFile(path.join(web, "AGENTS.md"), "LEAF SHOULD STAY\n", "utf-8");
+
+    const section = await loadProjectInstructionsSection(web);
+    expect(Buffer.byteLength(section, "utf8")).toBeLessThanOrEqual(PROJECT_INSTRUCTIONS_MAX_BYTES);
+    expect(section).toContain("truncated");
+    expect(section).toContain("LEAF SHOULD STAY");
+    expect(section).not.toContain("ROOT SHOULD DROP");
+    expect(section).not.toContain("### AGENTS.md for .");
+  });
+
   test("falls back to a readable AGENTS.md when AGENTS.override.md cannot be read", async () => {
     const workspaceRoot = path.resolve(path.join("/repo", "apps", "web"));
     const io = {

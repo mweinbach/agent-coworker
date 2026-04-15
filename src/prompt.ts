@@ -29,6 +29,7 @@ import { isUserFacingProviderEnabled } from "./providers/catalog";
 import type { ProviderName } from "./types";
 import { buildWorkspaceMapSection } from "./workspace/map";
 import { loadProjectInstructionsSection } from "./projectInstructions";
+import { sameWorkspacePath } from "./utils/workspacePath";
 
 function buildProjectInstructionsSection(config: AgentConfig): string {
   const text = (config.userProfile?.instructions ?? "").trim();
@@ -36,15 +37,34 @@ function buildProjectInstructionsSection(config: AgentConfig): string {
   return ["## Project instructions", "", text].join("\n");
 }
 
+function resolveProjectInstructionsTargetDir(config: AgentConfig): string {
+  const workspaceRoot = path.resolve(path.dirname(config.projectAgentDir));
+  const executionCwd = path.resolve(config.workingDirectory);
+  if (sameWorkspacePath(workspaceRoot, executionCwd)) {
+    return executionCwd;
+  }
+
+  const relativeToWorkspace = path.relative(workspaceRoot, executionCwd);
+  if (
+    relativeToWorkspace
+    && relativeToWorkspace !== ".."
+    && !relativeToWorkspace.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relativeToWorkspace)
+  ) {
+    return executionCwd;
+  }
+
+  return workspaceRoot;
+}
+
 async function appendWorkspaceContextBlocks(
   prompt: string,
   config: AgentConfig,
   opts?: { includeProjectInstructions?: boolean },
 ): Promise<string> {
-  const workspaceRoot = path.dirname(config.projectAgentDir);
   const blocks: string[] = [prompt];
 
-  const agentsHierarchySection = await loadProjectInstructionsSection(workspaceRoot);
+  const agentsHierarchySection = await loadProjectInstructionsSection(resolveProjectInstructionsTargetDir(config));
   if (agentsHierarchySection) {
     blocks.push(agentsHierarchySection);
   }

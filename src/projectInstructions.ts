@@ -191,9 +191,10 @@ function renderProjectInstructionsSectionWithinByteLimit(files: LoadedAgentsFile
       continue;
     }
     const candidate = buildTruncatedSection([block, ...selectedBlocks]);
-    if (Buffer.byteLength(candidate, "utf8") <= maxBytes) {
-      selectedBlocks.unshift(block);
+    if (Buffer.byteLength(candidate, "utf8") > maxBytes) {
+      break;
     }
+    selectedBlocks.unshift(block);
   }
 
   return buildTruncatedSection(selectedBlocks);

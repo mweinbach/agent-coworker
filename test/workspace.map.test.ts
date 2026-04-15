@@ -251,4 +251,31 @@ describe("prompt integration", () => {
     expect(subPrompt).toContain("ROOT AGENTS CONTENT");
     expect(subPrompt).toContain("APP WEB CONTENT");
   });
+
+  test("hierarchical AGENTS.md follows a nested execution working directory inside the workspace root", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "ws-map-agents-cwd-"));
+    await fs.mkdir(path.join(tmp, ".git"), { recursive: true });
+    await fs.writeFile(path.join(tmp, "AGENTS.md"), "ROOT AGENTS CONTENT\n", "utf-8");
+
+    const app = path.join(tmp, "apps", "web");
+    await fs.mkdir(app, { recursive: true });
+    await fs.writeFile(path.join(app, "AGENTS.md"), "APP WEB CONTENT\n", "utf-8");
+
+    const config = makeConfig({
+      workingDirectory: app,
+      projectAgentDir: path.join(tmp, ".agent"),
+    });
+
+    const { prompt: mainPrompt } = await loadSystemPromptWithSkills(config);
+    expect(mainPrompt).toContain("## Project Instructions");
+    expect(mainPrompt).toContain("ROOT AGENTS CONTENT");
+    expect(mainPrompt).toContain("APP WEB CONTENT");
+    expect(mainPrompt).toContain("### AGENTS.md for apps/web");
+
+    const subPrompt = await loadAgentPrompt(config, "explorer");
+    expect(subPrompt).toContain("## Project Instructions");
+    expect(subPrompt).toContain("ROOT AGENTS CONTENT");
+    expect(subPrompt).toContain("APP WEB CONTENT");
+    expect(subPrompt).toContain("### AGENTS.md for apps/web");
+  });
 });

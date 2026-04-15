@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadAgentPrompt, loadSystemPrompt, loadSubAgentPrompt, loadSystemPromptWithSkills } from "../src/prompt";
+import { buildWorkspaceMapSection } from "../src/workspace/map";
 import {
   AGENT_ROLE_DEFINITIONS,
   buildSpawnAgentRolePromptLines,
@@ -1144,7 +1145,8 @@ describe("loadSubAgentPrompt", () => {
   });
 
   test("loads from builtInDir/prompts/sub-agents/ path", async () => {
-    const { builtIn } = await makeTmpDirs();
+    const { builtIn, cwd } = await makeTmpDirs();
+    await fs.mkdir(path.join(cwd, ".git"), { recursive: true });
 
     const basePrompt = "Shared base prompt.";
     const promptContent = "Custom explore agent prompt for testing.";
@@ -1157,9 +1159,15 @@ describe("loadSubAgentPrompt", () => {
       promptContent
     );
 
-    const config = makeConfig({ builtInDir: builtIn });
+    const config = makeConfig({
+      builtInDir: builtIn,
+      workingDirectory: cwd,
+      projectAgentDir: path.join(cwd, ".agent"),
+    });
     const prompt = await loadSubAgentPrompt(config, "explore");
-    expect(prompt).toBe(`${basePrompt}\n\n${promptContent}\n`);
+    const combined = `${basePrompt}\n\n${promptContent}\n`;
+    const expected = `${combined}\n\n${buildWorkspaceMapSection(config)}`;
+    expect(prompt).toBe(expected);
   });
 });
 

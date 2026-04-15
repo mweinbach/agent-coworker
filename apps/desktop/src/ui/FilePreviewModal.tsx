@@ -557,11 +557,9 @@ export function FilePreviewModal() {
               <pre className="whitespace-pre-wrap break-words rounded-md border border-border/80 bg-muted/25 p-3 font-mono text-xs leading-relaxed">{textContent}</pre>
             )
           ) : kind === "docx" && docxHtml ? (
-            <iframe
-              title="Word preview"
-              sandbox="allow-same-origin"
-              className="h-[min(72vh,720px)] w-full rounded-md border border-border/80 bg-background"
-              srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:system-ui,sans-serif;padding:12px;line-height:1.5;color:var(--text-primary);background:var(--background);}</style></head><body>${docxHtml}</body></html>`}
+            <div
+              className="prose-sm max-w-none leading-relaxed [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:mt-6 [&_h1]:mb-3 [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:mt-5 [&_h2]:mb-2 [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:mt-4 [&_h3]:mb-2 [&_p]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-1 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1 [&_a]:text-primary [&_a]:underline [&_img]:max-w-full"
+              dangerouslySetInnerHTML={{ __html: docxHtml }}
             />
           ) : kind === "xlsx" && xlsxHtml ? (
             <div

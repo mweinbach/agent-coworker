@@ -82,6 +82,41 @@ function toBoolean(checked: boolean | "indeterminate"): boolean {
   return checked === true;
 }
 
+function ToggleChip({
+  pressed,
+  onPressedChange,
+  "aria-label": ariaLabel,
+}: {
+  pressed: boolean;
+  onPressedChange: (next: boolean) => void;
+  "aria-label"?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={pressed}
+      aria-label={ariaLabel}
+      className={cn(
+        "relative inline-flex h-7 w-[52px] shrink-0 cursor-pointer items-center rounded-full border transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        pressed
+          ? "border-primary/60 bg-primary"
+          : "border-border bg-muted/50",
+      )}
+      onClick={() => onPressedChange(!pressed)}
+    >
+      <span
+        className={cn(
+          "pointer-events-none block size-5 rounded-full shadow-sm transition-transform duration-200",
+          pressed
+            ? "translate-x-[26px] bg-primary-foreground"
+            : "translate-x-[3px] bg-foreground/60",
+        )}
+      />
+    </button>
+  );
+}
+
 function updateProviderOption(
   providerOptions: ReturnType<typeof mergeWorkspaceProviderOptions>,
   provider: OpenAICompatibleProviderName,
@@ -1300,12 +1335,12 @@ export function WorkspacesPage() {
                     <div className="text-sm font-medium">MCP tools</div>
                     <div className="text-xs text-muted-foreground">Allow the agent to use MCP servers configured for this workspace.</div>
                   </div>
-                  <Checkbox
-                    checked={enableMcp}
+                  <ToggleChip
+                    pressed={enableMcp}
                     aria-label="Enable MCP tools"
-                    onCheckedChange={(checked) => {
+                    onPressedChange={(next) => {
                       if (!ws) return;
-                      void updateWorkspaceDefaults(ws.id, { defaultEnableMcp: toBoolean(checked) });
+                      void updateWorkspaceDefaults(ws.id, { defaultEnableMcp: next });
                     }}
                   />
                 </div>
@@ -1315,12 +1350,12 @@ export function WorkspacesPage() {
                     <div className="text-sm font-medium">Workspace backups</div>
                     <div className="text-xs text-muted-foreground">Persist a default backup policy for new sessions in this workspace.</div>
                   </div>
-                  <Checkbox
-                    checked={backupsEnabled}
+                  <ToggleChip
+                    pressed={backupsEnabled}
                     aria-label="Enable workspace backups"
-                    onCheckedChange={(checked) => {
+                    onPressedChange={(next) => {
                       if (!ws) return;
-                      void updateWorkspaceDefaults(ws.id, { defaultBackupsEnabled: toBoolean(checked) });
+                      void updateWorkspaceDefaults(ws.id, { defaultBackupsEnabled: next });
                     }}
                   />
                 </div>
@@ -1330,12 +1365,11 @@ export function WorkspacesPage() {
                     <div className="text-sm font-medium">Run shell commands without asking</div>
                     <div className="text-xs text-muted-foreground">Skip confirmation prompts and run shell commands immediately without review.</div>
                   </div>
-                  <Checkbox
-                    checked={yolo}
+                  <ToggleChip
+                    pressed={yolo}
                     aria-label="Run shell commands without asking"
-                    onCheckedChange={async (checked) => {
+                    onPressedChange={async (next) => {
                       if (!ws) return;
-                      const next = toBoolean(checked);
                       const confirmed = await confirmAction({
                         title: next ? "Enable auto-approve commands" : "Disable auto-approve commands",
                         message: next

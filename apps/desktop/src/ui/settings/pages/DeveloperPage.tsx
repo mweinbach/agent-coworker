@@ -89,11 +89,6 @@ export function DeveloperPage() {
 
   return (
     <div className="space-y-5">
-      <div className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight text-foreground">Developer</h1>
-        <p className="text-sm text-muted-foreground">Advanced settings and debugging tools.</p>
-      </div>
-
       <Card className="border-border/80 bg-card/85">
         <CardHeader>
           <CardTitle>File Explorer</CardTitle>

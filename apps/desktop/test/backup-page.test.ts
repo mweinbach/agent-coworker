@@ -75,7 +75,7 @@ describe("desktop backup page", () => {
   test("renders an empty-state prompt when no workspace is selected", () => {
     const html = renderToStaticMarkup(createElement(BackupPage, { workspace: null, runtime: null }));
 
-    expect(html).toContain("Workspace Backups");
+    expect(html).toContain("data-backup-page");
     expect(html).toContain("Select a workspace first to manage its backup history.");
   });
 
@@ -164,9 +164,8 @@ describe("desktop backup page", () => {
       }),
     );
 
-    expect(html).toContain("Workspace Backups");
+    expect(html).toContain("data-backup-page");
     expect(html).toContain("Backup History");
-    expect(html).toContain("Manage backup history and restore points for your workspaces.");
     expect(html).toContain("Deleted session");
     expect(html).toContain("Broken backup");
     expect(html).toContain("cp-0001");

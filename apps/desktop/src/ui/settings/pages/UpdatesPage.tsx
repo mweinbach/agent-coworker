@@ -81,11 +81,6 @@ export function UpdatesPage(props: UpdatesPageProps = {}) {
 
   return (
     <div className="space-y-5" data-update-phase={updateState.phase}>
-      <div className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight text-foreground">Updates</h1>
-        <p className="text-sm text-muted-foreground">Desktop app versioning and restart-based update installs.</p>
-      </div>
-
       <Card className="border-border/80 bg-card/85">
         <CardHeader className="flex-row items-center justify-between space-y-0">
           <div>

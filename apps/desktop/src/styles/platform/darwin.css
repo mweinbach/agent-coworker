@@ -49,6 +49,11 @@
   margin-top: 0;
 }
 
+:root[data-platform="darwin"] .settings-shell__main {
+  position: relative;
+  z-index: 81;
+}
+
 :root[data-platform="darwin"] .settings-shell__drag-zone {
   position: absolute;
   top: 0;

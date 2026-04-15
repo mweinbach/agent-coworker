@@ -192,8 +192,8 @@ describe("desktop remote access page", () => {
 
   test("renders pairing and trusted phone sections", () => {
     const html = renderToStaticMarkup(createElement(RemoteAccessPage));
-    expect(html).toContain("Remote Access");
-    expect(html).toContain("using the remote relay and Cowork JSON-RPC");
+    expect(html).toContain("data-remote-access-page");
+    expect(html).toContain("Cowork Mobile");
     expect(html).toContain("Workspace bridge");
     expect(html).toContain("Relay service:");
     expect(html).toContain("Pairing QR");

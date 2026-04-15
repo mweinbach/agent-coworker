@@ -1431,11 +1431,6 @@ export function WorkspacesPage() {
 
   return (
     <div className="space-y-5">
-      <div className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight text-foreground">Workspaces</h1>
-        <p className="text-sm text-muted-foreground">Set up how your AI works in this project.</p>
-      </div>
-
       {workspaces.length === 0 || !ws ? (
         <Card className="border-border/80 bg-card/85">
           <CardContent className="p-8 text-center">

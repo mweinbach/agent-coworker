@@ -95,14 +95,7 @@ export function RemoteAccessPage() {
   }
 
   return (
-    <div className="space-y-5">
-      <div className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight text-foreground">Remote Access</h1>
-        <p className="text-sm text-muted-foreground">
-          Pair one phone to the selected workspace using the remote relay and Cowork JSON-RPC.
-        </p>
-      </div>
-
+    <div className="space-y-5" data-remote-access-page="true">
       <Card className="border-border/80 bg-card/85">
         <CardHeader>
           <CardTitle>Workspace bridge</CardTitle>

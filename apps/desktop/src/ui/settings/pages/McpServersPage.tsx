@@ -120,13 +120,6 @@ export function McpServersPage() {
 
   return (
     <div className="space-y-5" ref={parent}>
-      <div className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight text-foreground">MCP servers</h1>
-        <p className="text-sm text-muted-foreground">Connect external tools and services Cowork can use in this workspace.</p>
-      </div>
-
-
-
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-medium">Custom servers</h2>
         {workspace ? (

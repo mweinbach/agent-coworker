@@ -173,7 +173,7 @@ describe("desktop usage page", () => {
       } as any),
     );
 
-    expect(html).toContain("Usage");
+    expect(html).toContain("data-usage-page");
     expect(html).toContain("By provider");
     expect(html).toContain("gpt-5.2");
     expect(html).toContain("gemini-3-flash-preview");

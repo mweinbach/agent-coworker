@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
-import { Button } from "../../../components/ui/button";
+import { Button, buttonVariants } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../../../components/ui/collapsible";
@@ -13,6 +13,7 @@ import { compareProviderNamesForSettings } from "../../../lib/providerOrdering";
 import type { ProviderName, ServerEvent } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 import { cn } from "../../../lib/utils";
+import { useOptionalSettingsChrome } from "../SettingsChromeContext";
 import {
   displayProviderName,
   fallbackAuthMethods,
@@ -359,6 +360,26 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     if (!canConnectProvider) return;
     void refreshProviderStatus();
   }, [canConnectProvider, refreshProviderStatus]);
+
+  const settingsChrome = useOptionalSettingsChrome();
+  useEffect(() => {
+    if (!settingsChrome) return;
+    settingsChrome.setChrome({
+      headerActions: canConnectProvider ? (
+        <button
+          type="button"
+          className={buttonVariants({ variant: "outline", size: "sm", className: "shrink-0" })}
+          onClick={() => void refreshProviderStatus({ refreshBedrockDiscovery: true })}
+          disabled={providerStatusRefreshing}
+        >
+          {providerStatusRefreshing ? "Refreshing…" : "Refresh status"}
+        </button>
+      ) : null,
+    });
+    return () => {
+      settingsChrome.setChrome(null);
+    };
+  }, [settingsChrome, canConnectProvider, providerStatusRefreshing, refreshProviderStatus]);
 
   useEffect(() => {
     if (!providerLastAuthResult?.ok) return;
@@ -1083,22 +1104,6 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
 
   return (
     <div className="space-y-5">
-      <div className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight text-foreground">Providers</h1>
-        <p className="text-sm text-muted-foreground">
-          Manage the providers Cowork can use in this app and check whether each one is ready.{" "}
-          <Button
-            variant="link"
-            className="h-auto px-0"
-            type="button"
-            onClick={() => void refreshProviderStatus({ refreshBedrockDiscovery: true })}
-            disabled={providerStatusRefreshing}
-          >
-            {providerStatusRefreshing ? "Refreshing..." : "Refresh status"}
-          </Button>
-        </p>
-      </div>
-
       {!canConnectProvider ? (
         <Card className="border-border/80 bg-card/85">
           <CardContent className="p-6 text-center text-sm text-muted-foreground">

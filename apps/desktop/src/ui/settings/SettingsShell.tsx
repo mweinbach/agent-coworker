@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 
 import { ArrowLeftIcon } from "lucide-react";
 
@@ -16,11 +16,54 @@ import { UpdatesPage } from "./pages/UpdatesPage";
 import { DeveloperPage } from "./pages/DeveloperPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { RemoteAccessPage } from "./pages/RemoteAccessPage";
+import { SettingsChromeProvider, type SettingsChromeState } from "./SettingsChromeContext";
 
 type SettingsPageDefinition = {
   id: SettingsPageId;
   label: string;
   render: () => ReactNode;
+};
+
+const SETTINGS_PAGE_META: Record<
+  SettingsPageId,
+  { title: string; description: string }
+> = {
+  providers: {
+    title: "Providers",
+    description: "Connect models and see whether each provider is ready to use.",
+  },
+  mcp: {
+    title: "MCP servers",
+    description: "Add tools and services the agent can call from this workspace.",
+  },
+  workspaces: {
+    title: "Workspace",
+    description: "Defaults for models, tools, and behavior in this project.",
+  },
+  memory: {
+    title: "Memory",
+    description: "What Cowork remembers about you and this workspace.",
+  },
+  remoteAccess: {
+    title: "Remote access",
+    description: "Pair a phone to this workspace over the relay when the app is open.",
+  },
+  backup: {
+    title: "Backups",
+    description: "Recovery snapshots and restore points for chat sessions.",
+  },
+  usage: {
+    title: "Usage",
+    description: "Token usage and estimated cost across sessions.",
+  },
+  developer: {
+    title: "Developer",
+    description: "Debug visibility and advanced workspace options.",
+  },
+  updates: {
+    title: "Updates",
+    description: "App version and restart-based updates.",
+  },
 };
 
 export function getSettingsGroups(remoteAccessAvailable: boolean): Array<{
@@ -29,10 +72,10 @@ export function getSettingsGroups(remoteAccessAvailable: boolean): Array<{
 }> {
   return [
     {
-      label: "Models & Tools",
+      label: "Models & tools",
       pages: [
         { id: "providers", label: "Providers", render: () => <ProvidersPage /> },
-        { id: "mcp", label: "Integrations", render: () => <McpServersPage /> },
+        { id: "mcp", label: "MCP servers", render: () => <McpServersPage /> },
       ],
     },
     {
@@ -41,14 +84,14 @@ export function getSettingsGroups(remoteAccessAvailable: boolean): Array<{
         { id: "workspaces", label: "General", render: () => <WorkspacesPage /> },
         { id: "memory", label: "Memory", render: () => <MemoryPage /> },
         ...(remoteAccessAvailable
-          ? [{ id: "remoteAccess", label: "Remote Access", render: () => <RemoteAccessPage /> } satisfies SettingsPageDefinition]
+          ? [{ id: "remoteAccess", label: "Remote access", render: () => <RemoteAccessPage /> } satisfies SettingsPageDefinition]
           : []),
       ],
     },
     {
-      label: "Recovery & Data",
+      label: "Data",
       pages: [
-        { id: "backup", label: "Backup", render: () => <BackupPage /> },
+        { id: "backup", label: "Backups", render: () => <BackupPage /> },
         { id: "usage", label: "Usage", render: () => <UsagePage /> },
       ],
     },
@@ -80,51 +123,55 @@ function SettingsNavigation({
   const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
 
   return (
-    <aside className="settings-shell__nav app-left-sidebar-pane flex min-h-0 flex-col border-r border-border/60 bg-gradient-to-b from-muted/12 to-muted/[0.04] max-[960px]:border-r-0 max-[960px]:border-b max-[960px]:bg-gradient-to-r max-[960px]:from-muted/10 max-[960px]:to-transparent">
-      <div className="border-b border-border/70 px-3 py-3 flex flex-col gap-2">
+    <aside className="settings-shell__nav app-left-sidebar-pane flex min-h-0 min-w-0 flex-col border-r border-border/50 max-[960px]:border-r-0 max-[960px]:border-b">
+      <div className="shrink-0 border-b border-border/50 px-3 py-3">
         <Button
-          className="settings-shell__back-button sidebar-lift h-9 w-full justify-start rounded-lg border border-border/70 bg-foreground/[0.03] px-3 text-[13px] font-medium text-foreground/86 hover:bg-foreground/[0.05] hover:text-foreground"
+          className="settings-shell__back-button h-9 w-full justify-start rounded-md border border-border/50 bg-foreground/[0.03] px-2.5 text-[13px] font-medium"
           variant="ghost"
           type="button"
           onClick={onBack}
         >
-          <ArrowLeftIcon className="h-4 w-4 mr-2" />
-          Back to app
+          <ArrowLeftIcon className="mr-2 h-4 w-4 shrink-0 opacity-70" />
+          Back
         </Button>
         {perWorkspaceSettings && currentWorkspace && (
-          <div className="mt-1 px-1 text-xs font-medium text-muted-foreground truncate">
+          <div className="mt-2 truncate px-1 text-[11px] text-muted-foreground" title={currentWorkspace.name}>
             {currentWorkspace.name}
           </div>
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 py-3.5 pb-4 flex flex-col gap-5 max-[960px]:flex-row max-[960px]:flex-wrap">
-        {settingsGroups.map((group) => (
-          <div key={group.label} className="flex flex-col gap-1">
-            <h4 className="mb-1.5 px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/80">
-              {group.label}
-            </h4>
-            <div className="flex flex-col gap-0.5">
-              {group.pages.map((page) => (
-                <Button
-                  key={page.id}
-                  variant="ghost"
-                  className={cn(
-                    "settings-shell__nav-button sidebar-lift h-8 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em]",
-                    activePage === page.id
-                      ? "bg-foreground/[0.07] text-foreground shadow-sm ring-1 ring-border/45"
-                      : "text-muted-foreground hover:bg-foreground/[0.045] hover:text-foreground",
-                  )}
-                  type="button"
-                  onClick={() => onSelectPage(page.id)}
-                >
-                  {page.label}
-                </Button>
-              ))}
+      <nav
+        className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2 pb-4"
+        aria-label="Settings sections"
+      >
+        <div className="flex flex-col gap-3 max-[960px]:flex-row max-[960px]:flex-wrap max-[960px]:gap-x-4 max-[960px]:gap-y-3">
+          {settingsGroups.map((group) => (
+            <div key={group.label} className="flex min-w-0 flex-col">
+              <div className="mb-0.5 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/80">
+                {group.label}
+              </div>
+              <div className="flex flex-col gap-0.5">
+                {group.pages.map((page) => (
+                  <button
+                    key={page.id}
+                    className={cn(
+                      "settings-shell__nav-button flex w-full items-center rounded-lg px-3 py-2 text-left text-[13px] transition-colors",
+                      activePage === page.id
+                        ? "bg-foreground/[0.08] font-medium text-foreground ring-1 ring-border/40"
+                        : "font-normal text-muted-foreground hover:bg-foreground/[0.05] hover:text-foreground",
+                    )}
+                    type="button"
+                    onClick={() => onSelectPage(page.id)}
+                  >
+                    {page.label}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      </nav>
     </aside>
   );
 }
@@ -138,6 +185,14 @@ export function SettingsShell() {
   const settingsGroups = getSettingsGroups(remoteAccessAvailable);
   const settingsPages = settingsGroups.flatMap((group) => group.pages);
   const activePage = settingsPages.find((page) => page.id === settingsPage) ?? settingsPages[0];
+  const meta = SETTINGS_PAGE_META[activePage.id];
+
+  const [pageChrome, setPageChromeState] = useState<SettingsChromeState>({});
+  const handleChromeChange = useCallback((next: SettingsChromeState) => {
+    setPageChromeState(next);
+  }, []);
+
+  const isBackupPage = activePage.id === "backup";
 
   return (
     <div
@@ -152,20 +207,64 @@ export function SettingsShell() {
         settingsGroups={settingsGroups}
       />
 
-      <main className="settings-shell__main app-main-content min-h-0 overflow-auto">
-        <div
-          className={cn(
-            "settings-shell__content w-full",
-            // Narrow: even padding. Wide: flush to the nav divider on the left; keep right/top/bottom inset.
-            activePage.id === "backup"
-              ? "h-full p-0"
-              : "max-[960px]:p-4 min-[961px]:pl-3 min-[961px]:py-5 min-[961px]:pr-5 lg:py-6 lg:pr-6",
-          )}
-        >
-          <div key={activePage.id} className="animate-in fade-in slide-in-from-bottom-2 duration-200 ease-out h-full">
-            {activePage.render()}
+      <main className="settings-shell__main app-main-content flex min-h-0 min-w-0 flex-col">
+        <SettingsChromeProvider onChromeChange={handleChromeChange}>
+          <div
+            className={cn(
+              "flex min-h-0 min-w-0 flex-1 flex-col",
+              isBackupPage ? "overflow-hidden" : "",
+            )}
+          >
+            <header
+              className={cn(
+                "settings-shell__page-header shrink-0 px-5 py-4 backdrop-blur-sm max-[960px]:px-4",
+                isBackupPage ? "" : "sticky top-0 z-10",
+              )}
+            >
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 space-y-1">
+                  <h1 className="text-xl font-semibold tracking-tight text-foreground">
+                    {meta.title}
+                  </h1>
+                  <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
+                    {meta.description}
+                  </p>
+                </div>
+                {pageChrome.headerActions ? (
+                  <div className="settings-shell__header-actions flex shrink-0 flex-wrap items-center justify-end gap-2 sm:pt-0.5">
+                    {pageChrome.headerActions}
+                  </div>
+                ) : null}
+              </div>
+            </header>
+
+            <div
+              className={cn(
+                "settings-shell__scroll min-h-0 min-w-0 flex-1",
+                isBackupPage ? "flex min-h-0 flex-col overflow-hidden" : "overflow-y-auto",
+              )}
+            >
+              <div
+                className={cn(
+                  "settings-shell__content w-full",
+                  isBackupPage
+                    ? "flex min-h-0 flex-1 flex-col p-0"
+                    : "max-[960px]:p-4 min-[961px]:px-5 min-[961px]:pb-6 min-[961px]:pt-4",
+                )}
+              >
+                <div
+                  key={activePage.id}
+                  className={cn(
+                    "animate-in fade-in duration-150",
+                    isBackupPage ? "flex min-h-0 flex-1 flex-col" : "",
+                  )}
+                >
+                  {activePage.render()}
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
+        </SettingsChromeProvider>
       </main>
     </div>
   );

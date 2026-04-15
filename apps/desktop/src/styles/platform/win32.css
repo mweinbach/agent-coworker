@@ -154,6 +154,10 @@
   z-index: 81;
 }
 
+:root[data-platform="win32"] .settings-shell__header-actions {
+  padding-right: 8.5rem;
+}
+
 :root[data-platform="win32"] .settings-shell__drag-zone {
   position: absolute;
   top: 0;

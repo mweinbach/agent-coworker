@@ -288,6 +288,11 @@ body {
   }
 }
 
+.settings-shell__page-header {
+  background: var(--surface-settings-main);
+  box-shadow: 0 1px 0 var(--border-subtle);
+}
+
 .settings-shell__content {
   min-height: 100%;
 }

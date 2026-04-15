@@ -6,7 +6,7 @@ import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { useAppStore } from "../../../app/store";
 import type { ThreadRuntime } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
-import { Button } from "../../../components/ui/button";
+import { Button, buttonVariants } from "../../../components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "../../../components/ui/dialog";
 import { cn } from "../../../lib/utils";
+import { useOptionalSettingsChrome } from "../SettingsChromeContext";
 import { formatCost, formatTokenCount } from "../../../../../../src/session/pricing";
 import type { ModelUsageSummary } from "../../../../../../src/session/costTracker";
 
@@ -203,56 +204,56 @@ export function UsagePage(props: UsagePageProps = {}) {
 
   const hasUsage = aggregate && aggregate.totalSessions > 0;
 
-  return (
-    <div className="space-y-5" data-usage-page="true">
-      <div className="flex items-start justify-between gap-3 max-[960px]:flex-col">
-        <div className="space-y-2">
-          <h1 className="text-3xl font-semibold tracking-tight text-foreground">Usage</h1>
-          <p className="max-w-2xl text-sm text-muted-foreground">
-            Token usage and estimated costs across all sessions, broken down by provider and model.
+  const settingsChrome = useOptionalSettingsChrome();
+  const estimateNoticeDialog = (
+    <Dialog open={estimateNoticeOpen} onOpenChange={handleEstimateNoticeOpenChange}>
+      <DialogContent showClose className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Usage estimates</DialogTitle>
+          <DialogDescription>
+            These numbers are estimates based on provider-reported token usage and Cowork&apos;s local pricing catalog.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 text-sm text-muted-foreground">
+          <p>
+            Billing may vary. Providers can round differently, apply cached-token discounts differently, or change
+            prices independently of what is bundled in the app.
+          </p>
+          <p>
+            Be careful while using these estimates for spend decisions. Treat totals as protective guidance, not exact
+            invoices.
           </p>
         </div>
-
-        <div className="shrink-0">
-          <Button
-            type="button"
-            variant="outline"
-            className="gap-2"
-            onClick={() => handleEstimateNoticeOpenChange?.(true)}
-          >
-            <AlertTriangleIcon className="h-4 w-4" />
-            How estimates work
+        <DialogFooter>
+          <Button type="button" variant="secondary" onClick={() => handleEstimateNoticeOpenChange?.(false)}>
+            Got it
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 
-          <Dialog open={estimateNoticeOpen} onOpenChange={handleEstimateNoticeOpenChange}>
-            <DialogContent showClose className="max-w-lg">
-              <DialogHeader>
-                <DialogTitle>Usage estimates</DialogTitle>
-                <DialogDescription>
-                  These numbers are estimates based on provider-reported token usage and Cowork&apos;s local pricing
-                  catalog.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-3 text-sm text-muted-foreground">
-                <p>
-                  Billing may vary. Providers can round differently, apply cached-token discounts differently, or
-                  change prices independently of what is bundled in the app.
-                </p>
-                <p>
-                  Be careful while using these estimates for spend decisions. Treat totals as protective
-                  guidance, not exact invoices.
-                </p>
-              </div>
-              <DialogFooter>
-                <Button type="button" variant="secondary" onClick={() => handleEstimateNoticeOpenChange?.(false)}>
-                  Got it
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        </div>
-      </div>
+  useEffect(() => {
+    if (!settingsChrome) return;
+    settingsChrome.setChrome({
+      headerActions: (
+        <button
+          type="button"
+          className={buttonVariants({ variant: "outline", size: "sm", className: "gap-2" })}
+          onClick={() => handleEstimateNoticeOpenChange?.(true)}
+        >
+          <AlertTriangleIcon className="h-4 w-4" data-icon />
+          How estimates work
+        </button>
+      ),
+    });
+    return () => {
+      settingsChrome.setChrome(null);
+    };
+  }, [settingsChrome, handleEstimateNoticeOpenChange]);
 
+  return (
+    <div className="space-y-5" data-usage-page="true">
       {/* ── Overview stats ──────────────────────────────────────────── */}
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <UsageStat
@@ -360,6 +361,22 @@ export function UsagePage(props: UsagePageProps = {}) {
           No usage data recorded yet. Usage will appear here as you use models across sessions.
         </div>
       )}
+
+      {!settingsChrome ? (
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={() => handleEstimateNoticeOpenChange?.(true)}
+          >
+            <AlertTriangleIcon className="h-4 w-4" />
+            How estimates work
+          </Button>
+        </div>
+      ) : null}
+      {estimateNoticeDialog}
     </div>
   );
 }

@@ -190,13 +190,6 @@ export function MemoryPage() {
 
   return (
     <div className="space-y-5">
-      <div className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight text-foreground">Memory</h1>
-        <p className="text-sm text-muted-foreground">
-          Things Cowork remembers about you and this workspace.
-        </p>
-      </div>
-
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           {workspaces.length > 1 && workspace ? (

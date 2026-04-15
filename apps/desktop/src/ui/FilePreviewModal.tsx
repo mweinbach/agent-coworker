@@ -43,13 +43,9 @@ import { cn } from "../lib/utils";
 import { getExtensionLower, getFilePreviewKind, mimeForPreviewKind, type FilePreviewKind } from "../lib/filePreviewKind";
 
 function toArrayBuffer(u8: Uint8Array): ArrayBuffer {
-  const buf = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
-  if (buf instanceof SharedArrayBuffer) {
-    const copy = new ArrayBuffer(u8.byteLength);
-    new Uint8Array(copy).set(u8);
-    return copy;
-  }
-  return buf;
+  const ab = new ArrayBuffer(u8.byteLength);
+  new Uint8Array(ab).set(u8);
+  return ab;
 }
 
 const XLSX_MAX_ROWS = 200;

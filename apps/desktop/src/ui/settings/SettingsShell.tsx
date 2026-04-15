@@ -142,23 +142,23 @@ function SettingsNavigation({
       </div>
 
       <nav
-        className="min-h-0 flex-1 overflow-y-auto py-2 pb-4"
+        className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2 pb-4"
         aria-label="Settings sections"
       >
         <div className="flex flex-col gap-3 max-[960px]:flex-row max-[960px]:flex-wrap max-[960px]:gap-x-4 max-[960px]:gap-y-3">
           {settingsGroups.map((group) => (
             <div key={group.label} className="flex min-w-0 flex-col">
-              <div className="mb-0.5 px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/80">
+              <div className="mb-0.5 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/80">
                 {group.label}
               </div>
-              <div className="flex flex-col">
+              <div className="flex flex-col gap-0.5">
                 {group.pages.map((page) => (
                   <button
                     key={page.id}
                     className={cn(
-                      "settings-shell__nav-button flex w-full items-center px-4 py-2 text-left text-[13px] transition-colors",
+                      "settings-shell__nav-button flex w-full items-center rounded-lg px-3 py-2 text-left text-[13px] transition-colors",
                       activePage === page.id
-                        ? "bg-foreground/[0.08] font-medium text-foreground"
+                        ? "bg-foreground/[0.08] font-medium text-foreground ring-1 ring-border/40"
                         : "font-normal text-muted-foreground hover:bg-foreground/[0.05] hover:text-foreground",
                     )}
                     type="button"

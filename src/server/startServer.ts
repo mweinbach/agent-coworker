@@ -65,6 +65,7 @@ import {
   resolveWsProtocol,
   splitWebSocketSubprotocolHeader,
 } from "./wsProtocol/negotiation";
+import { FIRST_CLOUD_MILESTONE } from "../execution/prototypes/e2b";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const errorWithCodeSchema = z.object({
@@ -597,7 +598,12 @@ export async function startAgentServer(
             work: controlConfig.userProfile?.work ?? "",
             details: controlConfig.userProfile?.details ?? "",
           },
-          ...(controlConfig.cloud ? { cloud: controlConfig.cloud } : {}),
+          cloud: {
+            targetMode: controlConfig.cloud?.targetMode ?? FIRST_CLOUD_MILESTONE.targetMode,
+            controlPlaneHost: controlConfig.cloud?.controlPlaneHost ?? FIRST_CLOUD_MILESTONE.controlPlaneHost,
+            sandboxProvider: controlConfig.cloud?.sandboxProvider ?? FIRST_CLOUD_MILESTONE.firstSandboxProvider,
+            executionBackend: controlConfig.cloud?.executionBackend ?? "local",
+          },
         },
       },
     ];

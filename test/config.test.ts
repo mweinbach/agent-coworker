@@ -1102,10 +1102,10 @@ describe("loadConfig", () => {
     });
 
     expect(cfg.cloud).toEqual({
+      enabled: false,
       targetMode: "hosted-single-tenant",
       controlPlaneHost: "fly-machines",
       sandboxProvider: "e2b",
-      executionBackend: "local",
     });
   });
 
@@ -1119,16 +1119,16 @@ describe("loadConfig", () => {
       env: {
         AGENT_CLOUD_TARGET_MODE: "sandboxed-multi-tenant",
         AGENT_CLOUD_CONTROL_PLANE_HOST: "render",
-        AGENT_SANDBOX_PROVIDER: "vercel-sandbox",
-        AGENT_EXECUTION_BACKEND: "sandbox",
+        AGENT_CLOUD_SANDBOX_PROVIDER: "vercel-sandbox",
+        AGENT_CLOUD_ENABLED: "true",
       },
     });
 
     expect(cfg.cloud).toEqual({
+      enabled: true,
       targetMode: "sandboxed-multi-tenant",
       controlPlaneHost: "render",
       sandboxProvider: "vercel-sandbox",
-      executionBackend: "sandbox",
     });
   });
 });

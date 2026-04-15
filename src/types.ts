@@ -565,11 +565,31 @@ export interface HarnessConfig {
   strictMode: boolean;
 }
 
-export type CloudTargetMode = "hosted-single-tenant" | "sandboxed-multi-tenant";
-export type ControlPlaneHost = "fly-machines" | "railway" | "render";
-export type ExecutionSandboxProvider = "e2b" | "vercel-sandbox" | "modal";
+export const CLOUD_TARGET_MODES = [
+  "hosted-single-tenant",
+  "sandboxed-multi-tenant",
+] as const;
+
+export type CloudTargetMode = (typeof CLOUD_TARGET_MODES)[number];
+
+export const CLOUD_CONTROL_PLANE_HOSTS = [
+  "fly-machines",
+  "railway",
+  "render",
+] as const;
+
+export type ControlPlaneHost = (typeof CLOUD_CONTROL_PLANE_HOSTS)[number];
+
+export const CLOUD_SANDBOX_PROVIDERS = [
+  "e2b",
+  "vercel-sandbox",
+  "modal",
+] as const;
+
+export type ExecutionSandboxProvider = (typeof CLOUD_SANDBOX_PROVIDERS)[number];
 
 export interface CloudExecutionConfig {
+  enabled?: boolean;
   targetMode?: CloudTargetMode;
   controlPlaneHost?: ControlPlaneHost;
   executionBackend?: "local" | "sandbox";

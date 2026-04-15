@@ -291,27 +291,45 @@ function normalizeNullableNonNegativeInt(v: unknown): number | null | undefined 
   return normalizeNonNegativeInt(v);
 }
 
-function resolveCloudTargetMode(v: unknown): AgentConfig["cloud"]["targetMode"] | undefined {
+function resolveCloudTargetMode(v: unknown): AgentConfig["cloud"] extends infer T
+  ? T extends { targetMode?: infer U } ? U | undefined : never
+  : never {
   if (typeof v !== "string") return undefined;
   const normalized = v.trim();
-  return CLOUD_TARGET_MODES.includes(normalized as AgentConfig["cloud"]["targetMode"])
-    ? normalized as AgentConfig["cloud"]["targetMode"]
+  return CLOUD_TARGET_MODES.includes(normalized as AgentConfig["cloud"] extends infer T
+    ? T extends { targetMode?: infer U } ? U : never
+    : never)
+    ? normalized as AgentConfig["cloud"] extends infer T
+        ? T extends { targetMode?: infer U } ? U : never
+        : never
     : undefined;
 }
 
-function resolveCloudControlPlaneHost(v: unknown): AgentConfig["cloud"]["controlPlaneHost"] | undefined {
+function resolveCloudControlPlaneHost(v: unknown): AgentConfig["cloud"] extends infer T
+  ? T extends { controlPlaneHost?: infer U } ? U | undefined : never
+  : never {
   if (typeof v !== "string") return undefined;
   const normalized = v.trim();
-  return CLOUD_CONTROL_PLANE_HOSTS.includes(normalized as AgentConfig["cloud"]["controlPlaneHost"])
-    ? normalized as AgentConfig["cloud"]["controlPlaneHost"]
+  return CLOUD_CONTROL_PLANE_HOSTS.includes(normalized as AgentConfig["cloud"] extends infer T
+    ? T extends { controlPlaneHost?: infer U } ? U : never
+    : never)
+    ? normalized as AgentConfig["cloud"] extends infer T
+        ? T extends { controlPlaneHost?: infer U } ? U : never
+        : never
     : undefined;
 }
 
-function resolveCloudSandboxProvider(v: unknown): AgentConfig["cloud"]["sandboxProvider"] | undefined {
+function resolveCloudSandboxProvider(v: unknown): AgentConfig["cloud"] extends infer T
+  ? T extends { sandboxProvider?: infer U } ? U | undefined : never
+  : never {
   if (typeof v !== "string") return undefined;
   const normalized = v.trim();
-  return CLOUD_SANDBOX_PROVIDERS.includes(normalized as AgentConfig["cloud"]["sandboxProvider"])
-    ? normalized as AgentConfig["cloud"]["sandboxProvider"]
+  return CLOUD_SANDBOX_PROVIDERS.includes(normalized as AgentConfig["cloud"] extends infer T
+    ? T extends { sandboxProvider?: infer U } ? U : never
+    : never)
+    ? normalized as AgentConfig["cloud"] extends infer T
+        ? T extends { sandboxProvider?: infer U } ? U : never
+        : never
     : undefined;
 }
 

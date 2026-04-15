@@ -920,6 +920,7 @@ describe("AgentSession", () => {
         targetMode: "hosted-single-tenant",
         controlPlaneHost: "fly-machines",
         sandboxProvider: "e2b",
+        executionBackend: "local",
       });
     });
 

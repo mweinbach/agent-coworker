@@ -247,10 +247,11 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("/my/custom/output/dir");
   });
 
-  test("uploadsDirectory no longer appears in prompt (uploads go to workingDirectory)", async () => {
+  test("static prompt keeps uploads guidance generic instead of interpolating uploadsDirectory", async () => {
     const config = makeConfig({ uploadsDirectory: "/my/custom/uploads/dir" });
     const prompt = await loadSystemPrompt(config);
-    // uploadsDirectory is no longer referenced in the prompt template
+    expect(prompt).toContain("configured uploads directory");
+    expect(prompt).toContain("/test/working/User Uploads");
     expect(prompt).not.toContain("{{uploadsDirectory}}");
     expect(prompt).not.toContain("/my/custom/uploads/dir");
   });

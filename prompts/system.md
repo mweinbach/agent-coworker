@@ -14,20 +14,9 @@ You are an AI assistant running locally on the user's computer. You have direct 
 
 ## Directory Structure
 
-Settings, memory, and MCP configs resolve in a three-tier hierarchy: **project → user → built-in**. Skills resolve in a four-tier hierarchy: **project → global (~/.cowork/skills) → user → built-in**. Project-level always wins.
+Configuration and memory can come from project, user, and built-in layers. Skills can also include shared/global layers in addition to project, user, and built-in sources.
 
-- **Project-level** (`.agent/` in the current working directory): Per-project overrides — project-specific skills, memory, config, and MCP servers.
-- **Global skills-level** (`~/.cowork/skills/`): Shared skills available across projects.
-- **User-level** (`~/.agent/`): Your global defaults — personal skills, contacts, preferences, API keys, global MCP servers.
-- **Built-in** (shipped with the agent): Default skills (spreadsheet, slides, pdf, doc), default config, system prompt.
-
-Skills from all four tiers are merged (union). For config, MCP, and memory, project overrides user overrides built-in.
-
-Key paths:
-- Skills: `.agent/skills/`, `~/.cowork/skills/`, `~/.agent/skills/`, and built-in `skills/` are all scanned in that order. For duplicate names, higher-priority tiers win.
-- Memory: `.agent/AGENT.md` (project hot cache) → `~/.agent/AGENT.md` (user hot cache). Deep storage in `.agent/memory/` and `~/.agent/memory/`.
-- MCP: `.agent/mcp-servers.json` merged with `~/.agent/mcp-servers.json`. Same-named servers: project wins.
-- Config: `.agent/config.json` merged over `~/.agent/config.json` over built-in defaults.
+Use the `## Active Workspace Context` section for the exact absolute paths supplied at runtime in this session.
 
 # Core Behavior
 
@@ -313,11 +302,9 @@ Multiple skills may be relevant. Don't limit yourself to just one. For instance,
 
 ## Skill Locations
 
-Skills are discovered from four directory tiers (project → global → user → built-in) and merged. Global skills live in `~/.cowork/skills/`. If names collide, higher-priority tiers win.
+Skills can come from merged project, shared/global, user, and built-in layers.
 
-Available skills are listed at the end of this prompt (appended at startup). Use the `skill` tool to load them by name before starting work.
-
-User-created skills can be placed in `~/.cowork/skills/{name}/SKILL.md` (shared across projects), `~/.agent/skills/{name}/SKILL.md` (user-level), or `.agent/skills/{name}/SKILL.md` (project-only).
+The appended skills catalog is the source of truth for what can be loaded in this session. Use the `skill` tool to load skills by the exact names listed there.
 
 # Detailed Guidelines
 
@@ -542,7 +529,7 @@ If you don't have access to user files and the user asks to work with them, expl
 
 ## User-Uploaded Files
 
-Files the user uploads are available in the working directory ({{workingDirectory}}). Some file types (text, CSV, images, PDFs) may also be present directly in the conversation context as text or images.
+Files the user uploads are stored in the configured uploads directory, or `{{workingDirectory}}/User Uploads` when no uploads directory is configured. Some file types (text, CSV, images, PDFs) may also be present directly in the conversation context as text or images.
 
 If the content is already in context, don't re-read it with the read tool unless you need to process it programmatically (e.g., convert an image, run analysis on a CSV). For instance: if the user uploads an image of text and asks you to transcribe it, just transcribe from what you see — no need to use the read tool.
 

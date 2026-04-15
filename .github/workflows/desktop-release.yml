@@ -176,6 +176,44 @@ jobs:
 
           bun run desktop:build -- --publish never --${{ matrix.build_arch }}
 
+      - name: Verify Windows ARM64 installer sidecar payload
+        if: ${{ runner.os == 'Windows' && matrix.build_arch == 'arm64' }}
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "apps/desktop/release/*-win-arm64.exe" |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if (-not $installer) {
+            throw "No packaged .exe installer found for arch arm64 under apps/desktop/release"
+          }
+
+          $installRoot = Join-Path $env:RUNNER_TEMP "desktop-installer-arm64-smoke"
+          if (Test-Path $installRoot) {
+            Remove-Item $installRoot -Recurse -Force
+          }
+
+          Start-Process -FilePath $installer.FullName -ArgumentList "/S", "/D=$installRoot" -Wait
+
+          $requiredPaths = @(
+            (Join-Path $installRoot "resources\\binaries\\bun.exe"),
+            (Join-Path $installRoot "resources\\binaries\\cowork-server-manifest.json"),
+            (Join-Path $installRoot "resources\\binaries\\server\\index.js")
+          )
+
+          foreach ($requiredPath in $requiredPaths) {
+            if (-not (Test-Path $requiredPath)) {
+              throw "ARM64 installer is missing expected packaged sidecar asset: $requiredPath"
+            }
+          }
+
+          $manifestPath = Join-Path $installRoot "resources\\binaries\\cowork-server-manifest.json"
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+
+          if ($manifest.launch.kind -ne "bun" -or $manifest.launch.runtime -ne "bun.exe" -or $manifest.launch.entrypoint -ne "server/index.js") {
+            throw "ARM64 installer sidecar manifest does not point at the expected Bun runtime payload"
+          }
+
       - name: Verify macOS signing and notarization
         if: ${{ runner.os == 'macOS' }}
         shell: bash

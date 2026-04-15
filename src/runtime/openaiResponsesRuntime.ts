@@ -55,7 +55,7 @@ export function createOpenAiResponsesRuntime(
       try {
         const resolved = await resolveOpenAiResponsesModel(params);
         const telemetry = parseTelemetrySettings(params.telemetry);
-        const piTools = toolMapToPiTools(params.tools);
+        const piTools = toolMapToPiTools(params.tools, params.config.provider);
         const includeUnknownRawParts = params.includeRawChunks ?? true;
         const turnMessages: Array<Record<string, unknown>> = [];
         let usage = undefined as RuntimeRunTurnResult["usage"];

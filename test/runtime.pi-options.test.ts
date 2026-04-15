@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 
 import * as __internal from "../src/runtime/piRuntimeOptions";
+import { __internal as piRuntimeInternal } from "../src/runtime/piRuntime";
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import type { AgentConfig, ModelMessage } from "../src/types";
 
@@ -301,5 +302,73 @@ describe("pi runtime provider option mapping", () => {
     expect(jsonSchema.properties.position.items).toEqual({ type: "number" });
     expect(jsonSchema.properties.position.maxItems).toBe(2);
     expect(jsonSchema.properties.position.additionalItems).toBeUndefined();
+  });
+
+  test("always relaxes Fireworks tool schemas to provider-safe permissive objects", () => {
+    const tools = {
+      giantTool: {
+        description: "tool with a very large enum schema",
+        inputSchema: {
+          type: "object",
+          properties: {
+            choice: {
+              type: "string",
+              enum: Array.from({ length: 4000 }, (_, index) => `option-${index}`),
+            },
+          },
+          required: ["choice"],
+          additionalProperties: false,
+        },
+      },
+    };
+
+    const fireworksTools = piRuntimeInternal.toolMapToPiTools(tools as any, "fireworks") as any[];
+    expect(fireworksTools[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+      additionalProperties: true,
+    });
+  });
+
+  test("also relaxes small Fireworks tool schemas so provider behavior is consistent", () => {
+    const tools = {
+      readFile: {
+        description: "simple tool",
+        inputSchema: z.object({
+          filePath: z.string(),
+          limit: z.number().optional(),
+        }),
+      },
+    };
+
+    const fireworksTools = piRuntimeInternal.toolMapToPiTools(tools as any, "fireworks") as any[];
+    expect(fireworksTools[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+      additionalProperties: true,
+    });
+  });
+
+  test("keeps oversized tool schemas for non-Fireworks providers", () => {
+    const hugeEnum = Array.from({ length: 4000 }, (_, index) => `option-${index}`);
+    const tools = {
+      giantTool: {
+        description: "tool with a very large enum schema",
+        inputSchema: {
+          type: "object",
+          properties: {
+            choice: {
+              type: "string",
+              enum: hugeEnum,
+            },
+          },
+          required: ["choice"],
+          additionalProperties: false,
+        },
+      },
+    };
+
+    const openAiTools = piRuntimeInternal.toolMapToPiTools(tools as any, "openai") as any[];
+    expect(openAiTools[0]?.parameters.properties.choice.enum).toHaveLength(4000);
   });
 });

@@ -384,6 +384,21 @@ export function toPiJsonSchema(inputSchema: unknown): Record<string, unknown> {
   return { type: "object", properties: {}, additionalProperties: true };
 }
 
+function relaxedToolJsonSchema(): Record<string, unknown> {
+  return { type: "object", properties: {}, additionalProperties: true };
+}
+
+export function applyProviderToolSchemaBudget(
+  provider: ProviderName,
+  schema: Record<string, unknown>,
+  _state?: { totalBytes: number },
+): Record<string, unknown> {
+  if (provider === "fireworks") {
+    return relaxedToolJsonSchema();
+  }
+  return schema;
+}
+
 export function toolCallFromPartial(event: any): {
   toolCallId: string;
   toolName: string;

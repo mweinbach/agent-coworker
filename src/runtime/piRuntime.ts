@@ -5,6 +5,7 @@ import {
   asNonEmptyString,
   asRecord,
   asString,
+  applyProviderToolSchemaBudget,
   buildPiStreamOptions,
   extractToolCallsFromAssistant,
   isZodSchema,
@@ -741,15 +742,24 @@ export function markModelCallSpanError(span: Span | null, error: unknown): void 
   span.end();
 }
 
-export function toolMapToPiTools(tools: RuntimeRunTurnParams["tools"]): Array<Record<string, unknown>> {
+export function toolMapToPiTools(
+  tools: RuntimeRunTurnParams["tools"],
+  provider?: ProviderName,
+): Array<Record<string, unknown>> {
+  const schemaBudgetState = { totalBytes: 0 };
   return Object.entries(tools).flatMap(([name, def]) => {
     const toolRecord = asRecord(def);
     if (!toolRecord) return [];
 
+    const schema = toPiJsonSchema(toolRecord.inputSchema);
+    const parameters = provider
+      ? applyProviderToolSchemaBudget(provider, schema, schemaBudgetState)
+      : schema;
+
     return [{
       name,
       description: asNonEmptyString(toolRecord.description) ?? name,
-      parameters: toPiJsonSchema(toolRecord.inputSchema),
+      parameters,
     }];
   });
 }
@@ -1045,7 +1055,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
       try {
         const resolved = await resolvePiModel(params);
         const telemetry = parseTelemetrySettings(params.telemetry);
-        const piTools = toolMapToPiTools(params.tools);
+        const piTools = toolMapToPiTools(params.tools, params.config.provider);
         const includeUnknownRawParts = params.includeRawChunks ?? true;
         const turnMessages: Array<Record<string, unknown>> = [];
         let usage = undefined as RuntimeRunTurnResult["usage"];

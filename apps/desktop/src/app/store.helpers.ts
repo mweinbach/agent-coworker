@@ -154,6 +154,7 @@ export type AppStoreState = {
   workspaceExplorerById: Record<string, WorkspaceExplorerState>;
 
   promptModal: PromptModalState;
+  filePreview: { path: string } | null;
   notifications: Notification[];
 
   providerStatusByName: Partial<Record<ProviderName, ProviderStatus>>;
@@ -318,6 +319,9 @@ export type AppStoreState = {
   createWorkspaceDirectory: (workspaceId: string, parentPath: string, name: string) => Promise<void>;
   renameWorkspacePath: (workspaceId: string, path: string, newName: string) => Promise<void>;
   trashWorkspacePath: (workspaceId: string, path: string) => Promise<void>;
+
+  openFilePreview: (opts: { path: string }) => void;
+  closeFilePreview: () => void;
 };
 
 export type AppStoreActionKeys = {

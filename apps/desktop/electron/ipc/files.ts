@@ -10,6 +10,7 @@ import {
   type ListDirectoryInput,
   type OpenPathInput,
   type PreviewOSFileInput,
+  type ReadFileForPreviewInput,
   type ReadFileInput,
   type RenamePathInput,
   type RevealPathInput,
@@ -21,6 +22,7 @@ import {
   listDirectoryInputSchema,
   openPathInputSchema,
   previewOSFileInputSchema,
+  readFileForPreviewInputSchema,
   readFileInputSchema,
   renamePathInputSchema,
   revealPathInputSchema,
@@ -104,6 +106,33 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
       if (fh) {
         await fh.close();
       }
+    }
+  });
+
+  const DEFAULT_PREVIEW_MAX_BYTES = 15 * 1024 * 1024;
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.readFileForPreview, async (_event, args: ReadFileForPreviewInput) => {
+    const input = parseWithSchema(readFileForPreviewInputSchema, args, "readFileForPreview options");
+    await workspaceRoots.ensureApprovedWorkspaceRoots();
+    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    const maxBytes = input.maxBytes ?? DEFAULT_PREVIEW_MAX_BYTES;
+    const stat = await fs.stat(safePath);
+    if (!stat.isFile()) {
+      throw new Error("Path is not a file");
+    }
+    const toRead = Math.min(maxBytes, stat.size);
+    const fh = await fs.open(safePath, "r");
+    try {
+      const buffer = Buffer.alloc(toRead);
+      const { bytesRead } = await fh.read(buffer, 0, toRead, 0);
+      const slice = buffer.subarray(0, bytesRead);
+      return {
+        base64: slice.toString("base64"),
+        byteLength: bytesRead,
+        truncated: stat.size > bytesRead,
+      };
+    } finally {
+      await fh.close();
     }
   });
 

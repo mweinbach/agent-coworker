@@ -15,7 +15,7 @@ import { useAppStore } from "../../app/store";
 import type { ExplorerEntry } from "../../app/types";
 import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
-import { listDirectory, showContextMenu, confirmAction, showNotification, previewOSFile } from "../../lib/desktopCommands";
+import { listDirectory, showContextMenu, confirmAction, showNotification } from "../../lib/desktopCommands";
 
 export type WorkspaceFileExplorerProps = {
   workspaceId: string;
@@ -315,6 +315,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   const refresh = useAppStore((s) => s.refreshWorkspaceFiles);
   const selectFile = useAppStore((s) => s.selectWorkspaceFile);
   const openFile = useAppStore((s) => s.openWorkspaceFile);
+  const openFilePreview = useAppStore((s) => s.openFilePreview);
   const revealFile = useAppStore((s) => s.revealWorkspaceFile);
   const copyPath = useAppStore((s) => s.copyWorkspaceFilePath);
   const trashPath = useAppStore((s) => s.trashWorkspacePath);
@@ -775,10 +776,10 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     (entry: ExplorerEntry) => {
       selectFile(workspaceId, entry.path);
       if (!entry.isDirectory) {
-        void previewOSFile({ path: entry.path }).catch(() => {});
+        openFilePreview({ path: entry.path });
       }
     },
-    [selectFile, workspaceId]
+    [openFilePreview, selectFile, workspaceId]
   );
 
   if (!workspacePath || !rootPath) {

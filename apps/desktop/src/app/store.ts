@@ -30,6 +30,7 @@ const initialState: AppStoreDataState = {
   workspaceExplorerById: {},
 
   promptModal: null,
+  filePreview: null,
   notifications: [],
 
   providerStatusByName: {},

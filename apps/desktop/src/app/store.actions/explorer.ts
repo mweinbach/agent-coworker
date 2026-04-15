@@ -45,8 +45,30 @@ import {
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
-export function createExplorerActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "refreshWorkspaceFiles" | "navigateWorkspaceFiles" | "navigateWorkspaceFilesUp" | "selectWorkspaceFile" | "openWorkspaceFile" | "revealWorkspaceFile" | "copyWorkspaceFilePath" | "createWorkspaceDirectory" | "renameWorkspacePath" | "trashWorkspacePath"> {
+export function createExplorerActions(set: StoreSet, get: StoreGet): Pick<
+  AppStoreActions,
+  | "refreshWorkspaceFiles"
+  | "navigateWorkspaceFiles"
+  | "navigateWorkspaceFilesUp"
+  | "selectWorkspaceFile"
+  | "openWorkspaceFile"
+  | "revealWorkspaceFile"
+  | "copyWorkspaceFilePath"
+  | "createWorkspaceDirectory"
+  | "renameWorkspacePath"
+  | "trashWorkspacePath"
+  | "openFilePreview"
+  | "closeFilePreview"
+> {
   return {
+    openFilePreview: (opts: { path: string }) => {
+      set({ filePreview: { path: opts.path } });
+    },
+
+    closeFilePreview: () => {
+      set({ filePreview: null });
+    },
+
     refreshWorkspaceFiles: async (workspaceId: string) => {
       const ws = get().workspaces.find((w) => w.id === workspaceId);
       if (!ws) return;

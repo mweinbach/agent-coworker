@@ -15,6 +15,7 @@ import {
 } from "./lib/desktopCommands";
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { ContextSidebar } from "./ui/ContextSidebar";
+import { FilePreviewModal } from "./ui/FilePreviewModal";
 import { PromptModal } from "./ui/PromptModal";
 import { Sidebar } from "./ui/Sidebar";
 import { AppTopBar } from "./ui/layout/AppTopBar";
@@ -384,6 +385,7 @@ export default function App() {
         <ChatShell init={init} ready={ready} startupError={startupError} />
       )}
       <PromptModal />
+      <FilePreviewModal />
       <DesktopOnboarding />
     </>
   );

@@ -17,6 +17,7 @@ import {
   type OpenExternalUrlInput,
   type OpenPathInput,
   type PreviewOSFileInput,
+  type ReadFileForPreviewInput,
   type ReadFileInput,
   type ReadTranscriptInput,
   type RenamePathInput,
@@ -45,6 +46,7 @@ import {
   openPathInputSchema,
   openExternalUrlInputSchema,
   previewOSFileInputSchema,
+  readFileForPreviewInputSchema,
   readFileInputSchema,
   persistedStateInputSchema,
   readTranscriptInputSchema,
@@ -106,6 +108,10 @@ function assertListDirectoryInput(opts: ListDirectoryInput): void {
 
 function assertReadFileInput(opts: ReadFileInput): void {
   parseWithSchema(readFileInputSchema, opts, "readFile options");
+}
+
+function assertReadFileForPreviewInput(opts: ReadFileForPreviewInput): void {
+  parseWithSchema(readFileForPreviewInputSchema, opts, "readFileForPreview options");
 }
 
 function assertPreviewOSFileInput(opts: PreviewOSFileInput): void {
@@ -291,6 +297,11 @@ const desktopApi = Object.freeze<DesktopApi>({
   readFile: (opts: ReadFileInput) => {
     assertReadFileInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.readFile, opts);
+  },
+
+  readFileForPreview: (opts: ReadFileForPreviewInput) => {
+    assertReadFileForPreviewInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.readFileForPreview, opts);
   },
 
   previewOSFile: (opts: PreviewOSFileInput) => {

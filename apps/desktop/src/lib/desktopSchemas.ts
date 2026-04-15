@@ -22,6 +22,7 @@ import type {
   OpenExternalUrlInput,
   OpenPathInput,
   PreviewOSFileInput,
+  ReadFileForPreviewInput,
   ReadFileInput,
   ReadTranscriptInput,
   RenamePathInput,
@@ -161,6 +162,12 @@ export const openExternalUrlInputSchema: z.ZodType<OpenExternalUrlInput> = z.obj
 });
 export const previewOSFileInputSchema: z.ZodType<PreviewOSFileInput> = sharedPathSchema;
 export const readFileInputSchema: z.ZodType<ReadFileInput> = sharedPathSchema;
+
+export const readFileForPreviewInputSchema: z.ZodType<ReadFileForPreviewInput> = z.object({
+  path: nonEmptyStringSchema,
+  maxBytes: z.number().int().positive().max(50 * 1024 * 1024).optional(),
+});
+
 export const revealPathInputSchema: z.ZodType<RevealPathInput> = sharedPathSchema;
 export const copyPathInputSchema: z.ZodType<CopyPathInput> = sharedPathSchema;
 export const trashPathInputSchema: z.ZodType<TrashPathInput> = sharedPathSchema;

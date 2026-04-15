@@ -103,6 +103,17 @@ export type ReadFileOutput = {
   content: string;
 };
 
+export type ReadFileForPreviewInput = {
+  path: string;
+  maxBytes?: number;
+};
+
+export type ReadFileForPreviewOutput = {
+  base64: string;
+  byteLength: number;
+  truncated: boolean;
+};
+
 export type CopyPathInput = {
   path: string;
 };
@@ -256,6 +267,7 @@ export interface DesktopApi {
   getPlatform(): Promise<string>;
   listDirectory(opts: ListDirectoryInput): Promise<ExplorerEntry[]>;
   readFile(opts: ReadFileInput): Promise<ReadFileOutput>;
+  readFileForPreview(opts: ReadFileForPreviewInput): Promise<ReadFileForPreviewOutput>;
   previewOSFile(opts: PreviewOSFileInput): Promise<void>;
   openPath(opts: OpenPathInput): Promise<void>;
   openExternalUrl(opts: OpenExternalUrlInput): Promise<void>;
@@ -303,6 +315,7 @@ export const DESKTOP_IPC_CHANNELS = {
   getPlatform: "desktop:getPlatform",
   listDirectory: "desktop:listDirectory",
   readFile: "desktop:readFile",
+  readFileForPreview: "desktop:readFileForPreview",
   previewOSFile: "desktop:previewOSFile",
   openPath: "desktop:openPath",
   openExternalUrl: "desktop:openExternalUrl",

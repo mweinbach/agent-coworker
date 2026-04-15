@@ -630,6 +630,7 @@ export function ChatView() {
   });
   const composerText = useAppStore((s) => s.composerText);
   const hasPromptModal = useAppStore((s) => s.promptModal !== null);
+  const hasFilePreview = useAppStore((s) => s.filePreview !== null);
   const developerMode = useAppStore((s) => s.developerMode);
   const messageBarHeight = useAppStore((s) => s.messageBarHeight);
   const [overflowCitationUrlsByMessageId, setOverflowCitationUrlsByMessageId] = useState<Map<string, Map<number, string>>>(
@@ -1026,7 +1027,7 @@ export function ChatView() {
   }
 
   const busy = rt?.busy === true;
-  const inputDisabled = hasPromptModal || preparingAttachments;
+  const inputDisabled = hasPromptModal || hasFilePreview || preparingAttachments;
   const transcriptOnly = rt?.transcriptOnly === true;
   const hydrating = rt?.hydrating === true || (bootstrapPending && Boolean(selectedThreadId) && Boolean(thread) && rt === null);
   const disconnected = !hydrating && !transcriptOnly && thread.status !== "active";

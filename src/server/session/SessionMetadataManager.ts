@@ -5,6 +5,7 @@ import {
   pickEditableOpenAiCompatibleProviderOptions,
 } from "../../shared/openaiCompatibleOptions";
 import { effectiveToolOutputOverflowChars } from "../../shared/toolOutputOverflow";
+import { FIRST_CLOUD_MILESTONE } from "../../execution/prototypes/e2b";
 import type { AgentConfig, HarnessContextPayload } from "../../types";
 import type { SessionConfigPatch } from "../protocol";
 import { DEFAULT_SESSION_TITLE, heuristicTitleFromQuery, type SessionTitleSource } from "../sessionTitleService";
@@ -273,6 +274,13 @@ export class SessionMetadataManager {
         toolOutputOverflowChars,
         ...(defaultToolOutputOverflowChars !== undefined ? { defaultToolOutputOverflowChars } : {}),
         ...(providerOptions ? { providerOptions } : {}),
+        cloud: {
+          targetMode: this.context.state.config.cloud?.targetMode ?? FIRST_CLOUD_MILESTONE.targetMode,
+          controlPlaneHost: this.context.state.config.cloud?.controlPlaneHost ?? FIRST_CLOUD_MILESTONE.controlPlaneHost,
+          sandboxProvider:
+            this.context.state.config.cloud?.sandboxProvider ?? FIRST_CLOUD_MILESTONE.firstSandboxProvider,
+          executionBackend: this.context.state.config.cloud?.executionBackend ?? "local",
+        },
         userName: this.context.state.config.userName,
         userProfile: this.effectiveUserProfile(),
       },

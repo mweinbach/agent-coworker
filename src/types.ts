@@ -215,6 +215,11 @@ export interface AgentConfig {
   harness?: HarnessConfig;
 
   /**
+   * Optional cloud deployment guidance for hosted and sandboxed execution.
+   */
+  cloud?: CloudExecutionConfig;
+
+  /**
    * Optional command templates exposed to slash command execution.
    * Keys are command names and values include template and metadata.
    */
@@ -558,6 +563,17 @@ export interface ObservabilityHealth {
 export interface HarnessConfig {
   reportOnly: boolean;
   strictMode: boolean;
+}
+
+export type CloudTargetMode = "hosted-single-tenant" | "sandboxed-multi-tenant";
+export type ControlPlaneHost = "fly-machines" | "railway" | "render";
+export type ExecutionSandboxProvider = "e2b" | "vercel-sandbox" | "modal";
+
+export interface CloudExecutionConfig {
+  targetMode?: CloudTargetMode;
+  controlPlaneHost?: ControlPlaneHost;
+  executionBackend?: "local" | "sandbox";
+  sandboxProvider?: ExecutionSandboxProvider;
 }
 
 export interface HarnessContextMetadata {

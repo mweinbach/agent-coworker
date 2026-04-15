@@ -916,6 +916,11 @@ describe("AgentSession", () => {
       expect("defaultToolOutputOverflowChars" in evt.config).toBe(false);
       expect(evt.config.preferredChildModel).toBe("gemini-3-flash-preview");
       expect(evt.config.maxSteps).toBe(100);
+      expect(evt.config.cloud).toEqual({
+        targetMode: "hosted-single-tenant",
+        controlPlaneHost: "fly-machines",
+        sandboxProvider: "e2b",
+      });
     });
 
     test("getSessionConfigEvent exposes editable openai-compatible provider options", () => {

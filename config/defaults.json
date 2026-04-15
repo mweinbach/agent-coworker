@@ -10,6 +10,11 @@
     "baseUrl": "https://cloud.langfuse.com",
     "otelEndpoint": "https://cloud.langfuse.com/api/public/otel/v1/traces"
   },
+  "cloud": {
+    "targetMode": "hosted-single-tenant",
+    "controlPlaneHost": "fly-machines",
+    "sandboxProvider": "e2b"
+  },
   "harness": {
     "reportOnly": true,
     "strictMode": false

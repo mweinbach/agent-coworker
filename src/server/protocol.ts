@@ -93,6 +93,12 @@ export type SessionConfigState = {
     work: string;
     details: string;
   };
+  cloud?: {
+    targetMode: "hosted-single-tenant" | "sandboxed-multi-tenant";
+    controlPlaneHost: "fly-machines" | "railway" | "render";
+    sandboxProvider?: "e2b" | "vercel-sandbox" | "modal";
+    executionBackend: "local" | "sandbox";
+  };
 };
 
 export type ServerEvent =

@@ -32,6 +32,10 @@ Notes:
 - `userProfile.instructions`
 - `userProfile.work`
 - `userProfile.details`
+- `cloud.targetMode`
+- `cloud.controlPlaneHost`
+- `cloud.executionBackend`
+- `cloud.sandboxProvider`
 - `AGENT_ENABLE_MCP` or `enableMcp`
 - `AGENT_ENABLE_MEMORY` or `enableMemory`
 - `AGENT_MEMORY_REQUIRE_APPROVAL` or `memoryRequireApproval`
@@ -41,6 +45,41 @@ Notes:
 - `toolOutputOverflowChars`
 - `providerOptions`
 - `command`
+
+## Cloud Deployment Defaults
+
+Cowork now carries an explicit cloud deployment preference block in config so hosted operators and future clients can discover the intended rollout shape without reading source code.
+
+Supported config keys:
+
+- `cloud.targetMode`
+  - `hosted-single-tenant`
+  - `sandboxed-multi-tenant`
+- `cloud.controlPlaneHost`
+  - `fly-machines`
+  - `railway`
+  - `render`
+- `cloud.executionBackend`
+  - `local`
+  - `sandbox`
+- `cloud.sandboxProvider`
+  - `e2b`
+  - `vercel-sandbox`
+  - `modal`
+
+Current built-in defaults resolve to:
+
+- `targetMode: hosted-single-tenant`
+- `controlPlaneHost: fly-machines`
+- `executionBackend: local`
+- `sandboxProvider: e2b`
+
+Interpretation:
+
+- The first production milestone is a hosted single-tenant control plane.
+- Fly Machines is the preferred control-plane home because it can host the long-lived Bun WebSocket server directly.
+- Tool execution still defaults to `local` because the current server process remains the execution host until a sandbox backend is selected.
+- `e2b` is the first sandbox prototype target once shell/filesystem execution moves out of the control plane.
 
 ## Child-Agent Routing
 

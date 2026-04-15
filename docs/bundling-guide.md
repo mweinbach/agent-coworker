@@ -109,6 +109,32 @@ process.on("SIGTERM", () => server.stop());
 
 This is how the CLI entrypoint works (`src/index.ts`): it launches the REPL, which starts the server in-process on an ephemeral port and connects over WebSocket.
 
+## Cloud Hosting Guidance
+
+For cloud deployments, treat the Bun WebSocket server as the **control plane**, not the untrusted execution sandbox.
+
+Recommended first milestone:
+
+- host mode: `hosted-single-tenant`
+- control-plane host: `fly-machines`
+- execution backend: `local`
+- first sandbox prototype: `e2b`
+
+Why:
+
+- the current server depends on a long-lived Bun WebSocket process
+- Fly Machines is a natural fit for `wss` + persistent Bun services
+- Vercel Sandbox / E2B / Modal are better execution-plane targets than control-plane hosts for the current architecture
+
+Rollout sequence:
+
+1. Host `bun run serve` on a single-tenant Fly Machine behind TLS/auth.
+2. Persist `.cowork`, session DB, uploads, and outputs on durable storage.
+3. Keep tool execution local to that VM for the hosted MVP.
+4. Move `bash`, `read`, `write`, `edit`, `glob`, and `grep` to a sandbox execution backend once the adapter layer is in place.
+
+Do not assume Vercel Functions are a drop-in host for the current Bun WebSocket server. Use Vercel Sandbox only as a future execution-plane primitive, not as the home for the existing control plane.
+
 ## Connecting a Client
 
 ### Using AgentSocket (TypeScript/JavaScript)

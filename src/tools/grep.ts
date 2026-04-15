@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { execFile } from "node:child_process";
 
+import { defaultLocalToolExecutionBackend } from "../execution/local";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
@@ -68,21 +69,41 @@ export function createGrepTool(
         return msg;
       }
 
-      const output = await new Promise<string>((resolve) => {
-        execFileImpl(rgPath, args, { maxBuffer: 1024 * 1024 * 10 }, (err, stdout) => {
-          // ripgrep returns exit code 1 when there are no matches.
-          const parsedErrorCode = errorCodeSchema.safeParse(err);
-          const code = parsedErrorCode.success ? parsedErrorCode.data.code : undefined;
-          if (code === 1) return resolve("No matches found.");
-          if (code === "ENOENT") {
-            return resolve("ripgrep (rg) not found.");
-          }
-          if (err) {
-            return resolve(`rg failed: ${String(err)}`);
-          }
-          return resolve(stdout.toString());
-        });
+      const executionBackend = ctx.executionBackend
+        ?? (
+          execFileImpl === execFile
+            ? defaultLocalToolExecutionBackend
+            : {
+                ...defaultLocalToolExecutionBackend,
+                runRipgrep: async ({ rgPath, args }) =>
+                  await new Promise<{ stdout: string; stderr: string; exitCode: number; errorCode?: string }>((resolve) => {
+                    execFileImpl(rgPath, args, { maxBuffer: 1024 * 1024 * 10 }, (err, stdout, stderr) => {
+                      const parsedErrorCode = errorCodeSchema.safeParse(err);
+                      const code = parsedErrorCode.success ? parsedErrorCode.data.code : undefined;
+                      resolve({
+                        stdout: String(stdout ?? ""),
+                        stderr: String(stderr ?? ""),
+                        exitCode: typeof code === "number" ? code : err ? 1 : 0,
+                        ...(typeof code === "string" ? { errorCode: code } : {}),
+                      });
+                    });
+                  }),
+              }
+        );
+      const ripgrepResult = await executionBackend.runRipgrep({
+        rgPath,
+        args,
+        cwd: ctx.config.workingDirectory,
+        abortSignal: ctx.abortSignal,
       });
+      const output =
+        ripgrepResult.exitCode === 1
+          ? "No matches found."
+          : ripgrepResult.errorCode === "ENOENT"
+            ? "ripgrep (rg) not found."
+            : ripgrepResult.exitCode !== 0
+              ? `rg failed: ${ripgrepResult.stderr || ripgrepResult.errorCode || `exit ${ripgrepResult.exitCode}`}`
+              : ripgrepResult.stdout;
 
       const res = output;
       ctx.log(`tool< grep ${JSON.stringify({ chars: res.length })}`);

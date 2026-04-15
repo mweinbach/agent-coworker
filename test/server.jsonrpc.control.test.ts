@@ -609,6 +609,9 @@ describe("server JSON-RPC control methods", () => {
       expect(configUpdated.config.workingDirectory).toBe(tmpDir);
       expect(sessionSettings.enableMcp).toBe(true);
       expect(sessionConfig.config.defaultBackupsEnabled).toBe(true);
+      expect(sessionConfig.config.cloud.targetMode).toBe("hosted-single-tenant");
+      expect(sessionConfig.config.cloud.controlPlaneHost).toBe("fly-machines");
+      expect(sessionConfig.config.cloud.executionBackend).toBe("local");
       rpc.close();
     } finally {
       await stopTestServer(server);

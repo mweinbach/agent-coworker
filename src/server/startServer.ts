@@ -597,6 +597,7 @@ export async function startAgentServer(
             work: controlConfig.userProfile?.work ?? "",
             details: controlConfig.userProfile?.details ?? "",
           },
+          ...(controlConfig.cloud ? { cloud: controlConfig.cloud } : {}),
         },
       },
     ];

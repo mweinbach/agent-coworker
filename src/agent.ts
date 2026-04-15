@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { getModel as realGetModel } from "./config";
 import { buildTurnSystemPrompt } from "./harness/buildTurnSystemPrompt";
+import { createLocalToolExecutionBackend } from "./execution";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
@@ -11,6 +12,7 @@ import type { ProviderContinuationState } from "./shared/providerContinuation";
 import type { AgentControl } from "./tools";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "./types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTracker";
+import type { ToolExecutionBackendFactory } from "./execution";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { createTools } from "./tools";
 import type { AgentShellPolicy } from "./server/agents/commandPolicy";
@@ -215,6 +217,7 @@ type RunTurnDeps = {
   createTools: typeof createTools;
   loadMCPServers: typeof loadMCPServers;
   loadMCPTools: typeof loadMCPTools;
+  createToolExecutionBackend: ToolExecutionBackendFactory;
 };
 
 type LegacyStreamTextInput = Record<string, unknown>;
@@ -246,6 +249,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     createTools,
     loadMCPServers,
     loadMCPTools,
+    createToolExecutionBackend: createLocalToolExecutionBackend,
     ...runtimeOverrides,
   };
   const legacyModelResolver = legacyGetModel ?? realGetModel;
@@ -284,6 +288,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       agentControl: params.agentControl,
       costTracker: params.costTracker,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
+      executionBackend: deps.createToolExecutionBackend({ config, log }),
     };
     const builtInTools = deps.createTools(toolCtx);
 

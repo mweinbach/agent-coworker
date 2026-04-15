@@ -1,8 +1,8 @@
-import fg from "fast-glob";
 import path from "node:path";
 
 import { z } from "zod";
 
+import { defaultLocalToolExecutionBackend } from "../execution/local";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 import { resolveMaybeRelative } from "../utils/paths";
@@ -13,19 +13,6 @@ const globInputSchema = z.object({
   cwd: z.string().optional().describe("Directory to search from (defaults to working directory)"),
   maxResults: z.number().int().min(1).max(10000).optional().default(2000).describe("Maximum files to return"),
 }).strict();
-const globEntrySchema = z.union([
-  z.string(),
-  z.object({
-    path: z.string(),
-    stats: z.object({
-      mtimeMs: z.number().finite().optional(),
-    }).optional(),
-  }).passthrough(),
-]);
-const destroyableStreamSchema = z.object({
-  destroy: z.unknown().optional(),
-}).passthrough();
-
 function assertSafeGlobPattern(pattern: string): void {
   const normalizedPattern = pattern.replace(/\\/g, "/");
   const maybeNegatedPattern = normalizedPattern.startsWith("!") ? normalizedPattern.slice(1) : normalizedPattern;
@@ -59,40 +46,13 @@ export function createGlobTool(ctx: ToolContext) {
         ctx.config,
         "glob"
       );
-      const files: Array<{ path: string; mtimeMs: number }> = [];
-      const stream = fg.stream(normalizedInput.pattern, {
+      const executionBackend = ctx.executionBackend ?? defaultLocalToolExecutionBackend;
+      const { matches: files, truncated } = await executionBackend.glob({
+        pattern: normalizedInput.pattern,
         cwd: searchCwd,
-        dot: false,
-        objectMode: true,
-        stats: true,
-        braceExpansion: false,
-        followSymbolicLinks: false,
+        maxResults: effectiveMaxResults,
+        abortSignal: ctx.abortSignal,
       });
-      let truncated = false;
-      for await (const entry of stream as AsyncIterable<unknown>) {
-        if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
-        const parsedEntry = globEntrySchema.safeParse(entry);
-        if (!parsedEntry.success) continue;
-
-        if (typeof parsedEntry.data === "string") {
-          files.push({ path: parsedEntry.data, mtimeMs: 0 });
-        } else {
-          files.push({
-            path: parsedEntry.data.path,
-            mtimeMs: parsedEntry.data.stats?.mtimeMs ?? 0,
-          });
-        }
-
-        if (files.length >= effectiveMaxResults) {
-          truncated = true;
-          const destroyableStream = destroyableStreamSchema.safeParse(stream);
-          if (destroyableStream.success && typeof destroyableStream.data.destroy === "function") {
-            destroyableStream.data.destroy?.();
-          }
-          break;
-        }
-      }
-      files.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
       await Promise.all(
         files.map(async (f) => {

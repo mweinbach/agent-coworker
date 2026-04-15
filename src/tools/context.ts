@@ -10,6 +10,7 @@ import type { AgentWaitMode, AgentWaitResult } from "../server/agents/types";
 import type { AgentConfig, HarnessContextState } from "../types";
 import type { TodoItem } from "../types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "../session/costTracker";
+import type { ToolExecutionBackend } from "../execution";
 export type { AgentWaitMode, AgentWaitResult } from "../server/agents/types";
 
 export interface AgentControl {
@@ -73,4 +74,7 @@ export interface ToolContext {
 
   /** Notify the session when tool-driven budget changes should be persisted/emitted immediately. */
   onSessionUsageBudgetUpdated?: (snapshot: SessionUsageSnapshot) => void;
+
+  /** Execution backend for shell, grep, and filesystem-adjacent tools. */
+  executionBackend?: ToolExecutionBackend;
 }

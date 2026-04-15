@@ -126,6 +126,20 @@ Each tool is a factory function accepting a `ToolContext` with access to:
 - `approveCommand()` — Request approval for risky commands
 - `updateTodos()` — Update progress indicators
 
+### 3.1 Execution backends (`src/execution/`)
+
+Cloud-hosted deployments now distinguish between:
+
+- a **control plane** — the Bun WebSocket server, sessions, approvals, persistence, provider auth, and JSON-RPC protocol
+- an **execution plane** — shell, filesystem, ripgrep, and future sandboxed process execution
+
+The `ToolContext` now carries an `executionBackend`, created in `src/agent.ts` and backed by:
+
+- `src/execution/local.ts` — the default local implementation used today
+- `src/execution/prototypes/e2b.ts` — the first sandbox prototype target and milestone recommendation
+
+This keeps existing local behavior unchanged while making `bash`, `read`, `write`, `edit`, `glob`, and `grep` swappable without moving the WebSocket/session protocol boundary.
+
 ### 4. Providers (`src/providers/`)
 
 There are 12 registered providers: `google`, `openai`, `anthropic`, `bedrock`, `together`, `fireworks`, `nvidia`, `lmstudio`, `baseten`, `opencode-go`, `opencode-zen`, and `codex-cli`.
@@ -213,6 +227,23 @@ JSON-RPC flow (`cowork.jsonrpc.v1` subprotocol):
 5. If approval needed → server sends JSON-RPC request → client responds
 6. Turn completes → turn/completed notification
 ```
+
+### Cloud deployment shape
+
+The first supported cloud milestone is intentionally conservative:
+
+- **target mode**: `hosted-single-tenant`
+- **control-plane host**: `fly-machines`
+- **first sandbox prototype**: `e2b`
+
+In that setup:
+
+1. Fly hosts the always-on Bun WebSocket server (`src/server/startServer.ts`)
+2. clients continue speaking the same `/ws` JSON-RPC protocol
+3. local execution remains the default until a sandbox backend is selected
+4. the E2B prototype becomes the first execution-plane candidate for shell/filesystem isolation
+
+This avoids forcing a protocol rewrite while creating a clean path toward a later `sandboxed-multi-tenant` mode.
 
 Legacy event names (e.g. `server_hello`, `model_stream_chunk`, `assistant_message`) are defined in `src/server/protocol.ts` and projected to JSON-RPC notifications by `eventProjector.ts`.
 

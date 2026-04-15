@@ -1,8 +1,8 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 
 import { z } from "zod";
 
+import { defaultLocalToolExecutionBackend } from "../execution/local";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 import { resolveMaybeRelative } from "../utils/paths";
@@ -24,8 +24,9 @@ export function createWriteTool(ctx: ToolContext) {
         ctx.config,
         "write"
       );
-      await fs.mkdir(path.dirname(abs), { recursive: true });
-      await fs.writeFile(abs, content, "utf-8");
+      const executionBackend = ctx.executionBackend ?? defaultLocalToolExecutionBackend;
+      await executionBackend.makeDirectory({ dirPath: path.dirname(abs) });
+      await executionBackend.writeTextFile({ filePath: abs, content });
 
       const res = `Wrote ${content.length} chars to ${abs}`;
       ctx.log(`tool< write ${JSON.stringify({ ok: true })}`);

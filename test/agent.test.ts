@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import type { ToolExecutionBackend } from "../src/execution";
 import type { AgentConfig } from "../src/types";
 import type { RunTurnParams } from "../src/agent";
 import { createRunTurn } from "../src/agent";
@@ -74,6 +75,19 @@ const mockCreateTools = mock((_ctx: any) => ({
   bash: { type: "builtin" },
   read: { type: "builtin" },
 }));
+const makeMockExecutionBackend = (): ToolExecutionBackend => ({
+  kind: "local",
+  displayName: "mock backend",
+  runShellCommand: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+  runRipgrep: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+  readTextFile: async () => "",
+  readTextRange: async () => ({ lines: [], totalLineCount: 0 }),
+  readBinaryFile: async () => new Uint8Array(),
+  writeTextFile: async () => {},
+  makeDirectory: async () => {},
+  glob: async () => ({ matches: [], truncated: false }),
+});
+const mockCreateToolExecutionBackend = mock((_opts: any) => makeMockExecutionBackend());
 
 const mockLoadMCPServers = mock(async (_config: AgentConfig) => [] as any[]);
 const mockLoadMCPTools = mock(async (_servers: any[], _opts?: any) => ({
@@ -111,6 +125,7 @@ describe("runTurn", () => {
     mockStepCountIs.mockClear();
     mockGetModel.mockClear();
     mockCreateTools.mockClear();
+    mockCreateToolExecutionBackend.mockClear();
     mockLoadMCPServers.mockClear();
     mockLoadMCPTools.mockClear();
 
@@ -126,6 +141,7 @@ describe("runTurn", () => {
       bash: { type: "builtin" },
       read: { type: "builtin" },
     }));
+    mockCreateToolExecutionBackend.mockImplementation((_opts: any) => makeMockExecutionBackend());
     mockLoadMCPServers.mockImplementation(async (_config: AgentConfig) => [] as any[]);
     mockLoadMCPTools.mockImplementation(async (_servers: any[], _opts?: any) => ({
       tools: {} as Record<string, any>,
@@ -137,6 +153,7 @@ describe("runTurn", () => {
       stepCountIs: mockStepCountIs,
       getModel: mockGetModel,
       createTools: mockCreateTools,
+      createToolExecutionBackend: mockCreateToolExecutionBackend,
       loadMCPServers: mockLoadMCPServers,
       loadMCPTools: mockLoadMCPTools,
     });
@@ -887,6 +904,11 @@ describe("runTurn", () => {
     expect(ctx.askUser).toBe(askUser);
     expect(ctx.approveCommand).toBe(approveCommand);
     expect(ctx.updateTodos).toBe(updateTodos);
+    expect(ctx.executionBackend).toMatchObject({
+      kind: "local",
+      displayName: "mock backend",
+    });
+    expect(mockCreateToolExecutionBackend).toHaveBeenCalledWith({ config, log });
   });
 
   test("passes abortSignal through tool context", async () => {

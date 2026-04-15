@@ -1,10 +1,8 @@
-import { createReadStream } from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
-import readline from "node:readline";
 
 import { z } from "zod";
 
+import { defaultLocalToolExecutionBackend } from "../execution/local";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 import { resolveMaybeRelative, truncateLine } from "../utils/paths";
@@ -51,15 +49,16 @@ export function createReadTool(ctx: ToolContext) {
         ctx.config,
         "read"
       );
+      const executionBackend = ctx.executionBackend ?? defaultLocalToolExecutionBackend;
 
       const imageMimeType = supportedImageMimeType(abs);
       if (imageMimeType) {
-        const buffer = await fs.readFile(abs);
+        const buffer = await executionBackend.readBinaryFile({ filePath: abs });
         const result = {
           type: "content",
           content: [
             { type: "text", text: `Image file: ${path.basename(abs)}` },
-            { type: "image", data: buffer.toString("base64"), mimeType: imageMimeType },
+            { type: "image", data: Buffer.from(buffer).toString("base64"), mimeType: imageMimeType },
           ],
         };
         ctx.log(
@@ -68,27 +67,15 @@ export function createReadTool(ctx: ToolContext) {
         return result;
       }
 
-      const start = (offset || 1) - 1;
-      const end = start + limit;
-      const numbered: string[] = [];
+      const range = await executionBackend.readTextRange({
+        filePath: abs,
+        offset,
+        limit,
+        abortSignal: ctx.abortSignal,
+      });
+      const numbered = range.lines.map(({ lineNumber, text }) => `${lineNumber}\t${truncateLine(text, 2000)}`);
 
-      let lineNo = 0;
-      const stream = createReadStream(abs, { encoding: "utf-8" });
-      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-      try {
-        for await (const line of rl) {
-          lineNo += 1;
-          if (lineNo <= start) continue;
-          if (lineNo > end) break;
-          if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
-          numbered.push(`${lineNo}\t${truncateLine(line, 2000)}`);
-        }
-      } finally {
-        rl.close();
-        stream.destroy();
-      }
-
-      if (lineNo === 0 && start === 0) {
+      if (range.totalLineCount === 0 && (offset || 1) === 1) {
         // Preserve existing behavior for empty files.
         numbered.push("1\t");
       }

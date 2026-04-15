@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
+import type { ToolExecutionBackend } from "../src/execution";
 import type { AgentConfig } from "../src/types";
 import type { ToolContext } from "../src/tools/context";
 
@@ -85,6 +86,22 @@ function makeCtx(dir: string, overrides: Partial<ToolContext> = {}): ToolContext
 
 async function tmpDir(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), "agent-coworker-test-"));
+}
+
+function makeExecutionBackend(overrides: Partial<ToolExecutionBackend> = {}): ToolExecutionBackend {
+  return {
+    kind: "local",
+    displayName: "mock backend",
+    runShellCommand: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    runRipgrep: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    readTextFile: async () => "",
+    readTextRange: async () => ({ lines: [], totalLineCount: 0 }),
+    readBinaryFile: async () => new Uint8Array(),
+    writeTextFile: async () => {},
+    makeDirectory: async () => {},
+    glob: async () => ({ matches: [], truncated: false }),
+    ...overrides,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +238,22 @@ describe("read tool", () => {
       ],
     });
   });
+
+  test("delegates text reads to the execution backend when provided", async () => {
+    const dir = await tmpDir();
+    const backend = makeExecutionBackend({
+      readTextRange: async () => ({
+        lines: [
+          { lineNumber: 4, text: "delegated line" },
+        ],
+        totalLineCount: 10,
+      }),
+    });
+
+    const t: any = createReadTool(makeCtx(dir, { executionBackend: backend }));
+    const out: string = await t.execute({ filePath: path.join(dir, "virtual.txt"), offset: 4, limit: 1 });
+    expect(out).toBe("4\tdelegated line");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -322,6 +355,28 @@ describe("write tool", () => {
     await expect(
       t.execute({ filePath: path.join(link, "blocked.txt"), content: "nope" })
     ).rejects.toThrow(/blocked/i);
+  });
+
+  test("delegates directory creation and writes to the execution backend when provided", async () => {
+    const dir = await tmpDir();
+    const calls: string[] = [];
+    const backend = makeExecutionBackend({
+      makeDirectory: async ({ dirPath }) => {
+        calls.push(`mkdir:${dirPath}`);
+      },
+      writeTextFile: async ({ filePath, content }) => {
+        calls.push(`write:${filePath}:${content}`);
+      },
+    });
+
+    const t: any = createWriteTool(makeCtx(dir, { executionBackend: backend }));
+    const target = path.join(dir, "nested", "virtual.txt");
+    await t.execute({ filePath: target, content: "delegated" });
+
+    expect(calls).toEqual([
+      `mkdir:${path.join(dir, "nested")}`,
+      `write:${target}:delegated`,
+    ]);
   });
 });
 
@@ -490,6 +545,29 @@ describe("edit tool", () => {
     await expect(
       t.execute({ filePath: p, oldString: "aaa", newString: "bbb", replaceAll: false })
     ).rejects.toThrow(/found 3 times/);
+  });
+
+  test("delegates edit reads and writes to the execution backend when provided", async () => {
+    const dir = await tmpDir();
+    const writes: Array<{ filePath: string; content: string }> = [];
+    const backend = makeExecutionBackend({
+      readTextFile: async () => "alpha beta",
+      writeTextFile: async ({ filePath, content }) => {
+        writes.push({ filePath, content });
+      },
+    });
+
+    const target = path.join(dir, "virtual.txt");
+    const t: any = createEditTool(makeCtx(dir, { executionBackend: backend }));
+    const res = await t.execute({
+      filePath: target,
+      oldString: "beta",
+      newString: "gamma",
+      replaceAll: false,
+    });
+
+    expect(res).toBe("Edit applied.");
+    expect(writes).toEqual([{ filePath: target, content: "alpha gamma" }]);
   });
 });
 
@@ -684,6 +762,21 @@ describe("bash tool", () => {
     expect(res.exitCode).toBe(130);
     expect(res.stderr.toLowerCase()).toContain("aborted");
   });
+
+  test("delegates shell execution to the execution backend when provided", async () => {
+    const dir = await tmpDir();
+    const backend = makeExecutionBackend({
+      runShellCommand: async ({ command, cwd }) => ({
+        stdout: `backend:${command}:${cwd}`,
+        stderr: "",
+        exitCode: 0,
+      }),
+    });
+
+    const t: any = createBashTool(makeCtx(dir, { executionBackend: backend }));
+    const res = await t.execute({ command: "echo delegated" });
+    expect(res.stdout).toBe(`backend:echo delegated:${dir}`);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -818,6 +911,23 @@ describe("glob tool", () => {
     const lines = res.split("\n");
     expect(lines.length).toBeGreaterThanOrEqual(2);
     expect(res).toContain("truncated to 2 matches");
+  });
+
+  test("delegates globbing to the execution backend when provided", async () => {
+    const dir = await tmpDir();
+    const backend = makeExecutionBackend({
+      glob: async () => ({
+        matches: [
+          { path: "b.ts", mtimeMs: 2 },
+          { path: "a.ts", mtimeMs: 1 },
+        ],
+        truncated: false,
+      }),
+    });
+
+    const t: any = createGlobTool(makeCtx(dir, { executionBackend: backend }));
+    const res: string = await t.execute({ pattern: "*.ts" });
+    expect(res).toBe("b.ts\na.ts");
   });
 });
 
@@ -1201,6 +1311,35 @@ describe("grep tool", () => {
     });
     expect(res).toContain("deep_match");
     expect(res).toContain("deep.txt");
+  });
+
+  test("delegates ripgrep execution to the execution backend when provided", async () => {
+    const dir = await tmpDir();
+    const calls: Array<{ rgPath: string; args: string[]; cwd: string }> = [];
+    const backend = makeExecutionBackend({
+      runRipgrep: async ({ rgPath, args, cwd }) => {
+        calls.push({ rgPath, args, cwd });
+        return {
+          stdout: `${path.join(dir, "delegated.txt")}:1:delegated\n`,
+          stderr: "",
+          exitCode: 0,
+        };
+      },
+    });
+
+    const t: any = createGrepTool(makeCtx(dir, { executionBackend: backend }), {
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+    const res: string = await t.execute({
+      pattern: "delegated",
+      path: dir,
+      caseSensitive: true,
+    });
+
+    expect(res).toContain("delegated");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.rgPath).toBe("rg");
+    expect(calls[0]?.cwd).toBe(dir);
   });
 });
 

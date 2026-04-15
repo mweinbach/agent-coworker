@@ -16,6 +16,11 @@ import {
   resolveRuntimeName as resolveRuntimeNameFromValue,
 } from "./types";
 import type { AgentConfig, CommandTemplateConfig, ProviderName, RuntimeName } from "./types";
+import {
+  CLOUD_CONTROL_PLANE_HOSTS,
+  CLOUD_SANDBOX_PROVIDERS,
+  CLOUD_TARGET_MODES,
+} from "./types";
 import { resolveAuthHomeDir } from "./utils/authHome";
 import { defaultSupportedModel, describeModelProviderMismatch, getSupportedModel } from "./models/registry";
 import { normalizeChildRoutingConfig } from "./models/childModelRouting";
@@ -199,6 +204,12 @@ const userProfileLayerSchema = z.object({
   work: z.string().optional(),
   details: z.string().optional(),
 }).passthrough();
+const cloudLayerSchema = z.object({
+  enabled: booleanLikeSchema.optional(),
+  targetMode: z.enum(CLOUD_TARGET_MODES).optional(),
+  controlPlaneHost: z.enum(CLOUD_CONTROL_PLANE_HOSTS).optional(),
+  sandboxProvider: z.enum(CLOUD_SANDBOX_PROVIDERS).optional(),
+}).passthrough();
 
 function parseCommandConfig(raw: unknown): AgentConfig["command"] | undefined {
   if (raw === undefined) return undefined;
@@ -278,6 +289,30 @@ function normalizeNonNegativeInt(v: unknown): number | undefined {
 function normalizeNullableNonNegativeInt(v: unknown): number | null | undefined {
   if (v === null) return null;
   return normalizeNonNegativeInt(v);
+}
+
+function resolveCloudTargetMode(v: unknown): AgentConfig["cloud"]["targetMode"] | undefined {
+  if (typeof v !== "string") return undefined;
+  const normalized = v.trim();
+  return CLOUD_TARGET_MODES.includes(normalized as AgentConfig["cloud"]["targetMode"])
+    ? normalized as AgentConfig["cloud"]["targetMode"]
+    : undefined;
+}
+
+function resolveCloudControlPlaneHost(v: unknown): AgentConfig["cloud"]["controlPlaneHost"] | undefined {
+  if (typeof v !== "string") return undefined;
+  const normalized = v.trim();
+  return CLOUD_CONTROL_PLANE_HOSTS.includes(normalized as AgentConfig["cloud"]["controlPlaneHost"])
+    ? normalized as AgentConfig["cloud"]["controlPlaneHost"]
+    : undefined;
+}
+
+function resolveCloudSandboxProvider(v: unknown): AgentConfig["cloud"]["sandboxProvider"] | undefined {
+  if (typeof v !== "string") return undefined;
+  const normalized = v.trim();
+  return CLOUD_SANDBOX_PROVIDERS.includes(normalized as AgentConfig["cloud"]["sandboxProvider"])
+    ? normalized as AgentConfig["cloud"]["sandboxProvider"]
+    : undefined;
 }
 
 export function getSavedProviderApiKeyForHome(home: string, provider: ProviderName): string | undefined {
@@ -582,6 +617,23 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
   const command = parseCommandConfig((merged as Record<string, unknown>).command);
   const disableBuiltInSkills = asBoolean(env.COWORK_DISABLE_BUILTIN_SKILLS) ?? false;
+  const mergedCloud = parseLayer(cloudLayerSchema, (merged as Record<string, unknown>).cloud, {});
+  const cloudEnabled =
+    asBoolean(env.AGENT_CLOUD_ENABLED) ??
+    mergedCloud.enabled ??
+    false;
+  const cloudTargetMode =
+    resolveCloudTargetMode(env.AGENT_CLOUD_TARGET_MODE) ??
+    mergedCloud.targetMode ??
+    "hosted-single-tenant";
+  const cloudControlPlaneHost =
+    resolveCloudControlPlaneHost(env.AGENT_CLOUD_CONTROL_PLANE_HOST) ??
+    mergedCloud.controlPlaneHost ??
+    "fly-machines";
+  const cloudSandboxProvider =
+    resolveCloudSandboxProvider(env.AGENT_CLOUD_SANDBOX_PROVIDER) ??
+    mergedCloud.sandboxProvider ??
+    "e2b";
 
   const normalizedProviderOptions = mergeProviderOptionDefaults(
     provider,
@@ -645,6 +697,12 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     observability,
     harness,
     command,
+    cloud: {
+      enabled: cloudEnabled,
+      targetMode: cloudTargetMode,
+      controlPlaneHost: cloudControlPlaneHost,
+      sandboxProvider: cloudSandboxProvider,
+    },
     ...(normalizedProviderOptions ? { providerOptions: normalizedProviderOptions } : {}),
     ...(normalizedModelSettings ? { modelSettings: normalizedModelSettings } : {}),
   };

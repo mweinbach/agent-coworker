@@ -1090,6 +1090,47 @@ describe("loadConfig", () => {
     expect(cfg.observability?.publicKey).toBe("pk-lf-test");
     expect(cfg.observability?.secretKey).toBe("sk-lf-test");
   });
+
+  test("loads default cloud execution strategy from built-in config", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.cloud).toEqual({
+      targetMode: "hosted-single-tenant",
+      controlPlaneHost: "fly-machines",
+      sandboxProvider: "e2b",
+      executionBackend: "local",
+    });
+  });
+
+  test("allows env overrides for cloud execution strategy", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {
+        AGENT_CLOUD_TARGET_MODE: "sandboxed-multi-tenant",
+        AGENT_CLOUD_CONTROL_PLANE_HOST: "render",
+        AGENT_SANDBOX_PROVIDER: "vercel-sandbox",
+        AGENT_EXECUTION_BACKEND: "sandbox",
+      },
+    });
+
+    expect(cfg.cloud).toEqual({
+      targetMode: "sandboxed-multi-tenant",
+      controlPlaneHost: "render",
+      sandboxProvider: "vercel-sandbox",
+      executionBackend: "sandbox",
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

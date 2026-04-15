@@ -255,6 +255,16 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 
 `cowork/session/agent/inspect` is a thread-scoped, root-only read for child agents. It returns the same detailed inspection payload as the root `inspectAgent` tool: the latest child summary, the full latest assistant text, a parsed structured child report when the final assistant text includes a recognized JSON footer, and compact session/last-turn usage snapshots for the child.
 
+### Cloud deployment metadata
+
+Workspace control state now includes additive cloud execution metadata inside the `session_config` event payload:
+
+- `cloud.targetMode` — current deployment target mode (`hosted-single-tenant` or `sandboxed-multi-tenant`)
+- `cloud.controlPlaneHost` — preferred or active control-plane host (`fly-machines`, `railway`, or `render`)
+- `cloud.sandboxProvider` — first execution-plane target when sandboxing is planned (`e2b`, `vercel-sandbox`, `modal`, or `none`)
+
+These fields are descriptive and do not change the turn/thread wire flow. Clients may use them to render operator hints, deployment badges, or cloud-specific setup UI.
+
 ### Core JSON-RPC notifications currently available
 
 - `thread/started`

@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
-
 import { z } from "zod";
 
+import { defaultLocalToolExecutionBackend } from "../execution/local";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 import { resolveMaybeRelative } from "../utils/paths";
@@ -36,7 +35,8 @@ export function createEditTool(ctx: ToolContext) {
         ctx.config,
         "edit"
       );
-      let content = await fs.readFile(abs, "utf-8");
+      const executionBackend = ctx.executionBackend ?? defaultLocalToolExecutionBackend;
+      let content = await executionBackend.readTextFile({ filePath: abs });
       if (!content.includes(oldString)) throw new Error(`oldString not found in ${abs}`);
 
       if (!replaceAll) {
@@ -49,7 +49,7 @@ export function createEditTool(ctx: ToolContext) {
       }
 
       content = replaceAll ? content.replaceAll(oldString, newString) : content.replace(oldString, newString);
-      await fs.writeFile(abs, content, "utf-8");
+      await executionBackend.writeTextFile({ filePath: abs, content });
 
       ctx.log(`tool< edit ${JSON.stringify({ ok: true })}`);
       return "Edit applied.";

@@ -211,6 +211,12 @@ describe("shared JSON-RPC control schemas", () => {
           config: {
             backupsEnabled: false,
             preferredChildModelRef: "openai:gpt-5.4-mini",
+            cloud: {
+              targetMode: "hosted-single-tenant",
+              controlPlaneHost: "fly-machines",
+              sandboxProvider: "e2b",
+              executionBackend: "local",
+            },
           },
         },
       ],

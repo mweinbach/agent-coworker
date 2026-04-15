@@ -28,6 +28,7 @@ import {
 import { isUserFacingProviderEnabled } from "./providers/catalog";
 import type { ProviderName } from "./types";
 import { buildWorkspaceMapSection } from "./workspace/map";
+import { loadProjectInstructionsSection } from "./projectInstructions";
 
 function buildProjectInstructionsSection(config: AgentConfig): string {
   const text = (config.userProfile?.instructions ?? "").trim();
@@ -35,12 +36,19 @@ function buildProjectInstructionsSection(config: AgentConfig): string {
   return ["## Project instructions", "", text].join("\n");
 }
 
-function appendWorkspaceContextBlocks(
+async function appendWorkspaceContextBlocks(
   prompt: string,
   config: AgentConfig,
   opts?: { includeProjectInstructions?: boolean },
-): string {
+): Promise<string> {
+  const workspaceRoot = path.dirname(config.projectAgentDir);
   const blocks: string[] = [prompt];
+
+  const agentsHierarchySection = await loadProjectInstructionsSection(workspaceRoot);
+  if (agentsHierarchySection) {
+    blocks.push(agentsHierarchySection);
+  }
+
   if (opts?.includeProjectInstructions) {
     const projectInstructions = buildProjectInstructionsSection(config);
     if (projectInstructions) {
@@ -627,8 +635,9 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt = renderSpawnAgentSpecificPrompt(prompt, config);
   prompt = normalizeLegacySpawnAgentGuidance(prompt);
 
-  // Project instructions already render via {{userProfileInstructions}} in system templates; do not duplicate.
-  prompt = appendWorkspaceContextBlocks(prompt, config, { includeProjectInstructions: false });
+  // User profile instructions render via {{userProfileInstructions}} in system templates; do not duplicate.
+  // Hierarchical AGENTS.md / AGENTS.override.md are appended separately from memory (.agent/AGENT.md).
+  prompt = await appendWorkspaceContextBlocks(prompt, config, { includeProjectInstructions: false });
 
   prompt += `\n\n${buildSkillPolicySection(vars.skillNames, vars.skillExamples, config)}`;
   prompt += `\n\n${buildShellExecutionPolicySection()}`;
@@ -705,5 +714,5 @@ export async function loadAgentPrompt(config: AgentConfig, role: AgentRole): Pro
     fs.readFile(rolePath, "utf-8"),
   ]);
   const combined = `${basePrompt.trimEnd()}\n\n${rolePrompt.trim()}\n`;
-  return appendWorkspaceContextBlocks(combined, config, { includeProjectInstructions: true });
+  return await appendWorkspaceContextBlocks(combined, config, { includeProjectInstructions: true });
 }

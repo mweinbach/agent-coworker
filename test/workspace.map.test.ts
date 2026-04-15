@@ -220,4 +220,35 @@ describe("prompt integration", () => {
     expect(idxMap).toBeGreaterThan(idxProject);
     expect(prompt).toContain("Use pnpm only.");
   });
+
+  test("hierarchical AGENTS.md: repo root and workspace root both appear in order in main and subagent prompts", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "ws-map-agents-hier-"));
+    await fs.mkdir(path.join(tmp, ".git"), { recursive: true });
+    await fs.writeFile(path.join(tmp, "AGENTS.md"), "ROOT AGENTS CONTENT\n", "utf-8");
+
+    const app = path.join(tmp, "apps", "web");
+    const agentDir = path.join(app, ".agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(app, "AGENTS.md"), "APP WEB CONTENT\n", "utf-8");
+
+    const config = makeConfig({
+      workingDirectory: app,
+      projectAgentDir: agentDir,
+    });
+
+    const { prompt: mainPrompt } = await loadSystemPromptWithSkills(config);
+    expect(mainPrompt).toContain("## Project Instructions");
+    const idxRoot = mainPrompt.indexOf("### AGENTS.md for .");
+    const idxApp = mainPrompt.indexOf("### AGENTS.md for apps/web");
+    expect(idxRoot).toBeGreaterThan(-1);
+    expect(idxApp).toBeGreaterThan(idxRoot);
+    expect(mainPrompt).toContain("ROOT AGENTS CONTENT");
+    expect(mainPrompt).toContain("APP WEB CONTENT");
+
+    const subPrompt = await loadAgentPrompt(config, "explorer");
+    expect(subPrompt).toContain("## Project Instructions");
+    expect(subPrompt.indexOf("### AGENTS.md for .")).toBeGreaterThan(-1);
+    expect(subPrompt).toContain("ROOT AGENTS CONTENT");
+    expect(subPrompt).toContain("APP WEB CONTENT");
+  });
 });

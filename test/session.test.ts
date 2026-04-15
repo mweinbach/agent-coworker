@@ -917,6 +917,7 @@ describe("AgentSession", () => {
       expect(evt.config.preferredChildModel).toBe("gemini-3-flash-preview");
       expect(evt.config.maxSteps).toBe(100);
       expect(evt.config.cloud).toEqual({
+        enabled: false,
         targetMode: "hosted-single-tenant",
         controlPlaneHost: "fly-machines",
         sandboxProvider: "e2b",

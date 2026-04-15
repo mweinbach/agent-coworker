@@ -1,4 +1,5 @@
 import { describe, expect, test, mock, beforeEach, afterEach } from "bun:test";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -227,7 +228,7 @@ describe("runTurn", () => {
     expect(system).toContain(`- Git root: ${workspaceRoot}`);
     expect(system).toContain("- Working directory relation: same as workspace root");
     expect(system).toContain(`- Uploads directory: ${path.resolve(workspaceRoot, "User Uploads")}`);
-    expect(system).toContain(`- Project config + workspace memory: ${path.join(workspaceRoot, ".agent")}`);
+    expect(system).toContain(`- Project config, memory, and MCP overrides: ${path.join(workspaceRoot, ".agent")}`);
     expect(system).toContain(
       "- Path rule: `bash`, `read`, `write`, `glob`, and `grep` default to the execution working directory.",
     );
@@ -269,7 +270,52 @@ describe("runTurn", () => {
     expect(system).toContain(`- Uploads directory: ${path.resolve(outsideDir, "User Uploads")}`);
   });
 
-  test("deriveActiveWorkspaceContext treats case-only macOS path changes as the same workspace", () => {
+  test("buildTurnSystemPrompt reports the git root for the execution cwd", async () => {
+    const { workspaceRoot } = await makeTempWorkspaceConfig();
+    await fs.mkdir(path.join(workspaceRoot, ".git"), { recursive: true });
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "active-workspace-context-other-git-"));
+    const outsideDir = path.join(outsideRoot, "scratch");
+    await fs.mkdir(path.join(outsideRoot, ".git"), { recursive: true });
+    await fs.mkdir(outsideDir, { recursive: true });
+    const config = makeConfig({
+      projectAgentDir: path.join(workspaceRoot, ".agent"),
+      workingDirectory: outsideDir,
+      uploadsDirectory: undefined,
+    });
+
+    const system = buildTurnSystemPrompt("Base system prompt", config, []);
+
+    expect(system).toContain(`- Git root: ${outsideRoot}`);
+    expect(system).not.toContain(`- Git root: ${workspaceRoot}`);
+  });
+
+  test("buildTurnSystemPrompt rewrites legacy project .agent guidance for off-root working directories", () => {
+    const workspaceRoot = "/tmp/workspace-root";
+    const config = makeConfig({
+      projectAgentDir: path.join(workspaceRoot, ".agent"),
+      workingDirectory: "/tmp/outside-workdir",
+      uploadsDirectory: undefined,
+    });
+    const system = buildTurnSystemPrompt(
+      [
+        "- **Project-level** (`.agent/` in the current working directory): Per-project overrides — project-specific skills, memory, config, and MCP servers.",
+        "- Skills: `.agent/skills/`, `~/.cowork/skills/`, `~/.agent/skills/`, and built-in `skills/` are all scanned in that order. For duplicate names, higher-priority tiers win.",
+        "- Memory: `.agent/AGENT.md` (project hot cache) → `~/.agent/AGENT.md` (user hot cache). Deep storage in `.agent/memory/` and `~/.agent/memory/`.",
+        "- MCP: `.agent/mcp-servers.json` merged with `~/.agent/mcp-servers.json`. Same-named servers: project wins.",
+        "- Config: `.agent/config.json` merged over `~/.agent/config.json` over built-in defaults.",
+        "User-created skills can be placed in `~/.cowork/skills/{name}/SKILL.md` (shared across projects), `~/.agent/skills/{name}/SKILL.md` (user-level), or `.agent/skills/{name}/SKILL.md` (project-only).",
+      ].join("\n"),
+      config,
+      [],
+    );
+
+    expect(system).not.toContain("current working directory");
+    expect(system).toContain(`\`${path.join(workspaceRoot, ".agent", "config.json")}\``);
+    expect(system).toContain(`\`${path.join(workspaceRoot, ".agent", "mcp-servers.json")}\``);
+    expect(system).toContain(`\`${path.join(workspaceRoot, ".agent", "skills", "{name}", "SKILL.md")}\``);
+  });
+
+  test("deriveActiveWorkspaceContext keeps unresolved macOS case-only path changes outside the workspace", () => {
     const config = makeConfig({
       projectAgentDir: "/Users/max/Repo/.agent",
       workingDirectory: "/users/max/repo",
@@ -278,7 +324,34 @@ describe("runTurn", () => {
 
     const context = deriveActiveWorkspaceContext(config, "darwin");
 
-    expect(context.workingDirectoryRelation).toBe("same as workspace root");
+    expect(context.workingDirectoryRelation).toBe("outside workspace root");
+  });
+
+  test("deriveActiveWorkspaceContext treats macOS case-only path changes as the same workspace when real paths match", () => {
+    const originalRealpathSync = fsSync.realpathSync;
+    let callCount = 0;
+    (fsSync as typeof import("node:fs")).realpathSync = ((target: string | Buffer | URL) => {
+      callCount += 1;
+      const normalized = String(target).replaceAll("\\", "/");
+      if (normalized === "/Users/max/Repo" || normalized === "/users/max/repo") {
+        return "/Users/max/Repo";
+      }
+      throw Object.assign(new Error(`ENOENT: no such file or directory, realpath '${target}'`), { code: "ENOENT" });
+    }) as typeof fsSync.realpathSync;
+    const config = makeConfig({
+      projectAgentDir: "/Users/max/Repo/.agent",
+      workingDirectory: "/users/max/repo",
+      uploadsDirectory: undefined,
+    });
+
+    try {
+      const context = deriveActiveWorkspaceContext(config, "darwin");
+
+      expect(callCount).toBeGreaterThan(0);
+      expect(context.workingDirectoryRelation).toBe("same as workspace root");
+    } finally {
+      (fsSync as typeof import("node:fs")).realpathSync = originalRealpathSync;
+    }
   });
 
   test("passes harness context into the runtime system prompt", async () => {

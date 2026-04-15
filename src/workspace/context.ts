@@ -68,7 +68,15 @@ function normalizeWorkspaceContextPath(
   platform: NodeJS.Platform = process.platform,
 ): string {
   const canonical = canonicalWorkspacePath(dir, platform);
-  return platform === "darwin" ? canonical.toLowerCase() : canonical;
+  if (platform !== "darwin") {
+    return canonical;
+  }
+
+  try {
+    return canonicalWorkspacePath(fs.realpathSync(canonical), platform);
+  } catch {
+    return canonical;
+  }
 }
 
 export function deriveActiveWorkspaceContext(
@@ -81,7 +89,7 @@ export function deriveActiveWorkspaceContext(
   return {
     workspaceRoot,
     executionCwd,
-    gitRoot: findGitRootSync(workspaceRoot),
+    gitRoot: findGitRootSync(executionCwd),
     workingDirectoryRelation: deriveWorkingDirectoryRelation(workspaceRoot, executionCwd, platform),
     outputDirectory: config.outputDirectory,
     effectiveUploadsDirectory: config.uploadsDirectory ?? path.resolve(config.workingDirectory, "User Uploads"),
@@ -114,9 +122,9 @@ export function renderActiveWorkspaceContextSection(
 
   lines.push(
     `- Uploads directory: ${context.effectiveUploadsDirectory}`,
-    `- Project config + workspace memory: ${context.projectAgentDir}`,
+    `- Project config, memory, and MCP overrides: ${context.projectAgentDir}`,
     "- Path rule: `bash`, `read`, `write`, `glob`, and `grep` default to the execution working directory.",
-    `- Path rule: project config and workspace memory live under ${context.projectAgentDir}.`,
+    `- Path rule: project config, memory, and MCP overrides live under ${context.projectAgentDir}.`,
   );
 
   return lines.join("\n");

@@ -1,5 +1,7 @@
+import path from "node:path";
+
 import type { AgentConfig, HarnessContextState } from "../types";
-import { renderActiveWorkspaceContextSection } from "../workspace/context";
+import { deriveActiveWorkspaceContext, renderActiveWorkspaceContextSection } from "../workspace/context";
 import { renderHarnessContextSection } from "./renderHarnessContextSection";
 
 const MCP_NAMESPACING_TOKEN = "`mcp__{serverName}__{toolName}`";
@@ -11,13 +13,44 @@ export function stripStaticMcpNamespacingGuidance(system: string): string {
     .join("\n");
 }
 
+function withTrailingSeparator(dir: string): string {
+  return dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`;
+}
+
+function rewriteLegacyProjectPathGuidance(
+  system: string,
+  config: AgentConfig | null | undefined,
+): string {
+  if (!config) return system;
+
+  const context = deriveActiveWorkspaceContext(config);
+  if (context.workingDirectoryRelation === "same as workspace root") {
+    return system;
+  }
+
+  return system
+    .replaceAll(
+      "(`.agent/` in the current working directory)",
+      `(\`${withTrailingSeparator(context.projectAgentDir)}\`)`,
+    )
+    .replaceAll("`.agent/skills/`", `\`${withTrailingSeparator(path.join(context.projectAgentDir, "skills"))}\``)
+    .replaceAll("`.agent/AGENT.md`", `\`${path.join(context.projectAgentDir, "AGENT.md")}\``)
+    .replaceAll("`.agent/memory/`", `\`${withTrailingSeparator(path.join(context.projectAgentDir, "memory"))}\``)
+    .replaceAll("`.agent/mcp-servers.json`", `\`${path.join(context.projectAgentDir, "mcp-servers.json")}\``)
+    .replaceAll("`.agent/config.json`", `\`${path.join(context.projectAgentDir, "config.json")}\``)
+    .replaceAll(
+      "`.agent/skills/{name}/SKILL.md`",
+      `\`${path.join(context.projectAgentDir, "skills", "{name}", "SKILL.md")}\``,
+    );
+}
+
 export function buildTurnSystemPrompt(
   system: string,
   config: AgentConfig | null | undefined,
   mcpToolNames: string[],
   harnessContext?: HarnessContextState | null,
 ): string {
-  const sections = [stripStaticMcpNamespacingGuidance(system)];
+  const sections = [rewriteLegacyProjectPathGuidance(stripStaticMcpNamespacingGuidance(system), config)];
 
   const workspaceSection = renderActiveWorkspaceContextSection(config);
   if (workspaceSection) {

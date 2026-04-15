@@ -123,10 +123,10 @@ function SettingsNavigation({
   const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
 
   return (
-    <aside className="settings-shell__nav app-left-sidebar-pane flex min-h-0 min-w-0 flex-col border-r border-border/50 bg-muted/20 max-[960px]:border-r-0 max-[960px]:border-b">
+    <aside className="settings-shell__nav app-left-sidebar-pane flex min-h-0 min-w-0 flex-col border-r border-border/50 max-[960px]:border-r-0 max-[960px]:border-b">
       <div className="shrink-0 border-b border-border/50 px-3 py-3">
         <Button
-          className="settings-shell__back-button h-9 w-full justify-start rounded-md px-2.5 text-[13px] font-medium"
+          className="settings-shell__back-button h-9 w-full justify-start rounded-md border border-border/50 bg-foreground/[0.03] px-2.5 text-[13px] font-medium"
           variant="ghost"
           type="button"
           onClick={onBack}
@@ -159,7 +159,7 @@ function SettingsNavigation({
                     className={cn(
                       "settings-shell__nav-button h-8 justify-start rounded-md px-2 text-[13px] font-normal",
                       activePage === page.id
-                        ? "bg-foreground/[0.06] font-medium text-foreground"
+                        ? "bg-foreground/[0.08] font-medium text-foreground ring-1 ring-border/40"
                         : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground",
                     )}
                     type="button"
@@ -197,7 +197,7 @@ export function SettingsShell() {
 
   return (
     <div
-      className="settings-shell relative grid h-full min-h-0 min-w-0 bg-background"
+      className="settings-shell relative grid h-full min-h-0 min-w-0 bg-transparent"
       style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}
     >
       <div className="settings-shell__drag-zone" aria-hidden="true" />
@@ -218,7 +218,7 @@ export function SettingsShell() {
           >
             <header
               className={cn(
-                "settings-shell__page-header shrink-0 border-b border-border/50 bg-background/95 px-5 py-4 backdrop-blur-sm max-[960px]:px-4",
+                "settings-shell__page-header shrink-0 px-5 py-4 backdrop-blur-sm max-[960px]:px-4",
                 isBackupPage ? "" : "sticky top-0 z-10",
               )}
             >

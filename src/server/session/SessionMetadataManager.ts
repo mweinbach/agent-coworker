@@ -6,7 +6,12 @@ import {
 } from "../../shared/openaiCompatibleOptions";
 import { effectiveToolOutputOverflowChars } from "../../shared/toolOutputOverflow";
 import { FIRST_CLOUD_MILESTONE } from "../../execution/prototypes/e2b";
-import type { AgentConfig, HarnessContextPayload } from "../../types";
+import {
+  CLOUD_CONTROL_PLANE_HOSTS,
+  CLOUD_SANDBOX_PROVIDERS,
+  CLOUD_TARGET_MODES,
+} from "../../types";
+import type { AgentConfig, CloudExecutionConfig, HarnessContextPayload } from "../../types";
 import type { SessionConfigPatch } from "../protocol";
 import { DEFAULT_SESSION_TITLE, heuristicTitleFromQuery, type SessionTitleSource } from "../sessionTitleService";
 import type { SessionContext } from "./SessionContext";
@@ -44,6 +49,74 @@ function userProfileEqual(
   );
 }
 
+function normalizeCloudConfig(
+  baseCloud: CloudExecutionConfig | undefined,
+  patchCloud: SessionConfigPatch["cloud"] | undefined,
+): CloudExecutionConfig {
+  const targetMode = patchCloud?.targetMode ?? baseCloud?.targetMode ?? FIRST_CLOUD_MILESTONE.targetMode;
+  const controlPlaneHost =
+    patchCloud?.controlPlaneHost ?? baseCloud?.controlPlaneHost ?? FIRST_CLOUD_MILESTONE.controlPlaneHost;
+  const executionBackend =
+    patchCloud?.executionBackend ?? baseCloud?.executionBackend ?? (patchCloud?.enabled ? "sandbox" : "local");
+  const sandboxProvider =
+    patchCloud?.sandboxProvider ?? baseCloud?.sandboxProvider ?? FIRST_CLOUD_MILESTONE.firstSandboxProvider;
+  const enabled = patchCloud?.enabled ?? baseCloud?.enabled ?? executionBackend === "sandbox";
+
+  return {
+    enabled,
+    targetMode,
+    controlPlaneHost,
+    executionBackend,
+    sandboxProvider,
+  };
+}
+
+function cloudConfigEqual(
+  left: CloudExecutionConfig | undefined,
+  right: CloudExecutionConfig | undefined,
+): boolean {
+  return (
+    (left?.enabled ?? false) === (right?.enabled ?? false)
+    && (left?.targetMode ?? FIRST_CLOUD_MILESTONE.targetMode) === (right?.targetMode ?? FIRST_CLOUD_MILESTONE.targetMode)
+    && (left?.controlPlaneHost ?? FIRST_CLOUD_MILESTONE.controlPlaneHost)
+      === (right?.controlPlaneHost ?? FIRST_CLOUD_MILESTONE.controlPlaneHost)
+    && (left?.executionBackend ?? "local") === (right?.executionBackend ?? "local")
+    && (left?.sandboxProvider ?? FIRST_CLOUD_MILESTONE.firstSandboxProvider)
+      === (right?.sandboxProvider ?? FIRST_CLOUD_MILESTONE.firstSandboxProvider)
+  );
+}
+
+function normalizeCloudPatchInput(
+  patchCloud: SessionConfigPatch["cloud"] | undefined,
+): SessionConfigPatch["cloud"] | undefined {
+  if (!patchCloud) return undefined;
+
+  const next: NonNullable<SessionConfigPatch["cloud"]> = {};
+  if (typeof patchCloud.enabled === "boolean") {
+    next.enabled = patchCloud.enabled;
+  }
+  if (typeof patchCloud.targetMode === "string" && CLOUD_TARGET_MODES.includes(patchCloud.targetMode)) {
+    next.targetMode = patchCloud.targetMode;
+  }
+  if (
+    typeof patchCloud.controlPlaneHost === "string"
+    && CLOUD_CONTROL_PLANE_HOSTS.includes(patchCloud.controlPlaneHost)
+  ) {
+    next.controlPlaneHost = patchCloud.controlPlaneHost;
+  }
+  if (patchCloud.executionBackend === "local" || patchCloud.executionBackend === "sandbox") {
+    next.executionBackend = patchCloud.executionBackend;
+  }
+  if (
+    typeof patchCloud.sandboxProvider === "string"
+    && CLOUD_SANDBOX_PROVIDERS.includes(patchCloud.sandboxProvider)
+  ) {
+    next.sandboxProvider = patchCloud.sandboxProvider;
+  }
+
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 export class SessionMetadataManager {
   constructor(private readonly context: SessionContext) {}
 
@@ -57,6 +130,7 @@ export class SessionMetadataManager {
   }
 
   private promptRefreshConfig(baseConfig: AgentConfig, patch: SessionConfigPatch): AgentConfig {
+    const normalizedCloudPatch = normalizeCloudPatchInput(patch.cloud);
     return {
       ...baseConfig,
       ...(patch.providerOptions !== undefined
@@ -77,6 +151,11 @@ export class SessionMetadataManager {
           }
         : {}),
       ...(patch.enableMemory !== undefined ? { enableMemory: patch.enableMemory } : {}),
+      ...(normalizedCloudPatch !== undefined
+        ? {
+            cloud: normalizeCloudConfig(baseConfig.cloud, normalizedCloudPatch),
+          }
+        : {}),
     };
   }
 
@@ -85,6 +164,7 @@ export class SessionMetadataManager {
     normalizedChildRouting: ReturnType<typeof normalizeChildRoutingConfig> | undefined,
     baseConfig: AgentConfig,
   ): AgentConfig {
+    const normalizedCloudPatch = normalizeCloudPatchInput(patch.cloud);
     let nextConfig: AgentConfig = baseConfig;
     if (patch.observabilityEnabled !== undefined) {
       nextConfig = { ...nextConfig, observabilityEnabled: patch.observabilityEnabled };
@@ -152,6 +232,12 @@ export class SessionMetadataManager {
         },
       };
     }
+    if (normalizedCloudPatch !== undefined) {
+      nextConfig = {
+        ...nextConfig,
+        cloud: normalizeCloudConfig(nextConfig.cloud, normalizedCloudPatch),
+      };
+    }
     return nextConfig;
   }
 
@@ -159,6 +245,7 @@ export class SessionMetadataManager {
     patch: SessionConfigPatch,
     normalizedChildRouting: ReturnType<typeof normalizeChildRoutingConfig> | undefined,
   ): import("./SessionContext").PersistedProjectConfigPatch {
+    const normalizedCloudPatch = normalizeCloudPatchInput(patch.cloud);
     const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
     if (normalizedChildRouting !== undefined) {
       persistPatch.preferredChildModel = normalizedChildRouting.preferredChildModel;
@@ -193,6 +280,9 @@ export class SessionMetadataManager {
     if (patch.userProfile !== undefined) {
       persistPatch.userProfile = patch.userProfile;
     }
+    if (normalizedCloudPatch !== undefined) {
+      persistPatch.cloud = normalizedCloudPatch;
+    }
     return persistPatch;
   }
 
@@ -226,6 +316,7 @@ export class SessionMetadataManager {
       ) !== JSON.stringify(
         pickEditableOpenAiCompatibleProviderOptions(nextConfig.providerOptions),
       )
+      || !cloudConfigEqual(baseConfig.cloud, nextConfig.cloud)
       || (baseConfig.userName ?? "") !== (nextConfig.userName ?? "")
       || !userProfileEqual(baseConfig.userProfile, nextConfig.userProfile)
     );
@@ -254,6 +345,7 @@ export class SessionMetadataManager {
     const backupsEnabled = this.context.state.backupsEnabledOverride ?? defaultBackupsEnabled;
     const defaultToolOutputOverflowChars = this.context.state.config.projectConfigOverrides?.toolOutputOverflowChars;
     const toolOutputOverflowChars = effectiveToolOutputOverflowChars(this.context.state.config.toolOutputOverflowChars);
+    const cloud = normalizeCloudConfig(this.context.state.config.cloud, undefined);
     return {
       type: "session_config",
       sessionId: this.context.id,
@@ -275,11 +367,11 @@ export class SessionMetadataManager {
         ...(defaultToolOutputOverflowChars !== undefined ? { defaultToolOutputOverflowChars } : {}),
         ...(providerOptions ? { providerOptions } : {}),
         cloud: {
-          targetMode: this.context.state.config.cloud?.targetMode ?? FIRST_CLOUD_MILESTONE.targetMode,
-          controlPlaneHost: this.context.state.config.cloud?.controlPlaneHost ?? FIRST_CLOUD_MILESTONE.controlPlaneHost,
-          sandboxProvider:
-            this.context.state.config.cloud?.sandboxProvider ?? FIRST_CLOUD_MILESTONE.firstSandboxProvider,
-          executionBackend: this.context.state.config.cloud?.executionBackend ?? "local",
+          enabled: cloud.enabled ?? (cloud.executionBackend ?? "local") === "sandbox",
+          targetMode: cloud.targetMode ?? FIRST_CLOUD_MILESTONE.targetMode,
+          controlPlaneHost: cloud.controlPlaneHost ?? FIRST_CLOUD_MILESTONE.controlPlaneHost,
+          sandboxProvider: cloud.sandboxProvider ?? FIRST_CLOUD_MILESTONE.firstSandboxProvider,
+          executionBackend: cloud.executionBackend ?? "local",
         },
         userName: this.context.state.config.userName,
         userProfile: this.effectiveUserProfile(),

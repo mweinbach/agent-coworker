@@ -756,6 +756,21 @@ export function createControlSocketHelpers(
     if (evt.type === "session_config") {
       const providerOptions = normalizeWorkspaceProviderOptions((evt.config as any).providerOptions);
       const userProfile = evt.config.userProfile ? normalizeWorkspaceUserProfile(evt.config.userProfile) : undefined;
+      const cloud = evt.config.cloud
+        ? {
+            ...(typeof evt.config.cloud.enabled === "boolean" ? { enabled: evt.config.cloud.enabled } : {}),
+            ...(typeof evt.config.cloud.targetMode === "string" ? { targetMode: evt.config.cloud.targetMode } : {}),
+            ...(typeof evt.config.cloud.controlPlaneHost === "string"
+              ? { controlPlaneHost: evt.config.cloud.controlPlaneHost }
+              : {}),
+            ...(typeof evt.config.cloud.executionBackend === "string"
+              ? { executionBackend: evt.config.cloud.executionBackend }
+              : {}),
+            ...(typeof evt.config.cloud.sandboxProvider === "string"
+              ? { sandboxProvider: evt.config.cloud.sandboxProvider }
+              : {}),
+          }
+        : undefined;
       set((s) => ({
         workspaces: s.workspaces.map((workspace) =>
           workspace.id === workspaceId
@@ -770,6 +785,7 @@ export function createControlSocketHelpers(
                 providerOptions,
                 ...(typeof evt.config.userName === "string" ? { userName: evt.config.userName } : {}),
                 ...(userProfile ? { userProfile } : {}),
+                ...(cloud ? { cloud } : {}),
               }
             : workspace,
         ),

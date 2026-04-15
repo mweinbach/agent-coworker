@@ -690,4 +690,95 @@ describe("desktop workspaces page", () => {
       harness.restore();
     }
   });
+
+  test("renders cloud execution settings and exposes built-in provider choices", async () => {
+    const harness = setupWorkspacePageJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    const updateWorkspaceDefaults = mock(async () => {});
+
+    try {
+      useAppStore.setState((state) => ({
+        ...state,
+        perWorkspaceSettings: true,
+        workspaces: [
+          {
+            id: "ws-cloud",
+            name: "Cloud Workspace",
+            path: "/tmp/cloud-workspace",
+            createdAt: "2026-04-15T00:00:00.000Z",
+            lastOpenedAt: "2026-04-15T00:00:00.000Z",
+            defaultProvider: "openai",
+            defaultModel: "gpt-5.4",
+            defaultPreferredChildModel: "gpt-5.4",
+            defaultEnableMcp: true,
+            defaultBackupsEnabled: true,
+            yolo: false,
+            cloudEnabled: false,
+            cloud: {
+              enabled: false,
+              targetMode: "hosted-single-tenant",
+              controlPlaneHost: "fly-machines",
+              executionBackend: "local",
+              sandboxProvider: "e2b",
+            },
+          },
+        ],
+        selectedWorkspaceId: "ws-cloud",
+        updateWorkspaceDefaults,
+      }));
+
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(WorkspacesPage));
+      });
+
+      const generalTab = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "General");
+      if (!(generalTab instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing General tab");
+      }
+
+      await act(async () => {
+        generalTab.click();
+      });
+
+      const generalText = container.textContent ?? "";
+      expect(generalText).toContain("Cloud execution");
+      expect(generalText).toContain("Vercel Sandbox");
+      expect(generalText).toContain("Cloudflare Containers");
+
+      const cloudEnabledCheckbox = container.querySelector('[aria-label="Enable cloud deployment defaults"]');
+      if (!(cloudEnabledCheckbox instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing cloud execution planning checkbox");
+      }
+
+      await act(async () => {
+        cloudEnabledCheckbox.click();
+      });
+
+      expect(updateWorkspaceDefaults).toHaveBeenCalledWith("ws-cloud", {
+        cloud: {
+          enabled: true,
+          targetMode: "hosted-single-tenant",
+          controlPlaneHost: "fly-machines",
+          executionBackend: "local",
+          sandboxProvider: "e2b",
+        },
+      });
+
+      expect(container.querySelector('[aria-label="Workspace cloud target mode"]')).toBeTruthy();
+      expect(container.querySelector('[aria-label="Workspace cloud control plane host"]')).toBeTruthy();
+      expect(container.querySelector('[aria-label="Workspace cloud execution backend"]')).toBeTruthy();
+      expect(container.querySelector('[aria-label="Workspace cloud sandbox provider"]')).toBeTruthy();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
 });

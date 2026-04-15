@@ -261,7 +261,7 @@ Workspace control state now includes additive cloud execution metadata inside th
 
 - `cloud.targetMode` — current deployment target mode (`hosted-single-tenant` or `sandboxed-multi-tenant`)
 - `cloud.controlPlaneHost` — preferred or active control-plane host (`fly-machines`, `railway`, or `render`)
-- `cloud.sandboxProvider` — first execution-plane target when sandboxing is planned (`e2b`, `vercel-sandbox`, `modal`, or `none`)
+- `cloud.sandboxProvider` — first execution-plane target when sandboxing is planned (`e2b`, `vercel-sandbox`, `cloudflare-containers`, or `modal`)
 
 These fields are descriptive and do not change the turn/thread wire flow. Clients may use them to render operator hints, deployment badges, or cloud-specific setup UI.
 

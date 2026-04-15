@@ -54,6 +54,21 @@ import type { DraftModelSelection } from "../store.helpers/runtimeState";
 import { normalizeWorkspaceUserProfile } from "../types";
 import type { ThreadRecord, WorkspaceDefaultsPatch, WorkspaceRecord } from "../types";
 
+type WorkspaceCloudSettings = NonNullable<WorkspaceRecord["cloud"]>;
+
+function cloudSettingsEqual(
+  left: WorkspaceCloudSettings | undefined,
+  right: WorkspaceCloudSettings | undefined,
+): boolean {
+  return (
+    (left?.enabled ?? false) === (right?.enabled ?? false)
+    && (left?.targetMode ?? "hosted-single-tenant") === (right?.targetMode ?? "hosted-single-tenant")
+    && (left?.controlPlaneHost ?? "fly-machines") === (right?.controlPlaneHost ?? "fly-machines")
+    && (left?.sandboxProvider ?? "e2b") === (right?.sandboxProvider ?? "e2b")
+    && (left?.executionBackend ?? "local") === (right?.executionBackend ?? "local")
+  );
+}
+
 export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "applyWorkspaceDefaultsToThread" | "updateWorkspaceDefaults"> {
   type ApplySessionDefaultsMessage = {
     type: "apply_session_defaults";
@@ -180,8 +195,9 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       preferredChildModelRef?: string;
       allowedChildModelRefs?: string[];
       providerOptions?: WorkspaceRecord["providerOptions"];
-        userName?: string;
-        userProfile?: WorkspaceRecord["userProfile"];
+      userName?: string;
+      userProfile?: WorkspaceRecord["userProfile"];
+      cloud?: WorkspaceRecord["cloud"];
       };
   }): ApplySessionDefaultsMessage | null => {
     const configPatch: NonNullable<ApplySessionDefaultsMessage["config"]> = {};
@@ -262,6 +278,18 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     ) {
       configPatch.userProfile = normalizeWorkspaceUserProfile(opts.desired.userProfile);
     }
+    if (
+      opts.desired.cloud !== undefined
+      && !cloudSettingsEqual(opts.desired.cloud, opts.current.sessionConfig?.cloud as WorkspaceCloudSettings | undefined)
+    ) {
+      configPatch.cloud = {
+        enabled: opts.desired.cloud.enabled ?? false,
+        targetMode: opts.desired.cloud.targetMode ?? "hosted-single-tenant",
+        controlPlaneHost: opts.desired.cloud.controlPlaneHost ?? "fly-machines",
+        sandboxProvider: opts.desired.cloud.sandboxProvider ?? "e2b",
+        executionBackend: opts.desired.cloud.executionBackend ?? "local",
+      };
+    }
 
     if (!providerChanged && !enableMcpChanged && Object.keys(configPatch).length === 0) {
       return null;
@@ -313,6 +341,15 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       defaultAllowedChildModelRefs: controlSessionConfig?.allowedChildModelRefs ?? workspace.defaultAllowedChildModelRefs ?? [],
       defaultToolOutputOverflowChars: controlSessionConfig?.defaultToolOutputOverflowChars ?? workspace.defaultToolOutputOverflowChars,
       providerOptions: normalizeWorkspaceProviderOptions(controlSessionConfig?.providerOptions) ?? workspace.providerOptions,
+      cloud: controlSessionConfig?.cloud
+        ? {
+            enabled: workspace.cloud?.enabled ?? false,
+            targetMode: controlSessionConfig.cloud.targetMode,
+            controlPlaneHost: controlSessionConfig.cloud.controlPlaneHost,
+            sandboxProvider: controlSessionConfig.cloud.sandboxProvider ?? "e2b",
+            executionBackend: controlSessionConfig.cloud.executionBackend,
+          }
+        : workspace.cloud,
       userName: typeof controlSessionConfig?.userName === "string" ? controlSessionConfig.userName : workspace.userName,
       userProfile: controlSessionConfig?.userProfile
         ? normalizeWorkspaceUserProfile(controlSessionConfig.userProfile)
@@ -592,6 +629,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         workspacePatch.defaultEnableMcp !== undefined ||
         workspacePatch.defaultBackupsEnabled !== undefined ||
         workspacePatch.providerOptions !== undefined ||
+        workspacePatch.cloud !== undefined ||
         workspacePatch.userName !== undefined ||
         userProfilePatch !== undefined;
       if (!shouldSyncCoreSettings) {
@@ -628,6 +666,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const allowedChildModelRefs = nextWorkspace.defaultAllowedChildModelRefs ?? [];
       const toolOutputOverflowChars = nextWorkspace.defaultToolOutputOverflowChars;
       const providerOptions = nextWorkspace.providerOptions;
+      const cloud = nextWorkspace.cloud;
       const userName = nextWorkspace.userName;
       const userProfile = nextWorkspace.userProfile ? normalizeWorkspaceUserProfile(nextWorkspace.userProfile) : undefined;
       const currentWorkspaceRuntime = get().workspaceRuntimeById[workspaceId];
@@ -650,6 +689,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
               ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
               allowedChildModelRefs,
               ...(providerOptions ? { providerOptions } : {}),
+              ...(cloud ? { cloud } : {}),
               ...(userName !== undefined ? { userName } : {}),
               ...(userProfile !== undefined ? { userProfile } : {}),
             },

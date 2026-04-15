@@ -43,6 +43,7 @@ import {
 } from "../../../../../../src/shared/googleThinking";
 import {
   normalizeWorkspaceUserProfile,
+  type WorkspaceCloudSettings,
   type WorkspaceRecord,
   type WorkspaceUserProfile,
 } from "../../../app/types";
@@ -80,6 +81,47 @@ import { displayProviderName } from "../../../lib/providerDisplayNames";
 
 function toBoolean(checked: boolean | "indeterminate"): boolean {
   return checked === true;
+}
+
+const CLOUD_TARGET_MODE_OPTIONS = [
+  { value: "hosted-single-tenant", label: "Hosted single tenant" },
+  { value: "sandboxed-multi-tenant", label: "Sandboxed multi tenant" },
+] as const;
+
+const CLOUD_CONTROL_PLANE_HOST_OPTIONS = [
+  { value: "fly-machines", label: "Fly Machines" },
+  { value: "railway", label: "Railway" },
+  { value: "render", label: "Render" },
+] as const;
+
+const CLOUD_SANDBOX_PROVIDER_OPTIONS = [
+  { value: "e2b", label: "E2B" },
+  { value: "vercel-sandbox", label: "Vercel Sandbox" },
+  { value: "cloudflare-containers", label: "Cloudflare Containers" },
+  { value: "modal", label: "Modal" },
+] as const;
+
+const CLOUD_EXECUTION_BACKEND_OPTIONS = [
+  { value: "local", label: "Local on control plane" },
+  { value: "sandbox", label: "Sandbox execution plane" },
+] as const;
+
+function normalizeWorkspaceCloudConfig(value?: Partial<WorkspaceCloudSettings> | null): WorkspaceCloudSettings {
+  return {
+    enabled: value?.enabled === true,
+    targetMode: value?.targetMode === "sandboxed-multi-tenant" ? "sandboxed-multi-tenant" : "hosted-single-tenant",
+    controlPlaneHost:
+      value?.controlPlaneHost === "railway" || value?.controlPlaneHost === "render"
+        ? value.controlPlaneHost
+        : "fly-machines",
+    executionBackend: value?.executionBackend === "sandbox" ? "sandbox" : "local",
+    sandboxProvider:
+      value?.sandboxProvider === "vercel-sandbox"
+      || value?.sandboxProvider === "cloudflare-containers"
+      || value?.sandboxProvider === "modal"
+        ? value.sandboxProvider
+        : "e2b",
+  };
 }
 
 function updateProviderOption(
@@ -1065,6 +1107,183 @@ export function WorkspaceUserProfileCard({
   );
 }
 
+type WorkspaceCloudSettingsCardProps = {
+  workspace: Pick<WorkspaceRecord, "id" | "cloud">;
+  updateWorkspaceDefaults: (
+    workspaceId: string,
+    patch: { cloud?: Partial<WorkspaceCloudSettings> },
+  ) => Promise<unknown> | void;
+};
+
+export function WorkspaceCloudSettingsCard({
+  workspace,
+  updateWorkspaceDefaults,
+}: WorkspaceCloudSettingsCardProps) {
+  const cloud = normalizeWorkspaceCloudConfig(workspace.cloud);
+  const cloudStatusCopy = cloud.executionBackend === "sandbox"
+    ? `Ready to target ${CLOUD_SANDBOX_PROVIDER_OPTIONS.find((entry) => entry.value === cloud.sandboxProvider)?.label ?? cloud.sandboxProvider} once a sandbox adapter is connected.`
+    : "Uses the same host VM as the current Bun control plane until a sandbox backend is enabled.";
+
+  return (
+    <Card className="border-border/80 bg-card/85">
+      <CardHeader>
+        <CardTitle>Cloud execution</CardTitle>
+        <CardDescription>
+          Choose the out-of-the-box cloud target, control-plane host, and sandbox provider for this workspace.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+          <div>
+            <div className="text-sm font-medium">Enable cloud deployment defaults</div>
+            <div className="text-xs text-muted-foreground">
+              Stores the preferred hosted execution strategy in this workspace and advertises it to the control UI.
+            </div>
+          </div>
+          <Checkbox
+            checked={cloud.enabled}
+            aria-label="Enable cloud deployment defaults"
+            onCheckedChange={(checked) => {
+              void updateWorkspaceDefaults(workspace.id, {
+                cloud: {
+                  ...cloud,
+                  enabled: toBoolean(checked),
+                },
+              });
+            }}
+          />
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <div className={MODEL_CARD_FIELD_CLASS}>
+            <div className="text-sm font-medium text-foreground">Deployment target</div>
+            <Select
+              value={cloud.targetMode}
+              onValueChange={(value) => {
+                const nextTargetMode = value as WorkspaceCloudSettings["targetMode"];
+                void updateWorkspaceDefaults(workspace.id, {
+                  cloud: {
+                    ...cloud,
+                    enabled: true,
+                    targetMode: nextTargetMode,
+                    executionBackend: nextTargetMode === "sandboxed-multi-tenant" ? "sandbox" : cloud.executionBackend,
+                  },
+                });
+              }}
+            >
+              <SelectTrigger aria-label="Workspace cloud target mode" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CLOUD_TARGET_MODE_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className={MODEL_CARD_FIELD_CLASS}>
+            <div className="text-sm font-medium text-foreground">Control-plane host</div>
+            <Select
+              value={cloud.controlPlaneHost}
+              onValueChange={(value) => {
+                void updateWorkspaceDefaults(workspace.id, {
+                  cloud: {
+                    ...cloud,
+                    enabled: true,
+                    controlPlaneHost: value as WorkspaceCloudSettings["controlPlaneHost"],
+                  },
+                });
+              }}
+            >
+              <SelectTrigger aria-label="Workspace cloud control plane host" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CLOUD_CONTROL_PLANE_HOST_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className={MODEL_CARD_FIELD_CLASS}>
+            <div className="text-sm font-medium text-foreground">Execution backend</div>
+            <Select
+              value={cloud.executionBackend}
+              onValueChange={(value) => {
+                void updateWorkspaceDefaults(workspace.id, {
+                  cloud: {
+                    ...cloud,
+                    enabled: true,
+                    executionBackend: value as WorkspaceCloudSettings["executionBackend"],
+                  },
+                });
+              }}
+            >
+              <SelectTrigger aria-label="Workspace cloud execution backend" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CLOUD_EXECUTION_BACKEND_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className={MODEL_CARD_FIELD_CLASS}>
+            <div className="text-sm font-medium text-foreground">Sandbox provider</div>
+            <Select
+              value={cloud.sandboxProvider}
+              onValueChange={(value) => {
+                void updateWorkspaceDefaults(workspace.id, {
+                  cloud: {
+                    ...cloud,
+                    enabled: true,
+                    sandboxProvider: value as WorkspaceCloudSettings["sandboxProvider"],
+                  },
+                });
+              }}
+            >
+              <SelectTrigger aria-label="Workspace cloud sandbox provider" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CLOUD_SANDBOX_PROVIDER_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-border/60 bg-background/35 p-3 text-xs text-muted-foreground">
+          <div className="font-medium text-foreground">Current rollout</div>
+          <div className="mt-1">
+            {cloud.targetMode === "hosted-single-tenant"
+              ? "Hosted single-tenant keeps the Bun WebSocket server on one trusted workspace host."
+              : "Sandboxed multi-tenant prepares the workspace for isolated execution per sandbox instance."}
+          </div>
+          <div className="mt-2">{cloudStatusCopy}</div>
+          <div className="mt-2">
+            Built-in targets now include <span className="font-medium text-foreground">Vercel Sandbox</span> and
+            <span className="font-medium text-foreground"> Cloudflare Containers</span> out of the box.
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 type WorkspaceDefaultsSummaryProps = {
   provider: ProviderName;
   model: string;
@@ -1360,6 +1579,11 @@ export function WorkspacesPage() {
                 </div>
               </CardContent>
             </Card>
+
+            <WorkspaceCloudSettingsCard
+              workspace={ws}
+              updateWorkspaceDefaults={updateWorkspaceDefaults}
+            />
 
             <SearchSettingsCard
               workspace={ws}

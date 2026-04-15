@@ -10,7 +10,13 @@ import {
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
 } from "../../shared/openaiCompatibleOptions";
-import { CHILD_MODEL_ROUTING_MODES, PROVIDER_NAMES } from "../../types";
+import {
+  CHILD_MODEL_ROUTING_MODES,
+  CLOUD_CONTROL_PLANE_HOSTS,
+  CLOUD_SANDBOX_PROVIDERS,
+  CLOUD_TARGET_MODES,
+  PROVIDER_NAMES,
+} from "../../types";
 
 import {
   legacyEventEnvelope,
@@ -72,6 +78,13 @@ const editableProviderOptionsSchema = z.object({
   google: providerOptionsGoogleSchema.optional(),
   lmstudio: providerOptionsLmStudioSchema.optional(),
 }).strict();
+const cloudConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  targetMode: z.enum(CLOUD_TARGET_MODES).optional(),
+  controlPlaneHost: z.enum(CLOUD_CONTROL_PLANE_HOSTS).optional(),
+  executionBackend: z.enum(["local", "sandbox"]).optional(),
+  sandboxProvider: z.enum(CLOUD_SANDBOX_PROVIDERS).optional(),
+}).strict();
 
 export const sessionStateReadRequestSchema = z.object({
   cwd: optionalNonEmptyTrimmedStringSchema,
@@ -94,6 +107,7 @@ export const sessionDefaultsApplyRequestSchema = z.object({
     providerOptions: editableProviderOptionsSchema.optional(),
     userName: z.string().optional(),
     userProfile: userProfileSchema.optional(),
+    cloud: cloudConfigSchema.optional(),
   }).passthrough().optional(),
 }).strict();
 
@@ -136,6 +150,7 @@ export const sessionConfigEventSchema = z.object({
     providerOptions: editableProviderOptionsSchema.optional(),
     userName: z.string().optional(),
     userProfile: userProfileSchema.optional(),
+    cloud: cloudConfigSchema.optional(),
   }).passthrough(),
 }).passthrough();
 

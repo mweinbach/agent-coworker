@@ -230,6 +230,13 @@ class MockJsonRpcSocket {
             allowedChildModelRefs: [],
             maxSteps: 100,
             toolOutputOverflowChars: 25000,
+            cloud: {
+              enabled: false,
+              targetMode: "hosted-single-tenant",
+              controlPlaneHost: "fly-machines",
+              sandboxProvider: "e2b",
+              executionBackend: "local",
+            },
           },
         },
       };
@@ -270,6 +277,13 @@ class MockJsonRpcSocket {
               allowedChildModelRefs: [],
               maxSteps: 100,
               toolOutputOverflowChars: 25000,
+              cloud: {
+                enabled: false,
+                targetMode: "hosted-single-tenant",
+                controlPlaneHost: "fly-machines",
+                sandboxProvider: "e2b",
+                executionBackend: "local",
+              },
             },
           },
         ],
@@ -953,6 +967,12 @@ describe("workspace settings sync", () => {
       maxSteps: 75,
       userName: "Alex",
       userProfile: { instructions: "", work: "", details: "" },
+      cloud: {
+        targetMode: "sandboxed-multi-tenant",
+        controlPlaneHost: "render",
+        sandboxProvider: "vercel-sandbox",
+        executionBackend: "sandbox",
+      },
     });
 
     const ok = await requestJsonRpcControlEvent(
@@ -972,6 +992,12 @@ describe("workspace settings sync", () => {
     expect(workspace?.defaultAllowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
     expect(workspace?.defaultBackupsEnabled).toBe(false);
     expect(workspace?.defaultToolOutputOverflowChars).toBe(12000);
+    expect(workspace?.cloud).toEqual({
+      targetMode: "sandboxed-multi-tenant",
+      controlPlaneHost: "render",
+      sandboxProvider: "vercel-sandbox",
+      executionBackend: "sandbox",
+    });
     expect(workspace?.userName).toBe("Alex");
     expect(workspace?.userProfile).toEqual({ instructions: "", work: "", details: "" });
     expect(runtime?.controlSessionConfig?.preferredChildModel).toBe("gpt-5-mini");
@@ -981,6 +1007,12 @@ describe("workspace settings sync", () => {
     expect(runtime?.controlSessionConfig?.backupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.defaultBackupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.defaultToolOutputOverflowChars).toBe(12000);
+    expect((runtime?.controlSessionConfig as any)?.cloud).toEqual({
+      targetMode: "sandboxed-multi-tenant",
+      controlPlaneHost: "render",
+      sandboxProvider: "vercel-sandbox",
+      executionBackend: "sandbox",
+    });
   });
 
   test("control session_config keeps session backup overrides separate from the workspace default", async () => {
@@ -1159,6 +1191,12 @@ describe("workspace settings sync", () => {
           reasoningSummary: "detailed",
         },
       },
+      cloud: {
+        targetMode: "sandboxed-multi-tenant",
+        controlPlaneHost: "render",
+        sandboxProvider: "vercel-sandbox",
+        executionBackend: "sandbox",
+      },
     });
 
     await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
@@ -1174,6 +1212,13 @@ describe("workspace settings sync", () => {
           reasoningSummary: "detailed",
         },
       },
+      cloud: {
+        enabled: true,
+        targetMode: "sandboxed-multi-tenant",
+        controlPlaneHost: "render",
+        sandboxProvider: "vercel-sandbox",
+        executionBackend: "sandbox",
+      },
     });
 
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
@@ -1182,6 +1227,12 @@ describe("workspace settings sync", () => {
       instructions: "Keep answers terse.",
       work: "Platform engineer",
       details: "Prefers Bun and TypeScript",
+    });
+    expect(workspace?.cloud).toEqual({
+      targetMode: "sandboxed-multi-tenant",
+      controlPlaneHost: "render",
+      sandboxProvider: "vercel-sandbox",
+      executionBackend: "sandbox",
     });
 
     expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
@@ -1239,6 +1290,13 @@ describe("workspace settings sync", () => {
                 work: "Platform engineer",
                 details: "Prefers Bun",
               },
+              cloud: {
+                enabled: true,
+                targetMode: "sandboxed-multi-tenant",
+                controlPlaneHost: "fly-machines",
+                sandboxProvider: "cloudflare-containers",
+                executionBackend: "sandbox",
+              },
               providerOptions: {
                 openai: {
                   reasoningEffort: "high",
@@ -1257,6 +1315,7 @@ describe("workspace settings sync", () => {
 
     expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
       cwd: "/tmp/workspace",
+      threadId: expect.any(String),
       config: {
         toolOutputOverflowChars: 25000,
         childModelRoutingMode: "cross-provider-allowlist",

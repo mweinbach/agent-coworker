@@ -31,6 +31,7 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.workspaces[0]?.defaultBackupsEnabled).toBe(true);
     expect(parsed.workspaces[0]?.wsProtocol).toBe("jsonrpc");
     expect(parsed.workspaces[0]?.defaultToolOutputOverflowChars).toBeUndefined();
+    expect(parsed.workspaces[0]?.cloud).toBeUndefined();
     expect(parsed.workspaces[0]?.yolo).toBe(false);
     expect(parsed.developerMode).toBe(false);
     expect(parsed.showHiddenFiles).toBe(false);
@@ -69,6 +70,13 @@ describe("desktop persisted-state schema defaults", () => {
           defaultEnableMcp: false,
           defaultBackupsEnabled: false,
           defaultToolOutputOverflowChars: null,
+          cloud: {
+            enabled: true,
+            targetMode: "sandboxed-multi-tenant",
+            controlPlaneHost: "fly-machines",
+            executionBackend: "sandbox",
+            sandboxProvider: "cloudflare-containers",
+          },
           userName: "Alex",
           userProfile: {
             instructions: "Keep answers terse.",
@@ -87,6 +95,13 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.workspaces[0]?.defaultBackupsEnabled).toBe(false);
     expect(parsed.workspaces[0]?.wsProtocol).toBe("jsonrpc");
     expect(parsed.workspaces[0]?.defaultToolOutputOverflowChars).toBeNull();
+    expect(parsed.workspaces[0]?.cloud).toEqual({
+      enabled: true,
+      targetMode: "sandboxed-multi-tenant",
+      controlPlaneHost: "fly-machines",
+      executionBackend: "sandbox",
+      sandboxProvider: "cloudflare-containers",
+    });
     expect(parsed.workspaces[0]?.userName).toBe("Alex");
     expect(parsed.workspaces[0]?.userProfile).toEqual({
       instructions: "Keep answers terse.",

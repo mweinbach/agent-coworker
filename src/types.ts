@@ -583,17 +583,28 @@ export type ControlPlaneHost = (typeof CLOUD_CONTROL_PLANE_HOSTS)[number];
 export const CLOUD_SANDBOX_PROVIDERS = [
   "e2b",
   "vercel-sandbox",
+  "cloudflare-containers",
   "modal",
 ] as const;
 
 export type ExecutionSandboxProvider = (typeof CLOUD_SANDBOX_PROVIDERS)[number];
+export const CLOUD_EXECUTION_BACKENDS = ["local", "sandbox"] as const;
+export type CloudExecutionBackend = (typeof CLOUD_EXECUTION_BACKENDS)[number];
 
 export interface CloudExecutionConfig {
   enabled?: boolean;
   targetMode?: CloudTargetMode;
   controlPlaneHost?: ControlPlaneHost;
-  executionBackend?: "local" | "sandbox";
+  executionBackend?: CloudExecutionBackend;
   sandboxProvider?: ExecutionSandboxProvider;
+}
+
+export interface ResolvedCloudExecutionConfig {
+  enabled: boolean;
+  targetMode: CloudTargetMode;
+  controlPlaneHost: ControlPlaneHost;
+  executionBackend: CloudExecutionBackend;
+  sandboxProvider: ExecutionSandboxProvider;
 }
 
 export interface HarnessContextMetadata {

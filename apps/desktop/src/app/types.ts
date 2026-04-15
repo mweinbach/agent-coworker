@@ -25,6 +25,14 @@ export type WorkspaceUserProfile = {
   details: string;
 };
 
+export type WorkspaceCloudSettings = {
+  enabled?: boolean;
+  targetMode?: "hosted-single-tenant" | "sandboxed-multi-tenant";
+  controlPlaneHost?: "fly-machines" | "railway" | "render";
+  executionBackend?: "local" | "sandbox";
+  sandboxProvider?: "e2b" | "vercel-sandbox" | "cloudflare-containers" | "modal";
+};
+
 export function normalizeWorkspaceUserProfile(
   value?: Partial<WorkspaceUserProfile> | null,
 ): WorkspaceUserProfile {
@@ -71,6 +79,7 @@ export type WorkspaceRecord = {
   providerOptions?: WorkspaceProviderOptions;
   userName?: string;
   userProfile?: WorkspaceUserProfile;
+  cloud?: WorkspaceCloudSettings;
   defaultEnableMcp: boolean;
   defaultBackupsEnabled: boolean;
   yolo: boolean;

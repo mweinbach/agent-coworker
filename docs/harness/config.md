@@ -65,6 +65,7 @@ Supported config keys:
 - `cloud.sandboxProvider`
   - `e2b`
   - `vercel-sandbox`
+  - `cloudflare-containers`
   - `modal`
 
 Current built-in defaults resolve to:

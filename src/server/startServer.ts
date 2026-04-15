@@ -161,6 +161,7 @@ async function persistProjectConfigPatch(
       | "backupsEnabled"
       | "toolOutputOverflowChars"
       | "userName"
+      | "cloud"
     >
   > & {
     userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
@@ -205,6 +206,14 @@ async function persistProjectConfigPatch(
       next[key] = Object.keys(currentProviderOptions).length > 0 ? currentProviderOptions : undefined;
       continue;
     }
+    if (key === "cloud" && isPlainObject(value)) {
+      const currentCloud = isPlainObject(current.cloud) ? current.cloud : {};
+      next[key] = {
+        ...currentCloud,
+        ...value,
+      };
+      continue;
+    }
     if (key === "userProfile" && isPlainObject(value)) {
       const currentUserProfile = isPlainObject(current.userProfile) ? current.userProfile : {};
       next[key] = {
@@ -241,6 +250,7 @@ function mergeConfigPatch(
       | "backupsEnabled"
       | "toolOutputOverflowChars"
       | "userName"
+      | "cloud"
     >
   > & {
     userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
@@ -271,6 +281,12 @@ function mergeConfigPatch(
     next.userProfile = {
       ...config.userProfile,
       ...patch.userProfile,
+    };
+  }
+  if (patch.cloud !== undefined) {
+    next.cloud = {
+      ...config.cloud,
+      ...patch.cloud,
     };
   }
   return next;
@@ -599,6 +615,7 @@ export async function startAgentServer(
             details: controlConfig.userProfile?.details ?? "",
           },
           cloud: {
+            enabled: controlConfig.cloud?.enabled ?? false,
             targetMode: controlConfig.cloud?.targetMode ?? FIRST_CLOUD_MILESTONE.targetMode,
             controlPlaneHost: controlConfig.cloud?.controlPlaneHost ?? FIRST_CLOUD_MILESTONE.controlPlaneHost,
             sandboxProvider: controlConfig.cloud?.sandboxProvider ?? FIRST_CLOUD_MILESTONE.firstSandboxProvider,
@@ -641,6 +658,7 @@ export async function startAgentServer(
             childModelRoutingMode?: import("../types").ChildModelRoutingMode;
             preferredChildModelRef?: string;
             allowedChildModelRefs?: string[];
+            cloud?: AgentConfig["cloud"];
           }) => {
             await persistProjectConfigPatch(currentConfig.projectAgentDir, selection, currentConfig.providerOptions);
             currentConfig = mergeConfigPatch(currentConfig, selection);
@@ -664,6 +682,7 @@ export async function startAgentServer(
               | "observabilityEnabled"
               | "backupsEnabled"
               | "toolOutputOverflowChars"
+              | "cloud"
             >
           > & {
             clearToolOutputOverflowChars?: boolean;

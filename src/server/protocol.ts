@@ -2,6 +2,7 @@ import type {
   ApprovalRiskCode,
   AgentConfig,
   ChildModelRoutingMode,
+  CloudExecutionConfig,
   CommandInfo,
   HarnessContextPayload,
   MCPServerConfig,
@@ -17,6 +18,7 @@ import type {
   SkillInstallationEntry,
   SkillUpdateCheckResult,
   TodoItem,
+  ResolvedCloudExecutionConfig,
 } from "../types";
 import type { SessionUsageSnapshot, TurnUsage } from "../session/costTracker";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
@@ -70,6 +72,7 @@ export type SessionConfigPatch = {
     work?: string;
     details?: string;
   };
+  cloud?: CloudExecutionConfig;
 };
 
 export type SessionConfigState = {
@@ -93,12 +96,7 @@ export type SessionConfigState = {
     work: string;
     details: string;
   };
-  cloud?: {
-    targetMode: "hosted-single-tenant" | "sandboxed-multi-tenant";
-    controlPlaneHost: "fly-machines" | "railway" | "render";
-    sandboxProvider?: "e2b" | "vercel-sandbox" | "modal";
-    executionBackend: "local" | "sandbox";
-  };
+  cloud?: ResolvedCloudExecutionConfig;
 };
 
 export type ServerEvent =

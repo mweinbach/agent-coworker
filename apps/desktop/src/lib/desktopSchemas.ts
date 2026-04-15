@@ -115,6 +115,13 @@ const workspaceProviderOptionsSchema = z.object({
     reloadOnContextMismatch: z.boolean().optional(),
   }).strict().optional(),
 }).strict();
+const workspaceCloudDefaultsSchema = z.object({
+  enabled: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+  targetMode: z.enum(["hosted-single-tenant", "sandboxed-multi-tenant"]).optional(),
+  controlPlaneHost: z.enum(["fly-machines", "railway", "render"]).optional(),
+  executionBackend: z.enum(["local", "sandbox"]).optional(),
+  sandboxProvider: z.enum(["e2b", "vercel-sandbox", "cloudflare-containers", "modal"]).optional(),
+}).strict();
 
 export const startWorkspaceServerInputSchema: z.ZodType<StartWorkspaceServerInput> = z.object({
   workspaceId: safeIdSchema,
@@ -197,6 +204,7 @@ const persistedWorkspaceSchema = z.object({
     return undefined;
   }, z.number().int().nonnegative().nullable().optional()),
   providerOptions: workspaceProviderOptionsSchema.optional(),
+  cloud: workspaceCloudDefaultsSchema.optional(),
   userName: optionalStringSchema,
   userProfile: z.object({
     instructions: optionalStringSchema,

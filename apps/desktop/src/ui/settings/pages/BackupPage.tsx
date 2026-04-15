@@ -683,7 +683,7 @@ export function BackupPage(props: BackupPageProps = {}) {
 
       {/* Main Split-Pane Layout - Full Page */}
       <div
-        className="mx-[-1.5rem] flex min-h-0 flex-1 overflow-hidden border-y border-border/70 bg-transparent max-[960px]:mx-[-1rem]"
+        className="flex min-h-0 flex-1 overflow-hidden bg-transparent"
         data-backup-split="true"
       >
         <BackupSidebar

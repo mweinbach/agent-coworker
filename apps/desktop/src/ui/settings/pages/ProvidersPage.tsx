@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
-import { Button } from "../../../components/ui/button";
+import { Button, buttonVariants } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../../../components/ui/collapsible";
@@ -366,16 +366,14 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     if (!settingsChrome) return;
     settingsChrome.setChrome({
       headerActions: canConnectProvider ? (
-        <Button
-          variant="outline"
-          size="sm"
+        <button
           type="button"
-          className="shrink-0"
+          className={buttonVariants({ variant: "outline", size: "sm", className: "shrink-0" })}
           onClick={() => void refreshProviderStatus({ refreshBedrockDiscovery: true })}
           disabled={providerStatusRefreshing}
         >
           {providerStatusRefreshing ? "Refreshing…" : "Refresh status"}
-        </Button>
+        </button>
       ) : null,
     });
     return () => {

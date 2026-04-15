@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 
 import {
   AlertTriangleIcon,
@@ -606,10 +606,30 @@ export function BackupPage(props: BackupPageProps = {}) {
   const selectedBackupsEnabled = selectedThreadRuntime?.sessionConfig?.backupsEnabled ?? null;
 
   const settingsChrome = useOptionalSettingsChrome();
-  const backupHeaderActions = useMemo(() => {
-    if (!workspace) return null;
+  useEffect(() => {
+    if (!settingsChrome) return;
+    return () => { settingsChrome.setChrome(null); };
+  }, [settingsChrome]);
+
+  if (!workspace) {
     return (
-      <div className="flex flex-wrap items-center justify-end gap-2">
+      <div className="flex min-h-[220px] flex-col items-center justify-center px-4 py-10" data-backup-page="true">
+        <Card className="w-full max-w-md border-border/80 bg-card/85">
+          <CardContent className="p-8 text-center">
+            <ArchiveIcon className="mx-auto mb-4 h-12 w-12 text-muted-foreground/30" />
+            <p className="text-muted-foreground">Select a workspace first to manage its backup history.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="flex h-full min-h-0 flex-col gap-0"
+      data-backup-page="true"
+    >
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 px-5 py-2.5 max-[960px]:px-4">
         <label className="flex max-w-full items-center gap-2 rounded-md border border-border/70 bg-background px-2.5 py-1.5 text-xs sm:text-sm">
           <Checkbox
             checked={selectedBackupsEnabled ?? false}
@@ -636,44 +656,7 @@ export function BackupPage(props: BackupPageProps = {}) {
           </Select>
         )}
       </div>
-    );
-  }, [
-    workspace,
-    workspaceList.length,
-    props.workspace,
-    selectedBackupsEnabled,
-    canToggleSelectedEntry,
-    selectedEntry,
-    setSessionBackupsEnabled,
-    selectWorkspaceFromStore,
-  ]);
 
-  useEffect(() => {
-    if (!settingsChrome) return;
-    settingsChrome.setChrome(backupHeaderActions ? { headerActions: backupHeaderActions } : {});
-    return () => {
-      settingsChrome.setChrome(null);
-    };
-  }, [settingsChrome, backupHeaderActions]);
-
-  if (!workspace) {
-    return (
-      <div className="flex min-h-[220px] flex-col items-center justify-center px-4 py-10" data-backup-page="true">
-        <Card className="w-full max-w-md border-border/80 bg-card/85">
-          <CardContent className="p-8 text-center">
-            <ArchiveIcon className="mx-auto mb-4 h-12 w-12 text-muted-foreground/30" />
-            <p className="text-muted-foreground">Select a workspace first to manage its backup history.</p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className="flex h-full min-h-0 flex-col gap-0"
-      data-backup-page="true"
-    >
       {error ? (
         <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive flex items-center gap-2 shrink-0">
           <AlertTriangleIcon className="h-4 w-4" />

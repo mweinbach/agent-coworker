@@ -6,7 +6,7 @@ import { useAutoAnimate } from "@formkit/auto-animate/react";
 import { useAppStore } from "../../../app/store";
 import type { ThreadRuntime } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
-import { Button } from "../../../components/ui/button";
+import { Button, buttonVariants } from "../../../components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -237,16 +237,14 @@ export function UsagePage(props: UsagePageProps = {}) {
     if (!settingsChrome) return;
     settingsChrome.setChrome({
       headerActions: (
-        <Button
+        <button
           type="button"
-          variant="outline"
-          size="sm"
-          className="gap-2"
+          className={buttonVariants({ variant: "outline", size: "sm", className: "gap-2" })}
           onClick={() => handleEstimateNoticeOpenChange?.(true)}
         >
-          <AlertTriangleIcon className="h-4 w-4" />
+          <AlertTriangleIcon className="h-4 w-4" data-icon />
           How estimates work
-        </Button>
+        </button>
       ),
     });
     return () => {

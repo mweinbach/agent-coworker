@@ -19,7 +19,7 @@
 }
 
 .app-surface-opaque {
-  background: var(--surface-window);
+  background: var(--panel-bg);
   color: var(--text-primary);
 }
 

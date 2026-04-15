@@ -1,6 +1,6 @@
 import { useCallback, useState, type ReactNode } from "react";
 
-import { ArrowLeftIcon, XIcon } from "lucide-react";
+import { ArrowLeftIcon } from "lucide-react";
 
 import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
@@ -231,19 +231,11 @@ export function SettingsShell() {
                     {meta.description}
                   </p>
                 </div>
-                <div className="settings-shell__header-actions flex shrink-0 flex-wrap items-center justify-end gap-2 sm:pt-0.5">
-                  {pageChrome.headerActions}
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    type="button"
-                    className="text-muted-foreground hover:text-foreground"
-                    onClick={closeSettings}
-                    title="Close settings"
-                  >
-                    <XIcon data-icon />
-                  </Button>
-                </div>
+                {pageChrome.headerActions ? (
+                  <div className="settings-shell__header-actions flex shrink-0 flex-wrap items-center justify-end gap-2 sm:pt-0.5">
+                    {pageChrome.headerActions}
+                  </div>
+                ) : null}
               </div>
             </header>
 

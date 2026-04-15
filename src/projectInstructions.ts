@@ -5,13 +5,22 @@ import path from "node:path";
 export const PROJECT_INSTRUCTIONS_MAX_BYTES = 32 * 1024;
 
 const FILENAMES = ["AGENTS.override.md", "AGENTS.md"] as const;
+const PROJECT_INSTRUCTIONS_HEADER = [
+  "## Project Instructions",
+  "",
+  "These instructions are loaded automatically from AGENTS files in the workspace hierarchy.",
+].join("\n");
+const PROJECT_INSTRUCTIONS_TRUNCATED_NOTICE =
+  "... (truncated: kept the most specific project instructions within the byte limit)";
 
-async function findGitRoot(startDir: string): Promise<string | undefined> {
+type ProjectInstructionsIo = Pick<typeof fs, "stat" | "readFile">;
+
+async function findGitRoot(startDir: string, io: ProjectInstructionsIo = fs): Promise<string | undefined> {
   let current = path.resolve(startDir);
   while (true) {
     const gitPath = path.join(current, ".git");
     try {
-      const stat = await fs.stat(gitPath);
+      const stat = await io.stat(gitPath);
       if (stat.isDirectory() || stat.isFile()) {
         return current;
       }
@@ -52,21 +61,6 @@ export function directoriesFromGitRootToWorkspace(
   return dirs;
 }
 
-async function pickAgentsFile(dir: string): Promise<{ filename: (typeof FILENAMES)[number]; abs: string } | null> {
-  for (const name of FILENAMES) {
-    const abs = path.join(dir, name);
-    try {
-      const stat = await fs.stat(abs);
-      if (stat.isFile()) {
-        return { filename: name, abs };
-      }
-    } catch {
-      // try next candidate
-    }
-  }
-  return null;
-}
-
 function displayPathForDirectory(gitRoot: string, dir: string): string {
   const rel = path.relative(gitRoot, dir);
   if (!rel || rel === "") {
@@ -103,59 +97,118 @@ export type LoadedAgentsFile = {
   content: string;
 };
 
+function renderProjectInstructionsFileBlock(file: LoadedAgentsFile): string {
+  const headingLabel = file.filename === "AGENTS.override.md" ? "AGENTS.override.md" : "AGENTS.md";
+  return [`### ${headingLabel} for ${file.displayPath}`, "", file.content.trimEnd()].join("\n");
+}
+
+function joinProjectInstructionsParts(parts: string[]): string {
+  return parts.filter(Boolean).join("\n\n").trimEnd();
+}
+
+async function loadAgentsFileForDirectory(
+  dir: string,
+  displayPath: string,
+  io: ProjectInstructionsIo = fs,
+): Promise<LoadedAgentsFile | null> {
+  for (const filename of FILENAMES) {
+    const abs = path.join(dir, filename);
+    try {
+      const stat = await io.stat(abs);
+      if (!stat.isFile()) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+
+    try {
+      const content = await io.readFile(abs, "utf8");
+      return { directory: dir, displayPath, filename, content };
+    } catch {
+      // Fail open so unreadable AGENTS files do not block prompt construction.
+      continue;
+    }
+  }
+  return null;
+}
+
 /**
  * Load AGENTS.override.md / AGENTS.md along the path from git root (if any) to workspace root.
  * Does not read `.agent/AGENT.md` or other memory paths.
  */
-export async function loadProjectAgentsFiles(workspaceRoot: string): Promise<LoadedAgentsFile[]> {
+export async function loadProjectAgentsFiles(
+  workspaceRoot: string,
+  io: ProjectInstructionsIo = fs,
+): Promise<LoadedAgentsFile[]> {
   const ws = path.resolve(workspaceRoot);
-  const gitRoot = await findGitRoot(ws);
+  const gitRoot = await findGitRoot(ws, io);
   const dirs = directoriesFromGitRootToWorkspace(ws, gitRoot);
   const rootForLabels = gitRoot ?? ws;
 
   const loaded: LoadedAgentsFile[] = [];
   for (const dir of dirs) {
-    const picked = await pickAgentsFile(dir);
-    if (!picked) continue;
-    const raw = await fs.readFile(picked.abs, "utf8");
-    loaded.push({
-      directory: dir,
-      displayPath: displayPathForDirectory(rootForLabels, dir),
-      filename: picked.filename,
-      content: raw,
-    });
+    const loadedFile = await loadAgentsFileForDirectory(dir, displayPathForDirectory(rootForLabels, dir), io);
+    if (loadedFile) {
+      loaded.push(loadedFile);
+    }
   }
   return loaded;
 }
 
 function renderProjectInstructionsSectionInner(files: LoadedAgentsFile[]): string {
-  const lines: string[] = [
-    "## Project Instructions",
-    "",
-    "These instructions are loaded automatically from AGENTS files in the workspace hierarchy.",
-    "",
-  ];
+  return joinProjectInstructionsParts([PROJECT_INSTRUCTIONS_HEADER, ...files.map(renderProjectInstructionsFileBlock)]);
+}
 
-  for (const file of files) {
-    const headingLabel = file.filename === "AGENTS.override.md" ? "AGENTS.override.md" : "AGENTS.md";
-    lines.push(`### ${headingLabel} for ${file.displayPath}`, "", file.content.trimEnd(), "", "");
+function renderProjectInstructionsSectionWithinByteLimit(files: LoadedAgentsFile[], maxBytes: number): string {
+  const rendered = renderProjectInstructionsSectionInner(files);
+  if (Buffer.byteLength(rendered, "utf8") <= maxBytes) {
+    return rendered;
   }
 
-  return lines.join("\n").trimEnd();
+  const fileBlocks = files.map(renderProjectInstructionsFileBlock);
+  const buildTruncatedSection = (blocks: string[]) =>
+    joinProjectInstructionsParts([PROJECT_INSTRUCTIONS_HEADER, PROJECT_INSTRUCTIONS_TRUNCATED_NOTICE, ...blocks]);
+
+  const selectedBlocks: string[] = [];
+  const mostSpecificBlock = fileBlocks[fileBlocks.length - 1];
+  if (!mostSpecificBlock) {
+    return "";
+  }
+
+  const mostSpecificSection = buildTruncatedSection([mostSpecificBlock]);
+  if (Buffer.byteLength(mostSpecificSection, "utf8") > maxBytes) {
+    const prefix = buildTruncatedSection([]);
+    const remainingBytes = Math.max(0, maxBytes - Buffer.byteLength(`${prefix}\n\n`, "utf8"));
+    const truncatedMostSpecificBlock = truncateUtf8Bytes(mostSpecificBlock, remainingBytes);
+    return buildTruncatedSection(truncatedMostSpecificBlock ? [truncatedMostSpecificBlock] : []);
+  }
+
+  selectedBlocks.unshift(mostSpecificBlock);
+  for (let i = fileBlocks.length - 2; i >= 0; i -= 1) {
+    const block = fileBlocks[i];
+    if (!block) {
+      continue;
+    }
+    const candidate = buildTruncatedSection([block, ...selectedBlocks]);
+    if (Buffer.byteLength(candidate, "utf8") <= maxBytes) {
+      selectedBlocks.unshift(block);
+    }
+  }
+
+  return buildTruncatedSection(selectedBlocks);
 }
 
 /**
  * Markdown section for hierarchical AGENTS files (empty string if none found).
  */
-export async function loadProjectInstructionsSection(workspaceRoot: string): Promise<string> {
-  const files = await loadProjectAgentsFiles(workspaceRoot);
+export async function loadProjectInstructionsSection(
+  workspaceRoot: string,
+  io: ProjectInstructionsIo = fs,
+): Promise<string> {
+  const files = await loadProjectAgentsFiles(workspaceRoot, io);
   if (files.length === 0) {
     return "";
   }
-  const rendered = renderProjectInstructionsSectionInner(files);
-  const bytes = Buffer.byteLength(rendered, "utf8");
-  if (bytes <= PROJECT_INSTRUCTIONS_MAX_BYTES) {
-    return rendered;
-  }
-  return truncateUtf8Bytes(rendered, PROJECT_INSTRUCTIONS_MAX_BYTES);
+  return renderProjectInstructionsSectionWithinByteLimit(files, PROJECT_INSTRUCTIONS_MAX_BYTES);
 }

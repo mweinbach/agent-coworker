@@ -87,4 +87,48 @@ describe("loadProjectAgentsFiles and section", () => {
     expect(Buffer.byteLength(section, "utf8")).toBeLessThanOrEqual(PROJECT_INSTRUCTIONS_MAX_BYTES);
     expect(section).toContain("truncated");
   });
+
+  test("preserves the most specific workspace AGENTS content under the byte cap", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agents-cap-specific-"));
+    await fs.mkdir(path.join(tmp, ".git"), { recursive: true });
+    await fs.writeFile(path.join(tmp, "AGENTS.md"), "R".repeat(PROJECT_INSTRUCTIONS_MAX_BYTES), "utf-8");
+
+    const web = path.join(tmp, "apps", "web");
+    await fs.mkdir(web, { recursive: true });
+    await fs.writeFile(path.join(web, "AGENTS.md"), "NESTED INSTRUCTION\n", "utf-8");
+
+    const section = await loadProjectInstructionsSection(web);
+    expect(Buffer.byteLength(section, "utf8")).toBeLessThanOrEqual(PROJECT_INSTRUCTIONS_MAX_BYTES);
+    expect(section).toContain("truncated");
+    expect(section).toContain("NESTED INSTRUCTION");
+  });
+
+  test("falls back to a readable AGENTS.md when AGENTS.override.md cannot be read", async () => {
+    const workspaceRoot = path.resolve(path.join("/repo", "apps", "web"));
+    const io = {
+      stat: async (abs: string) => {
+        if (abs === path.join(workspaceRoot, "AGENTS.override.md") || abs === path.join(workspaceRoot, "AGENTS.md")) {
+          return { isFile: () => true, isDirectory: () => false } as any;
+        }
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      },
+      readFile: async (abs: string) => {
+        if (abs === path.join(workspaceRoot, "AGENTS.override.md")) {
+          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        }
+        if (abs === path.join(workspaceRoot, "AGENTS.md")) {
+          return "READABLE FALLBACK\n";
+        }
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      },
+    };
+
+    const files = await loadProjectAgentsFiles(workspaceRoot, io as any);
+    expect(files.map((f) => [f.displayPath, f.filename, f.content.trim()])).toEqual([
+      [".", "AGENTS.md", "READABLE FALLBACK"],
+    ]);
+
+    const section = await loadProjectInstructionsSection(workspaceRoot, io as any);
+    expect(section).toContain("READABLE FALLBACK");
+  });
 });

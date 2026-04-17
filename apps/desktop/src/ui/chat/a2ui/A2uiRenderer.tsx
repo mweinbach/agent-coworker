@@ -354,8 +354,221 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
       );
     }
 
+    case "TextArea": {
+      const placeholder = resolveText(props, context.dataModel, "placeholder", "hint");
+      const label = resolveText(props, context.dataModel, "label");
+      const defaultValue = resolveText(props, context.dataModel, "value", "defaultValue", "initialValue");
+      const componentId = typeof component.id === "string" ? component.id : "";
+      const rowsRaw = props?.rows;
+      const rows = typeof rowsRaw === "number" && rowsRaw > 0 ? Math.min(Math.max(Math.floor(rowsRaw), 2), 20) : 4;
+      const canSubmit = context.interactive && Boolean(context.onAction) && componentId.length > 0;
+      return (
+        <ControlledTextArea
+          label={label}
+          placeholder={placeholder}
+          defaultValue={defaultValue}
+          rows={rows}
+          {...(canSubmit
+            ? {
+                onBlurSubmit: (value) => {
+                  if (!context.onAction) return;
+                  void context.onAction({ componentId, eventType: "change", payload: { value } });
+                },
+              }
+            : {})}
+        />
+      );
+    }
+
+    case "Select": {
+      const label = resolveText(props, context.dataModel, "label");
+      const placeholder = resolveText(props, context.dataModel, "placeholder");
+      const componentId = typeof component.id === "string" ? component.id : "";
+      const canChange = context.interactive && Boolean(context.onAction) && componentId.length > 0;
+      const rawOptions = resolveDynamic(props?.options, context.dataModel);
+      const options = Array.isArray(rawOptions)
+        ? rawOptions.flatMap((entry): Array<{ label: string; value: string }> => {
+            if (typeof entry === "string" || typeof entry === "number") {
+              return [{ label: String(entry), value: String(entry) }];
+            }
+            if (entry && typeof entry === "object") {
+              const rec = entry as Record<string, unknown>;
+              const value = rec.value ?? rec.id ?? rec.key ?? rec.label;
+              const lbl = rec.label ?? rec.text ?? rec.title ?? value;
+              if (value === undefined) return [];
+              return [{ label: String(lbl ?? value), value: String(value) }];
+            }
+            return [];
+          })
+        : [];
+      const defaultValue = resolveDynamicString(props?.value ?? props?.defaultValue, context.dataModel)
+        || (options[0]?.value ?? "");
+      return (
+        <ControlledSelect
+          label={label}
+          placeholder={placeholder}
+          defaultValue={defaultValue}
+          options={options}
+          {...(canChange
+            ? {
+                onChange: (value) => {
+                  if (!context.onAction) return;
+                  void context.onAction({ componentId, eventType: "change", payload: { value } });
+                },
+              }
+            : {})}
+        />
+      );
+    }
+
+    case "Link": {
+      const text = resolveText(props, context.dataModel, "text", "label");
+      const href = resolveImageSrc(props?.href ?? props?.url, context.dataModel);
+      if (!href) {
+        return <span className="text-sm text-muted-foreground underline-offset-2">{text || "link"}</span>;
+      }
+      return (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          referrerPolicy="no-referrer"
+          className="text-sm text-primary underline underline-offset-2 hover:text-primary/80"
+        >
+          {text || href}
+        </a>
+      );
+    }
+
+    case "ProgressBar": {
+      const value = clampProgressValue(resolveDynamic(props?.value, context.dataModel));
+      const max = (() => {
+        const raw = resolveDynamic(props?.max, context.dataModel);
+        return typeof raw === "number" && raw > 0 ? raw : 100;
+      })();
+      const label = resolveText(props, context.dataModel, "label");
+      const pct = Math.max(0, Math.min(100, (value / max) * 100));
+      return (
+        <div className="flex flex-col gap-1">
+          {label ? <span className="text-xs text-muted-foreground">{label}</span> : null}
+          <div
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={max}
+            aria-valuenow={value}
+            className="h-2 w-full overflow-hidden rounded-full bg-muted/50"
+          >
+            <div
+              className="h-full rounded-full bg-primary transition-all duration-150"
+              style={{ width: `${pct}%` } as CSSProperties}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    case "Badge": {
+      const text = resolveText(props, context.dataModel, "text", "label");
+      const tone = typeof props?.tone === "string" ? props.tone.toLowerCase() : "default";
+      const toneClass = tone === "success"
+        ? "border-success/40 bg-success/15 text-success"
+        : tone === "warning"
+          ? "border-warning/40 bg-warning/15 text-warning"
+          : tone === "danger" || tone === "error"
+            ? "border-destructive/40 bg-destructive/15 text-destructive"
+            : "border-border/50 bg-muted/40 text-muted-foreground";
+      return (
+        <span className={cn(
+          "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+          toneClass,
+        )}>{text}</span>
+      );
+    }
+
+    case "Table": {
+      const columnsRaw = resolveDynamic(props?.columns, context.dataModel);
+      const rowsRaw = resolveDynamic(props?.rows, context.dataModel);
+      const columns = Array.isArray(columnsRaw)
+        ? columnsRaw.flatMap((col): Array<{ key: string; label: string }> => {
+            if (typeof col === "string") return [{ key: col, label: col }];
+            if (col && typeof col === "object") {
+              const rec = col as Record<string, unknown>;
+              const key = typeof rec.key === "string" ? rec.key
+                : typeof rec.id === "string" ? rec.id
+                : typeof rec.field === "string" ? rec.field
+                : null;
+              if (!key) return [];
+              const lbl = typeof rec.label === "string" ? rec.label
+                : typeof rec.title === "string" ? rec.title
+                : key;
+              return [{ key, label: lbl }];
+            }
+            return [];
+          })
+        : [];
+      const rows = Array.isArray(rowsRaw) ? rowsRaw : [];
+      if (columns.length === 0) {
+        return <UnknownComponent component={component} context={childContext} reason="Table requires props.columns" />;
+      }
+      return (
+        <div className="overflow-x-auto rounded-md border border-border/50 bg-background/50">
+          <table className="min-w-full text-left text-xs">
+            <thead className="bg-muted/30 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              <tr>
+                {columns.map((col) => (
+                  <th key={col.key} className="px-3 py-2 font-semibold">{col.label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rowIndex) => (
+                <tr key={`row-${rowIndex}`} className={rowIndex % 2 === 0 ? "bg-transparent" : "bg-muted/15"}>
+                  {columns.map((col) => (
+                    <td key={`cell-${rowIndex}-${col.key}`} className="px-3 py-1.5 align-top text-foreground/90">
+                      {tableCellRender(row, col.key)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={columns.length} className="px-3 py-3 text-center text-muted-foreground">
+                    No rows.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
     default:
       return <UnknownComponent component={component} context={childContext} reason={`unhandled type: ${rawType}`} />;
+  }
+}
+
+function clampProgressValue(raw: unknown): number {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function tableCellRender(row: unknown, key: string): ReactNode {
+  if (!row || typeof row !== "object") return "";
+  const rec = row as Record<string, unknown>;
+  const value = rec[key];
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
   }
 }
 
@@ -396,6 +609,77 @@ function ControlledTextField({
         }}
         className="h-9 w-full rounded-md border border-border/60 bg-background/70 px-3 text-sm text-foreground shadow-none placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
       />
+    </label>
+  );
+}
+
+function ControlledTextArea({
+  label,
+  placeholder,
+  defaultValue,
+  rows,
+  onBlurSubmit,
+}: {
+  label: string;
+  placeholder: string;
+  defaultValue: string;
+  rows: number;
+  onBlurSubmit?: (value: string) => void;
+}) {
+  const [value, setValue] = useState(defaultValue);
+  const inputId = `a2ui-textarea-${useSafeId()}`;
+  return (
+    <label className="flex w-full flex-col gap-1 text-sm" htmlFor={inputId}>
+      {label ? <span className="text-xs font-medium text-muted-foreground">{label}</span> : null}
+      <textarea
+        id={inputId}
+        value={value}
+        rows={rows}
+        placeholder={placeholder}
+        onChange={(event) => setValue(event.currentTarget.value)}
+        onBlur={() => {
+          if (onBlurSubmit && value !== defaultValue) onBlurSubmit(value);
+        }}
+        className="w-full resize-y rounded-md border border-border/60 bg-background/70 px-3 py-2 text-sm text-foreground shadow-none placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40"
+      />
+    </label>
+  );
+}
+
+function ControlledSelect({
+  label,
+  placeholder,
+  defaultValue,
+  options,
+  onChange,
+}: {
+  label: string;
+  placeholder: string;
+  defaultValue: string;
+  options: Array<{ label: string; value: string }>;
+  onChange?: (value: string) => void;
+}) {
+  const [value, setValue] = useState(defaultValue);
+  const inputId = `a2ui-select-${useSafeId()}`;
+  const hasPlaceholder = placeholder && !options.some((option) => option.value === defaultValue);
+  return (
+    <label className="flex w-full flex-col gap-1 text-sm" htmlFor={inputId}>
+      {label ? <span className="text-xs font-medium text-muted-foreground">{label}</span> : null}
+      <select
+        id={inputId}
+        value={value}
+        onChange={(event) => {
+          const next = event.currentTarget.value;
+          setValue(next);
+          onChange?.(next);
+        }}
+        className="h-9 w-full rounded-md border border-border/60 bg-background/70 px-3 text-sm text-foreground shadow-none focus:outline-none focus:ring-2 focus:ring-ring/40"
+      >
+        {hasPlaceholder ? <option value="" disabled>{placeholder}</option> : null}
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
     </label>
   );
 }

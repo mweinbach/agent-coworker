@@ -23,10 +23,16 @@ export const SUPPORTED_BASIC_CATALOG_COMPONENT_TYPES = [
   "Spacer",
   "Button",
   "TextField",
+  "TextArea",
   "Checkbox",
+  "Select",
+  "Link",
+  "ProgressBar",
   "Image",
   "List",
   "Card",
+  "Badge",
+  "Table",
 ] as const;
 
 export type SupportedBasicComponentType = (typeof SUPPORTED_BASIC_CATALOG_COMPONENT_TYPES)[number];

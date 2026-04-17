@@ -140,16 +140,12 @@ export function stringifyDynamic(value: unknown): string {
   return text;
 }
 
-export type DynamicLike =
-  | string
-  | number
-  | boolean
-  | null
-  | undefined
-  | { path: string }
-  | { literal: unknown }
-  | { formatString: string }
-  | Record<string, unknown>;
+/**
+ * Any value an agent might supply where a dynamic binding is acceptable.
+ * The evaluator is structural, not nominal — we accept `unknown` so callers
+ * don't need to cast every prop.
+ */
+export type DynamicLike = unknown;
 
 /**
  * Best-effort resolution of an A2UI dynamic value. Recognized shapes:
@@ -182,11 +178,11 @@ export function resolveDynamic(value: DynamicLike, model: DataModel): unknown {
 }
 
 export function resolveDynamicString(value: unknown, model: DataModel): string {
-  return stringifyDynamic(resolveDynamic(value as DynamicLike, model));
+  return stringifyDynamic(resolveDynamic(value, model));
 }
 
 export function resolveDynamicBoolean(value: unknown, model: DataModel): boolean {
-  const resolved = resolveDynamic(value as DynamicLike, model);
+  const resolved = resolveDynamic(value, model);
   if (typeof resolved === "boolean") return resolved;
   if (typeof resolved === "string") return resolved.toLowerCase() === "true";
   if (typeof resolved === "number") return resolved !== 0;
@@ -194,7 +190,7 @@ export function resolveDynamicBoolean(value: unknown, model: DataModel): boolean
 }
 
 export function resolveDynamicNumber(value: unknown, model: DataModel): number | null {
-  const resolved = resolveDynamic(value as DynamicLike, model);
+  const resolved = resolveDynamic(value, model);
   if (typeof resolved === "number" && Number.isFinite(resolved)) return resolved;
   if (typeof resolved === "string") {
     const parsed = Number(resolved);

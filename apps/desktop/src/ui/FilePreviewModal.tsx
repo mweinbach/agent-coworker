@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { defaultRemarkPlugins, Streamdown } from "streamdown";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
@@ -25,6 +25,7 @@ import {
 } from "../components/ai-elements/message";
 import { cn } from "../lib/utils";
 import { getExtensionLower, getFilePreviewKind, mimeForPreviewKind, type FilePreviewKind } from "../lib/filePreviewKind";
+import { decorateDocxPreviewHtml, loadDocxPreviewLayout, type DocxPreviewLayout } from "../lib/docxPreview";
 
 const XLSX_MAX_ROWS = 200;
 const XLSX_MAX_COLS = 40;
@@ -147,6 +148,7 @@ export function FilePreviewModal() {
   const [truncated, setTruncated] = useState(false);
   const [textContent, setTextContent] = useState<string | null>(null);
   const [docxHtml, setDocxHtml] = useState<string | null>(null);
+  const [docxLayout, setDocxLayout] = useState<DocxPreviewLayout | null>(null);
   const [xlsxHtml, setXlsxHtml] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
@@ -164,6 +166,7 @@ export function FilePreviewModal() {
       setTruncated(false);
       setTextContent(null);
       setDocxHtml(null);
+      setDocxLayout(null);
       setXlsxHtml(null);
       revokeBlob();
       return;
@@ -175,6 +178,7 @@ export function FilePreviewModal() {
     setTruncated(false);
     setTextContent(null);
     setDocxHtml(null);
+    setDocxLayout(null);
     setXlsxHtml(null);
     revokeBlob();
 
@@ -212,11 +216,18 @@ export function FilePreviewModal() {
             bytes.byteOffset,
             bytes.byteOffset + bytes.byteLength,
           ) as ArrayBuffer;
-          const htmlResult = await mammoth.convertToHtml({ arrayBuffer });
+          const [htmlResult, layout] = await Promise.all([
+            mammoth.convertToHtml(
+              { arrayBuffer },
+              { styleMap: ["p[style-id='Subtitle'] => p.docx-subtitle:fresh"] },
+            ),
+            loadDocxPreviewLayout(arrayBuffer),
+          ]);
           if (controller.signal.aborted) return;
           const sanitized = await sanitizePreviewHtml(htmlResult.value);
           if (controller.signal.aborted) return;
-          setDocxHtml(sanitized);
+          setDocxHtml(decorateDocxPreviewHtml(sanitized));
+          setDocxLayout(layout);
           setLoading(false);
           return;
         }
@@ -344,6 +355,18 @@ export function FilePreviewModal() {
 
   const showDocxApproximationNote = kind === "docx" && !loading && !error && docxHtml !== null;
 
+  const docxPreviewStyle = useMemo(() => {
+    if (!docxHtml) return undefined;
+    return {
+      fontFamily: `'${docxLayout?.fontFamily ?? "Aptos"}', 'Calibri', 'Carlito', 'Segoe UI', system-ui, sans-serif`,
+      ["--docx-accent" as string]: docxLayout?.accentColor ?? "var(--accent)",
+      ["--docx-title" as string]: docxLayout?.titleColor ?? "var(--text-primary)",
+      ["--docx-body" as string]: docxLayout?.bodyColor ?? "var(--text-primary)",
+      ["--docx-muted" as string]: docxLayout?.mutedColor ?? "var(--text-muted)",
+      ["--docx-divider" as string]: docxLayout?.dividerColor ?? "var(--warning)",
+    } satisfies CSSProperties;
+  }, [docxHtml, docxLayout]);
+
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent className="app-surface-opaque flex max-h-[90vh] max-w-5xl flex-col gap-0 overflow-hidden p-0">
@@ -436,21 +459,47 @@ export function FilePreviewModal() {
             <div
               className={cn(
                 "docx-preview mx-auto w-full max-w-[8.5in] rounded-sm border border-border/60 bg-background px-[1in] py-[0.75in] shadow-sm",
-                "[&_h1]:mb-1 [&_h1]:mt-6 [&_h1]:text-[20pt] [&_h1]:font-bold [&_h1]:leading-snug [&_h1]:tracking-tight",
+                "[&_.docx-title]:mb-3 [&_.docx-title]:text-[22pt] [&_.docx-title]:font-bold [&_.docx-title]:leading-[1.2] [&_.docx-title]:tracking-[-0.01em] [&_.docx-title]:text-[var(--docx-title)]",
+                "[&_.docx-subtitle]:mb-3 [&_.docx-subtitle]:text-[11pt] [&_.docx-subtitle]:italic [&_.docx-subtitle]:leading-[1.35] [&_.docx-subtitle]:text-[var(--docx-accent)]",
+                "[&_.docx-byline]:mb-2 [&_.docx-byline]:text-[10pt] [&_.docx-byline]:font-semibold [&_.docx-byline]:leading-[1.3] [&_.docx-byline]:text-[var(--docx-title)]",
+                "[&_.docx-note]:mb-5 [&_.docx-note]:text-[9pt] [&_.docx-note]:italic [&_.docx-note]:leading-[1.45] [&_.docx-note]:text-[var(--docx-muted)]",
+                "[&_.docx-divider]:mb-8 [&_.docx-divider]:h-px [&_.docx-divider]:w-full [&_.docx-divider]:bg-[var(--docx-divider)]",
+                "[&_h1]:mb-2 [&_h1]:mt-8 [&_h1]:text-[14pt] [&_h1]:font-bold [&_h1]:leading-[1.25] [&_h1]:text-[var(--docx-accent)]",
                 "[&_h2]:mb-1 [&_h2]:mt-5 [&_h2]:text-[16pt] [&_h2]:font-semibold [&_h2]:leading-snug",
                 "[&_h3]:mb-1 [&_h3]:mt-4 [&_h3]:text-[13pt] [&_h3]:font-semibold [&_h3]:leading-snug",
                 "[&_h4]:mb-1 [&_h4]:mt-3 [&_h4]:text-[11pt] [&_h4]:font-semibold",
-                "[&_p]:my-[6pt] [&_p]:text-[11pt] [&_p]:leading-[1.6]",
+                "[&_p]:my-[6pt] [&_p]:text-[11pt] [&_p]:leading-[1.45] [&_p]:text-[var(--docx-body)]",
                 "[&_ul]:my-[6pt] [&_ul]:list-disc [&_ul]:pl-8 [&_ol]:my-[6pt] [&_ol]:list-decimal [&_ol]:pl-8",
-                "[&_li]:my-[2pt] [&_li]:text-[11pt] [&_li]:leading-[1.6]",
-                "[&_table]:my-4 [&_table]:w-full [&_table]:border-collapse",
-                "[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1.5 [&_td]:text-[10pt] [&_th]:border [&_th]:border-border [&_th]:bg-muted/30 [&_th]:px-2 [&_th]:py-1.5 [&_th]:text-[10pt] [&_th]:font-semibold",
+                "[&_li]:my-[2pt] [&_li]:text-[11pt] [&_li]:leading-[1.45]",
+                "[&_.docx-table]:my-6 [&_.docx-table]:w-full [&_.docx-table]:border-collapse",
+                "[&_.docx-cell]:border [&_.docx-cell]:border-border/70 [&_.docx-cell]:px-2.5 [&_.docx-cell]:py-2 [&_.docx-cell]:align-top",
+                "[&_.docx-table-paragraph]:my-0 [&_.docx-table-paragraph]:text-[10pt] [&_.docx-table-paragraph]:leading-[1.35]",
+                "[&_tr:first-child_.docx-cell]:bg-muted/20 [&_tr:first-child_.docx-table-paragraph]:font-semibold",
                 "[&_a]:text-primary [&_a]:underline [&_img]:max-w-full [&_blockquote]:border-l-[3px] [&_blockquote]:border-border [&_blockquote]:pl-4 [&_blockquote]:italic",
                 "[&_strong]:font-semibold [&_em]:italic",
               )}
-              style={{ fontFamily: "'Calibri', 'Carlito', 'Segoe UI', system-ui, sans-serif" }}
-              dangerouslySetInnerHTML={{ __html: docxHtml }}
-            />
+              style={docxPreviewStyle}
+            >
+              {docxLayout?.headerImageSrc ? (
+                <div className="mb-6">
+                  <img
+                    src={docxLayout.headerImageSrc}
+                    alt="Document header"
+                    className="block h-auto max-w-full"
+                    style={docxLayout.headerImageWidthPx ? { width: `${docxLayout.headerImageWidthPx}px` } : undefined}
+                  />
+                </div>
+              ) : null}
+              <div dangerouslySetInnerHTML={{ __html: docxHtml }} />
+              {docxLayout?.footerText ? (
+                <div
+                  data-file-preview-docx-footer="true"
+                  className="mt-10 text-[8pt] leading-[1.3] text-[var(--docx-muted)]"
+                >
+                  {docxLayout.footerText}
+                </div>
+              ) : null}
+            </div>
           ) : kind === "xlsx" && xlsxHtml ? (
             <div
               className="preview-xlsx overflow-x-auto text-sm [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1"

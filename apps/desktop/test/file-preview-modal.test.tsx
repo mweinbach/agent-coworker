@@ -16,6 +16,17 @@ let previewResult: PreviewResult = {
 
 const copyPathMock = mock(async () => {});
 const readFileForPreviewMock = mock(async () => previewResult);
+const loadDocxPreviewLayoutMock = mock(async () => ({
+  accentColor: "#EC6210",
+  titleColor: "#1C1B19",
+  bodyColor: "#1C1B19",
+  mutedColor: "#666666",
+  dividerColor: "#FBBA13",
+  fontFamily: "Aptos",
+  headerImageSrc: "data:image/png;base64,ZmFrZQ==",
+  headerImageWidthPx: 180,
+  footerText: "Creative Strategies | Intel Pro Day 2026 work document",
+}));
 
 mock.module("mammoth", () => ({
   default: {
@@ -27,6 +38,11 @@ mock.module("dompurify", () => ({
   default: {
     sanitize: (value: string) => value,
   },
+}));
+
+mock.module("../src/lib/docxPreview", () => ({
+  decorateDocxPreviewHtml: (value: string) => `<div class="docx-title">${value}</div>`,
+  loadDocxPreviewLayout: loadDocxPreviewLayoutMock,
 }));
 
 mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
@@ -60,6 +76,7 @@ describe("file preview modal", () => {
     };
     copyPathMock.mockClear();
     readFileForPreviewMock.mockClear();
+    loadDocxPreviewLayoutMock.mockClear();
     resetAppStore();
   });
 
@@ -139,9 +156,14 @@ describe("file preview modal", () => {
 
       const doc = harness.dom.window.document;
       const note = doc.querySelector("[data-file-preview-docx-note='true']");
+      const footer = doc.querySelector("[data-file-preview-docx-footer='true']");
+      const headerImage = doc.querySelector("img[alt='Document header']");
 
       expect(note?.textContent).toContain("may not match Word layout exactly");
       expect(doc.body.textContent).toContain("Docx title");
+      expect(footer?.textContent).toContain("Creative Strategies");
+      expect(headerImage).not.toBeNull();
+      expect(loadDocxPreviewLayoutMock).toHaveBeenCalledTimes(1);
 
       await act(async () => {
         root.unmount();

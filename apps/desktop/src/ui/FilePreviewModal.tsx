@@ -336,6 +336,19 @@ export function FilePreviewModal() {
 
   const isOpen = path !== null;
 
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleWindowBlur = () => {
+      closeFilePreview();
+    };
+
+    window.addEventListener("blur", handleWindowBlur);
+    return () => {
+      window.removeEventListener("blur", handleWindowBlur);
+    };
+  }, [closeFilePreview, isOpen]);
+
   const showFallback =
     !loading &&
     !error &&

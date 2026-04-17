@@ -161,4 +161,45 @@ describe("file preview modal", () => {
       harness.restore();
     }
   });
+
+  test.serial("closes the preview when the app window loses focus", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+
+    try {
+      const path = "/Users/mweinbach/Library/Mobile Documents/com~apple~CloudDocs/Claude/tmp/preview_latency_review.docx";
+      previewResult = {
+        bytes: new Uint8Array([1, 2, 3, 4]),
+        byteLength: 4,
+        truncated: false,
+      };
+
+      useAppStore.setState({ filePreview: { path } });
+
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(FilePreviewModal));
+        await flushUi();
+        await flushUi();
+      });
+
+      expect(harness.dom.window.document.querySelector("[role='dialog']")).not.toBeNull();
+
+      await act(async () => {
+        harness.dom.window.dispatchEvent(new harness.dom.window.Event("blur"));
+        await flushUi();
+      });
+
+      expect(harness.dom.window.document.querySelector("[role='dialog']")).toBeNull();
+      expect(useAppStore.getState().filePreview).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

@@ -1,6 +1,7 @@
 # Lessons
 
 - For plugin install flows in this repo, only synthesize default `.mcp.json` / `.app.json` paths when the file actually exists, require explicitly declared `skills` directories to exist on disk, and normalize local `.codex-plugin/plugin.json` inputs back to the plugin root before discovery.
+- When the user asks for desktop UI verification in this repo, prefer live Computer Use inspection of the running app in addition to local tests whenever the bridge is healthy.
 - When the user calls out a settings toggle in this repo, use the shared `Switch` primitive for binary on/off controls and reserve `Checkbox` for checklist-style selection; button or checkbox semantics are the wrong accessibility contract for a toggle row.
 - For provider-facing MCP tool schemas, do not pass tuple-style JSON Schema arrays like `items: [{...}, {...}]` through unchanged; normalize schema-valued keywords to provider-safe object/boolean nodes before registering tools or OpenAI-compatible runtimes will reject the function definition at request build time.
 - For parsers that read tagged footer blocks from model output in this repo, never stop at the first matching tag when prompts can include earlier examples; parse the trailing footer and add a regression test for echoed format examples before shipping.

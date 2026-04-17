@@ -14,7 +14,6 @@ let previewResult: PreviewResult = {
   truncated: false,
 };
 
-const copyPathMock = mock(async () => {});
 const readFileForPreviewMock = mock(async () => previewResult);
 const loadDocxPreviewLayoutMock = mock(async () => ({
   accentColor: "#EC6210",
@@ -46,7 +45,6 @@ mock.module("../src/lib/docxPreview", () => ({
 }));
 
 mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  copyPath: copyPathMock,
   readFileForPreview: readFileForPreviewMock,
 }));
 
@@ -74,13 +72,12 @@ describe("file preview modal", () => {
       byteLength: 0,
       truncated: false,
     };
-    copyPathMock.mockClear();
     readFileForPreviewMock.mockClear();
     loadDocxPreviewLayoutMock.mockClear();
     resetAppStore();
   });
 
-  test.serial("shows a single-line path row with copy/reveal actions and a constrained markdown shell", async () => {
+  test.serial("shows the simplified header controls and a constrained markdown shell", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
 
     try {
@@ -103,25 +100,13 @@ describe("file preview modal", () => {
       });
 
       const doc = harness.dom.window.document;
-      const pathNode = doc.querySelector("[data-file-preview-path='true']");
       const markdownShell = doc.querySelector("[data-file-preview-markdown-shell='true']");
-      const copyButton = Array.from(doc.querySelectorAll("button")).find((button) => button.textContent?.includes("Copy path"));
 
-      expect(pathNode?.className).toContain("truncate");
-      expect(pathNode?.className).toContain("whitespace-nowrap");
-      expect(pathNode?.textContent).toBe(path);
       expect(markdownShell?.className).toContain("max-w-[78ch]");
-      expect(doc.body.textContent).toContain("Reveal");
-      expect(doc.body.textContent).toContain("Open externally");
-      if (!(copyButton instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing copy path button");
-      }
-
-      await act(async () => {
-        copyButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
-      });
-
-      expect(copyPathMock.mock.calls).toEqual([[{ path }]]);
+      expect(doc.body.textContent).toContain("Open in: Default app");
+      expect(doc.body.textContent).not.toContain(path);
+      expect(doc.body.textContent).not.toContain("Copy path");
+      expect(doc.body.textContent).not.toContain("Reveal");
 
       await act(async () => {
         root.unmount();
@@ -164,6 +149,52 @@ describe("file preview modal", () => {
       expect(footer?.textContent).toContain("Creative Strategies");
       expect(headerImage).not.toBeNull();
       expect(loadDocxPreviewLayoutMock).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test.serial("collapses the docx layout note into an info chip after the timeout", async () => {
+    const harness = setupJsdom({ includeAnimationFrame: true });
+
+    try {
+      const originalSetTimeout = harness.dom.window.setTimeout.bind(harness.dom.window);
+      harness.dom.window.setTimeout = ((callback: TimerHandler) => {
+        if (typeof callback === "function") callback();
+        return 1 as unknown as number;
+      }) as typeof harness.dom.window.setTimeout;
+
+      const path = "/Users/mweinbach/Library/Mobile Documents/com~apple~CloudDocs/Claude/tmp/preview_latency_review.docx";
+      previewResult = {
+        bytes: new Uint8Array([1, 2, 3, 4]),
+        byteLength: 4,
+        truncated: false,
+      };
+
+      useAppStore.setState({ filePreview: { path } });
+
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(FilePreviewModal));
+        await flushUi();
+        await flushUi();
+      });
+
+      const doc = harness.dom.window.document;
+      const chip = doc.querySelector("[data-file-preview-docx-chip='true']");
+      const note = doc.querySelector("[data-file-preview-docx-note='true']");
+
+      expect(chip?.textContent).toContain("Layout note");
+      expect(note).toBeNull();
+
+      harness.dom.window.setTimeout = originalSetTimeout;
 
       await act(async () => {
         root.unmount();

@@ -4,7 +4,7 @@ import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
-import { CopyIcon, ExternalLinkIcon, FolderOpenIcon } from "lucide-react";
+import { ExternalLinkIcon, InfoIcon } from "lucide-react";
 
 import { useAppStore } from "../app/store";
 import { Badge } from "../components/ui/badge";
@@ -12,12 +12,11 @@ import { Button } from "../components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
-import { copyPath, openPath, readFileForPreview, revealPath } from "../lib/desktopCommands";
+import { openPath, readFileForPreview } from "../lib/desktopCommands";
 import {
   DesktopMessageLink,
   defaultDesktopRehypePlugins,
@@ -29,6 +28,9 @@ import { decorateDocxPreviewHtml, loadDocxPreviewLayout, type DocxPreviewLayout 
 
 const XLSX_MAX_ROWS = 200;
 const XLSX_MAX_COLS = 40;
+const DOCX_LAYOUT_NOTICE_MS = 4000;
+const DOCX_LAYOUT_NOTICE_TEXT =
+  "Word preview is optimized for content review and may not match Word layout exactly. Use the default Word app for fidelity-sensitive checks.";
 
 function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
@@ -149,6 +151,7 @@ export function FilePreviewModal() {
   const [textContent, setTextContent] = useState<string | null>(null);
   const [docxHtml, setDocxHtml] = useState<string | null>(null);
   const [docxLayout, setDocxLayout] = useState<DocxPreviewLayout | null>(null);
+  const [docxNoticeCollapsed, setDocxNoticeCollapsed] = useState(false);
   const [xlsxHtml, setXlsxHtml] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
@@ -167,6 +170,7 @@ export function FilePreviewModal() {
       setTextContent(null);
       setDocxHtml(null);
       setDocxLayout(null);
+      setDocxNoticeCollapsed(false);
       setXlsxHtml(null);
       revokeBlob();
       return;
@@ -179,6 +183,7 @@ export function FilePreviewModal() {
     setTextContent(null);
     setDocxHtml(null);
     setDocxLayout(null);
+    setDocxNoticeCollapsed(false);
     setXlsxHtml(null);
     revokeBlob();
 
@@ -295,6 +300,18 @@ export function FilePreviewModal() {
     };
   }, [revokeBlob]);
 
+  useEffect(() => {
+    if (!(kind === "docx" && docxHtml && !loading && !error) || docxNoticeCollapsed) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setDocxNoticeCollapsed(true);
+    }, DOCX_LAYOUT_NOTICE_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [docxHtml, docxNoticeCollapsed, error, kind, loading]);
+
   const titleName = path ? basenamePath(path) : "";
 
   const kindLabel = useMemo(() => {
@@ -317,14 +334,6 @@ export function FilePreviewModal() {
 
   const openExternal = () => {
     if (path) void openPath({ path }).catch(() => {});
-  };
-
-  const copyFullPath = () => {
-    if (path) void copyPath({ path }).catch(() => {});
-  };
-
-  const reveal = () => {
-    if (path) void revealPath({ path }).catch(() => {});
   };
 
   const mdRemarkPlugins = useMemo(() => {
@@ -354,6 +363,7 @@ export function FilePreviewModal() {
     !loading && !error && kind === "unknown" && textContent === null && !blobUrl;
 
   const showDocxApproximationNote = kind === "docx" && !loading && !error && docxHtml !== null;
+  const openButtonLabel = kind === "docx" ? "Open in: Word" : kind === "xlsx" ? "Open in: Excel" : "Open in: Default app";
 
   const docxPreviewStyle = useMemo(() => {
     if (!docxHtml) return undefined;
@@ -381,43 +391,35 @@ export function FilePreviewModal() {
             <div className="flex shrink-0 items-center gap-2">
               <Button type="button" variant="outline" size="sm" onClick={openExternal}>
                 <ExternalLinkIcon className="mr-1 size-3.5" />
-                Open externally
-              </Button>
-            </div>
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <div className="min-w-0 flex-1 rounded-md border border-border/70 bg-muted/30 px-3 py-2">
-              <DialogDescription
-                data-file-preview-path="true"
-                className="truncate whitespace-nowrap font-mono text-[11px] leading-none text-muted-foreground"
-                title={path ?? undefined}
-              >
-                {path}
-              </DialogDescription>
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              <Button type="button" variant="ghost" size="sm" onClick={copyFullPath}>
-                <CopyIcon className="mr-1 size-3.5" />
-                Copy path
-              </Button>
-              <Button type="button" variant="ghost" size="sm" onClick={reveal}>
-                <FolderOpenIcon className="mr-1 size-3.5" />
-                Reveal
+                {openButtonLabel}
               </Button>
             </div>
           </div>
           {showDocxApproximationNote ? (
-            <div
-              data-file-preview-docx-note="true"
-              className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
-            >
-              Word preview is optimized for content review and may not match Word layout exactly. Use Open externally for fidelity-sensitive checks.
-            </div>
+            docxNoticeCollapsed ? (
+              <button
+                type="button"
+                data-file-preview-docx-chip="true"
+                className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border/70 bg-muted/25 px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/35"
+                title={DOCX_LAYOUT_NOTICE_TEXT}
+                onClick={() => setDocxNoticeCollapsed(false)}
+              >
+                <InfoIcon className="size-3.5" />
+                Layout note
+              </button>
+            ) : (
+              <div
+                data-file-preview-docx-note="true"
+                className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+              >
+                {DOCX_LAYOUT_NOTICE_TEXT}
+              </div>
+            )
           ) : null}
           {truncated ? (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
               <span>
-                Preview truncated — only the first portion of this file is shown. Open the file externally for the full contents.
+                Preview truncated — only the first portion of this file is shown. Open the file in its default app for the full contents.
               </span>
               <Button type="button" size="sm" variant="outline" onClick={openExternal}>
                 <ExternalLinkIcon className="mr-1 size-3.5" />
@@ -515,7 +517,7 @@ export function FilePreviewModal() {
                   : "Could not detect a text preview for this file."}
               </p>
               <Button type="button" onClick={openExternal}>
-                Open externally
+                {openButtonLabel}
               </Button>
             </div>
           ) : null}

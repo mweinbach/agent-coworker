@@ -402,11 +402,6 @@ export function FilePreviewModal() {
             "min-h-0 flex-1 overflow-y-auto px-5 py-4",
             kind === "docx" && docxHtml && "bg-white px-6 py-6",
           )}
-          onClick={(event) => {
-            if (event.target === event.currentTarget) {
-              closeFilePreview();
-            }
-          }}
         >
           {loading ? (
             <div className="py-16 text-center text-sm text-muted-foreground">Loading preview…</div>

@@ -162,7 +162,7 @@ describe("file preview modal", () => {
     }
   });
 
-  test.serial("closes the preview when clicking the empty gutter area", async () => {
+  test.serial("keeps clicks inside the popup open and closes on overlay clicks", async () => {
     const harness = setupJsdom({ includeAnimationFrame: true });
 
     try {
@@ -185,13 +185,24 @@ describe("file preview modal", () => {
         await flushUi();
       });
 
-      const content = harness.dom.window.document.querySelector("[data-file-preview-content='true']");
-      if (!(content instanceof harness.dom.window.HTMLDivElement)) {
-        throw new Error("missing file preview content shell");
+      const dialog = harness.dom.window.document.querySelector("[data-slot='dialog-content']");
+      const overlay = harness.dom.window.document.querySelector("[data-slot='dialog-overlay']");
+      if (!(dialog instanceof harness.dom.window.HTMLDivElement)) {
+        throw new Error("missing dialog content shell");
+      }
+      if (!(overlay instanceof harness.dom.window.HTMLDivElement)) {
+        throw new Error("missing dialog overlay");
       }
 
       await act(async () => {
-        content.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        dialog.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await flushUi();
+      });
+
+      expect(harness.dom.window.document.querySelector("[role='dialog']")).not.toBeNull();
+
+      await act(async () => {
+        overlay.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
         await flushUi();
       });
 

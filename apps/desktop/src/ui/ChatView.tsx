@@ -83,6 +83,7 @@ import { ActivityGroupCard } from "./chat/ActivityGroupCard";
 import { buildChatRenderItems } from "./chat/activityGroups";
 import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
 import { ToolCard } from "./chat/toolCards/ToolCard";
+import { A2uiSurfaceCard } from "./chat/a2ui/A2uiSurfaceCard";
 
 type ChatViewContextValue = {
   developerMode: boolean;
@@ -463,6 +464,10 @@ const FeedRow = memo(function FeedRow(props: {
         state={item.state}
       />
     );
+  }
+
+  if (item.kind === "ui_surface") {
+    return <A2uiSurfaceCard item={item} />;
   }
 
   if (item.kind === "log") {

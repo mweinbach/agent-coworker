@@ -4,7 +4,7 @@ import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
-import { ExternalLinkIcon, InfoIcon } from "lucide-react";
+import { ExternalLinkIcon } from "lucide-react";
 
 import { useAppStore } from "../app/store";
 import { Badge } from "../components/ui/badge";
@@ -16,7 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
-import { openPath, readFileForPreview } from "../lib/desktopCommands";
+import { getPreferredFileApp, openPath, readFileForPreview } from "../lib/desktopCommands";
 import {
   DesktopMessageLink,
   defaultDesktopRehypePlugins,
@@ -28,9 +28,6 @@ import { decorateDocxPreviewHtml, loadDocxPreviewLayout, type DocxPreviewLayout 
 
 const XLSX_MAX_ROWS = 200;
 const XLSX_MAX_COLS = 40;
-const DOCX_LAYOUT_NOTICE_MS = 4000;
-const DOCX_LAYOUT_NOTICE_TEXT =
-  "Word preview is optimized for content review and may not match Word layout exactly. Use the default Word app for fidelity-sensitive checks.";
 
 function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
@@ -151,7 +148,7 @@ export function FilePreviewModal() {
   const [textContent, setTextContent] = useState<string | null>(null);
   const [docxHtml, setDocxHtml] = useState<string | null>(null);
   const [docxLayout, setDocxLayout] = useState<DocxPreviewLayout | null>(null);
-  const [docxNoticeCollapsed, setDocxNoticeCollapsed] = useState(false);
+  const [preferredFileApp, setPreferredFileApp] = useState<string | null>(null);
   const [xlsxHtml, setXlsxHtml] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
@@ -170,7 +167,7 @@ export function FilePreviewModal() {
       setTextContent(null);
       setDocxHtml(null);
       setDocxLayout(null);
-      setDocxNoticeCollapsed(false);
+      setPreferredFileApp(null);
       setXlsxHtml(null);
       revokeBlob();
       return;
@@ -183,15 +180,19 @@ export function FilePreviewModal() {
     setTextContent(null);
     setDocxHtml(null);
     setDocxLayout(null);
-    setDocxNoticeCollapsed(false);
+    setPreferredFileApp(null);
     setXlsxHtml(null);
     revokeBlob();
 
     void (async () => {
       try {
-        const result = await readFileForPreview({ path });
+        const [result, preferredApp] = await Promise.all([
+          readFileForPreview({ path }),
+          getPreferredFileApp({ path }).catch(() => null),
+        ]);
         if (controller.signal.aborted) return;
         setTruncated(result.truncated);
+        setPreferredFileApp(preferredApp);
         const bytes = result.bytes;
         const previewKind = getFilePreviewKind(path);
 
@@ -300,18 +301,6 @@ export function FilePreviewModal() {
     };
   }, [revokeBlob]);
 
-  useEffect(() => {
-    if (!(kind === "docx" && docxHtml && !loading && !error) || docxNoticeCollapsed) {
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      setDocxNoticeCollapsed(true);
-    }, DOCX_LAYOUT_NOTICE_MS);
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [docxHtml, docxNoticeCollapsed, error, kind, loading]);
-
   const titleName = path ? basenamePath(path) : "";
 
   const kindLabel = useMemo(() => {
@@ -362,13 +351,12 @@ export function FilePreviewModal() {
   const showUnknownFallback =
     !loading && !error && kind === "unknown" && textContent === null && !blobUrl;
 
-  const showDocxApproximationNote = kind === "docx" && !loading && !error && docxHtml !== null;
-  const openButtonLabel = kind === "docx" ? "Open in: Word" : kind === "xlsx" ? "Open in: Excel" : "Open in: Default app";
+  const openButtonLabel = preferredFileApp ? `Open in ${preferredFileApp}` : "Open";
 
   const docxPreviewStyle = useMemo(() => {
     if (!docxHtml) return undefined;
     return {
-      fontFamily: `'${docxLayout?.fontFamily ?? "Aptos"}', 'Calibri', 'Carlito', 'Segoe UI', system-ui, sans-serif`,
+      fontFamily: `'${docxLayout?.fontFamily ?? "Aptos"}', 'Aptos Display', 'Calibri', 'Carlito', 'Segoe UI', system-ui, sans-serif`,
       ["--docx-accent" as string]: docxLayout?.accentColor ?? "var(--accent)",
       ["--docx-title" as string]: docxLayout?.titleColor ?? "var(--text-primary)",
       ["--docx-body" as string]: docxLayout?.bodyColor ?? "var(--text-primary)",
@@ -395,27 +383,6 @@ export function FilePreviewModal() {
               </Button>
             </div>
           </div>
-          {showDocxApproximationNote ? (
-            docxNoticeCollapsed ? (
-              <button
-                type="button"
-                data-file-preview-docx-chip="true"
-                className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border/70 bg-muted/25 px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/35"
-                title={DOCX_LAYOUT_NOTICE_TEXT}
-                onClick={() => setDocxNoticeCollapsed(false)}
-              >
-                <InfoIcon className="size-3.5" />
-                Layout note
-              </button>
-            ) : (
-              <div
-                data-file-preview-docx-note="true"
-                className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
-              >
-                {DOCX_LAYOUT_NOTICE_TEXT}
-              </div>
-            )
-          ) : null}
           {truncated ? (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
               <span>
@@ -431,7 +398,7 @@ export function FilePreviewModal() {
 
         <div className={cn(
           "min-h-0 flex-1 overflow-y-auto px-5 py-4",
-          kind === "docx" && docxHtml && "bg-muted/30 px-6 py-6",
+          kind === "docx" && docxHtml && "bg-white px-6 py-6",
         )}>
           {loading ? (
             <div className="py-16 text-center text-sm text-muted-foreground">Loading preview…</div>
@@ -460,7 +427,7 @@ export function FilePreviewModal() {
           ) : kind === "docx" && docxHtml ? (
             <div
               className={cn(
-                "docx-preview mx-auto w-full max-w-[8.5in] rounded-sm border border-border/60 bg-background px-[1in] py-[0.75in] shadow-sm",
+                "docx-preview mx-auto min-h-[11in] w-[8.5in] max-w-full rounded-sm border border-border/60 bg-white px-[1in] py-[1in] text-black shadow-sm",
                 "[&_.docx-title]:mb-3 [&_.docx-title]:text-[22pt] [&_.docx-title]:font-bold [&_.docx-title]:leading-[1.2] [&_.docx-title]:tracking-[-0.01em] [&_.docx-title]:text-[var(--docx-title)]",
                 "[&_.docx-subtitle]:mb-3 [&_.docx-subtitle]:text-[11pt] [&_.docx-subtitle]:italic [&_.docx-subtitle]:leading-[1.35] [&_.docx-subtitle]:text-[var(--docx-accent)]",
                 "[&_.docx-byline]:mb-2 [&_.docx-byline]:text-[10pt] [&_.docx-byline]:font-semibold [&_.docx-byline]:leading-[1.3] [&_.docx-byline]:text-[var(--docx-title)]",

@@ -131,7 +131,8 @@ describe("workspace file explorer helpers", () => {
           entry({ name: "README.md", path: readmePath, isDirectory: false }),
         ]),
         [srcPath]: snapshot([entry({ name: "index.ts", path: `${srcPath}/index.ts`, isDirectory: false })]),
-      }
+      },
+      false,
     );
 
     expect(rows).toHaveLength(3);
@@ -159,7 +160,8 @@ describe("workspace file explorer helpers", () => {
           updatedAt: 1700000000000,
           fingerprint: "fp",
         },
-      }
+      },
+      false,
     );
 
     expect(rows).toHaveLength(2);
@@ -176,10 +178,30 @@ describe("workspace file explorer helpers", () => {
       new Set([root, srcPath]),
       {
         [root]: snapshot([entry({ name: "src", path: srcPath, isDirectory: true })]),
-      }
+      },
+      false,
     );
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ kind: "entry", depth: 0, expanded: true });
+  });
+
+  test("buildExplorerRows suppresses office lockfiles when hidden files are off", () => {
+    const root = "/workspace";
+
+    const rows = buildExplorerRows(
+      root,
+      new Set([root]),
+      {
+        [root]: snapshot([
+          entry({ name: "~$draft.docx", path: `${root}/~$draft.docx`, isDirectory: false }),
+          entry({ name: "draft.docx", path: `${root}/draft.docx`, isDirectory: false }),
+        ]),
+      },
+      false,
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind === "entry" ? rows[0].entry.name : "").toBe("draft.docx");
   });
 });

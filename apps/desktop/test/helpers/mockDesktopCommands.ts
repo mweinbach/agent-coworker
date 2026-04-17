@@ -73,6 +73,7 @@ export function createDesktopCommandsMock(
     listDirectory: async () => [],
     readFile: async () => "",
     readFileForPreview: async () => ({ bytes: new Uint8Array(), byteLength: 0, truncated: false }),
+    getPreferredFileApp: async () => null,
     previewOSFile: async () => {},
     openPath: async () => {},
     openExternalUrl: async () => {},

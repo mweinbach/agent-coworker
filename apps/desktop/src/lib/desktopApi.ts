@@ -83,6 +83,10 @@ export type OpenPathInput = {
   path: string;
 };
 
+export type PreferredFileAppInput = {
+  path: string;
+};
+
 export type OpenExternalUrlInput = {
   url: string;
 };
@@ -268,6 +272,7 @@ export interface DesktopApi {
   listDirectory(opts: ListDirectoryInput): Promise<ExplorerEntry[]>;
   readFile(opts: ReadFileInput): Promise<ReadFileOutput>;
   readFileForPreview(opts: ReadFileForPreviewInput): Promise<ReadFileForPreviewOutput>;
+  getPreferredFileApp(opts: PreferredFileAppInput): Promise<string | null>;
   previewOSFile(opts: PreviewOSFileInput): Promise<void>;
   openPath(opts: OpenPathInput): Promise<void>;
   openExternalUrl(opts: OpenExternalUrlInput): Promise<void>;
@@ -316,6 +321,7 @@ export const DESKTOP_IPC_CHANNELS = {
   listDirectory: "desktop:listDirectory",
   readFile: "desktop:readFile",
   readFileForPreview: "desktop:readFileForPreview",
+  getPreferredFileApp: "desktop:getPreferredFileApp",
   previewOSFile: "desktop:previewOSFile",
   openPath: "desktop:openPath",
   openExternalUrl: "desktop:openExternalUrl",

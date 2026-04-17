@@ -16,6 +16,7 @@ import {
   type ListDirectoryInput,
   type OpenExternalUrlInput,
   type OpenPathInput,
+  type PreferredFileAppInput,
   type PreviewOSFileInput,
   type ReadFileForPreviewInput,
   type ReadFileInput,
@@ -44,6 +45,7 @@ import {
   mobileRelayBridgeStateSchema,
   mobileRelayStartInputSchema,
   openPathInputSchema,
+  preferredFileAppInputSchema,
   openExternalUrlInputSchema,
   previewOSFileInputSchema,
   readFileForPreviewInputSchema,
@@ -120,6 +122,10 @@ function assertPreviewOSFileInput(opts: PreviewOSFileInput): void {
 
 function assertOpenPathInput(opts: OpenPathInput): void {
   parseWithSchema(openPathInputSchema, opts, "openPath options");
+}
+
+function assertPreferredFileAppInput(opts: PreferredFileAppInput): void {
+  parseWithSchema(preferredFileAppInputSchema, opts, "getPreferredFileApp options");
 }
 
 function assertOpenExternalUrlInput(opts: OpenExternalUrlInput): void {
@@ -302,6 +308,11 @@ const desktopApi = Object.freeze<DesktopApi>({
   readFileForPreview: (opts: ReadFileForPreviewInput) => {
     assertReadFileForPreviewInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.readFileForPreview, opts);
+  },
+
+  getPreferredFileApp: (opts: PreferredFileAppInput) => {
+    assertPreferredFileAppInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getPreferredFileApp, opts);
   },
 
   previewOSFile: (opts: PreviewOSFileInput) => {

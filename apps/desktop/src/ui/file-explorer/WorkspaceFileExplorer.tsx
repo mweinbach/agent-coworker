@@ -196,10 +196,16 @@ export function shouldAutoRefreshExplorer(visibilityState: string, hasFocus: boo
   return visibilityState === "visible" && hasFocus;
 }
 
+function shouldSuppressExplorerEntry(entry: ExplorerEntry, showHiddenFiles: boolean): boolean {
+  if (showHiddenFiles) return false;
+  return entry.isHidden || entry.name.startsWith(".") || entry.name.startsWith("~$");
+}
+
 export function buildExplorerRows(
   rootPath: string,
   expandedPaths: Set<string>,
-  directoryByPath: Record<string, DirectorySnapshot>
+  directoryByPath: Record<string, DirectorySnapshot>,
+  showHiddenFiles: boolean,
 ): ExplorerTreeRow[] {
   const rows: ExplorerTreeRow[] = [];
   const normalizedRootPath = normalizeExplorerPath(rootPath);
@@ -213,6 +219,7 @@ export function buildExplorerRows(
     nextAncestry.add(directoryPath);
 
     for (const entry of directory.entries) {
+      if (shouldSuppressExplorerEntry(entry, showHiddenFiles)) continue;
       const normalizedEntryPath = normalizeExplorerPath(entry.path);
       const expanded = entry.isDirectory && expandedPaths.has(normalizedEntryPath);
 
@@ -349,8 +356,8 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   }, [explorer?.selectedPath]);
 
   const treeRows = useMemo(
-    () => buildExplorerRows(rootPath, expandedPaths, directoryByPath),
-    [rootPath, expandedPaths, directoryByPath]
+    () => buildExplorerRows(rootPath, expandedPaths, directoryByPath, showHiddenFiles),
+    [rootPath, expandedPaths, directoryByPath, showHiddenFiles]
   );
 
   const rootSnapshot = directoryByPath[rootPath];

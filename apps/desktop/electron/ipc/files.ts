@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 
 import { clipboard, shell, BrowserWindow } from "electron";
 
@@ -9,6 +11,7 @@ import {
   type CreateDirectoryInput,
   type ListDirectoryInput,
   type OpenPathInput,
+  type PreferredFileAppInput,
   type PreviewOSFileInput,
   type ReadFileForPreviewInput,
   type ReadFileInput,
@@ -21,6 +24,7 @@ import {
   createDirectoryInputSchema,
   listDirectoryInputSchema,
   openPathInputSchema,
+  preferredFileAppInputSchema,
   previewOSFileInputSchema,
   readFileForPreviewInputSchema,
   readFileInputSchema,
@@ -34,8 +38,11 @@ import {
   resolveAllowedPath,
   resolveAllowedRevealPath,
 } from "../services/ipcSecurity";
+import { isExplorerEntryHidden } from "../services/explorerVisibility";
 import { DEFAULT_PREVIEW_MAX_BYTES, readCappedFilePreview } from "../services/filePreviewRead";
 import type { DesktopIpcModuleContext } from "./types";
+
+const execFile = promisify(execFileCallback);
 
 export function registerFilesIpc(context: DesktopIpcModuleContext): void {
   const { handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
@@ -52,7 +59,7 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     const entries = await fs.readdir(safePath, { withFileTypes: true });
     const results = await Promise.all(
       entries.map(async (entry) => {
-        const isHidden = entry.name.startsWith(".");
+        const isHidden = isExplorerEntryHidden(entry.name);
         if (!input.includeHidden && isHidden) {
           return null;
         }
@@ -115,6 +122,13 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
     await workspaceRoots.ensureApprovedWorkspaceRoots();
     const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
     return await readCappedFilePreview(safePath, input.maxBytes ?? DEFAULT_PREVIEW_MAX_BYTES);
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getPreferredFileApp, async (_event, args: PreferredFileAppInput) => {
+    const input = parseWithSchema(preferredFileAppInputSchema, args, "getPreferredFileApp options");
+    await workspaceRoots.ensureApprovedWorkspaceRoots();
+    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    return await resolvePreferredFileAppLabel(safePath);
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.previewOSFile, async (event, args: PreviewOSFileInput) => {
@@ -193,4 +207,63 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
       }
     }
   });
+}
+
+type AppCandidate = {
+  label: string;
+  bundleId: string;
+  knownPaths: string[];
+};
+
+async function resolvePreferredFileAppLabel(filePath: string): Promise<string | null> {
+  if (process.platform !== "darwin") return null;
+
+  const ext = path.extname(filePath).toLowerCase();
+  const candidates =
+    ext === ".docx" || ext === ".doc"
+      ? [
+          {
+            label: "Word",
+            bundleId: "com.microsoft.Word",
+            knownPaths: ["/Applications/Microsoft Word.app"],
+          },
+          {
+            label: "Pages",
+            bundleId: "com.apple.iWork.Pages",
+            knownPaths: ["/Applications/Pages.app"],
+          },
+        ]
+      : ext === ".xlsx" || ext === ".xls"
+        ? [
+            {
+              label: "Excel",
+              bundleId: "com.microsoft.Excel",
+              knownPaths: ["/Applications/Microsoft Excel.app"],
+            },
+          ]
+        : [];
+
+  for (const candidate of candidates) {
+    if (await appCandidateExists(candidate)) return candidate.label;
+  }
+
+  return null;
+}
+
+async function appCandidateExists(candidate: AppCandidate): Promise<boolean> {
+  for (const knownPath of candidate.knownPaths) {
+    try {
+      await fs.access(knownPath);
+      return true;
+    } catch {
+      // Keep checking.
+    }
+  }
+
+  try {
+    const { stdout } = await execFile("mdfind", [`kMDItemCFBundleIdentifier == "${candidate.bundleId}"`]);
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
 }

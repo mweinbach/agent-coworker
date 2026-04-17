@@ -142,6 +142,10 @@ export async function readFileForPreview(opts: {
   return await requireDesktopApi().readFileForPreview(opts);
 }
 
+export async function getPreferredFileApp(opts: { path: string }): Promise<string | null> {
+  return await requireDesktopApi().getPreferredFileApp(opts);
+}
+
 export async function previewOSFile(opts: { path: string }): Promise<void> {
   await requireDesktopApi().previewOSFile(opts);
 }

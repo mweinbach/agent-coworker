@@ -4,7 +4,7 @@ import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
-import { ExternalLinkIcon, FolderOpenIcon } from "lucide-react";
+import { CopyIcon, ExternalLinkIcon, FolderOpenIcon } from "lucide-react";
 
 import { useAppStore } from "../app/store";
 import { Badge } from "../components/ui/badge";
@@ -17,7 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog";
-import { openPath, readFileForPreview, revealPath } from "../lib/desktopCommands";
+import { copyPath, openPath, readFileForPreview, revealPath } from "../lib/desktopCommands";
 import {
   DesktopMessageLink,
   defaultDesktopRehypePlugins,
@@ -308,6 +308,10 @@ export function FilePreviewModal() {
     if (path) void openPath({ path }).catch(() => {});
   };
 
+  const copyFullPath = () => {
+    if (path) void copyPath({ path }).catch(() => {});
+  };
+
   const reveal = () => {
     if (path) void revealPath({ path }).catch(() => {});
   };
@@ -338,31 +342,55 @@ export function FilePreviewModal() {
   const showUnknownFallback =
     !loading && !error && kind === "unknown" && textContent === null && !blobUrl;
 
+  const showDocxApproximationNote = kind === "docx" && !loading && !error && docxHtml !== null;
+
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent className="app-surface-opaque flex max-h-[90vh] max-w-5xl flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="shrink-0 space-y-2 border-b border-border/60 px-5 py-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
+        <DialogHeader className="shrink-0 space-y-3 border-b border-border/60 px-5 py-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <DialogTitle className="truncate text-lg">{titleName}</DialogTitle>
                 <Badge variant="secondary">{kindLabel}</Badge>
               </div>
-              <DialogDescription className="font-mono text-xs text-muted-foreground break-all">
-                {path}
-              </DialogDescription>
             </div>
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={reveal}>
-                <FolderOpenIcon className="mr-1 size-3.5" />
-                Reveal
-              </Button>
-              <Button type="button" variant="default" size="sm" onClick={openExternal}>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={openExternal}>
                 <ExternalLinkIcon className="mr-1 size-3.5" />
                 Open externally
               </Button>
             </div>
           </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="min-w-0 flex-1 rounded-md border border-border/70 bg-muted/30 px-3 py-2">
+              <DialogDescription
+                data-file-preview-path="true"
+                className="truncate whitespace-nowrap font-mono text-[11px] leading-none text-muted-foreground"
+                title={path ?? undefined}
+              >
+                {path}
+              </DialogDescription>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <Button type="button" variant="ghost" size="sm" onClick={copyFullPath}>
+                <CopyIcon className="mr-1 size-3.5" />
+                Copy path
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={reveal}>
+                <FolderOpenIcon className="mr-1 size-3.5" />
+                Reveal
+              </Button>
+            </div>
+          </div>
+          {showDocxApproximationNote ? (
+            <div
+              data-file-preview-docx-note="true"
+              className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+            >
+              Word preview is optimized for content review and may not match Word layout exactly. Use Open externally for fidelity-sensitive checks.
+            </div>
+          ) : null}
           {truncated ? (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
               <span>
@@ -390,15 +418,17 @@ export function FilePreviewModal() {
             <img src={blobUrl} alt={titleName} className="mx-auto block max-h-[min(72vh,720px)] max-w-full object-contain" />
           ) : (kind === "markdown" || kind === "text") && textContent !== null ? (
             kind === "markdown" ? (
-              <Streamdown
-                className="max-w-none leading-7 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_code]:rounded-sm [&_code]:bg-muted/45 [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/35 [&_pre]:p-3"
-                components={{ a: DesktopMessageLink }}
-                plugins={previewStreamdownPlugins}
-                remarkPlugins={mdRemarkPlugins}
-                rehypePlugins={defaultDesktopRehypePlugins}
-              >
-                {textContent}
-              </Streamdown>
+              <div data-file-preview-markdown-shell="true" className="mx-auto w-full max-w-[78ch]">
+                <Streamdown
+                  className="leading-7 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_code]:rounded-sm [&_code]:bg-muted/45 [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/35 [&_pre]:p-3"
+                  components={{ a: DesktopMessageLink }}
+                  plugins={previewStreamdownPlugins}
+                  remarkPlugins={mdRemarkPlugins}
+                  rehypePlugins={defaultDesktopRehypePlugins}
+                >
+                  {textContent}
+                </Streamdown>
+              </div>
             ) : (
               <pre className="whitespace-pre-wrap break-words rounded-md border border-border/80 bg-muted/25 p-3 font-mono text-xs leading-relaxed">{textContent}</pre>
             )

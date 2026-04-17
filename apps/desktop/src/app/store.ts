@@ -28,6 +28,7 @@ const initialState: AppStoreDataState = {
 
   latestTodosByThreadId: {},
   workspaceExplorerById: {},
+  workspaceExplorerRefreshById: {},
 
   promptModal: null,
   filePreview: null,

@@ -152,6 +152,7 @@ export type AppStoreState = {
 
   latestTodosByThreadId: Record<string, TodoItem[]>;
   workspaceExplorerById: Record<string, WorkspaceExplorerState>;
+  workspaceExplorerRefreshById: Record<string, number>;
 
   promptModal: PromptModalState;
   filePreview: { path: string } | null;

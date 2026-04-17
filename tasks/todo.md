@@ -1,5 +1,13 @@
 # Task Plan
 
+## Fix Desktop Preview Discoverability and Modal Polish
+
+- [x] Inspect the current live Electron desktop behavior before editing, including the context sidebar file tree baseline.
+- [x] Invalidate the live workspace file tree immediately after in-app file writes so new files surface without waiting for focus/polling.
+- [x] Simplify the preview header path treatment to a single-line truncated path with copy/reveal actions.
+- [x] Constrain Markdown preview width and add a clear docx approximation note in the in-app preview.
+- [x] Add focused desktop regressions, rerun targeted verification, and finish with a computer-use walkthrough of the live app.
+
 ## Fix Raw-loop includeParentTodos Review Thread
 
 - [x] Confirm the unresolved raw-loop review comment is still real against current `HEAD`.

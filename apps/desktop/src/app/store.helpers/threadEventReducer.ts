@@ -1064,6 +1064,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       onToolTerminal: () => {
         const thread = get().threads.find((t) => t.id === threadId);
         if (thread) {
+          set((state) => ({
+            workspaceExplorerRefreshById: {
+              ...state.workspaceExplorerRefreshById,
+              [thread.workspaceId]: (state.workspaceExplorerRefreshById[thread.workspaceId] ?? 0) + 1,
+            },
+          }));
           void get().refreshWorkspaceFiles(thread.workspaceId);
         }
       },

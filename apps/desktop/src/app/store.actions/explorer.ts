@@ -60,6 +60,15 @@ export function createExplorerActions(set: StoreSet, get: StoreGet): Pick<
   | "openFilePreview"
   | "closeFilePreview"
 > {
+  const bumpWorkspaceExplorerRefresh = (workspaceId: string) => {
+    set((state) => ({
+      workspaceExplorerRefreshById: {
+        ...state.workspaceExplorerRefreshById,
+        [workspaceId]: (state.workspaceExplorerRefreshById[workspaceId] ?? 0) + 1,
+      },
+    }));
+  };
+
   return {
     openFilePreview: (opts: { path: string }) => {
       set({ filePreview: { path: opts.path } });
@@ -193,18 +202,21 @@ export function createExplorerActions(set: StoreSet, get: StoreGet): Pick<
     createWorkspaceDirectory: async (workspaceId: string, parentPath: string, name: string) => {
       await createDirectory({ parentPath, name });
       await get().refreshWorkspaceFiles(workspaceId);
+      bumpWorkspaceExplorerRefresh(workspaceId);
     },
 
 
     renameWorkspacePath: async (workspaceId: string, targetPath: string, newName: string) => {
       await renamePath({ path: targetPath, newName });
       await get().refreshWorkspaceFiles(workspaceId);
+      bumpWorkspaceExplorerRefresh(workspaceId);
     },
 
 
     trashWorkspacePath: async (workspaceId: string, targetPath: string) => {
       await trashPath({ path: targetPath });
       await get().refreshWorkspaceFiles(workspaceId);
+      bumpWorkspaceExplorerRefresh(workspaceId);
     },
   };
 }

@@ -311,6 +311,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 }: WorkspaceFileExplorerProps) {
   const workspacePath = useAppStore((s) => s.workspaces.find((w) => w.id === workspaceId)?.path ?? null);
   const explorer = useAppStore((s) => s.workspaceExplorerById[workspaceId]);
+  const refreshSignal = useAppStore((s) => s.workspaceExplorerRefreshById[workspaceId] ?? 0);
   const showHiddenFiles = useAppStore((s) => s.showHiddenFiles);
   const refresh = useAppStore((s) => s.refreshWorkspaceFiles);
   const selectFile = useAppStore((s) => s.selectWorkspaceFile);
@@ -326,6 +327,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   const latestRequestByPathRef = useRef<Record<string, number>>({});
   const requestCounterRef = useRef(0);
   const syncInFlightRef = useRef(false);
+  const syncQueuedRef = useRef(false);
   const scopeRef = useRef<string | null>(null);
   const rootPathRef = useRef<string>("");
   const expandedPathsRef = useRef<Set<string>>(new Set());
@@ -527,15 +529,24 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   const refreshExpandedDirectories = useCallback(
     async () => {
       const currentRootPath = rootPathRef.current;
-      if (!currentRootPath || syncInFlightRef.current) return;
+      if (!currentRootPath) return;
+      if (syncInFlightRef.current) {
+        syncQueuedRef.current = true;
+        return;
+      }
       syncInFlightRef.current = true;
 
       try {
-        const paths = new Set<string>([currentRootPath, ...expandedPathsRef.current]);
-        const updates = await Promise.all(Array.from(paths).map((path) => loadDirectory(path, { background: true })));
-        if (updates.some(Boolean)) {
-          void refresh(workspaceId).catch(() => {});
-        }
+        do {
+          syncQueuedRef.current = false;
+          const cycleRootPath = rootPathRef.current;
+          if (!cycleRootPath) break;
+          const paths = new Set<string>([cycleRootPath, ...expandedPathsRef.current]);
+          const updates = await Promise.all(Array.from(paths).map((path) => loadDirectory(path, { background: true })));
+          if (updates.some(Boolean)) {
+            void refresh(workspaceId).catch(() => {});
+          }
+        } while (syncQueuedRef.current);
       } finally {
         syncInFlightRef.current = false;
       }
@@ -657,6 +668,11 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     if (!rootPath) return;
     void refreshExpandedDirectories();
   }, [rootPath, refreshExpandedDirectories, showHiddenFiles]);
+
+  useEffect(() => {
+    if (!rootPath || refreshSignal === 0) return;
+    void refreshExpandedDirectories();
+  }, [refreshExpandedDirectories, refreshSignal, rootPath]);
 
   useEffect(() => {
     if (!rootPath) return;

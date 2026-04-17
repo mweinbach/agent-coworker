@@ -1,10 +1,6 @@
 import { z } from "zod";
 
 import {
-  jsonRpcA2uiRequestSchemas,
-  jsonRpcA2uiResultSchemas,
-} from "./schema.a2ui";
-import {
   jsonRpcAgentNotificationSchemas,
   jsonRpcAgentRequestSchemas,
   jsonRpcAgentResultSchemas,
@@ -47,7 +43,6 @@ export const jsonRpcRequestSchemas = {
   ...jsonRpcSkillsRequestSchemas,
   ...jsonRpcMemoryRequestSchemas,
   ...jsonRpcBackupsRequestSchemas,
-  ...jsonRpcA2uiRequestSchemas,
 } as const;
 
 export const jsonRpcNotificationSchemas = {
@@ -72,7 +67,6 @@ export const jsonRpcResultSchemas = {
   ...jsonRpcSkillsResultSchemas,
   ...jsonRpcMemoryResultSchemas,
   ...jsonRpcBackupsResultSchemas,
-  ...jsonRpcA2uiResultSchemas,
 } as const;
 
 export const jsonRpcSchemaBundle = {

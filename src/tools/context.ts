@@ -73,17 +73,4 @@ export interface ToolContext {
 
   /** Notify the session when tool-driven budget changes should be persisted/emitted immediately. */
   onSessionUsageBudgetUpdated?: (snapshot: SessionUsageSnapshot) => void;
-
-  /**
-   * Apply an A2UI v0.9 envelope to the session's surface state. Returns a
-   * per-envelope result (ok/error plus surfaceId/change metadata). Only
-   * populated when the harness enables the A2UI feature.
-   */
-  applyA2uiEnvelope?: (envelope: unknown) => {
-    ok: boolean;
-    surfaceId?: string;
-    change?: "created" | "updated" | "deleted" | "noop";
-    error?: string;
-    warning?: string;
-  };
 }

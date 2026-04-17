@@ -82,18 +82,6 @@ export const projectedItemSchema = z.discriminatedUnion("type", [
     code: z.enum(SERVER_ERROR_CODES),
     source: z.enum(SERVER_ERROR_SOURCES),
   }).strict(),
-  z.object({
-    id: nonEmptyStringSchema,
-    type: z.literal("uiSurface"),
-    surfaceId: nonEmptyStringSchema,
-    catalogId: nonEmptyStringSchema,
-    version: z.literal("v0.9"),
-    revision: z.number().int().nonnegative(),
-    deleted: z.boolean(),
-    theme: z.record(z.string(), z.unknown()).optional(),
-    root: z.record(z.string(), z.unknown()).optional(),
-    dataModel: z.unknown().optional(),
-  }).strict(),
 ]);
 
 export type ProjectedItem = z.infer<typeof projectedItemSchema>;
@@ -181,20 +169,6 @@ function toFeedItem(
         message: item.message,
         code: item.code,
         source: item.source,
-      };
-    case "uiSurface":
-      return {
-        id: item.id,
-        kind: "ui_surface",
-        ts: existingTsOr(ts, existing),
-        surfaceId: item.surfaceId,
-        catalogId: item.catalogId,
-        version: item.version,
-        revision: item.revision,
-        deleted: item.deleted,
-        ...(item.theme ? { theme: item.theme } : {}),
-        ...(item.root ? { root: item.root } : {}),
-        ...(item.dataModel !== undefined ? { dataModel: item.dataModel } : {}),
       };
   }
 }

@@ -533,13 +533,6 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.includeRawChunks) ??
     true;
 
-  const enableA2ui =
-    asBoolean(env.AGENT_ENABLE_A2UI) ??
-    asBoolean(projectConfig.enableA2ui) ??
-    asBoolean(userConfig.enableA2ui) ??
-    asBoolean(builtInDefaults.enableA2ui) ??
-    false;
-
   const backupsEnabled =
     asBoolean(env.AGENT_BACKUPS_ENABLED) ??
     asBoolean(projectConfig.backupsEnabled) ??
@@ -647,7 +640,6 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     enableMemory,
     memoryRequireApproval,
     includeRawChunks,
-    enableA2ui,
     backupsEnabled,
     observabilityEnabled,
     observability,

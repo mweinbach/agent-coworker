@@ -178,7 +178,6 @@ Currently implemented `cowork/*` methods include:
   - `cowork/session/file/upload`
   - `cowork/session/delete`
   - `cowork/session/agent/inspect`
-  - `cowork/session/a2ui/action`
 - provider controls
   - `cowork/provider/catalog/read`
   - `cowork/provider/authMethods/read`
@@ -255,28 +254,6 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 `cowork/session/file/upload` writes a file into the workspace uploads directory and returns a legacy-compatible `file_uploaded` event envelope. JSON-RPC clients can then reference that saved file from `turn/start` or `turn/steer` with an `uploadedFile` input part when the file is too large to send inline.
 
 `cowork/session/agent/inspect` is a thread-scoped, root-only read for child agents. It returns the same detailed inspection payload as the root `inspectAgent` tool: the latest child summary, the full latest assistant text, a parsed structured child report when the final assistant text includes a recognized JSON footer, and compact session/last-turn usage snapshots for the child.
-
-`cowork/session/a2ui/action` forwards a user interaction on an A2UI surface (Phase 2) to the running agent. Clients dispatch it when a user clicks a `Button`, submits a `TextField`, or toggles a `Checkbox` inside an A2UI surface.
-
-Request params:
-
-```ts
-{
-  threadId: string;
-  surfaceId: string;
-  componentId: string;
-  eventType: string;            // e.g. "click", "submit", "change"
-  payload?: Record<string, unknown>;
-  clientMessageId?: string;
-}
-```
-
-The harness validates that the surface exists, is not deleted, and contains `componentId`. If validation fails the server replies with a JSON-RPC invalidParams error. On success the harness synthesizes a structured user message and delivers it:
-
-- If a turn is already running, the action is delivered as a steer against that turn, and the result carries `delivery: "delivered-as-steer"` and the active `turnId`.
-- Otherwise, the harness starts a new turn carrying the action text as the user message, and the result carries `delivery: "delivered-as-turn"` and the new `turnId`.
-
-The synthesized text is deterministic and human-readable (starts with `[a2ui.action] The user interacted with surface "<id>".`) so the agent can respond with further `a2ui` tool calls or plain text.
 
 ### Core JSON-RPC notifications currently available
 
@@ -394,7 +371,6 @@ The remainder of this document describes the **legacy Cowork protocol**, which r
   - Session Data: [messages](#messages) | [sessions](#sessions) | [session_snapshot](#session_snapshot) | [agent_spawned](#agent_spawned) | [agent_list](#agent_list) | [agent_wait_result](#agent_wait_result) | [session_deleted](#session_deleted) | [file_uploaded](#file_uploaded) | [turn_usage](#turn_usage) | [session_usage](#session_usage) | [budget_warning](#budget_warning) | [budget_exceeded](#budget_exceeded)
   - Backup & Observability: [session_backup_state](#session_backup_state) | [workspace_backups](#workspace_backups) | [workspace_backup_delta](#workspace_backup_delta) | [observability_status](#observability_status)
   - Harness: [harness_context](#harness_context)
-  - Generative UI: [a2ui_surface](#a2ui_surface)
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
@@ -3951,55 +3927,6 @@ Current harness context state for the session.
 | `context` | `(HarnessContextPayload & { updatedAt: string }) \| null` | Context with timestamp, or `null` if no context is set |
 
 When non-null, `context` contains all [HarnessContextPayload](#harnesscontextpayload) fields plus an `updatedAt` ISO 8601 timestamp.
-
----
-
-### a2ui_surface
-
-Resolved generative-UI surface state emitted when the agent calls the `a2ui` tool. Published after every envelope application and carries the post-reduction snapshot (not the raw envelope).
-
-This event is emitted only when the harness has A2UI enabled (`config/defaults.json`, `~/.agent/config.json`, or `.agent/config.json` contains `"enableA2ui": true`, or the environment has `AGENT_ENABLE_A2UI=true`). Clients can safely ignore the event when they do not implement an A2UI renderer.
-
-```json
-{
-  "type": "a2ui_surface",
-  "sessionId": "...",
-  "surfaceId": "greeter",
-  "catalogId": "https://a2ui.org/specification/v0_9/basic_catalog.json",
-  "version": "v0.9",
-  "revision": 3,
-  "deleted": false,
-  "theme": { "primaryColor": "#0f766e" },
-  "root": {
-    "id": "root",
-    "type": "Column",
-    "children": [
-      { "id": "title", "type": "Heading", "props": { "text": "Hello" } },
-      { "id": "body",  "type": "Text",    "props": { "text": { "path": "/message" } } }
-    ]
-  },
-  "dataModel": { "message": "Welcome to A2UI." },
-  "updatedAt": "2026-03-01T12:00:00.000Z"
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | `"a2ui_surface"` | — |
-| `sessionId` | `string` | Session identifier |
-| `surfaceId` | `string` | Unique id inside the session. Subsequent events for the same id replace the previous state. |
-| `catalogId` | `string` | URL identifying the A2UI component catalog the agent wrote against. Clients that only render the v0.9 basic catalog should show a fallback when the id does not match. |
-| `version` | `"v0.9"` | A2UI protocol version. |
-| `revision` | `integer` | Monotonically increases every time the harness folds a new envelope. |
-| `deleted` | `boolean` | `true` after `deleteSurface`. Clients should unmount the surface. |
-| `theme` | `Record<string, unknown> \| undefined` | Opaque theme blob from `createSurface.theme`. |
-| `root` | `Record<string, unknown> \| undefined` | Current root component tree. |
-| `dataModel` | `unknown \| undefined` | Current JSON data model the component tree reads via `{ path, ... }` bindings. |
-| `updatedAt` | `string` | ISO 8601 of the last fold. |
-
-On the JSON-RPC transport, the harness also projects the event into the standard `item/started` + `item/completed` notifications as a `uiSurface` ProjectedItem, and additionally emits a dedicated `cowork/session/a2ui/surface` notification carrying the raw event shape above. Thin clients can consume either; the ProjectedItem path keeps the surface in sync with the session feed.
-
-See [`src/shared/a2ui`](../src/shared/a2ui) for the envelope schema, reducer, and binding evaluator, and [`skills/a2ui/SKILL.md`](../skills/a2ui/SKILL.md) for the agent-facing guide.
 
 ---
 

@@ -193,12 +193,6 @@ export interface AgentConfig {
   includeRawChunks?: boolean;
 
   /**
-   * Whether the A2UI (Agent-to-UI) generative-UI tool is exposed to the model
-   * and associated protocol events are emitted. Defaults to false.
-   */
-  enableA2ui?: boolean;
-
-  /**
    * Whether workspace/session backups are enabled.
    * Defaults to true when not specified.
    */

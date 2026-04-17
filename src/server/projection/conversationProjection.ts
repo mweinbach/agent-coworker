@@ -670,23 +670,6 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     opts.sink.emitItemCompleted(null, item);
   };
 
-  const emitA2uiSurfaceItem = (evt: Extract<ServerEvent, { type: "a2ui_surface" }>) => {
-    const item: ProjectedItem = {
-      id: makeItemId("uiSurface", evt.surfaceId),
-      type: "uiSurface",
-      surfaceId: evt.surfaceId,
-      catalogId: evt.catalogId,
-      version: evt.version,
-      revision: evt.revision,
-      deleted: evt.deleted,
-      ...(evt.theme ? { theme: evt.theme } : {}),
-      ...(evt.root ? { root: evt.root } : {}),
-      ...(evt.dataModel !== undefined ? { dataModel: evt.dataModel } : {}),
-    };
-    opts.sink.emitItemStarted(null, item);
-    opts.sink.emitItemCompleted(null, item);
-  };
-
   const emitErrorItem = (evt: Extract<ServerEvent, { type: "error" }>) => {
     const item: ProjectedItem = {
       id: makeItemId("error", crypto.randomUUID()),
@@ -966,9 +949,6 @@ export function createConversationProjection(opts: CreateConversationProjectionO
           return;
         case "error":
           emitErrorItem(event);
-          return;
-        case "a2ui_surface":
-          emitA2uiSurfaceItem(event);
           return;
         default:
           return;

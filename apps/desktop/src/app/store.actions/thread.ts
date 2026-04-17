@@ -430,7 +430,7 @@ export async function hydrateThreadSelection(
   clearThreadSelectionRequest(threadId, requestId);
 }
 
-export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "removeThread" | "deleteThreadHistory" | "renameThread" | "newThread" | "selectThread" | "reconnectThread" | "sendMessage" | "cancelThread" | "clearThreadUsageHardCap" | "dispatchA2uiAction" | "setThreadModel" | "setComposerText" | "setInjectContext" | "answerAsk" | "answerApproval" | "dismissPrompt" | "loadAllThreadUsage"> {
+export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "removeThread" | "deleteThreadHistory" | "renameThread" | "newThread" | "selectThread" | "reconnectThread" | "sendMessage" | "cancelThread" | "clearThreadUsageHardCap" | "setThreadModel" | "setComposerText" | "setInjectContext" | "answerAsk" | "answerApproval" | "dismissPrompt" | "loadAllThreadUsage"> {
   const waitForSelectionFrame = async () => {
     await new Promise<void>((resolve) => {
       if (typeof window === "undefined") {
@@ -978,35 +978,6 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         sessionId: get().threadRuntimeById[threadId]?.sessionId,
         stopAtUsd: null,
       });
-    },
-
-    dispatchA2uiAction: async ({ threadId, surfaceId, componentId, eventType, payload }) => {
-      const thread = get().threads.find((t) => t.id === threadId);
-      if (!thread) return false;
-      const clientMessageId = makeId();
-      try {
-        const mod = await import("../store.helpers/jsonRpcSocket");
-        await mod.dispatchA2uiAction(get, set, thread.workspaceId, threadId, {
-          surfaceId,
-          componentId,
-          eventType,
-          ...(payload !== undefined ? { payload } : {}),
-          clientMessageId,
-        });
-        return true;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "A2UI action failed",
-            detail: message,
-          }),
-        }));
-        return false;
-      }
     },
   
 

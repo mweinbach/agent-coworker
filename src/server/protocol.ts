@@ -378,19 +378,6 @@ export type ServerEvent =
   }
   | { type: "harness_context"; sessionId: string; context: (HarnessContextPayload & { updatedAt: string }) | null }
   | {
-    type: "a2ui_surface";
-    sessionId: string;
-    surfaceId: string;
-    catalogId: string;
-    version: "v0.9";
-    revision: number;
-    deleted: boolean;
-    theme?: Record<string, unknown>;
-    root?: Record<string, unknown>;
-    dataModel?: unknown;
-    updatedAt: string;
-  }
-  | {
     type: "turn_usage";
     sessionId: string;
     turnId: string;

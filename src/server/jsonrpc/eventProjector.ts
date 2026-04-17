@@ -140,10 +140,6 @@ export function createJsonRpcEventProjector(opts: CreateJsonRpcEventProjectorOpt
         case "agent_wait_result":
           sendNotification("cowork/session/agentWaitResult", event);
           return;
-        case "a2ui_surface":
-          sendNotification("cowork/session/a2ui/surface", event);
-          projection.handle(event);
-          return;
         default:
           projection.handle(event);
           return;

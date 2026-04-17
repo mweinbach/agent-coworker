@@ -90,19 +90,6 @@ export interface RunTurnParams {
 
   /** Persist/emit session usage when a tool mutates budget thresholds mid-turn. */
   onSessionUsageBudgetUpdated?: (snapshot: SessionUsageSnapshot) => void;
-
-  /**
-   * Apply an A2UI v0.9 envelope to the session's surface state, returning a
-   * per-envelope outcome. Plumbed into the `a2ui` tool's ToolContext when
-   * provided. Only set when the harness enables generative UI for the turn.
-   */
-  applyA2uiEnvelope?: (envelope: unknown) => {
-    ok: boolean;
-    surfaceId?: string;
-    change?: "created" | "updated" | "deleted" | "noop";
-    error?: string;
-    warning?: string;
-  };
 }
 
 function mergeToolSets(
@@ -297,7 +284,6 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       agentControl: params.agentControl,
       costTracker: params.costTracker,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
-      applyA2uiEnvelope: params.applyA2uiEnvelope,
     };
     const builtInTools = deps.createTools(toolCtx);
 

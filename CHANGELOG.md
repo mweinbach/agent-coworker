@@ -4,40 +4,6 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
-### Added
-
-- **A2UI (Agent-to-UI) generative UI** — End-to-end support for
-  [Google's A2UI v0.9 protocol](https://a2ui.org/specification/v0.9-a2ui/).
-  Agents render rich, stateful UI surfaces directly in the main chat view
-  (forms, cards, tables, progress, etc.) instead of settling for plain
-  markdown.
-  - New `a2ui` tool lets the agent emit v0.9 envelopes
-    (`createSurface`, `updateComponents`, `updateDataModel`, `deleteSurface`).
-  - Per-session `A2uiSurfaceManager` folds envelopes into a resolved
-    surface and broadcasts a new `a2ui_surface` `ServerEvent` plus a
-    `uiSurface` `ProjectedItem` through the existing conversation
-    projection. Desktop + mobile render the surface inline in the feed.
-  - Client → server action channel: the new
-    `cowork/session/a2ui/action` JSON-RPC method routes button clicks,
-    text-field submits, and checkbox toggles back to the agent as a
-    structured steer (or fresh turn) so the model can update the surface.
-  - Desktop renderer covers the v0.9 basic catalog — Text, Heading,
-    Paragraph, Column, Row, Stack, Divider, Spacer, Card, List, Button,
-    TextField, TextArea, Checkbox, Select, Link, ProgressBar, Badge,
-    Table, Image — and supports the core client-side Functions subset
-    (`if`, `not`, `eq`, `neq`, `and`, `or`, `concat`, `length`, `join`,
-    `map`, `coalesce`).
-  - Expand button pops a surface into a larger modal without leaving
-    the feed.
-  - Mobile (Expo) gains a read-only React Native renderer that keeps
-    parity with the desktop basic catalog.
-  - Opt-in via `enableA2ui: true` in any config layer or the
-    `AGENT_ENABLE_A2UI` environment variable. Default is off.
-  - Bundled `skills/a2ui/SKILL.md` documents the envelope shape,
-    supported components, Functions subset, and interaction contract for
-    the agent. Full protocol reference in `docs/websocket-protocol.md`
-    and architecture notes in `docs/a2ui.md`.
-
 ## 0.1.44 - 2026-04-15
 
 ### Added

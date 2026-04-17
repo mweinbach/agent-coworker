@@ -83,20 +83,7 @@ export type SessionFeedItem =
   | { id: string; kind: "todos"; ts: string; todos: TodoItem[] }
   | { id: string; kind: "log"; ts: string; line: string }
   | { id: string; kind: "error"; ts: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
-  | { id: string; kind: "system"; ts: string; line: string }
-  | {
-      id: string;
-      kind: "ui_surface";
-      ts: string;
-      surfaceId: string;
-      catalogId: string;
-      version: "v0.9";
-      revision: number;
-      deleted: boolean;
-      theme?: Record<string, unknown>;
-      root?: Record<string, unknown>;
-      dataModel?: unknown;
-    };
+  | { id: string; kind: "system"; ts: string; line: string };
 
 export type SessionLastTurnUsage = {
   turnId: string;
@@ -199,19 +186,6 @@ const feedItemSchema: z.ZodType<SessionFeedItem> = z.discriminatedUnion("kind", 
     kind: z.literal("system"),
     ts: isoTimestampSchema,
     line: z.string(),
-  }).strict(),
-  z.object({
-    id: z.string().trim().min(1),
-    kind: z.literal("ui_surface"),
-    ts: isoTimestampSchema,
-    surfaceId: z.string().trim().min(1),
-    catalogId: z.string().trim().min(1),
-    version: z.literal("v0.9"),
-    revision: z.number().int().nonnegative(),
-    deleted: z.boolean(),
-    theme: z.record(z.string(), z.unknown()).optional(),
-    root: z.record(z.string(), z.unknown()).optional(),
-    dataModel: z.unknown().optional(),
   }).strict(),
 ]);
 

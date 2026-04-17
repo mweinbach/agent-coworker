@@ -369,4 +369,54 @@ describe("desktop developer page", () => {
       harness.restore();
     }
   });
+
+  test("renders developer toggles with switch semantics instead of button semantics", async () => {
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Workspace 1",
+              path: "/tmp/workspace-1",
+              createdAt: "2026-03-12T00:00:00.000Z",
+              lastOpenedAt: "2026-03-12T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.2",
+              defaultPreferredChildModel: "gpt-5.2",
+              defaultToolOutputOverflowChars: 12000,
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(DeveloperPage));
+      });
+
+      for (const label of [
+        "Show hidden files",
+        "Enable developer mode",
+        "Save oversized tool output to scratch files",
+      ]) {
+        expect(container.querySelector(`[role="switch"][aria-label="${label}"]`)).not.toBeNull();
+        expect(container.querySelector(`button[aria-label="${label}"]`)).toBeNull();
+      }
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

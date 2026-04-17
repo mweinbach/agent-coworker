@@ -3,8 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../../app/store";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
-import { Checkbox } from "../../../components/ui/checkbox";
 import { Input } from "../../../components/ui/input";
+import { Switch } from "../../../components/ui/switch";
 import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "../../../lib/wsProtocol";
 import {
   Select,
@@ -13,10 +13,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../../components/ui/select";
-
-function toBoolean(checked: boolean | "indeterminate"): boolean {
-  return checked === true;
-}
 
 function parseOverflowThresholdDraft(value: string): number | null {
   const trimmed = value.trim();
@@ -100,10 +96,10 @@ export function DeveloperPage() {
               <div className="text-sm font-medium">Show hidden files</div>
               <div className="text-xs text-muted-foreground">Display dotfiles and other hidden system files.</div>
             </div>
-            <Checkbox
+            <Switch
               checked={showHiddenFiles}
               aria-label="Show hidden files"
-              onCheckedChange={(checked) => setShowHiddenFiles(toBoolean(checked))}
+              onCheckedChange={setShowHiddenFiles}
             />
           </div>
         </CardContent>
@@ -120,10 +116,10 @@ export function DeveloperPage() {
               <div className="text-sm font-medium">Developer mode</div>
               <div className="text-xs text-muted-foreground">Show internal system notices in the chat feed.</div>
             </div>
-            <Checkbox
+            <Switch
               checked={developerMode}
               aria-label="Enable developer mode"
-              onCheckedChange={(checked) => setDeveloperMode(toBoolean(checked))}
+              onCheckedChange={setDeveloperMode}
             />
           </div>
         </CardContent>
@@ -190,12 +186,11 @@ export function DeveloperPage() {
                     When enabled, oversized text or JSON-like tool results are saved to disk instead of filling up the chat history. Cowork keeps a fixed inline preview.
                   </div>
                 </div>
-                <Checkbox
+                <Switch
                   checked={overflowEnabled}
                   aria-label="Save oversized tool output to scratch files"
                   onCheckedChange={(checked) => {
-                    const nextEnabled = toBoolean(checked);
-                    if (nextEnabled) {
+                    if (checked) {
                       enableOverflowWithDefault();
                       return;
                     }

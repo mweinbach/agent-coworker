@@ -1,3 +1,4 @@
+@import "./styles/fonts.css";
 @import "tailwindcss";
 @import "@heroui/styles";
 @import "./styles/tokens.css";
@@ -23,6 +24,13 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -electron-corner-smoothing: system-ui;
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--font-mono);
 }
 
 * {

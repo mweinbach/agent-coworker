@@ -97,6 +97,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       }
   
       const stayInSettings = get().view === "settings";
+      const defaultFeatureFlags = resolveWorkspaceFeatureFlags();
       const ws: WorkspaceRecord = {
         id: makeId(),
         name: basename(dir),
@@ -112,7 +113,8 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
         defaultAllowedChildModelRefs: [],
         defaultEnableMcp: true,
         defaultBackupsEnabled: true,
-        defaultFeatureFlags: resolveWorkspaceFeatureFlags(),
+        defaultFeatureFlags,
+        defaultEnableA2ui: defaultFeatureFlags.a2ui,
         yolo: false,
       };
   

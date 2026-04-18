@@ -774,18 +774,19 @@ export function createControlSocketHelpers(
                 defaultPreferredChildModelRef: evt.config.preferredChildModelRef,
                 defaultAllowedChildModelRefs: evt.config.allowedChildModelRefs,
                 defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
-                ...(defaultFeatureFlags
-                  ? {
-                      defaultFeatureFlags: resolveWorkspaceFeatureFlags({
-                        ...workspace.defaultFeatureFlags,
-                        ...defaultFeatureFlags,
-                      }),
-                      defaultEnableA2ui: resolveWorkspaceFeatureFlags({
-                        ...workspace.defaultFeatureFlags,
-                        ...defaultFeatureFlags,
-                      }).a2ui,
-                    }
-                  : {}),
+                ...(() => {
+                  if (!defaultFeatureFlags) {
+                    return {};
+                  }
+                  const nextFeatureFlags = resolveWorkspaceFeatureFlags({
+                    ...workspace.defaultFeatureFlags,
+                    ...defaultFeatureFlags,
+                  });
+                  return {
+                    defaultFeatureFlags: nextFeatureFlags,
+                    defaultEnableA2ui: nextFeatureFlags.a2ui,
+                  };
+                })(),
                 providerOptions,
                 ...(typeof evt.config.userName === "string" ? { userName: evt.config.userName } : {}),
                 ...(userProfile ? { userProfile } : {}),

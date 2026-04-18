@@ -368,20 +368,20 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       defaultFeatureFlags: featureFlagPatch,
       ...workspacePatch
     } = patch;
+    const nextFeatureFlags = featureFlagPatch !== undefined
+      ? resolveWorkspaceFeatureFlags({
+          ...workspace.defaultFeatureFlags,
+          ...featureFlagPatch,
+        })
+      : undefined;
     return {
       ...workspace,
       ...workspacePatch,
       ...(clearDefaultToolOutputOverflowChars ? { defaultToolOutputOverflowChars: undefined } : {}),
-      ...(featureFlagPatch !== undefined
+      ...(nextFeatureFlags !== undefined
         ? {
-            defaultFeatureFlags: resolveWorkspaceFeatureFlags({
-              ...workspace.defaultFeatureFlags,
-              ...featureFlagPatch,
-            }),
-            defaultEnableA2ui: resolveWorkspaceFeatureFlags({
-              ...workspace.defaultFeatureFlags,
-              ...featureFlagPatch,
-            }).a2ui,
+            defaultFeatureFlags: nextFeatureFlags,
+            defaultEnableA2ui: nextFeatureFlags.a2ui,
           }
         : {}),
       ...(workspacePatch.providerOptions !== undefined

@@ -223,6 +223,7 @@ describe("workspace startup flow", () => {
     const state = useAppStore.getState();
     expect(state.workspaces).toHaveLength(1);
     expect(state.workspaces[0]?.defaultToolOutputOverflowChars).toBeUndefined();
+    expect(state.workspaces[0]?.defaultEnableA2ui).toBe(false);
     expect(state.workspaceRuntimeById[state.workspaces[0]!.id]?.serverUrl).toBe("ws://new-workspace");
   });
 

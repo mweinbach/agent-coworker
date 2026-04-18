@@ -36,6 +36,12 @@ async function fetchServerWorkspaces(serverWsUrl: string): Promise<DiscoveredWor
   return Array.isArray(data.workspaces) ? data.workspaces : [];
 }
 
+async function supportsDesktopService(serverWsUrl: string): Promise<boolean> {
+  const base = toHttpBase(serverWsUrl);
+  const res = await fetch(`${base}/cowork/desktop/state`);
+  return res.ok;
+}
+
 // Open a WebSocket with the jsonrpc subprotocol and resolve once the handshake succeeds (or reject
 // on any close/error before that). Catches config mistakes (wrong port, wrong subprotocol, server
 // not running) *before* we hand control to the main app.
@@ -119,6 +125,18 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
       setBusy(true);
       setError(null);
       try {
+        setStatus("Checking server…");
+        await probeWebSocket(normalizedUrl);
+
+        setStatus("Loading desktop state…");
+        if (await supportsDesktopService(normalizedUrl)) {
+          configureWebAdapter(normalizedUrl, "");
+          window.cowork = createWebAdapter();
+          setStatus(null);
+          onConnect();
+          return;
+        }
+
         setStatus("Finding workspace…");
         const workspaces = await fetchServerWorkspaces(normalizedUrl);
         if (workspaces.length === 0) {

@@ -2,6 +2,8 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
+import type { WebDesktopServiceLike } from "./webDesktopService";
+
 type ExplorerEntryPayload = {
   name: string;
   path: string;
@@ -421,17 +423,117 @@ async function handleOpenPathRequest(workspaceRoots: string[], requestedPath: st
 
 export async function handleWebDesktopRoute(
   req: Request,
-  opts: { cwd: string },
+  opts: { cwd: string; desktopService?: WebDesktopServiceLike | null },
 ): Promise<Response | null> {
   const url = new URL(req.url);
-  const workspaceRoots = [opts.cwd];
+  const workspaceRoots = opts.desktopService
+    ? await opts.desktopService.getWorkspaceRoots(opts.cwd)
+    : [opts.cwd];
 
   try {
     if (url.pathname === "/cowork/workspaces") {
-      const workspaceName = opts.cwd.split("/").pop() ?? opts.cwd.split("\\").pop() ?? opts.cwd;
+      const workspaces = opts.desktopService
+        ? await opts.desktopService.listWorkspaces(opts.cwd)
+        : [{
+            name: opts.cwd.split("/").pop() ?? opts.cwd.split("\\").pop() ?? opts.cwd,
+            path: opts.cwd,
+          }];
       return jsonResponse({
-        workspaces: [{ name: workspaceName, path: opts.cwd }],
+        workspaces,
       });
+    }
+
+    if (opts.desktopService) {
+      if (url.pathname === "/cowork/desktop/state" && req.method === "GET") {
+        return jsonResponse(await opts.desktopService.loadState({ fallbackCwd: opts.cwd }));
+      }
+
+      if (url.pathname === "/cowork/desktop/state" && req.method === "POST") {
+        const body = await readJsonBody(req);
+        return jsonResponse(await opts.desktopService.saveState(body));
+      }
+
+      if (url.pathname === "/cowork/desktop/workspace/start" && req.method === "POST") {
+        const body = await readJsonBody(req);
+        const workspaceId = readRequiredStringField(body, "workspaceId");
+        const workspacePath = readRequiredStringField(body, "workspacePath");
+        const yolo = typeof body.yolo === "boolean" ? body.yolo : false;
+        return jsonResponse(await opts.desktopService.startWorkspaceServer({
+          workspaceId,
+          workspacePath,
+          yolo,
+        }));
+      }
+
+      if (url.pathname === "/cowork/desktop/workspace/stop" && req.method === "POST") {
+        const body = await readJsonBody(req);
+        const workspaceId = readRequiredStringField(body, "workspaceId");
+        await opts.desktopService.stopWorkspaceServer(workspaceId);
+        return new Response(null, { status: 204 });
+      }
+
+      if (url.pathname === "/cowork/desktop/workspace/resolve" && req.method === "POST") {
+        const body = await readJsonBody(req);
+        const workspacePath = readRequiredStringField(body, "path");
+        return jsonResponse({
+          path: await opts.desktopService.resolveWorkspaceDirectory(workspacePath),
+        });
+      }
+
+      if (url.pathname === "/cowork/desktop/transcript" && req.method === "GET") {
+        const threadId = readRequiredStringParam(url.searchParams, "threadId");
+        return jsonResponse(await opts.desktopService.readTranscript(threadId));
+      }
+
+      if (url.pathname === "/cowork/desktop/transcript/event" && req.method === "POST") {
+        const body = await readJsonBody(req);
+        const threadId = readRequiredStringField(body, "threadId");
+        const ts = readRequiredStringField(body, "ts");
+        const direction = readRequiredStringField(body, "direction");
+        if (direction !== "server" && direction !== "client") {
+          throw new Error("direction must be 'server' or 'client'");
+        }
+        await opts.desktopService.appendTranscriptEvent({
+          threadId,
+          ts,
+          direction,
+          payload: body.payload,
+        });
+        return new Response(null, { status: 204 });
+      }
+
+      if (url.pathname === "/cowork/desktop/transcript/batch" && req.method === "POST") {
+        const body = await req.json();
+        if (!Array.isArray(body)) {
+          throw new Error("Expected a JSON array body");
+        }
+        const events = body.map((item) => {
+          if (!item || typeof item !== "object" || Array.isArray(item)) {
+            throw new Error("Transcript batch entries must be objects");
+          }
+          const record = item as Record<string, unknown>;
+          const threadId = readRequiredStringField(record, "threadId");
+          const ts = readRequiredStringField(record, "ts");
+          const direction = readRequiredStringField(record, "direction");
+          if (direction !== "server" && direction !== "client") {
+            throw new Error("direction must be 'server' or 'client'");
+          }
+          return {
+            threadId,
+            ts,
+            direction,
+            payload: record.payload,
+          } as const;
+        });
+        await opts.desktopService.appendTranscriptBatch(events);
+        return new Response(null, { status: 204 });
+      }
+
+      if (url.pathname === "/cowork/desktop/transcript" && req.method === "DELETE") {
+        const threadId = readRequiredStringParam(url.searchParams, "threadId");
+        await opts.desktopService.deleteTranscript(threadId);
+        return new Response(null, { status: 204 });
+      }
     }
 
     if (url.pathname === "/cowork/fs/list") {
@@ -523,6 +625,10 @@ export async function handleWebDesktopRoute(
       error instanceof Error ? error.message : String(error),
       normalizeErrorStatus(error),
     );
+  }
+
+  if (url.pathname === "/cowork/desktop" || url.pathname.startsWith("/cowork/desktop/")) {
+    return textResponse("Desktop web service unavailable", 404);
   }
 
   return null;

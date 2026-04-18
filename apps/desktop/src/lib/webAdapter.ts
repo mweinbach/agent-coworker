@@ -11,6 +11,7 @@ import type {
 } from "./desktopApi";
 import type { DesktopFeatureFlags } from "./desktopFeatureFlags";
 import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
+import { hydrateTranscriptSnapshot } from "../app/transcriptHydration";
 import {
   createDefaultUpdaterState,
 } from "./desktopApi";
@@ -125,6 +126,20 @@ async function readWebJson<T>(pathname: string, params: Record<string, string | 
   return await response.json() as T;
 }
 
+async function maybeReadWebJson<T>(
+  pathname: string,
+  params: Record<string, string | number | boolean | undefined> = {},
+): Promise<T | null> {
+  const response = await fetch(buildWebRouteUrl(pathname, params));
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(await response.text() || `Request failed (${response.status})`);
+  }
+  return await response.json() as T;
+}
+
 async function postWebJson<T>(
   pathname: string,
   body: Record<string, unknown>,
@@ -144,6 +159,43 @@ async function postWebJson<T>(
   }
   const text = await response.text();
   return text ? JSON.parse(text) as T : undefined as T;
+}
+
+async function maybePostWebJson<T>(
+  pathname: string,
+  body: Record<string, unknown>,
+): Promise<T | null> {
+  const response = await fetch(buildWebRouteUrl(pathname), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(await response.text() || `Request failed (${response.status})`);
+  }
+  if (response.status === 204) {
+    return undefined as T;
+  }
+  const text = await response.text();
+  return text ? JSON.parse(text) as T : undefined as T;
+}
+
+async function maybeDeleteWeb(pathname: string, params: Record<string, string | number | boolean | undefined>): Promise<boolean> {
+  const response = await fetch(buildWebRouteUrl(pathname, params), {
+    method: "DELETE",
+  });
+  if (response.status === 404) {
+    return false;
+  }
+  if (!response.ok) {
+    throw new Error(await response.text() || `Request failed (${response.status})`);
+  }
+  return true;
 }
 
 async function readWebBytes(pathname: string, params: Record<string, string | number | boolean | undefined>): Promise<ReadFileForPreviewOutput> {
@@ -311,50 +363,99 @@ export function configureWebAdapter(serverUrl: string, workspacePath: string): v
 }
 
 export function createWebAdapter(): DesktopApi {
+  const fullDesktopMode = !getWorkspacePath().trim();
   const features: DesktopFeatureFlags = {
     remoteAccess: false,
-    workspacePicker: false,
-    workspaceLifecycle: false,
+    workspacePicker: fullDesktopMode,
+    workspaceLifecycle: fullDesktopMode,
   };
 
   return {
     features,
 
-    async startWorkspaceServer(_opts): Promise<{ url: string }> {
-      // In web mode there's a single process-lifetime server that the user's already connected
-      // to; there's nothing to start per-workspace. Always hand back the configured URL.
+    async startWorkspaceServer(opts): Promise<{ url: string }> {
+      const started = await maybePostWebJson<{ url: string }>("/cowork/desktop/workspace/start", opts);
+      if (started) {
+        return started;
+      }
       return { url: getServerUrl() };
     },
 
-    async stopWorkspaceServer(): Promise<void> {},
+    async stopWorkspaceServer(opts): Promise<void> {
+      await maybePostWebJson<void>("/cowork/desktop/workspace/stop", opts);
+    },
 
     async loadState(): Promise<PersistedState> {
-      const path = getWorkspacePath();
       const url = getServerUrl();
-      if (!path.trim()) {
+      const desktopState = await maybeReadWebJson<PersistedState>("/cowork/desktop/state");
+      if (desktopState) {
+        return desktopState;
+      }
+
+      const workspacePath = getWorkspacePath();
+      if (workspacePath.trim()) {
+        return seedWorkspaceFromUrl(url, workspacePath);
+      }
+
+      const discovered = await readWebJson<{ workspaces?: Array<{ path: string }> }>("/cowork/workspaces");
+      const fallbackPath = discovered.workspaces?.[0]?.path?.trim();
+      if (!fallbackPath) {
         throw new Error("Browser mode requires a workspace path. Reconnect through the Connect page.");
       }
-      return seedWorkspaceFromUrl(url, path);
+      return seedWorkspaceFromUrl(url, fallbackPath);
     },
 
     async saveState(state: PersistedState): Promise<void> {
-      savePersistedState(state);
+      const saved = await maybePostWebJson<PersistedState>("/cowork/desktop/state", state as Record<string, unknown>);
+      if (!saved) {
+        savePersistedState(state);
+      }
     },
 
-    async readTranscript(): Promise<TranscriptEvent[]> {
-      return [];
+    async readTranscript(opts): Promise<TranscriptEvent[]> {
+      return await maybeReadWebJson<TranscriptEvent[]>("/cowork/desktop/transcript", {
+        threadId: opts.threadId,
+      }) ?? [];
     },
 
-    async hydrateTranscript(): Promise<HydratedTranscriptSnapshot> {
-      return { feed: [], agents: [], sessionUsage: null, lastTurnUsage: null };
+    async hydrateTranscript(opts): Promise<HydratedTranscriptSnapshot> {
+      const transcript = await maybeReadWebJson<TranscriptEvent[]>("/cowork/desktop/transcript", {
+        threadId: opts.threadId,
+      }) ?? [];
+      return hydrateTranscriptSnapshot(transcript);
     },
 
-    async appendTranscriptEvent(): Promise<void> {},
-    async appendTranscriptBatch(): Promise<void> {},
-    async deleteTranscript(): Promise<void> {},
+    async appendTranscriptEvent(opts): Promise<void> {
+      await maybePostWebJson<void>("/cowork/desktop/transcript/event", opts as Record<string, unknown>);
+    },
+    async appendTranscriptBatch(events): Promise<void> {
+      const response = await fetch(buildWebRouteUrl("/cowork/desktop/transcript/batch"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(events),
+      });
+      if (response.status === 404) {
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(await response.text() || `Request failed (${response.status})`);
+      }
+    },
+    async deleteTranscript(opts): Promise<void> {
+      await maybeDeleteWeb("/cowork/desktop/transcript", { threadId: opts.threadId });
+    },
 
     async pickWorkspaceDirectory(): Promise<string | null> {
-      return null;
+      const candidate = window.prompt("Workspace path");
+      if (!candidate || !candidate.trim()) {
+        return null;
+      }
+      const resolved = await maybePostWebJson<{ path: string }>("/cowork/desktop/workspace/resolve", {
+        path: candidate.trim(),
+      });
+      return resolved?.path ?? candidate.trim();
     },
 
     async showContextMenu(opts): Promise<string | null> {

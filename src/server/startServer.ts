@@ -65,6 +65,7 @@ import {
   resolveWsProtocol,
   splitWebSocketSubprotocolHeader,
 } from "./wsProtocol/negotiation";
+import { WebDesktopService } from "./webDesktopService";
 import { handleWebDesktopRoute } from "./webDesktopRoutes";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
@@ -1362,7 +1363,10 @@ export async function startAgentServer(
           if (upgraded) return;
           return new Response("WebSocket upgrade failed", { status: 400, headers: corsHeaders });
         }
-        const webDesktopRoute = await handleWebDesktopRoute(req, { cwd: opts.cwd });
+        const webDesktopRoute = await handleWebDesktopRoute(req, {
+          cwd: opts.cwd,
+          desktopService: webDesktopService,
+        });
         if (webDesktopRoute) {
           for (const [key, value] of Object.entries(corsHeaders)) {
             webDesktopRoute.headers.set(key, value);
@@ -1401,6 +1405,9 @@ export async function startAgentServer(
   }
 
   const requestedPort = opts.port ?? 7337;
+  const webDesktopService = process.env.COWORK_WEB_DESKTOP_SERVICE === "1"
+    ? new WebDesktopService()
+    : null;
 
   function serveWithPortFallback(port: number): ReturnType<typeof Bun.serve> {
     try {
@@ -1474,6 +1481,11 @@ export async function startAgentServer(
     sessionBindings.clear();
     try {
       sessionDb.close();
+    } catch {
+      // ignore
+    }
+    try {
+      await webDesktopService?.stopAll();
     } catch {
       // ignore
     }

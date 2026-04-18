@@ -4,6 +4,7 @@ const LEGACY_STATE_KEY = "cowork:web:state";
 const STATE_KEY_PREFIX = "cowork:web:state:v2";
 const SERVER_URL_KEY = "cowork:web:serverUrl";
 const WORKSPACE_PATH_KEY = "cowork:web:workspacePath";
+const DESKTOP_SERVICE_SCOPE = "__desktop_service__";
 
 function hashScope(value: string): string {
   let hash = 2166136261;
@@ -28,9 +29,16 @@ function createScopedStateKey(serverUrl: string, workspacePath: string): string 
 
 function getCurrentScope(): { serverUrl: string; workspacePath: string } | null {
   const serverUrl = normalizeScopeValue(getSavedServerUrl());
-  const workspacePath = normalizeScopeValue(getSavedWorkspacePath());
-  if (!serverUrl || !workspacePath) {
+  const rawWorkspacePath = getSavedWorkspacePath();
+  const workspacePath = normalizeScopeValue(rawWorkspacePath);
+  if (!serverUrl) {
     return null;
+  }
+  if (!workspacePath) {
+    if (rawWorkspacePath === null) {
+      return null;
+    }
+    return { serverUrl, workspacePath: DESKTOP_SERVICE_SCOPE };
   }
   return { serverUrl, workspacePath };
 }

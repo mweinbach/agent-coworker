@@ -27,7 +27,11 @@ const serverProc = spawn({
   stderr: "inherit",
   // Server doesn't need stdin; keeping it "ignore" avoids fighting Vite for the TTY.
   stdin: "ignore",
-  env: { ...process.env, FORCE_COLOR: "1" },
+  env: {
+    ...process.env,
+    FORCE_COLOR: "1",
+    COWORK_WEB_DESKTOP_SERVICE: "1",
+  },
 });
 
 let serverUrl: string | null = null;

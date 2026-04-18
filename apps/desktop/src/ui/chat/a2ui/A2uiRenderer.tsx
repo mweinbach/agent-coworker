@@ -246,7 +246,8 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
       const cardChildren = (
         <div
           className={cn(
-            "flex flex-col gap-2.5",
+            "flex flex-col",
+            isRootCard ? "gap-4" : "gap-2.5",
             resolveOptionalAlignmentClass(props, "justify"),
             resolveOptionalAlignmentClass(props, "items"),
           )}
@@ -550,12 +551,18 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
         return <UnknownComponent component={component} context={childContext} reason="Table requires props.columns" />;
       }
       return (
-        <div className="overflow-hidden overflow-x-auto rounded-lg border border-border/25 bg-muted/[0.01]">
-          <table className="min-w-full text-left text-xs">
-            <thead className="bg-muted/15 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-              <tr>
+        <div className="overflow-hidden overflow-x-auto rounded-xl border border-border/30 bg-gradient-to-b from-muted/[0.12] to-muted/[0.03] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset] ring-1 ring-border/15 dark:shadow-[0_1px_0_0_rgba(255,255,255,0.06)_inset]">
+          <table className="min-w-full border-collapse text-left text-sm">
+            <thead>
+              <tr className="border-b border-border/35 bg-muted/20">
                 {columns.map((col) => (
-                  <th key={col.key} className="border-b border-border/25 px-4 py-2.5 font-semibold">{col.label}</th>
+                  <th
+                    key={col.key}
+                    scope="col"
+                    className="whitespace-nowrap px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground"
+                  >
+                    {col.label}
+                  </th>
                 ))}
               </tr>
             </thead>
@@ -564,20 +571,27 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
                 <tr
                   key={`row-${rowIndex}`}
                   className={cn(
-                    "transition-colors hover:bg-muted/10",
-                    rowIndex !== rows.length - 1 && "border-b border-border/15",
+                    "border-b border-border/[0.14] transition-colors last:border-b-0",
+                    rowIndex % 2 === 1 && "bg-muted/[0.045]",
+                    "hover:bg-muted/[0.09]",
                   )}
                 >
-                  {columns.map((col) => (
-                    <td key={`cell-${rowIndex}-${col.key}`} className="px-4 py-3 align-top text-foreground/90">
-                      {tableCellRender(row, col.key)}
+                  {columns.map((col, colIndex) => (
+                    <td
+                      key={`cell-${rowIndex}-${col.key}`}
+                      className={cn(
+                        "px-4 py-3.5 align-top text-[13px] leading-relaxed text-foreground/88 sm:py-4",
+                        colIndex === 0 && "font-medium text-foreground",
+                      )}
+                    >
+                      <span className="block min-w-0 break-words">{tableCellRender(row, col.key)}</span>
                     </td>
                   ))}
                 </tr>
               ))}
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={columns.length} className="px-4 py-4 text-center text-muted-foreground">
+                  <td colSpan={columns.length} className="px-4 py-6 text-center text-sm text-muted-foreground">
                     No rows.
                   </td>
                 </tr>

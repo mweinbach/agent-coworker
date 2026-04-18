@@ -138,7 +138,7 @@ export const A2uiInlineCard = memo(function A2uiInlineCard({ item }: { item: UiS
         </code>
         <ExpandIcon className="size-3.5 flex-none text-muted-foreground opacity-0 transition-opacity group-hover/a2ui-inline:opacity-100" />
       </button>
-      <div className="p-4 pt-3.5" style={themeStyle}>
+      <div className="px-5 py-4 pt-3.5" style={themeStyle}>
         {unsupportedCatalog ? (
           <div className="mb-3 rounded-md border border-warning/35 bg-warning/[0.08] px-3 py-2 text-xs text-warning">
             This surface uses an unsupported catalog. Rendering with best-effort basic primitives — some components may be skipped.

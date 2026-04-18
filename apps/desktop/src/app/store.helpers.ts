@@ -214,13 +214,6 @@ export type AppStoreState = {
   sendMessage: (text: string, busyPolicy?: ThreadBusyPolicy, attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[]) => Promise<boolean>;
   cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => void;
   clearThreadUsageHardCap: (threadId: string) => void;
-  dispatchA2uiAction: (opts: {
-    threadId: string;
-    surfaceId: string;
-    componentId: string;
-    eventType: string;
-    payload?: Record<string, unknown>;
-  }) => Promise<boolean>;
   setThreadModel: (threadId: string, provider: ProviderName, model: string) => void;
   setComposerText: (text: string) => void;
   setInjectContext: (v: boolean) => void;

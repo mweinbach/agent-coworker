@@ -1692,16 +1692,6 @@ export class AgentSession {
     await this.getTurnExecutionManager().sendSteerMessage(text, expectedTurnId, clientMessageId, attachments, inputParts);
   }
 
-  /** Snapshot of A2UI surfaces for inspection / action validation. */
-  getA2uiSurfacesSnapshot(): Record<string, unknown> {
-    if (!this.a2uiSurfaceManager) return {};
-    return this.a2uiSurfaceManager.getSurfaces() as Record<string, unknown>;
-  }
-
-  /**
-   * Validate an A2UI action against the current surface state. Returns a
-   * discriminated union so callers can surface structured errors.
-   */
   validateA2uiAction(opts: { surfaceId: string; componentId: string }): ReturnType<A2uiSurfaceManager["validateAction"]> {
     return this.getA2uiSurfaceManager().validateAction(opts);
   }

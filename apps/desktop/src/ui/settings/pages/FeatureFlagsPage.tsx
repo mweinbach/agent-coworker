@@ -73,7 +73,7 @@ export function FeatureFlagsPage() {
                   <div className="text-sm font-medium">{definition.label}</div>
                   <div className="text-xs text-muted-foreground">{definition.description}</div>
                   {forcedOffInPackaged ? (
-                    <div className="mt-1 text-xs text-amber-300/90">
+                    <div className="mt-1 text-xs text-warning">
                       Unavailable in packaged builds.
                     </div>
                   ) : null}

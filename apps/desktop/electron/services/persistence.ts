@@ -21,7 +21,7 @@ import {
   normalizeDesktopFeatureFlagOverrides,
   normalizeWorkspaceFeatureFlagOverrides,
   resolveWorkspaceFeatureFlags,
-} from "../../../src/shared/featureFlags";
+} from "../../../../src/shared/featureFlags";
 
 import { assertDirection, assertSafeId, assertWithinTranscriptsDir } from "./validation";
 

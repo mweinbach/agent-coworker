@@ -1,7 +1,6 @@
 import type { ToolContext } from "./context";
 import type { AgentConfig } from "../types";
 
-import { createA2uiTool } from "./a2ui";
 import { createAskTool } from "./ask";
 import { createBashTool } from "./bash";
 import { createEditTool } from "./edit";
@@ -25,6 +24,7 @@ import { createUsageTool } from "./usage";
 import { createWebFetchTool } from "./webFetch";
 import { createWebSearchTool } from "./webSearch";
 import { createWriteTool } from "./write";
+import { createA2uiTool } from "./a2ui";
 import { filterToolsForRole } from "../server/agents/toolPolicy";
 import { getAgentRoleDefinition } from "../server/agents/roles";
 import {
@@ -57,7 +57,7 @@ type ListSessionToolNameOptions = {
 };
 
 export function listSessionToolNames(
-  config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory" | "enableA2ui">,
+  config: Pick<AgentConfig, "provider" | "providerOptions" | "enableMemory">,
   opts: ListSessionToolNameOptions = {},
 ): string[] {
   const includeLegacyWebSearch =
@@ -79,7 +79,6 @@ export function listSessionToolNames(
     "notebookEdit",
     "skill",
     ...(config.enableMemory ?? true ? ["memory"] : []),
-    ...(config.enableA2ui === true ? ["a2ui"] : []),
     "usage",
     ...(opts.includeAgentControl
       ? ["spawnAgent", "listAgents", "sendAgentInput", "waitForAgent", "inspectAgent", "resumeAgent", "closeAgent"]
@@ -110,7 +109,9 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     notebookEdit: createNotebookEditTool(ctx),
     skill: createSkillTool(ctx),
     ...(ctx.config.enableMemory ?? true ? { memory: createMemoryTool(ctx) } : {}),
-    ...(ctx.config.enableA2ui === true && ctx.applyA2uiEnvelope ? { a2ui: createA2uiTool(ctx) } : {}),
+    ...(ctx.config.provider !== "google" && ctx.config.enableA2ui === true && ctx.applyA2uiEnvelope
+      ? { a2ui: createA2uiTool(ctx) }
+      : {}),
     usage: createUsageTool(ctx),
   };
 

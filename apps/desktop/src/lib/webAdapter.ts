@@ -226,12 +226,12 @@ function createActionButton(
   button.disabled = opts.disabled === true;
   button.style.width = "100%";
   button.style.padding = "10px 12px";
-  button.style.border = "1px solid var(--border-default, #262626)";
+  button.style.border = "1px solid var(--border-default)";
   button.style.borderRadius = "10px";
   button.style.background = opts.emphasized
-    ? "var(--surface-raised, #1d1d1d)"
-    : "var(--surface-base, #141414)";
-  button.style.color = opts.muted ? "var(--text-secondary, #a3a3a3)" : "var(--text-primary, #f5f5f5)";
+    ? "var(--surface-raised)"
+    : "var(--surface-base)";
+  button.style.color = opts.muted ? "var(--text-secondary)" : "var(--text-primary)";
   button.style.textAlign = "left";
   button.style.fontSize = "13px";
   button.style.cursor = button.disabled ? "not-allowed" : "pointer";
@@ -242,6 +242,12 @@ function createActionButton(
     }
   });
   return button;
+}
+
+function applyStyles(el: HTMLElement, styles: Record<string, string>): void {
+  for (const [key, value] of Object.entries(styles)) {
+    el.style.setProperty(key, value);
+  }
 }
 
 function showBrowserActionSheet(items: ContextMenuItem[]): Promise<string | null> {
@@ -258,34 +264,40 @@ function showBrowserActionSheet(items: ContextMenuItem[]): Promise<string | null
     }
 
     const overlay = document.createElement("div");
-    overlay.style.position = "fixed";
-    overlay.style.inset = "0";
-    overlay.style.zIndex = "9999";
-    overlay.style.display = "flex";
-    overlay.style.alignItems = "center";
-    overlay.style.justifyContent = "center";
-    overlay.style.padding = "24px";
-    overlay.style.background = "rgba(0, 0, 0, 0.45)";
-    overlay.style.backdropFilter = "blur(6px)";
+    applyStyles(overlay, {
+      position: "fixed",
+      inset: "0",
+      zIndex: "9999",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "24px",
+      background: "var(--surface-overlay)",
+      backdropFilter: "blur(var(--titlebar-blur))",
+    });
 
     const panel = document.createElement("div");
-    panel.style.width = "min(360px, 100%)";
-    panel.style.display = "flex";
-    panel.style.flexDirection = "column";
-    panel.style.gap = "10px";
-    panel.style.padding = "14px";
-    panel.style.borderRadius = "16px";
-    panel.style.border = "1px solid var(--border-default, #262626)";
-    panel.style.background = "var(--surface-window, #101010)";
-    panel.style.boxShadow = "0 18px 50px rgba(0, 0, 0, 0.35)";
+    applyStyles(panel, {
+      width: "min(360px, 100%)",
+      display: "flex",
+      flexDirection: "column",
+      gap: "10px",
+      padding: "14px",
+      borderRadius: "16px",
+      border: "1px solid var(--border-default)",
+      background: "var(--surface-window)",
+      boxShadow: "var(--shadow-overlay)",
+    });
 
     const title = document.createElement("div");
     title.textContent = "Actions";
-    title.style.fontSize = "11px";
-    title.style.fontWeight = "600";
-    title.style.letterSpacing = "0.14em";
-    title.style.textTransform = "uppercase";
-    title.style.color = "var(--text-secondary, #a3a3a3)";
+    applyStyles(title, {
+      fontSize: "11px",
+      fontWeight: "600",
+      letterSpacing: "0.14em",
+      textTransform: "uppercase",
+      color: "var(--text-secondary)",
+    });
     panel.appendChild(title);
 
     const close = (value: string | null) => {

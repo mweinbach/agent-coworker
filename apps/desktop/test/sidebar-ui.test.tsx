@@ -116,6 +116,11 @@ function resetAppStore(overrides: Record<string, unknown> = {}) {
     developerMode: false,
     showHiddenFiles: false,
     perWorkspaceSettings: false,
+    desktopFeatureFlags: {
+      remoteAccess: true,
+      workspacePicker: workspacePickerEnabled,
+      workspaceLifecycle: workspaceLifecycleEnabled,
+    },
     onboardingVisible: false,
     sidebarCollapsed: false,
     contextSidebarCollapsed: false,

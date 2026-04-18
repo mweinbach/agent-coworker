@@ -184,9 +184,9 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "var(--surface-window, #0a0a0a)",
-        color: "var(--text-primary, #e5e5e5)",
-        fontFamily: "var(--font-sans, system-ui, sans-serif)",
+        background: "var(--surface-window)",
+        color: "var(--text-primary)",
+        fontFamily: "var(--font-sans)",
       }}
     >
       <div
@@ -194,15 +194,15 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
           width: 420,
           padding: 32,
           borderRadius: 12,
-          background: "var(--surface-base, #141414)",
-          border: "1px solid var(--border-default, #262626)",
+          background: "var(--surface-base)",
+          border: "1px solid var(--border-default)",
         }}
       >
         <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0, marginBottom: 4 }}>Cowork</h1>
         <p
           style={{
             fontSize: 13,
-            color: "var(--text-secondary, #a3a3a3)",
+            color: "var(--text-secondary)",
             margin: 0,
             marginBottom: 20,
           }}
@@ -212,7 +212,7 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
 
         {discovered.length > 1 ? (
           <>
-            <p style={{ fontSize: 12, color: "var(--text-secondary, #a3a3a3)", margin: 0, marginBottom: 8 }}>
+            <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: 0, marginBottom: 8 }}>
               Select a workspace:
             </p>
             <div style={{ marginBottom: 16 }}>
@@ -227,9 +227,9 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
                     textAlign: "left",
                     padding: "8px 12px",
                     borderRadius: 6,
-                    border: "1px solid var(--border-default, #262626)",
+                    border: "1px solid var(--border-default)",
                     background: "transparent",
-                    color: "var(--text-primary, #e5e5e5)",
+                    color: "var(--text-primary)",
                     fontSize: 13,
                     marginBottom: 4,
                     cursor: busy ? "not-allowed" : "pointer",
@@ -240,7 +240,7 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
                     style={{
                       display: "block",
                       fontSize: 11,
-                      color: "var(--text-tertiary, #666)",
+                      color: "var(--text-tertiary)",
                     }}
                   >
                     {ws.path}
@@ -259,8 +259,8 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
             padding: "10px 16px",
             borderRadius: 6,
             border: "none",
-            background: busy ? "var(--border-default, #333)" : "var(--accent, #3b82f6)",
-            color: "#fff",
+            background: busy ? "var(--border-default)" : "var(--accent)",
+            color: "var(--text-inverse)",
             fontSize: 13,
             fontWeight: 500,
             cursor: busy ? "not-allowed" : "pointer",
@@ -272,13 +272,13 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
         </button>
 
         {status && !error ? (
-          <p style={{ fontSize: 12, color: "var(--text-secondary, #a3a3a3)", margin: 0, marginBottom: 12 }}>
+          <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: 0, marginBottom: 12 }}>
             {status}
           </p>
         ) : null}
 
         {error ? (
-          <p style={{ fontSize: 12, color: "#f87171", margin: 0, marginBottom: 12 }}>{error}</p>
+          <p style={{ fontSize: 12, color: "var(--danger)", margin: 0, marginBottom: 12 }}>{error}</p>
         ) : null}
 
         <button
@@ -286,7 +286,7 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
           onClick={() => setShowAdvanced((v) => !v)}
           style={{
             fontSize: 11,
-            color: "var(--text-tertiary, #888)",
+            color: "var(--text-tertiary)",
             background: "transparent",
             border: "none",
             padding: 0,
@@ -305,7 +305,7 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
                 fontSize: 12,
                 fontWeight: 500,
                 marginBottom: 6,
-                color: "var(--text-secondary, #a3a3a3)",
+                color: "var(--text-secondary)",
               }}
             >
               Server URL
@@ -321,9 +321,9 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
                 boxSizing: "border-box",
                 padding: "8px 12px",
                 borderRadius: 6,
-                border: "1px solid var(--border-default, #262626)",
-                background: "var(--surface-base, #1a1a1a)",
-                color: "var(--text-primary, #e5e5e5)",
+                border: "1px solid var(--border-default)",
+                background: "var(--surface-base)",
+                color: "var(--text-primary)",
                 fontSize: 13,
                 marginBottom: 8,
                 outline: "none",
@@ -332,7 +332,7 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
             <p
               style={{
                 fontSize: 11,
-                color: "var(--text-tertiary, #666)",
+                color: "var(--text-tertiary)",
                 margin: 0,
               }}
             >
@@ -344,7 +344,7 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
         <p
           style={{
             fontSize: 11,
-            color: "var(--text-tertiary, #666)",
+            color: "var(--text-tertiary)",
             marginTop: 16,
             marginBottom: 0,
           }}

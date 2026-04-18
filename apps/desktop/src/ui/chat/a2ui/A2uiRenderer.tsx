@@ -551,7 +551,7 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
         return <UnknownComponent component={component} context={childContext} reason="Table requires props.columns" />;
       }
       return (
-        <div className="overflow-hidden overflow-x-auto rounded-xl border border-border/30 bg-gradient-to-b from-muted/[0.12] to-muted/[0.03] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset] ring-1 ring-border/15 dark:shadow-[0_1px_0_0_rgba(255,255,255,0.06)_inset]">
+        <div className="overflow-hidden overflow-x-auto rounded-xl border border-border/30 bg-gradient-to-b from-muted/[0.12] to-muted/[0.03] ring-1 ring-border/15 shadow-[var(--shadow-field)]">
           <table className="min-w-full border-collapse text-left text-sm">
             <thead>
               <tr className="border-b border-border/35 bg-muted/20">

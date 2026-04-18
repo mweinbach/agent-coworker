@@ -46,7 +46,7 @@ function WebEntry() {
 
   return (
     <React.Suspense
-      fallback={<div style={{ height: "100vh", background: "var(--surface-window, #0a0a0a)" }} />}
+      fallback={<div style={{ height: "100vh", background: "var(--surface-window)" }} />}
     >
       <App />
     </React.Suspense>

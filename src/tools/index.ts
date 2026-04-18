@@ -24,6 +24,7 @@ import { createUsageTool } from "./usage";
 import { createWebFetchTool } from "./webFetch";
 import { createWebSearchTool } from "./webSearch";
 import { createWriteTool } from "./write";
+import { createA2uiTool } from "./a2ui";
 import { filterToolsForRole } from "../server/agents/toolPolicy";
 import { getAgentRoleDefinition } from "../server/agents/roles";
 import {
@@ -108,6 +109,9 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     notebookEdit: createNotebookEditTool(ctx),
     skill: createSkillTool(ctx),
     ...(ctx.config.enableMemory ?? true ? { memory: createMemoryTool(ctx) } : {}),
+    ...(ctx.config.provider !== "google" && ctx.config.enableA2ui === true && ctx.applyA2uiEnvelope
+      ? { a2ui: createA2uiTool(ctx) }
+      : {}),
     usage: createUsageTool(ctx),
   };
 

@@ -86,6 +86,11 @@ describe("settings nav (store)", () => {
       view: "chat",
       lastNonSettingsView: "chat",
       settingsPage: "providers",
+      desktopFeatureFlags: {
+        remoteAccess: true,
+        workspacePicker: true,
+        workspaceLifecycle: true,
+      },
       notifications: [],
       workspaces: [],
       selectedWorkspaceId: null,
@@ -153,6 +158,13 @@ describe("settings nav (store)", () => {
 
   test("openSettings falls back when remote access is unavailable", () => {
     remoteAccessEnabled = false;
+    useAppStore.setState({
+      desktopFeatureFlags: {
+        remoteAccess: false,
+        workspacePicker: true,
+        workspaceLifecycle: true,
+      },
+    });
     useAppStore.getState().openSettings("remoteAccess");
     expect(useAppStore.getState().view).toBe("settings");
     expect(useAppStore.getState().settingsPage).toBe("providers");

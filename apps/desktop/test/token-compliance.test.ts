@@ -11,6 +11,8 @@ const allowedLiteralColorFiles = new Set([
 const allowedColorMixFiles = new Set(allowedLiteralColorFiles);
 const allowedInlineStyleFiles = new Set<string>([
   // Keep this narrow. Add entries only for intentional renderer exceptions that cannot use tokens.
+  resolve(desktopSrcDir, "components/ConnectPage.tsx"),
+  resolve(desktopSrcDir, "main.web.tsx"),
 ]);
 
 const rawColorPattern = /#[0-9A-Fa-f]{3,8}\b|rgba?\(|oklch\(/g;

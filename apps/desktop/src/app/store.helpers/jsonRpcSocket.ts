@@ -403,6 +403,30 @@ export async function interruptJsonRpcTurn(
   return await requestJsonRpc(get, set, workspaceId, "turn/interrupt", { threadId });
 }
 
+export async function dispatchA2uiAction(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+  threadId: string,
+  opts: {
+    surfaceId: string;
+    componentId: string;
+    eventType: string;
+    payload?: Record<string, unknown>;
+    clientMessageId?: string;
+  },
+): Promise<{ delivery: "delivered-as-steer" | "delivered-as-turn"; turnId: string }> {
+  const result = await requestJsonRpc(get, set, workspaceId, "cowork/session/a2ui/action", {
+    threadId,
+    surfaceId: opts.surfaceId,
+    componentId: opts.componentId,
+    eventType: opts.eventType,
+    ...(opts.payload !== undefined ? { payload: opts.payload } : {}),
+    ...(opts.clientMessageId ? { clientMessageId: opts.clientMessageId } : {}),
+  });
+  return result as { delivery: "delivered-as-steer" | "delivered-as-turn"; turnId: string };
+}
+
 export async function uploadJsonRpcWorkspaceFile(
   get: StoreGet,
   set: StoreSet | undefined,

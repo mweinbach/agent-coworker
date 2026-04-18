@@ -61,6 +61,7 @@ import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
 import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
 import { SkillManager } from "./SkillManager";
 import { TurnExecutionManager } from "./TurnExecutionManager";
+import { A2uiSurfaceManager } from "./A2uiSurfaceManager";
 import type {
   AgentInspectResult,
   AgentReasoningEffort,
@@ -259,6 +260,7 @@ const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<ServerEvent["type"]>([
   "budget_warning",
   "budget_exceeded",
   "config_updated",
+  "a2ui_surface",
 ]);
 
 function shouldReplayDisconnectedEvent(evt: ServerEvent): boolean {
@@ -282,6 +284,7 @@ export class AgentSession {
   private providerAuthManager: ProviderAuthManager | null = null;
   private providerCatalogManager: ProviderCatalogManager | null = null;
   private turnExecutionManager: TurnExecutionManager | null = null;
+  private a2uiSurfaceManager: A2uiSurfaceManager | null = null;
   private skillManager: SkillManager | null = null;
   private readonly metadataManager: SessionMetadataManager;
   private adminManager: SessionAdminManager | null = null;
@@ -602,9 +605,21 @@ export class AgentSession {
         metadataManager: this.metadataManager,
         backupController: this.backupController,
         flushPendingExternalSkillRefresh: async () => await this.flushPendingExternalSkillRefresh(),
+        getA2uiSurfaceManager: () => this.getA2uiSurfaceManager(),
       });
     }
     return this.turnExecutionManager;
+  }
+
+  private getA2uiSurfaceManager(): A2uiSurfaceManager {
+    if (!this.a2uiSurfaceManager) {
+      this.a2uiSurfaceManager = new A2uiSurfaceManager({
+        sessionId: this.id,
+        emit: (evt) => this.context.emit(evt),
+        log: (line) => this.context.emit({ type: "log", sessionId: this.id, line }),
+      });
+    }
+    return this.a2uiSurfaceManager;
   }
 
   private getAdminManager(): SessionAdminManager {
@@ -1021,6 +1036,7 @@ export class AgentSession {
   }
 
   reset() {
+    this.a2uiSurfaceManager?.reset();
     this.getAdminManager().reset();
   }
 
@@ -1674,6 +1690,10 @@ export class AgentSession {
       return;
     }
     await this.getTurnExecutionManager().sendSteerMessage(text, expectedTurnId, clientMessageId, attachments, inputParts);
+  }
+
+  validateA2uiAction(opts: { surfaceId: string; componentId: string }): ReturnType<A2uiSurfaceManager["validateAction"]> {
+    return this.getA2uiSurfaceManager().validateAction(opts);
   }
 
   getSessionUsage() {

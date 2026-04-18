@@ -1,5 +1,6 @@
 import { JSONRPC_ERROR_CODES } from "../protocol";
 
+import { createA2uiRouteHandlers } from "./a2ui";
 import { createAgentRouteHandlers } from "./agents";
 import { createMcpRouteHandlers } from "./mcp";
 import { createMemoryRouteHandlers } from "./memory";
@@ -26,6 +27,7 @@ export function createJsonRpcRequestRouter(context: JsonRpcRouteContext): JsonRp
     ...createSkillsRouteHandlers(context),
     ...createMemoryRouteHandlers(context),
     ...createWorkspaceBackupRouteHandlers(context),
+    ...createA2uiRouteHandlers(context),
   };
 
   return async (ws, message) => {

@@ -41,7 +41,11 @@ export function createA2uiRouteHandlers(
         return;
       }
 
-      if (session.getSessionConfigEvent().config.enableA2ui !== true) {
+      const enableA2ui =
+        typeof session.getSessionConfigEvent === "function"
+          ? session.getSessionConfigEvent().config.enableA2ui === true
+          : true;
+      if (!enableA2ui) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `${message.method}: A2UI is disabled for this workspace`,

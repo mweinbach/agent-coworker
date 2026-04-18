@@ -231,7 +231,7 @@ async function persistProjectConfigPatch(
     }
     if (key === "featureFlags" && isPlainObject(value)) {
       const currentFeatureFlags = isPlainObject(current.featureFlags) ? { ...current.featureFlags } : {};
-      const incomingFeatureFlags = value;
+      const incomingFeatureFlags: Record<string, unknown> = value;
       const mergedWorkspaceFlags = resolveWorkspaceFeatureFlags({
         ...(isPlainObject(currentFeatureFlags.workspace) ? currentFeatureFlags.workspace : {}),
         ...(isPlainObject(incomingFeatureFlags.workspace) ? incomingFeatureFlags.workspace : {}),

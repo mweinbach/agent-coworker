@@ -185,7 +185,7 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
     }
 
     case "Divider":
-      return <hr className="my-1 border-t border-border/60" />;
+      return <hr className="my-1 border-t border-border/25" />;
 
     case "Spacer":
       return <div aria-hidden className="h-3 w-full" />;
@@ -235,18 +235,38 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
         </div>
       );
 
-    case "Card":
-      return (
-        <div className="rounded-xl border border-border/40 bg-gradient-to-b from-background/85 to-background/55 p-4 shadow-sm">
-          <div className="flex flex-col gap-2.5">
-            {children.map((child, index) => (
-              <Fragment key={childKey(child, index)}>
-                <RenderNode component={child} context={childContext} />
-              </Fragment>
-            ))}
-          </div>
+    case "Card": {
+      // When a Card is at the top of the surface tree (depth === 0), the
+      // component that hosts the renderer (e.g. A2uiInlineCard, the surface
+      // dock, the popout dialog) is already supplying the visible card chrome
+      // — border, background, shadow, padding. Nesting a second card inside
+      // that host produces a "card on card" look. Render root-level cards as
+      // a plain column so the host's chrome is the only card surface.
+      const isRootCard = context.depth === 0;
+      const cardChildren = (
+        <div
+          className={cn(
+            "flex flex-col gap-2.5",
+            resolveOptionalAlignmentClass(props, "justify"),
+            resolveOptionalAlignmentClass(props, "items"),
+          )}
+        >
+          {children.map((child, index) => (
+            <Fragment key={childKey(child, index)}>
+              <RenderNode component={child} context={childContext} />
+            </Fragment>
+          ))}
         </div>
       );
+      if (isRootCard) {
+        return cardChildren;
+      }
+      return (
+        <div className="rounded-xl border border-border/25 bg-muted/[0.02] p-4">
+          {cardChildren}
+        </div>
+      );
+    }
 
     case "List": {
       const ordered = resolveBooleanProp(props, context.dataModel, "ordered");
@@ -530,12 +550,12 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
         return <UnknownComponent component={component} context={childContext} reason="Table requires props.columns" />;
       }
       return (
-        <div className="overflow-hidden overflow-x-auto rounded-lg border border-border/45 bg-background/55">
+        <div className="overflow-hidden overflow-x-auto rounded-lg border border-border/25 bg-muted/[0.01]">
           <table className="min-w-full text-left text-xs">
-            <thead className="bg-muted/35 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            <thead className="bg-muted/15 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
               <tr>
                 {columns.map((col) => (
-                  <th key={col.key} className="border-b border-border/40 px-3 py-2 font-semibold">{col.label}</th>
+                  <th key={col.key} className="border-b border-border/25 px-4 py-2.5 font-semibold">{col.label}</th>
                 ))}
               </tr>
             </thead>
@@ -544,12 +564,12 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
                 <tr
                   key={`row-${rowIndex}`}
                   className={cn(
-                    "transition-colors hover:bg-muted/15",
-                    rowIndex !== rows.length - 1 && "border-b border-border/25",
+                    "transition-colors hover:bg-muted/10",
+                    rowIndex !== rows.length - 1 && "border-b border-border/15",
                   )}
                 >
                   {columns.map((col) => (
-                    <td key={`cell-${rowIndex}-${col.key}`} className="px-3 py-2 align-top text-foreground/90">
+                    <td key={`cell-${rowIndex}-${col.key}`} className="px-4 py-3 align-top text-foreground/90">
                       {tableCellRender(row, col.key)}
                     </td>
                   ))}
@@ -557,7 +577,7 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
               ))}
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={columns.length} className="px-3 py-3 text-center text-muted-foreground">
+                  <td colSpan={columns.length} className="px-4 py-4 text-center text-muted-foreground">
                     No rows.
                   </td>
                 </tr>

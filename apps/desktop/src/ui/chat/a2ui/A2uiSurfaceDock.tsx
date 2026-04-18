@@ -168,8 +168,8 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
       <div className="mx-auto w-full max-w-[70rem]">
         <div
           className={cn(
-            "relative overflow-hidden rounded-t-xl border border-b-0 border-border/45",
-            "bg-gradient-to-b from-background to-muted/15 shadow-sm",
+            "relative overflow-hidden rounded-t-xl border border-b-0 border-border/35",
+            "bg-gradient-to-b from-background to-muted/10",
             "transition-[border-radius] duration-200",
             expanded && "rounded-b-none",
           )}
@@ -347,7 +347,7 @@ function RevisionControls({
   const relAge = formatRelativeAge(Date.now(), active.ts);
   const kindLabel = changeKindLabel(active.changeKind);
   return (
-    <div className="mb-3 flex flex-col gap-1 rounded-md border border-border/35 bg-muted/15 px-2 py-1.5 text-[11px] text-muted-foreground">
+    <div className="mb-3 flex flex-col gap-1 rounded-md border border-border/25 bg-muted/[0.05] px-2 py-1.5 text-[11px] text-muted-foreground">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1">
           <button

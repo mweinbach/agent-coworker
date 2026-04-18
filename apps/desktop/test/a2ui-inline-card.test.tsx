@@ -67,4 +67,29 @@ describe("A2uiInlineCard", () => {
     expect(html).toContain("Data update");
     expect(html).toContain("boosted energy");
   });
+
+  test("a root-level Card in the surface does not add a second card chrome", () => {
+    // Regression: a surface whose root component is `Card` used to render
+    // with a full rounded-xl inner card inside the A2uiInlineCard chrome,
+    // producing a visible "card on card" look. Root Cards should render as
+    // a plain column inside the inline card.
+    const html = renderToStaticMarkup(
+      createElement(A2uiInlineCard, {
+        item: createItem({
+          root: {
+            id: "root",
+            type: "Card",
+            children: [
+              { id: "heading", type: "Heading", props: { text: "Nested", level: 2 } },
+              { id: "body", type: "Text", props: { text: "flat content" } },
+            ],
+          },
+        }),
+      }),
+    );
+    expect(html).toContain("Nested");
+    expect(html).toContain("flat content");
+    expect(html).not.toContain("rounded-xl");
+    expect(html).not.toContain("from-background/85");
+  });
 });

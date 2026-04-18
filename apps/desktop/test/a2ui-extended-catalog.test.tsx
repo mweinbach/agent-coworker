@@ -162,6 +162,41 @@ describe("A2uiRenderer extended catalog (Phase 3)", () => {
     expect(html).toContain("Table requires props.columns");
   });
 
+  test("Card at root depth renders children flat (no nested card chrome)", () => {
+    // The host of A2uiRenderer (A2uiInlineCard, dock, dialog) already supplies
+    // the visible card chrome. A root-level Card must not add another rounded
+    // border on top of that or we get a "card on card" look.
+    const html = render({
+      id: "root",
+      type: "Card",
+      children: [
+        { id: "h", type: "Heading", props: { text: "Hello", level: 2 } },
+        { id: "t", type: "Text", props: { text: "World" } },
+      ],
+    });
+    expect(html).toContain("Hello");
+    expect(html).toContain("World");
+    // Classes that would indicate the nested card chrome was rendered.
+    expect(html).not.toContain("rounded-xl");
+    expect(html).not.toContain("from-background/85");
+  });
+
+  test("Card nested below root keeps its card chrome", () => {
+    const html = render({
+      id: "root",
+      type: "Column",
+      children: [
+        {
+          id: "inner-card",
+          type: "Card",
+          children: [{ id: "h", type: "Heading", props: { text: "Inner", level: 3 } }],
+        },
+      ],
+    });
+    expect(html).toContain("Inner");
+    expect(html).toContain("rounded-xl");
+  });
+
   test("Text reads via function calls (formatString style via `if`/`concat`)", () => {
     const html = render(
       {

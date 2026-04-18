@@ -4,7 +4,6 @@ import type { CSSProperties } from "react";
 import { ExpandIcon, SparklesIcon, Trash2Icon } from "lucide-react";
 
 import { isBasicCatalogId } from "../../../../../../src/shared/a2ui/component";
-import { Card, CardContent } from "../../../components/ui/card";
 import { cn } from "../../../lib/utils";
 import { useAppStore } from "../../../app/store";
 import type { FeedItem } from "../../../app/types";
@@ -83,22 +82,21 @@ export const A2uiInlineCard = memo(function A2uiInlineCard({ item }: { item: UiS
 
   if (isDeleted) {
     return (
-      <Card className="w-full max-w-4xl border-dashed border-border/60 bg-muted/20">
-        <CardContent className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
+      <div className="w-full max-w-4xl rounded-2xl border border-dashed border-border/40 bg-muted/10">
+        <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
           <Trash2Icon className="size-3.5" />
           <span>
             Surface <code className="font-mono">{item.surfaceId}</code> was deleted at revision {item.revision}.
           </span>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     );
   }
 
   return (
-    <Card
+    <div
       className={cn(
-        "group/a2ui-inline w-full max-w-4xl overflow-hidden border-border/45 shadow-sm",
-        "bg-gradient-to-b from-background to-muted/10",
+        "group/a2ui-inline w-full max-w-4xl overflow-hidden rounded-2xl border border-border/35 bg-card text-card-foreground shadow-sm",
       )}
     >
       <button
@@ -106,8 +104,8 @@ export const A2uiInlineCard = memo(function A2uiInlineCard({ item }: { item: UiS
         onClick={openInDock}
         aria-label="Pin this revision in the dock"
         className={cn(
-          "flex w-full items-center gap-2 border-b border-border/35 bg-muted/[0.06] px-3.5 py-2.5 text-left",
-          "transition-colors hover:bg-muted/15",
+          "flex w-full items-center gap-2 border-b border-border/25 bg-muted/[0.03] px-3.5 py-2.5 text-left",
+          "transition-colors hover:bg-muted/10",
         )}
       >
         <span className="flex size-6 flex-none items-center justify-center rounded-md bg-primary/10 text-primary">
@@ -140,7 +138,7 @@ export const A2uiInlineCard = memo(function A2uiInlineCard({ item }: { item: UiS
         </code>
         <ExpandIcon className="size-3.5 flex-none text-muted-foreground opacity-0 transition-opacity group-hover/a2ui-inline:opacity-100" />
       </button>
-      <CardContent className="p-4 pt-3.5" style={themeStyle}>
+      <div className="p-4 pt-3.5" style={themeStyle}>
         {unsupportedCatalog ? (
           <div className="mb-3 rounded-md border border-warning/35 bg-warning/[0.08] px-3 py-2 text-xs text-warning">
             This surface uses an unsupported catalog. Rendering with best-effort basic primitives — some components may be skipped.
@@ -152,7 +150,7 @@ export const A2uiInlineCard = memo(function A2uiInlineCard({ item }: { item: UiS
           dataModel={item.dataModel}
           {...(onAction ? { onAction } : {})}
         />
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 });

@@ -6108,6 +6108,112 @@ describe("AgentSession", () => {
       }));
     });
 
+    test("rehydrates persisted A2UI surfaces so resumed actions validate against restored state", () => {
+      const { emit } = makeEmit();
+
+      const session = AgentSession.fromPersisted({
+        persisted: {
+          sessionId: "persisted-a2ui-session",
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          title: "Persisted A2UI",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "google",
+          model: "gemini-3.1-pro-preview",
+          workingDirectory: "/tmp/persisted",
+          enableMcp: true,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          updatedAt: "2026-03-09T00:00:01.000Z",
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          messageCount: 1,
+          lastEventSeq: 3,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello" }] as any,
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+        initialSessionSnapshot: {
+          sessionId: "persisted-a2ui-session",
+          title: "Persisted A2UI",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "google",
+          model: "gemini-3.1-pro-preview",
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          mode: null,
+          depth: null,
+          nickname: null,
+          taskType: null,
+          targetPaths: null,
+          requestedModel: null,
+          effectiveModel: null,
+          requestedReasoningEffort: null,
+          effectiveReasoningEffort: null,
+          executionState: null,
+          lastMessagePreview: null,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          updatedAt: "2026-03-09T00:00:01.000Z",
+          messageCount: 1,
+          lastEventSeq: 3,
+          feed: [
+            {
+              id: "ui-surface-1",
+              kind: "ui_surface",
+              ts: "2026-03-09T00:00:01.000Z",
+              surfaceId: "surface-1",
+              catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
+              version: "v0.9",
+              revision: 1,
+              deleted: false,
+              root: {
+                id: "root",
+                type: "Column",
+                children: [
+                  {
+                    id: "buy",
+                    type: "Button",
+                    props: { text: "Buy" },
+                  },
+                ],
+              },
+              dataModel: { qty: 1 },
+              changeKind: "createSurface",
+            },
+          ],
+          agents: [],
+          todos: [],
+          sessionUsage: null,
+          lastTurnUsage: null,
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+        },
+        baseConfig: makeConfig("/tmp/persisted", {
+          provider: "google",
+          model: "gemini-3.1-pro-preview",
+          preferredChildModel: "gemini-3.1-pro-preview",
+          enableA2ui: true,
+        }),
+        emit,
+        sessionBackupFactory: makeSessionBackupFactory(),
+        getProviderStatusesImpl: async () => [],
+      });
+
+      expect(session.validateA2uiAction({ surfaceId: "surface-1", componentId: "buy" })).toEqual({
+        ok: true,
+        surfaceId: "surface-1",
+        componentId: "buy",
+        componentType: "Button",
+      });
+    });
+
     test("restores persisted providerOptions into resumed runtime config", async () => {
       const { emit } = makeEmit();
       const providerOptions = {

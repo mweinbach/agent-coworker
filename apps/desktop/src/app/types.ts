@@ -19,6 +19,7 @@ import type {
 import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
 import type {
   DesktopFeatureFlagOverrides,
+  WorkspaceFeatureFlags,
   WorkspaceFeatureFlagOverrides,
 } from "../../../../src/shared/featureFlags";
 import type { WorkspaceProviderOptions } from "./openaiCompatibleProviderOptions";
@@ -72,7 +73,7 @@ export type WorkspaceRecord = {
   defaultPreferredChildModelRef?: string;
   defaultAllowedChildModelRefs?: string[];
   defaultToolOutputOverflowChars?: number | null;
-  defaultFeatureFlags?: WorkspaceFeatureFlagOverrides;
+  defaultFeatureFlags?: WorkspaceFeatureFlags;
   providerOptions?: WorkspaceProviderOptions;
   userName?: string;
   userProfile?: WorkspaceUserProfile;
@@ -82,8 +83,9 @@ export type WorkspaceRecord = {
   yolo: boolean;
 };
 
-export type WorkspaceDefaultsPatch = Partial<Omit<WorkspaceRecord, "userProfile">> & {
+export type WorkspaceDefaultsPatch = Partial<Omit<WorkspaceRecord, "userProfile" | "defaultFeatureFlags">> & {
   clearDefaultToolOutputOverflowChars?: boolean;
+  defaultFeatureFlags?: WorkspaceFeatureFlagOverrides;
   userProfile?: Partial<WorkspaceUserProfile>;
 };
 

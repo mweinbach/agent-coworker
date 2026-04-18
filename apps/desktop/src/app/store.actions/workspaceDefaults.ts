@@ -19,6 +19,8 @@ import type { ProviderName } from "../../lib/wsProtocol";
 import type { SessionConfigPatch } from "../../../../../src/server/protocol";
 import {
   WORKSPACE_FEATURE_FLAG_IDS,
+  type WorkspaceFeatureFlagOverrides,
+  type WorkspaceFeatureFlags,
   normalizeWorkspaceFeatureFlagOverrides,
   resolveWorkspaceFeatureFlags,
 } from "../../../../../src/shared/featureFlags";
@@ -172,8 +174,8 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
   };
 
   const workspaceFeatureFlagsEqual = (
-    left: WorkspaceRecord["defaultFeatureFlags"] | undefined,
-    right: WorkspaceRecord["defaultFeatureFlags"] | undefined,
+    left: WorkspaceFeatureFlagOverrides | WorkspaceFeatureFlags | undefined,
+    right: WorkspaceFeatureFlagOverrides | WorkspaceFeatureFlags | undefined,
   ): boolean => {
     const normalizedLeft = resolveWorkspaceFeatureFlags(left);
     const normalizedRight = resolveWorkspaceFeatureFlags(right);

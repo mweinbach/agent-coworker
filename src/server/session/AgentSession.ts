@@ -70,6 +70,7 @@ import type {
   AgentContextMode,
 } from "../../shared/agents";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
+import type { A2uiComponent, A2uiSurfaceState, A2uiSurfacesById } from "../../shared/a2ui";
 
 // Packaged Bun sidecar builds need these dynamic imports because the old createRequire
 // path is unavailable there, and we want to avoid eagerly loading the heavier
@@ -265,6 +266,31 @@ const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<ServerEvent["type"]>([
 
 function shouldReplayDisconnectedEvent(evt: ServerEvent): boolean {
   return DISCONNECTED_REPLAY_EVENT_TYPES.has(evt.type);
+}
+
+function deriveA2uiSurfacesFromSnapshot(snapshot: SessionSnapshot | null | undefined): A2uiSurfacesById | undefined {
+  if (!snapshot) return undefined;
+
+  const surfaces: Record<string, A2uiSurfaceState> = {};
+  for (const item of snapshot.feed) {
+    if (item.kind !== "ui_surface") continue;
+    const existing = surfaces[item.surfaceId];
+    if (existing && existing.revision > item.revision) {
+      continue;
+    }
+    surfaces[item.surfaceId] = {
+      surfaceId: item.surfaceId,
+      catalogId: item.catalogId,
+      ...(item.theme ? { theme: structuredClone(item.theme) } : {}),
+      ...(item.root ? { root: structuredClone(item.root) as A2uiComponent } : {}),
+      ...(item.dataModel !== undefined ? { dataModel: structuredClone(item.dataModel) } : {}),
+      revision: item.revision,
+      updatedAt: item.ts,
+      deleted: item.deleted,
+    };
+  }
+
+  return Object.keys(surfaces).length > 0 ? surfaces : undefined;
 }
 
 export class AgentSession {
@@ -618,6 +644,7 @@ export class AgentSession {
         emit: (evt) => this.context.emit(evt),
         log: (line) => this.context.emit({ type: "log", sessionId: this.id, line }),
       });
+      this.a2uiSurfaceManager.hydrate(deriveA2uiSurfacesFromSnapshot(this.sessionSnapshotProjector.getSnapshot()));
     }
     return this.a2uiSurfaceManager;
   }

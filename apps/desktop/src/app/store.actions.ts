@@ -1,5 +1,6 @@
 import type { AppStoreActions, StoreGet, StoreSet } from "./store.helpers";
 
+import { createA2uiDockActions } from "./store.actions/a2uiDock";
 import { createWorkspaceBackupActions } from "./store.actions/backup";
 import { createBootstrapActions } from "./store.actions/bootstrap";
 import { createExplorerActions } from "./store.actions/explorer";
@@ -25,5 +26,6 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     ...createProviderActions(set, get),
     ...createExplorerActions(set, get),
     ...createOnboardingActions(set, get),
+    ...createA2uiDockActions(set, get),
   };
 }

@@ -27,15 +27,17 @@ import {
   type ThreadModelStreamRuntime,
 } from "../store.feedMapping";
 import type { StoreGet, StoreSet } from "../store.helpers";
-import type {
-  ApprovalPrompt,
-  AskPrompt,
-  FeedItem,
-  Notification,
-  ThreadAgentSummary,
-  ThreadBusyPolicy,
-  ThreadTitleSource,
+import {
+  createDefaultA2uiDock,
+  type ApprovalPrompt,
+  type AskPrompt,
+  type FeedItem,
+  type Notification,
+  type ThreadAgentSummary,
+  type ThreadBusyPolicy,
+  type ThreadTitleSource,
 } from "../types";
+import { recordSurfaceRevision, seedDockFromFeed, type ProjectedUiSurface } from "../a2uiDockReducer";
 import {
   RUNTIME,
   clearPendingThreadSteer,
@@ -732,6 +734,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       reconcileProjectedUserItem(set, threadId, item);
       return;
     }
+    if (item.type === "uiSurface") {
+      recordProjectedUiSurface(set, threadId, item);
+    }
     updateThreadFeed(
       set,
       threadId,
@@ -752,6 +757,10 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       }
     }
 
+    if (item.type === "uiSurface") {
+      recordProjectedUiSurface(set, threadId, item);
+    }
+
     updateThreadFeed(
       set,
       threadId,
@@ -765,6 +774,38 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             : undefined,
       },
     );
+  }
+
+  function recordProjectedUiSurface(
+    set: StoreSet,
+    threadId: string,
+    item: Extract<ProjectedItem, { type: "uiSurface" }>,
+  ) {
+    const ts = deps.nowIso();
+    const projected: ProjectedUiSurface = {
+      type: item.type,
+      surfaceId: item.surfaceId,
+      catalogId: item.catalogId,
+      version: item.version,
+      revision: item.revision,
+      deleted: item.deleted,
+      ...(item.theme !== undefined ? { theme: item.theme } : {}),
+      ...(item.root !== undefined ? { root: item.root } : {}),
+      ...(item.dataModel !== undefined ? { dataModel: item.dataModel } : {}),
+    };
+    set((s) => {
+      const runtime = s.threadRuntimeById[threadId];
+      if (!runtime) return {};
+      const currentDock = runtime.a2uiDock ?? createDefaultA2uiDock();
+      const nextDock = recordSurfaceRevision(currentDock, projected, ts);
+      if (nextDock === runtime.a2uiDock) return {};
+      return {
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: { ...runtime, a2uiDock: nextDock },
+        },
+      };
+    });
   }
 
   function applyProjectedReasoningDeltaToThread(
@@ -1180,6 +1221,11 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             sessionUsage: snapshot.sessionUsage,
             lastTurnUsage: snapshot.lastTurnUsage,
             feed: preserveCurrentFeed ? runtime.feed : snapshot.feed,
+            a2uiDock: seedDockFromFeed(
+              runtime.a2uiDock ?? createDefaultA2uiDock(),
+              preserveCurrentFeed ? runtime.feed : snapshot.feed,
+              deps.nowIso(),
+            ),
             hydrating: false,
             transcriptOnly: false,
           },

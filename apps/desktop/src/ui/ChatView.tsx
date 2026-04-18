@@ -83,7 +83,8 @@ import { ActivityGroupCard } from "./chat/ActivityGroupCard";
 import { buildChatRenderItems } from "./chat/activityGroups";
 import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
 import { ToolCard } from "./chat/toolCards/ToolCard";
-import { A2uiSurfaceCard } from "./chat/a2ui/A2uiSurfaceCard";
+import { A2uiSurfaceDock } from "./chat/a2ui/A2uiSurfaceDock";
+import { A2uiSurfaceHistoryRow } from "./chat/a2ui/A2uiSurfaceHistoryRow";
 
 type ChatViewContextValue = {
   developerMode: boolean;
@@ -544,7 +545,7 @@ const FeedRow = memo(function FeedRow(props: {
   }
 
   if (item.kind === "ui_surface") {
-    return <A2uiSurfaceCard item={item} />;
+    return <A2uiSurfaceHistoryRow item={item} />;
   }
 
   if (item.kind === "log") {
@@ -1213,6 +1214,12 @@ export function ChatView() {
             )}
           </ConversationContent>
         </Conversation>
+
+        {selectedThreadId ? (
+          <div className="shrink-0 bg-panel px-4">
+            <A2uiSurfaceDock threadId={selectedThreadId} />
+          </div>
+        ) : null}
 
         <div
           className="relative flex shrink-0 flex-col bg-panel px-4 pb-3 pt-2"

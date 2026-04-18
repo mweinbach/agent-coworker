@@ -215,6 +215,47 @@ export type ToolApprovalMetadata = {
 
 export type FeedItem = SessionFeedItem;
 
+/**
+ * One captured snapshot of an A2UI surface at a particular revision. The dock
+ * keeps these client-side so the user can scrub back through prior revisions.
+ */
+export type A2uiSurfaceRevision = {
+  revision: number;
+  ts: string;
+  catalogId: string;
+  version: "v0.9";
+  deleted: boolean;
+  theme?: Record<string, unknown>;
+  root?: Record<string, unknown>;
+  dataModel?: unknown;
+};
+
+/** Per-thread state for the floating A2UI dock. */
+export type A2uiThreadDock = {
+  /** All revisions per surface, oldest → newest. */
+  revisionsBySurfaceId: Record<string, A2uiSurfaceRevision[]>;
+  /** Which surface the dock is currently showing. Null when no live surface exists. */
+  focusedSurfaceId: string | null;
+  /** Whether the dock accordion is currently open. */
+  expanded: boolean;
+  /** Last revision the user saw per surface — drives the unseen-update pulse. */
+  lastSeenRevisionBySurfaceId: Record<string, number>;
+  /** Active revision per surface (defaults to the latest). */
+  activeRevisionBySurfaceId: Record<string, number>;
+};
+
+export const MAX_A2UI_REVISIONS_PER_SURFACE = 50;
+
+export function createDefaultA2uiDock(): A2uiThreadDock {
+  return {
+    revisionsBySurfaceId: {},
+    focusedSurfaceId: null,
+    expanded: false,
+    lastSeenRevisionBySurfaceId: {},
+    activeRevisionBySurfaceId: {},
+  };
+}
+
 export type SessionConfigSubset = Extract<ServerEvent, { type: "session_config" }>["config"];
 export type MCPServersEvent = Extract<ServerEvent, { type: "mcp_servers" }>;
 export type MCPServerValidationEvent = Extract<ServerEvent, { type: "mcp_server_validation" }>;
@@ -325,6 +366,7 @@ export type ThreadRuntime = {
   pendingTurnStart?: ThreadPendingTurnStart | null;
   pendingSteer?: ThreadPendingSteer | null;
   feed: FeedItem[];
+  a2uiDock: A2uiThreadDock;
   hydrating?: boolean;
   transcriptOnly: boolean;
   /** Draft-thread composer model (no session yet). Cleared on server_hello. */

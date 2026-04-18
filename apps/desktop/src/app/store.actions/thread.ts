@@ -38,6 +38,8 @@ import {
   truncateTitle,
 } from "../store.helpers";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
+import { seedDockFromFeed } from "../a2uiDockReducer";
+import { createDefaultA2uiDock } from "../types";
 import type {
   SessionSnapshot,
   SessionSnapshotFingerprint,
@@ -164,6 +166,11 @@ export async function hydrateThreadSelection(
             sessionUsage: snapshot.sessionUsage,
             lastTurnUsage: snapshot.lastTurnUsage,
             feed: snapshot.feed,
+            a2uiDock: seedDockFromFeed(
+              currentRuntime?.a2uiDock ?? createDefaultA2uiDock(),
+              snapshot.feed,
+              nowIso(),
+            ),
             hydrating: false,
             transcriptOnly: false,
             connected: currentRuntime?.connected ?? false,
@@ -362,20 +369,28 @@ export async function hydrateThreadSelection(
           clearThreadHydrationIfCurrent(requestId);
           return;
         }
-        set((state) => ({
-          threadRuntimeById: {
-            ...state.threadRuntimeById,
-            [threadId]: {
-              ...state.threadRuntimeById[threadId],
-              sessionUsage: snapshot.sessionUsage,
-              lastTurnUsage: snapshot.lastTurnUsage,
-              agents: snapshot.agents,
-              feed: snapshot.feed,
-              hydrating: false,
-              transcriptOnly: true,
+        set((state) => {
+          const currentRuntime = state.threadRuntimeById[threadId];
+          return {
+            threadRuntimeById: {
+              ...state.threadRuntimeById,
+              [threadId]: {
+                ...currentRuntime,
+                sessionUsage: snapshot.sessionUsage,
+                lastTurnUsage: snapshot.lastTurnUsage,
+                agents: snapshot.agents,
+                feed: snapshot.feed,
+                a2uiDock: seedDockFromFeed(
+                  currentRuntime?.a2uiDock ?? createDefaultA2uiDock(),
+                  snapshot.feed,
+                  nowIso(),
+                ),
+                hydrating: false,
+                transcriptOnly: true,
+              },
             },
-          },
-        }));
+          };
+        });
       }
     } catch (error) {
       if (!isSelectionCurrent(requestId)) {
@@ -538,6 +553,11 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
             sessionUsage: snapshot.sessionUsage,
             lastTurnUsage: snapshot.lastTurnUsage,
             feed: snapshot.feed,
+            a2uiDock: seedDockFromFeed(
+              currentRuntime?.a2uiDock ?? createDefaultA2uiDock(),
+              snapshot.feed,
+              nowIso(),
+            ),
             hydrating: false,
             transcriptOnly: false,
             connected: currentRuntime?.connected ?? false,

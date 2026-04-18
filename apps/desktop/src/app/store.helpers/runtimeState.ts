@@ -6,6 +6,7 @@ import {
   type ThreadModelStreamRuntime,
 } from "../store.feedMapping";
 import type { AppStoreState } from "../store.helpers";
+import { createDefaultA2uiDock } from "../types";
 import type { CachedSessionSnapshot, ThreadRuntime, WorkspaceRuntime } from "../types";
 
 export type PendingThreadSteer = {
@@ -316,6 +317,7 @@ export function defaultThreadRuntime(): ThreadRuntime {
     pendingTurnStart: null,
     pendingSteer: null,
     feed: [],
+    a2uiDock: createDefaultA2uiDock(),
     hydrating: false,
     transcriptOnly: false,
   };

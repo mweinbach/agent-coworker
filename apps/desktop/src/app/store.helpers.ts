@@ -330,6 +330,11 @@ export type AppStoreState = {
 
   openFilePreview: (opts: { path: string }) => void;
   closeFilePreview: () => void;
+
+  setA2uiDockExpanded: (threadId: string, expanded: boolean) => void;
+  focusA2uiSurface: (threadId: string, surfaceId: string | null) => void;
+  setA2uiActiveRevision: (threadId: string, surfaceId: string, revision: number) => void;
+  markA2uiSurfaceSeen: (threadId: string, surfaceId: string, revision: number) => void;
 };
 
 export type AppStoreActionKeys = {

@@ -1,5 +1,10 @@
 import { startWorkspaceServer } from "../lib/desktopCommands";
 import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
+import type {
+  DesktopFeatureFlagId,
+  DesktopFeatureFlagOverrides,
+  DesktopFeatureFlags,
+} from "../lib/desktopFeatureFlags";
 import { fallbackAuthMethods } from "../lib/providerDisplayNames";
 import type { MCPServerConfig, ProviderName, ServerEvent, TodoItem } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
@@ -174,6 +179,8 @@ export type AppStoreState = {
   developerMode: boolean;
   showHiddenFiles: boolean;
   perWorkspaceSettings: boolean;
+  desktopFeatureFlags: DesktopFeatureFlags;
+  desktopFeatureFlagOverrides: DesktopFeatureFlagOverrides;
   updateState: UpdaterState;
 
   onboardingVisible: boolean;
@@ -220,6 +227,7 @@ export type AppStoreState = {
   setDeveloperMode: (v: boolean) => void;
   setShowHiddenFiles: (v: boolean) => void;
   setPerWorkspaceSettings: (enabled: boolean) => void;
+  setDesktopFeatureFlagOverride: (flagId: DesktopFeatureFlagId, enabled: boolean) => Promise<void>;
   setUpdateState: (state: UpdaterState) => void;
   checkForUpdates: () => Promise<void>;
   quitAndInstallUpdate: () => Promise<void>;

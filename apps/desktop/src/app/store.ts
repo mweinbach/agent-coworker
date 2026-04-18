@@ -50,6 +50,12 @@ const initialState: AppStoreDataState = {
   developerMode: false,
   showHiddenFiles: false,
   perWorkspaceSettings: false,
+  desktopFeatureFlags: {
+    remoteAccess: false,
+    workspacePicker: true,
+    workspaceLifecycle: true,
+  },
+  desktopFeatureFlagOverrides: {},
   updateState: createDefaultUpdaterState(),
 
   onboardingVisible: false,

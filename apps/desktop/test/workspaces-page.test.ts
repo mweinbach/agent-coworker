@@ -382,7 +382,7 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Background details");
   });
 
-  test("renders and wires the A2UI workspace toggle", async () => {
+  test("keeps A2UI controls out of workspace behavior settings", async () => {
     const updateWorkspaceDefaults = mock(async () => {});
     useAppStore.setState((state) => ({
       ...state,
@@ -400,8 +400,11 @@ describe("desktop workspaces page", () => {
           defaultChildModelRoutingMode: "same-provider",
           defaultPreferredChildModelRef: "google:gemini-3-flash-preview",
           defaultAllowedChildModelRefs: [],
+          defaultFeatureFlags: {
+            experimentalApi: true,
+            a2ui: false,
+          },
           defaultEnableMcp: true,
-          defaultEnableA2ui: true,
           defaultBackupsEnabled: true,
           yolo: false,
         },
@@ -430,18 +433,9 @@ describe("desktop workspaces page", () => {
         root.render(createElement(WorkspacesPage));
       });
 
-      expect(container.textContent).toContain("Generative UI (A2UI)");
-
-      const toggle = container.querySelector('[aria-label="Enable A2UI generative UI"]');
-      if (!(toggle instanceof harness.dom.window.HTMLButtonElement)) {
-        throw new Error("missing A2UI toggle");
-      }
-
-      await act(async () => {
-        toggle.click();
-      });
-
-      expect(updateWorkspaceDefaults).toHaveBeenCalledWith("ws-1", { defaultEnableA2ui: false });
+      expect(container.textContent).not.toContain("Generative UI (A2UI)");
+      expect(container.querySelector('[aria-label="Enable A2UI generative UI"]')).toBeNull();
+      expect(updateWorkspaceDefaults).not.toHaveBeenCalled();
     } finally {
       if (root) {
         await act(async () => {
@@ -492,6 +486,11 @@ describe("desktop workspaces page", () => {
       },
       providerDefaultModelByProvider: {
         google: "gemini-3-flash-preview",
+      },
+      desktopFeatureFlags: {
+        remoteAccess: true,
+        workspacePicker: false,
+        workspaceLifecycle: false,
       },
     }));
 

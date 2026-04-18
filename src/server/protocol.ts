@@ -27,6 +27,10 @@ import type { ModelStreamPartType, ModelStreamRawFormat } from "./modelStream";
 import type { PersistedSessionSummary } from "./sessionStore";
 import type { SessionSnapshot } from "../shared/sessionSnapshot";
 import type {
+  WorkspaceFeatureFlagOverrides,
+  WorkspaceFeatureFlags,
+} from "../shared/featureFlags";
+import type {
   SessionBackupPublicState,
   WorkspaceBackupDeltaPreview,
   WorkspaceBackupPublicEntry,
@@ -71,6 +75,9 @@ export type SessionConfigPatch = {
     work?: string;
     details?: string;
   };
+  featureFlags?: {
+    workspace?: WorkspaceFeatureFlagOverrides;
+  };
 };
 
 export type SessionConfigState = {
@@ -94,6 +101,9 @@ export type SessionConfigState = {
     instructions: string;
     work: string;
     details: string;
+  };
+  featureFlags: {
+    workspace: WorkspaceFeatureFlags;
   };
 };
 

@@ -652,16 +652,75 @@ describe("server JSON-RPC control methods", () => {
       const defaultsResponse = await rpc.request("cowork/session/defaults/apply", {
         cwd: targetWorkspace,
         config: {
-          enableA2ui: true,
+          featureFlags: {
+            workspace: {
+              a2ui: true,
+            },
+          },
           enableMemory: true,
         },
       });
       expect(defaultsResponse.result.event.type).toBe("session_config");
 
       const targetConfig = JSON.parse(await fs.readFile(`${targetWorkspace}/.agent/config.json`, "utf-8"));
-      expect(targetConfig.enableA2ui).toBe(true);
+      expect(targetConfig.featureFlags?.workspace?.a2ui).toBe(true);
       expect(targetConfig.enableMemory).toBe(true);
       await expect(fs.readFile(`${serverRoot}/.agent/config.json`, "utf-8")).rejects.toBeDefined();
+
+      rpc.close();
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  test("workspace feature flags round-trip through session defaults apply", async () => {
+    const workspace = await makeTmpProject("agent-harness-feature-flags-");
+    await fs.writeFile(
+      `${workspace}/.agent/config.json`,
+      `${JSON.stringify({
+        featureFlags: {
+          workspace: {
+            experimentalApi: false,
+            a2ui: false,
+          },
+        },
+      }, null, 2)}\n`,
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(workspace));
+
+    try {
+      const rpc = await connectJsonRpc(url);
+      const before = await rpc.request("cowork/session/state/read", { cwd: workspace });
+      expect(before.result.events[2]?.type).toBe("session_config");
+      expect(before.result.events[2]?.config?.featureFlags?.workspace?.experimentalApi).toBe(false);
+      expect(before.result.events[2]?.config?.featureFlags?.workspace?.a2ui).toBe(false);
+      expect(before.result.events[2]?.config?.enableA2ui).toBe(false);
+
+      const apply = await rpc.request("cowork/session/defaults/apply", {
+        cwd: workspace,
+        config: {
+          featureFlags: {
+            workspace: {
+              experimentalApi: true,
+              a2ui: true,
+            },
+          },
+        },
+      });
+      expect(apply.result.event.type).toBe("session_config");
+      expect(apply.result.event.config.featureFlags.workspace.experimentalApi).toBe(true);
+      expect(apply.result.event.config.featureFlags.workspace.a2ui).toBe(true);
+      expect(apply.result.event.config.enableA2ui).toBe(true);
+
+      const persisted = JSON.parse(await fs.readFile(`${workspace}/.agent/config.json`, "utf-8"));
+      expect(persisted.featureFlags.workspace.experimentalApi).toBe(true);
+      expect(persisted.featureFlags.workspace.a2ui).toBe(true);
+
+      const after = await rpc.request("cowork/session/state/read", { cwd: workspace });
+      expect(after.result.events[2]?.config?.featureFlags?.workspace?.experimentalApi).toBe(true);
+      expect(after.result.events[2]?.config?.featureFlags?.workspace?.a2ui).toBe(true);
+      expect(after.result.events[2]?.config?.enableA2ui).toBe(true);
 
       rpc.close();
     } finally {

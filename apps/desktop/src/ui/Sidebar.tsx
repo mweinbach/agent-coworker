@@ -15,7 +15,7 @@ import {
 import { resolvePluginCatalogWorkspaceSelection } from "../app/pluginManagement";
 import { useAppStore } from "../app/store";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
-import { confirmAction, getDesktopFeatureFlags, showContextMenu } from "../lib/desktopCommands";
+import { confirmAction, showContextMenu } from "../lib/desktopCommands";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/utils";
@@ -61,6 +61,7 @@ export const Sidebar = memo(function Sidebar() {
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
+  const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
 
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
@@ -89,7 +90,6 @@ export const Sidebar = memo(function Sidebar() {
     pluginManagementWorkspaceId,
     pluginManagementMode,
   }), [pluginManagementMode, pluginManagementWorkspaceId, selectedWorkspaceId, workspaces]);
-  const desktopFeatures = getDesktopFeatureFlags();
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const workspaceLifecycleEnabled = desktopFeatures.workspaceLifecycle !== false;
   const activeWorkspaceId = view === "skills"

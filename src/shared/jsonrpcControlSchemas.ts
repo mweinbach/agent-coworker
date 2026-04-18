@@ -34,6 +34,11 @@ const userProfileSchema = z.object({
   details: z.string().optional(),
 }).passthrough();
 
+const workspaceFeatureFlagOverridesSchema = z.object({
+  experimentalApi: z.boolean().optional(),
+  a2ui: z.boolean().optional(),
+}).passthrough();
+
 const providerOptionsLocationSchema = z.object({
   country: z.string().optional(),
   region: z.string().optional(),
@@ -118,6 +123,9 @@ export const sessionConfigEventSchema = z.object({
     providerOptions: editableProviderOptionsSchema.optional(),
     userName: z.string().optional(),
     userProfile: userProfileSchema.optional(),
+    featureFlags: z.object({
+      workspace: workspaceFeatureFlagOverridesSchema.optional(),
+    }).passthrough().optional(),
   }).passthrough(),
 }).passthrough();
 
@@ -1028,6 +1036,9 @@ export const sessionDefaultsApplyRequestSchema = z.object({
     providerOptions: editableProviderOptionsSchema.optional(),
     userName: z.string().optional(),
     userProfile: userProfileSchema.optional(),
+    featureFlags: z.object({
+      workspace: workspaceFeatureFlagOverridesSchema.optional(),
+    }).passthrough().optional(),
   }).passthrough().optional(),
 }).strict();
 

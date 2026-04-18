@@ -3249,6 +3249,60 @@ describe("skill tool", () => {
     expect(res).toBe("First dir");
   });
 
+  test("hides the a2ui skill when the workspace A2UI feature flag is disabled", async () => {
+    const dir = await tmpDir();
+    const skillDir = path.join(dir, "skills", "a2ui");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      skillDoc("a2ui", "A2UI helper skill.", "# A2UI Skill\nDo not load when disabled."),
+      "utf-8"
+    );
+
+    const config = makeConfig(dir, {
+      skillsDirs: [path.join(dir, "skills")],
+      enableA2ui: true,
+      featureFlags: {
+        workspace: {
+          a2ui: false,
+        },
+      },
+    });
+    const ctx = makeCtx(dir);
+    ctx.config = config;
+
+    const t: any = createSkillTool(ctx);
+    const res: string = await t.execute({ skillName: "a2ui" });
+    expect(res).toContain("not found");
+  });
+
+  test("loads the a2ui skill when the workspace A2UI feature flag is enabled", async () => {
+    const dir = await tmpDir();
+    const skillDir = path.join(dir, "skills", "a2ui");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      skillDoc("a2ui", "A2UI helper skill.", "# A2UI Skill\nProtocol guidance."),
+      "utf-8"
+    );
+
+    const config = makeConfig(dir, {
+      skillsDirs: [path.join(dir, "skills")],
+      enableA2ui: false,
+      featureFlags: {
+        workspace: {
+          a2ui: true,
+        },
+      },
+    });
+    const ctx = makeCtx(dir);
+    ctx.config = config;
+
+    const t: any = createSkillTool(ctx);
+    const res: string = await t.execute({ skillName: "a2ui" });
+    expect(res).toContain("Protocol guidance.");
+  });
+
   test("appends deck-workspace hygiene guidance to slides skill loads", async () => {
     const dir = await tmpDir();
     const skillDir = path.join(dir, "skills", "slides");

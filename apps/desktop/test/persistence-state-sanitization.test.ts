@@ -522,6 +522,7 @@ describe("desktop persistence state validation", () => {
       developerMode: false,
       showHiddenFiles: false,
       perWorkspaceSettings: false,
+      desktopFeatureFlagOverrides: {},
       providerUiState: {
         lmstudio: {
           enabled: false,

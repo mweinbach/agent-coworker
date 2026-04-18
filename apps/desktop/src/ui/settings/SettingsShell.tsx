@@ -4,7 +4,6 @@ import { ArrowLeftIcon } from "lucide-react";
 
 import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
-import { isRemoteAccessEnabled } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
 import type { SettingsPageId } from "../../app/types";
 import { ProvidersPage } from "./pages/ProvidersPage";
@@ -16,6 +15,7 @@ import { UpdatesPage } from "./pages/UpdatesPage";
 import { DeveloperPage } from "./pages/DeveloperPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { RemoteAccessPage } from "./pages/RemoteAccessPage";
+import { FeatureFlagsPage } from "./pages/FeatureFlagsPage";
 import { SettingsChromeProvider, type SettingsChromeState } from "./SettingsChromeContext";
 
 type SettingsPageDefinition = {
@@ -60,6 +60,10 @@ const SETTINGS_PAGE_META: Record<
     title: "Developer",
     description: "Debug visibility and advanced workspace options.",
   },
+  featureFlags: {
+    title: "Feature flags",
+    description: "Enable or disable experimental capabilities.",
+  },
   updates: {
     title: "Updates",
     description: "App version and restart-based updates.",
@@ -98,6 +102,7 @@ export function getSettingsGroups(remoteAccessAvailable: boolean): Array<{
     {
       label: "Advanced",
       pages: [
+        { id: "featureFlags", label: "Feature flags", render: () => <FeatureFlagsPage /> },
         { id: "developer", label: "Developer", render: () => <DeveloperPage /> },
         { id: "updates", label: "Updates", render: () => <UpdatesPage /> },
       ],
@@ -177,7 +182,8 @@ function SettingsNavigation({
 }
 
 export function SettingsShell() {
-  const remoteAccessAvailable = isRemoteAccessEnabled();
+  const desktopFeatureFlags = useAppStore((s) => s.desktopFeatureFlags);
+  const remoteAccessAvailable = desktopFeatureFlags.remoteAccess === true;
   const settingsPage = useAppStore((s) => s.settingsPage);
   const setSettingsPage = useAppStore((s) => s.setSettingsPage);
   const closeSettings = useAppStore((s) => s.closeSettings);

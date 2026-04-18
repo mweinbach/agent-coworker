@@ -16,6 +16,7 @@ import {
   trashPath,
 } from "../../lib/desktopCommands";
 import { type ProviderName } from "../../lib/wsProtocol";
+import { resolveWorkspaceFeatureFlags } from "../../../../../src/shared/featureFlags";
 
 import {
   type AppStoreActions,
@@ -110,8 +111,8 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
         defaultPreferredChildModelRef: `google:${defaultModelForProvider("google")}`,
         defaultAllowedChildModelRefs: [],
         defaultEnableMcp: true,
-        defaultEnableA2ui: true,
         defaultBackupsEnabled: true,
+        defaultFeatureFlags: resolveWorkspaceFeatureFlags(),
         yolo: false,
       };
   

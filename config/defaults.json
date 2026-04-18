@@ -4,7 +4,7 @@
   "knowledgeCutoff": "End of May 2025",
   "toolOutputOverflowChars": 25000,
   "includeRawChunks": true,
-  "enableA2ui": true,
+  "enableA2ui": false,
   "observabilityEnabled": true,
   "observability": {
     "provider": "langfuse",

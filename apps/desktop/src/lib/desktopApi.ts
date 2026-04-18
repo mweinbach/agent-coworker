@@ -1,7 +1,7 @@
 import desktopPackage from "../../package.json";
 
 import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
-import type { DesktopFeatureFlags } from "./desktopFeatureFlags";
+import type { DesktopFeatureFlagOverrides, DesktopFeatureFlags } from "./desktopFeatureFlags";
 
 export type StartWorkspaceServerInput = {
   workspaceId: string;
@@ -246,6 +246,7 @@ export type SetWindowAppearanceInput = {
 
 export interface DesktopApi {
   readonly features: DesktopFeatureFlags;
+  resolveDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides): DesktopFeatureFlags;
   startWorkspaceServer(opts: StartWorkspaceServerInput): Promise<{ url: string }>;
   stopWorkspaceServer(opts: StopWorkspaceServerInput): Promise<void>;
   startMobileRelay(opts: MobileRelayStartInput): Promise<MobileRelayBridgeState>;

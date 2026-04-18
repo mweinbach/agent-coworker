@@ -17,6 +17,10 @@ import type {
   TodoItem,
 } from "../lib/wsProtocol";
 import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
+import type {
+  DesktopFeatureFlagOverrides,
+  WorkspaceFeatureFlagOverrides,
+} from "../../../../src/shared/featureFlags";
 import type { WorkspaceProviderOptions } from "./openaiCompatibleProviderOptions";
 
 export type WorkspaceUserProfile = {
@@ -68,6 +72,7 @@ export type WorkspaceRecord = {
   defaultPreferredChildModelRef?: string;
   defaultAllowedChildModelRefs?: string[];
   defaultToolOutputOverflowChars?: number | null;
+  defaultFeatureFlags?: WorkspaceFeatureFlagOverrides;
   providerOptions?: WorkspaceProviderOptions;
   userName?: string;
   userProfile?: WorkspaceUserProfile;
@@ -150,6 +155,7 @@ export type SettingsPageId =
   | "backup"
   | "mcp"
   | "memory"
+  | "featureFlags"
   | "updates"
   | "developer"
   | "remoteAccess";
@@ -185,6 +191,7 @@ export type PersistedState = {
   developerMode?: boolean;
   showHiddenFiles?: boolean;
   perWorkspaceSettings?: boolean;
+  desktopFeatureFlagOverrides?: DesktopFeatureFlagOverrides;
   providerState?: PersistedProviderState;
   providerUiState?: PersistedProviderUiState;
   onboarding?: PersistedOnboardingState;

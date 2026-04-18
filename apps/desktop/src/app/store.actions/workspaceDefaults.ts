@@ -17,6 +17,11 @@ import {
 } from "../../lib/desktopCommands";
 import type { ProviderName } from "../../lib/wsProtocol";
 import type { SessionConfigPatch } from "../../../../../src/server/protocol";
+import {
+  WORKSPACE_FEATURE_FLAG_IDS,
+  normalizeWorkspaceFeatureFlagOverrides,
+  resolveWorkspaceFeatureFlags,
+} from "../../../../../src/shared/featureFlags";
 
 import {
   type AppStoreActions,
@@ -166,6 +171,15 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     );
   };
 
+  const workspaceFeatureFlagsEqual = (
+    left: WorkspaceRecord["defaultFeatureFlags"] | undefined,
+    right: WorkspaceRecord["defaultFeatureFlags"] | undefined,
+  ): boolean => {
+    const normalizedLeft = resolveWorkspaceFeatureFlags(left);
+    const normalizedRight = resolveWorkspaceFeatureFlags(right);
+    return WORKSPACE_FEATURE_FLAG_IDS.every((flagId) => normalizedLeft[flagId] === normalizedRight[flagId]);
+  };
+
   const buildApplySessionDefaultsMessage = (opts: {
     sessionId: string;
     current: DefaultsTargetState;
@@ -173,7 +187,6 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       provider?: ProviderName;
       model?: string;
       enableMcp?: boolean;
-      enableA2ui?: boolean;
       backupsEnabled?: boolean;
       toolOutputOverflowChars?: number | null;
       preferredChildModel?: string;
@@ -181,8 +194,9 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       preferredChildModelRef?: string;
       allowedChildModelRefs?: string[];
       providerOptions?: WorkspaceRecord["providerOptions"];
-        userName?: string;
-        userProfile?: WorkspaceRecord["userProfile"];
+      userName?: string;
+      userProfile?: WorkspaceRecord["userProfile"];
+      featureFlags?: WorkspaceRecord["defaultFeatureFlags"];
       };
   }): ApplySessionDefaultsMessage | null => {
     const configPatch: NonNullable<ApplySessionDefaultsMessage["config"]> = {};
@@ -202,13 +216,6 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     const enableMcpChanged =
       typeof opts.desired.enableMcp === "boolean"
       && opts.desired.enableMcp !== opts.current.enableMcp;
-
-    if (
-      typeof opts.desired.enableA2ui === "boolean"
-      && opts.desired.enableA2ui !== opts.current.sessionConfig?.enableA2ui
-    ) {
-      configPatch.enableA2ui = opts.desired.enableA2ui;
-    }
 
     if (
       typeof opts.desired.backupsEnabled === "boolean"
@@ -271,6 +278,14 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       configPatch.userProfile = normalizeWorkspaceUserProfile(opts.desired.userProfile);
     }
 
+    const desiredFeatureFlags = normalizeWorkspaceFeatureFlagOverrides(opts.desired.featureFlags);
+    const currentFeatureFlags = normalizeWorkspaceFeatureFlagOverrides(opts.current.sessionConfig?.featureFlags?.workspace);
+    if (!workspaceFeatureFlagsEqual(desiredFeatureFlags, currentFeatureFlags)) {
+      configPatch.featureFlags = {
+        workspace: resolveWorkspaceFeatureFlags(desiredFeatureFlags),
+      };
+    }
+
     if (!providerChanged && !enableMcpChanged && Object.keys(configPatch).length === 0) {
       return null;
     }
@@ -310,6 +325,10 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       controlSessionConfig?.preferredChildModelRef?.trim()
       || workspace.defaultPreferredChildModelRef?.trim()
       || (defaultPreferredChildModel ? `${provider}:${defaultPreferredChildModel}` : undefined);
+    const defaultFeatureFlags = resolveWorkspaceFeatureFlags(
+      normalizeWorkspaceFeatureFlagOverrides(controlSessionConfig?.featureFlags?.workspace)
+      ?? workspace.defaultFeatureFlags,
+    );
 
     return {
       ...workspace,
@@ -320,6 +339,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       defaultPreferredChildModelRef,
       defaultAllowedChildModelRefs: controlSessionConfig?.allowedChildModelRefs ?? workspace.defaultAllowedChildModelRefs ?? [],
       defaultToolOutputOverflowChars: controlSessionConfig?.defaultToolOutputOverflowChars ?? workspace.defaultToolOutputOverflowChars,
+      defaultFeatureFlags,
       providerOptions: normalizeWorkspaceProviderOptions(controlSessionConfig?.providerOptions) ?? workspace.providerOptions,
       userName: typeof controlSessionConfig?.userName === "string" ? controlSessionConfig.userName : workspace.userName,
       userProfile: controlSessionConfig?.userProfile
@@ -328,10 +348,6 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           ? normalizeWorkspaceUserProfile(workspace.userProfile)
           : undefined,
       defaultEnableMcp: typeof runtime?.controlEnableMcp === "boolean" ? runtime.controlEnableMcp : workspace.defaultEnableMcp,
-      defaultEnableA2ui:
-        typeof controlSessionConfig?.enableA2ui === "boolean"
-          ? controlSessionConfig.enableA2ui
-          : workspace.defaultEnableA2ui ?? true,
       defaultBackupsEnabled:
         typeof controlSessionConfig?.defaultBackupsEnabled === "boolean"
           ? controlSessionConfig.defaultBackupsEnabled
@@ -343,11 +359,24 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     workspace: WorkspaceRecord,
     patch: WorkspaceDefaultsPatch,
   ): WorkspaceRecord => {
-    const { clearDefaultToolOutputOverflowChars, userProfile: userProfilePatch, ...workspacePatch } = patch;
+    const {
+      clearDefaultToolOutputOverflowChars,
+      userProfile: userProfilePatch,
+      defaultFeatureFlags: featureFlagPatch,
+      ...workspacePatch
+    } = patch;
     return {
       ...workspace,
       ...workspacePatch,
       ...(clearDefaultToolOutputOverflowChars ? { defaultToolOutputOverflowChars: undefined } : {}),
+      ...(featureFlagPatch !== undefined
+        ? {
+            defaultFeatureFlags: resolveWorkspaceFeatureFlags({
+              ...workspace.defaultFeatureFlags,
+              ...featureFlagPatch,
+            }),
+          }
+        : {}),
       ...(workspacePatch.providerOptions !== undefined
         ? {
             providerOptions: mergeWorkspaceProviderOptions(workspace.providerOptions, workspacePatch.providerOptions),
@@ -425,7 +454,6 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         });
         return;
       }
-      const harnessA2uiDefault = workspaceRuntime?.controlSessionConfig?.enableA2ui;
       const harnessBackupsDefault = workspaceRuntime?.controlSessionConfig?.defaultBackupsEnabled;
       const harnessToolOutputOverflowChars = workspaceRuntime?.controlSessionConfig?.defaultToolOutputOverflowChars;
 
@@ -506,9 +534,6 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         desired: {
           ...(!preserveSessionModel && provider && model ? { provider, model } : {}),
           enableMcp: desiredEnableMcp,
-          ...(typeof (mode === "explicit" ? ws.defaultEnableA2ui : harnessA2uiDefault) === "boolean"
-            ? { enableA2ui: mode === "explicit" ? (ws.defaultEnableA2ui ?? true) : harnessA2uiDefault }
-            : {}),
           ...(typeof (mode === "explicit" ? ws.defaultBackupsEnabled : harnessBackupsDefault) === "boolean"
             ? { backupsEnabled: mode === "explicit" ? ws.defaultBackupsEnabled : harnessBackupsDefault }
             : {}),
@@ -524,6 +549,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           ...(providerOptions ? { providerOptions } : {}),
           ...(userName !== undefined ? { userName } : {}),
           ...(userProfile !== undefined ? { userProfile } : {}),
+          featureFlags: ws.defaultFeatureFlags,
         },
       });
       if (!message || message.type !== "apply_session_defaults") {
@@ -606,8 +632,8 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         workspacePatch.defaultToolOutputOverflowChars !== undefined ||
         clearDefaultToolOutputOverflowChars === true ||
         workspacePatch.defaultEnableMcp !== undefined ||
-        workspacePatch.defaultEnableA2ui !== undefined ||
         workspacePatch.defaultBackupsEnabled !== undefined ||
+        workspacePatch.defaultFeatureFlags !== undefined ||
         workspacePatch.providerOptions !== undefined ||
         workspacePatch.userName !== undefined ||
         userProfilePatch !== undefined;
@@ -660,7 +686,6 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
               provider,
               model,
               enableMcp: nextWorkspace.defaultEnableMcp,
-              enableA2ui: nextWorkspace.defaultEnableA2ui ?? true,
               backupsEnabled: nextWorkspace.defaultBackupsEnabled,
               toolOutputOverflowChars,
               ...(preferredChildModel ? { preferredChildModel } : {}),
@@ -670,6 +695,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
               ...(providerOptions ? { providerOptions } : {}),
               ...(userName !== undefined ? { userName } : {}),
               ...(userProfile !== undefined ? { userProfile } : {}),
+              featureFlags: nextWorkspace.defaultFeatureFlags,
             },
           })
         : null;

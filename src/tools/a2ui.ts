@@ -77,7 +77,7 @@ export function createA2uiTool(ctx: ToolContext) {
     ) => {
       if (!ctx.applyA2uiEnvelope) {
         throw new Error(
-          "A2UI is not enabled for this session. Set `enableA2ui: true` in config/defaults.json, ~/.agent/config.json, or .agent/config.json.",
+          "A2UI is not enabled for this session. Enable `featureFlags.workspace.a2ui` for this workspace.",
         );
       }
       if (input.reason) {

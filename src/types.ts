@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { WorkspaceFeatureFlagOverrides } from "./shared/featureFlags";
 
 export const PROVIDER_NAMES = [
   "google",
@@ -225,6 +226,14 @@ export interface AgentConfig {
    * Keys are command names and values include template and metadata.
    */
   command?: Record<string, CommandTemplateConfig>;
+
+  /**
+   * Optional feature-flag overrides.
+   * Workspace flags are merged across built-in, user, and project config layers.
+   */
+  featureFlags?: {
+    workspace?: WorkspaceFeatureFlagOverrides;
+  };
 }
 
 export type PluginScope = "workspace" | "user";

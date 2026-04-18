@@ -20,6 +20,7 @@ import {
   mergeEditableOpenAiCompatibleProviderOptions,
   pickEditableOpenAiCompatibleProviderOptions,
 } from "../shared/openaiCompatibleOptions";
+import { resolveWorkspaceFeatureFlags } from "../shared/featureFlags";
 import { effectiveToolOutputOverflowChars } from "../shared/toolOutputOverflow";
 import { ensureDefaultGlobalSkillsReady } from "../skills/defaultGlobalSkills";
 import { writeTextFileAtomic } from "../utils/atomicFile";
@@ -163,6 +164,7 @@ async function persistProjectConfigPatch(
       | "backupsEnabled"
       | "toolOutputOverflowChars"
       | "userName"
+      | "featureFlags"
     >
   > & {
     userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
@@ -178,6 +180,18 @@ async function persistProjectConfigPatch(
   const current = await loadJsonObjectSafe(configPath);
   const next: Record<string, unknown> = { ...current };
   for (const [key, value] of entries) {
+    if (key === "enableA2ui" && typeof value === "boolean") {
+      const currentFeatureFlags = isPlainObject(current.featureFlags) ? { ...current.featureFlags } : {};
+      const mergedWorkspaceFlags = resolveWorkspaceFeatureFlags({
+        ...(isPlainObject(currentFeatureFlags.workspace) ? currentFeatureFlags.workspace : {}),
+        a2ui: value,
+      });
+      next.featureFlags = {
+        ...currentFeatureFlags,
+        workspace: mergedWorkspaceFlags,
+      };
+      continue;
+    }
     if (key === "providerOptions") {
       const currentProviderOptions = isPlainObject(current[key]) ? { ...current[key] } : {};
       for (const provider of EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES) {
@@ -215,6 +229,19 @@ async function persistProjectConfigPatch(
       };
       continue;
     }
+    if (key === "featureFlags" && isPlainObject(value)) {
+      const currentFeatureFlags = isPlainObject(current.featureFlags) ? { ...current.featureFlags } : {};
+      const incomingFeatureFlags = value;
+      const mergedWorkspaceFlags = resolveWorkspaceFeatureFlags({
+        ...(isPlainObject(currentFeatureFlags.workspace) ? currentFeatureFlags.workspace : {}),
+        ...(isPlainObject(incomingFeatureFlags.workspace) ? incomingFeatureFlags.workspace : {}),
+      });
+      next[key] = {
+        ...currentFeatureFlags,
+        workspace: mergedWorkspaceFlags,
+      };
+      continue;
+    }
     next[key] = value;
   }
   if (shouldClearToolOutputOverflowChars) {
@@ -244,6 +271,7 @@ function mergeConfigPatch(
       | "backupsEnabled"
       | "toolOutputOverflowChars"
       | "userName"
+      | "featureFlags"
     >
   > & {
     userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
@@ -251,7 +279,11 @@ function mergeConfigPatch(
     providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
   }
 ): AgentConfig {
-  const { clearToolOutputOverflowChars: _clearToolOutputOverflowChars, ...configPatch } = patch;
+  const {
+    clearToolOutputOverflowChars: _clearToolOutputOverflowChars,
+    enableA2ui: legacyEnableA2uiPatch,
+    ...configPatch
+  } = patch;
   const next: AgentConfig = { ...config, ...configPatch };
   if (patch.provider !== undefined && patch.provider !== config.provider) {
     next.runtime = defaultRuntimeNameForProvider(patch.provider);
@@ -275,6 +307,18 @@ function mergeConfigPatch(
       ...config.userProfile,
       ...patch.userProfile,
     };
+  }
+  if (patch.featureFlags?.workspace !== undefined || legacyEnableA2uiPatch !== undefined) {
+    const nextWorkspaceFeatureFlags = resolveWorkspaceFeatureFlags({
+      ...config.featureFlags?.workspace,
+      ...patch.featureFlags?.workspace,
+      ...(legacyEnableA2uiPatch !== undefined ? { a2ui: legacyEnableA2uiPatch } : {}),
+    });
+    next.featureFlags = {
+      ...config.featureFlags,
+      workspace: nextWorkspaceFeatureFlags,
+    };
+    next.enableA2ui = nextWorkspaceFeatureFlags.a2ui;
   }
   return next;
 }
@@ -556,6 +600,7 @@ export async function startAgentServer(
     const defaultBackupsEnabled = controlConfig.backupsEnabled ?? true;
     const defaultToolOutputOverflowChars = controlConfig.projectConfigOverrides?.toolOutputOverflowChars;
     const toolOutputOverflowChars = effectiveToolOutputOverflowChars(controlConfig.toolOutputOverflowChars);
+    const workspaceFeatureFlags = resolveWorkspaceFeatureFlags(controlConfig.featureFlags?.workspace);
     const preferredChildModelRef =
       controlConfig.preferredChildModelRef ?? `${controlConfig.provider}:${controlConfig.preferredChildModel}`;
 
@@ -585,7 +630,7 @@ export async function startAgentServer(
           observabilityEnabled: controlConfig.observabilityEnabled ?? false,
           backupsEnabled: defaultBackupsEnabled,
           defaultBackupsEnabled,
-          enableA2ui: controlConfig.enableA2ui ?? true,
+          enableA2ui: workspaceFeatureFlags.a2ui,
           enableMemory: controlConfig.enableMemory ?? true,
           memoryRequireApproval: controlConfig.memoryRequireApproval ?? false,
           preferredChildModel: controlConfig.preferredChildModel,
@@ -601,6 +646,9 @@ export async function startAgentServer(
             instructions: controlConfig.userProfile?.instructions ?? "",
             work: controlConfig.userProfile?.work ?? "",
             details: controlConfig.userProfile?.details ?? "",
+          },
+          featureFlags: {
+            workspace: workspaceFeatureFlags,
           },
         },
       },

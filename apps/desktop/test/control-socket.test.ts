@@ -604,6 +604,11 @@ describe("control socket helpers over JSON-RPC", () => {
             preferredChildModelRef: "openai:gpt-5.2",
             allowedChildModelRefs: [],
             maxSteps: 100,
+            featureFlags: {
+              workspace: {
+                experimentalApi: false,
+              },
+            },
           },
         },
       ],
@@ -618,6 +623,10 @@ describe("control socket helpers over JSON-RPC", () => {
     });
     expect(state.workspaceRuntimeById[workspaceId].controlEnableMcp).toBe(false);
     expect(state.workspaceRuntimeById[workspaceId].controlSessionConfig?.preferredChildModel).toBe("gpt-5.2");
+    expect(state.workspaces[0]?.defaultFeatureFlags).toEqual({
+      experimentalApi: false,
+      a2ui: false,
+    });
   });
 
   test("pending waiter diagnostics reflect in-flight JSON-RPC waits", async () => {

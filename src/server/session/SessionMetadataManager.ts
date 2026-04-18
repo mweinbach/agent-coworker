@@ -4,6 +4,11 @@ import {
   mergeEditableOpenAiCompatibleProviderOptions,
   pickEditableOpenAiCompatibleProviderOptions,
 } from "../../shared/openaiCompatibleOptions";
+import {
+  WORKSPACE_FEATURE_FLAG_IDS,
+  resolveWorkspaceFeatureFlags,
+  type WorkspaceFeatureFlagOverrides,
+} from "../../shared/featureFlags";
 import { effectiveToolOutputOverflowChars } from "../../shared/toolOutputOverflow";
 import type { AgentConfig, HarnessContextPayload } from "../../types";
 import type { SessionConfigPatch } from "../protocol";
@@ -43,6 +48,15 @@ function userProfileEqual(
   );
 }
 
+function workspaceFeatureFlagsEqual(
+  left: WorkspaceFeatureFlagOverrides | undefined,
+  right: WorkspaceFeatureFlagOverrides | undefined,
+): boolean {
+  const normalizedLeft = resolveWorkspaceFeatureFlags(left);
+  const normalizedRight = resolveWorkspaceFeatureFlags(right);
+  return WORKSPACE_FEATURE_FLAG_IDS.every((flagId) => normalizedLeft[flagId] === normalizedRight[flagId]);
+}
+
 export class SessionMetadataManager {
   constructor(private readonly context: SessionContext) {}
 
@@ -52,31 +66,6 @@ export class SessionMetadataManager {
       instructions: profile?.instructions ?? "",
       work: profile?.work ?? "",
       details: profile?.details ?? "",
-    };
-  }
-
-  private promptRefreshConfig(baseConfig: AgentConfig, patch: SessionConfigPatch): AgentConfig {
-    return {
-      ...baseConfig,
-      ...(patch.providerOptions !== undefined
-        ? {
-            providerOptions: mergeEditableOpenAiCompatibleProviderOptions(
-              baseConfig.providerOptions,
-              patch.providerOptions,
-            ),
-          }
-        : {}),
-      ...(patch.userName !== undefined ? { userName: patch.userName } : {}),
-      ...(patch.userProfile !== undefined
-        ? {
-          userProfile: {
-              ...this.effectiveUserProfile(baseConfig),
-              ...patch.userProfile,
-            },
-          }
-        : {}),
-      ...(patch.enableA2ui !== undefined ? { enableA2ui: patch.enableA2ui } : {}),
-      ...(patch.enableMemory !== undefined ? { enableMemory: patch.enableMemory } : {}),
     };
   }
 
@@ -91,9 +80,6 @@ export class SessionMetadataManager {
     }
     if (patch.backupsEnabled !== undefined) {
       nextConfig = { ...nextConfig, backupsEnabled: patch.backupsEnabled };
-    }
-    if (patch.enableA2ui !== undefined) {
-      nextConfig = { ...nextConfig, enableA2ui: patch.enableA2ui };
     }
     if (patch.enableMemory !== undefined) {
       nextConfig = { ...nextConfig, enableMemory: patch.enableMemory };
@@ -155,6 +141,21 @@ export class SessionMetadataManager {
         },
       };
     }
+    if (patch.featureFlags?.workspace !== undefined || patch.enableA2ui !== undefined) {
+      const nextWorkspaceFeatureFlags = resolveWorkspaceFeatureFlags({
+        ...nextConfig.featureFlags?.workspace,
+        ...patch.featureFlags?.workspace,
+        ...(patch.enableA2ui !== undefined ? { a2ui: patch.enableA2ui } : {}),
+      });
+      nextConfig = {
+        ...nextConfig,
+        enableA2ui: nextWorkspaceFeatureFlags.a2ui,
+        featureFlags: {
+          ...nextConfig.featureFlags,
+          workspace: nextWorkspaceFeatureFlags,
+        },
+      };
+    }
     return nextConfig;
   }
 
@@ -174,9 +175,6 @@ export class SessionMetadataManager {
     }
     if (patch.backupsEnabled !== undefined) {
       persistPatch.backupsEnabled = patch.backupsEnabled;
-    }
-    if (patch.enableA2ui !== undefined) {
-      persistPatch.enableA2ui = patch.enableA2ui;
     }
     if (patch.enableMemory !== undefined) {
       persistPatch.enableMemory = patch.enableMemory;
@@ -199,6 +197,14 @@ export class SessionMetadataManager {
     if (patch.userProfile !== undefined) {
       persistPatch.userProfile = patch.userProfile;
     }
+    if (patch.featureFlags?.workspace !== undefined || patch.enableA2ui !== undefined) {
+      persistPatch.featureFlags = {
+        workspace: {
+          ...(patch.featureFlags?.workspace ?? {}),
+          ...(patch.enableA2ui !== undefined ? { a2ui: patch.enableA2ui } : {}),
+        },
+      };
+    }
     return persistPatch;
   }
 
@@ -215,7 +221,7 @@ export class SessionMetadataManager {
       || baseMaxSteps !== nextMaxSteps
       || (baseConfig.observabilityEnabled ?? false) !== (nextConfig.observabilityEnabled ?? false)
       || (baseConfig.backupsEnabled ?? true) !== (nextConfig.backupsEnabled ?? true)
-      || (baseConfig.enableA2ui ?? true) !== (nextConfig.enableA2ui ?? true)
+      || (baseConfig.enableA2ui ?? false) !== (nextConfig.enableA2ui ?? false)
       || (baseConfig.enableMemory ?? true) !== (nextConfig.enableMemory ?? true)
       || (baseConfig.memoryRequireApproval ?? false) !== (nextConfig.memoryRequireApproval ?? false)
       || baseConfig.preferredChildModel !== nextConfig.preferredChildModel
@@ -235,6 +241,7 @@ export class SessionMetadataManager {
       )
       || (baseConfig.userName ?? "") !== (nextConfig.userName ?? "")
       || !userProfileEqual(baseConfig.userProfile, nextConfig.userProfile)
+      || !workspaceFeatureFlagsEqual(baseConfig.featureFlags?.workspace, nextConfig.featureFlags?.workspace)
     );
   }
 
@@ -261,6 +268,7 @@ export class SessionMetadataManager {
     const backupsEnabled = this.context.state.backupsEnabledOverride ?? defaultBackupsEnabled;
     const defaultToolOutputOverflowChars = this.context.state.config.projectConfigOverrides?.toolOutputOverflowChars;
     const toolOutputOverflowChars = effectiveToolOutputOverflowChars(this.context.state.config.toolOutputOverflowChars);
+    const workspaceFeatureFlags = resolveWorkspaceFeatureFlags(this.context.state.config.featureFlags?.workspace);
     return {
       type: "session_config",
       sessionId: this.context.id,
@@ -268,7 +276,7 @@ export class SessionMetadataManager {
         yolo: this.context.state.yolo,
         observabilityEnabled: this.context.state.config.observabilityEnabled ?? false,
         backupsEnabled,
-        enableA2ui: this.context.state.config.enableA2ui ?? true,
+        enableA2ui: workspaceFeatureFlags.a2ui,
         enableMemory: this.context.state.config.enableMemory ?? true,
         memoryRequireApproval: this.context.state.config.memoryRequireApproval ?? false,
         defaultBackupsEnabled,
@@ -284,6 +292,9 @@ export class SessionMetadataManager {
         ...(providerOptions ? { providerOptions } : {}),
         userName: this.context.state.config.userName,
         userProfile: this.effectiveUserProfile(),
+        featureFlags: {
+          workspace: workspaceFeatureFlags,
+        },
       },
     };
   }
@@ -479,12 +490,13 @@ export class SessionMetadataManager {
       patch.userName !== undefined
       || patch.userProfile !== undefined
       || patch.enableA2ui !== undefined
+      || patch.featureFlags?.workspace !== undefined
       || patch.enableMemory !== undefined
       || patch.providerOptions !== undefined
     ) {
       try {
         refreshedSystemPrompt = await this.context.deps.loadSystemPromptWithSkillsImpl(
-          this.promptRefreshConfig(baseConfig, patch),
+          nextConfig,
         );
       } catch (err) {
         this.context.emitError(

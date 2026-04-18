@@ -1,4 +1,8 @@
 import type { ProviderName, ServerEvent } from "../../lib/wsProtocol";
+import {
+  normalizeWorkspaceFeatureFlagOverrides,
+  resolveWorkspaceFeatureFlags,
+} from "../../../../../src/shared/featureFlags";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import { normalizeWorkspaceUserProfile } from "../types";
@@ -756,20 +760,28 @@ export function createControlSocketHelpers(
     if (evt.type === "session_config") {
       const providerOptions = normalizeWorkspaceProviderOptions((evt.config as any).providerOptions);
       const userProfile = evt.config.userProfile ? normalizeWorkspaceUserProfile(evt.config.userProfile) : undefined;
+      const defaultFeatureFlags =
+        normalizeWorkspaceFeatureFlagOverrides(evt.config.featureFlags?.workspace)
+        ?? (typeof evt.config.enableA2ui === "boolean" ? { a2ui: evt.config.enableA2ui } : undefined);
       set((s) => ({
         workspaces: s.workspaces.map((workspace) =>
           workspace.id === workspaceId
             ? {
                 ...workspace,
                 defaultBackupsEnabled: evt.config.defaultBackupsEnabled,
-                defaultEnableA2ui: typeof evt.config.enableA2ui === "boolean"
-                  ? evt.config.enableA2ui
-                  : workspace.defaultEnableA2ui,
                 defaultPreferredChildModel: evt.config.preferredChildModel,
                 defaultChildModelRoutingMode: evt.config.childModelRoutingMode,
                 defaultPreferredChildModelRef: evt.config.preferredChildModelRef,
                 defaultAllowedChildModelRefs: evt.config.allowedChildModelRefs,
                 defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
+                ...(defaultFeatureFlags
+                  ? {
+                      defaultFeatureFlags: resolveWorkspaceFeatureFlags({
+                        ...workspace.defaultFeatureFlags,
+                        ...defaultFeatureFlags,
+                      }),
+                    }
+                  : {}),
                 providerOptions,
                 ...(typeof evt.config.userName === "string" ? { userName: evt.config.userName } : {}),
                 ...(userProfile ? { userProfile } : {}),

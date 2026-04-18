@@ -31,7 +31,6 @@ import {
   isProviderNameString,
   visibleAuthMethods,
 } from "../../lib/providerDisplayNames";
-import { getDesktopFeatureFlags } from "../../lib/desktopCommands";
 import coworkIconSvg from "../../../build/icon.icon/Assets/svgviewer-output.svg";
 
 const PROVIDER_STATUS_POLL_MS = 4000;
@@ -119,7 +118,7 @@ function WelcomeStep({ onContinue, onDismiss }: { onContinue: () => void; onDism
 // ── Step 2: Workspace ──
 
 function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack: () => void }) {
-  const desktopFeatures = getDesktopFeatureFlags();
+  const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);

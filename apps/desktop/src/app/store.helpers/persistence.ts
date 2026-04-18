@@ -47,6 +47,7 @@ function buildPersistedState(state: AppStoreState): PersistedState {
     developerMode: state.developerMode,
     showHiddenFiles: state.showHiddenFiles,
     perWorkspaceSettings: state.perWorkspaceSettings,
+    desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides,
     ...(providerState ? { providerState } : {}),
     providerUiState,
     onboarding: state.onboardingState,

@@ -1004,7 +1004,12 @@ describe("loadSystemPrompt", () => {
 
   test("injects A2UI enabled guidance into the system prompt", async () => {
     const config = makeConfig({
-      enableA2ui: true,
+      enableA2ui: false,
+      featureFlags: {
+        workspace: {
+          a2ui: true,
+        },
+      },
       skillsDirs: ["/nonexistent/skills"],
     });
 
@@ -1015,7 +1020,12 @@ describe("loadSystemPrompt", () => {
 
   test("injects A2UI disabled guidance and hides the a2ui skill when disabled", async () => {
     const config = makeConfig({
-      enableA2ui: false,
+      enableA2ui: true,
+      featureFlags: {
+        workspace: {
+          a2ui: false,
+        },
+      },
     });
 
     const prompt = await loadSystemPrompt(config);

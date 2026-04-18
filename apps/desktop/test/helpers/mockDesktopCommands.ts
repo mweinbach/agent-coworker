@@ -44,13 +44,15 @@ const DEFAULT_MOBILE_RELAY_STATE = {
 export function createDesktopCommandsMock(
   overrides: Partial<DesktopCommandsModule> = {},
 ): DesktopCommandsModule {
+  const resolveFlags = (featureOverrides?: { remoteAccess?: boolean; workspacePicker?: boolean; workspaceLifecycle?: boolean }) => ({
+    remoteAccess: typeof featureOverrides?.remoteAccess === "boolean" ? featureOverrides.remoteAccess : true,
+    workspacePicker: typeof featureOverrides?.workspacePicker === "boolean" ? featureOverrides.workspacePicker : true,
+    workspaceLifecycle: typeof featureOverrides?.workspaceLifecycle === "boolean" ? featureOverrides.workspaceLifecycle : true,
+  });
+
   return {
-    getDesktopFeatureFlags: () => ({
-      remoteAccess: true,
-      workspacePicker: true,
-      workspaceLifecycle: true,
-    }),
-    isRemoteAccessEnabled: () => true,
+    getDesktopFeatureFlags: (featureOverrides) => resolveFlags(featureOverrides),
+    isRemoteAccessEnabled: () => resolveFlags().remoteAccess,
     startWorkspaceServer: async () => ({ url: "ws://mock" }),
     stopWorkspaceServer: async () => {},
     loadState: async () => ({ version: 2, workspaces: [], threads: [] }),

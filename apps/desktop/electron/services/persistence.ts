@@ -17,6 +17,11 @@ import { normalizeWorkspaceProviderOptions } from "../../src/app/openaiCompatibl
 import { normalizePersistedProviderState } from "../../src/app/persistedProviderState";
 import { deriveDefaultLmStudioUiEnabled, normalizePersistedProviderUiState } from "../../src/app/providerUiState";
 import type { TranscriptBatchInput } from "../../src/lib/desktopApi";
+import {
+  normalizeDesktopFeatureFlagOverrides,
+  normalizeWorkspaceFeatureFlagOverrides,
+  resolveWorkspaceFeatureFlags,
+} from "../../../src/shared/featureFlags";
 
 import { assertDirection, assertSafeId, assertWithinTranscriptsDir } from "./validation";
 
@@ -51,6 +56,7 @@ function defaultState(): PersistedState {
     developerMode: false,
     showHiddenFiles: false,
     perWorkspaceSettings: false,
+    desktopFeatureFlagOverrides: {},
     providerUiState: normalizePersistedProviderUiState(undefined),
   };
 }
@@ -206,6 +212,11 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       continue;
     }
 
+    const defaultFeatureFlags = resolveWorkspaceFeatureFlags(
+      normalizeWorkspaceFeatureFlagOverrides(item.defaultFeatureFlags)
+      ?? (typeof item.defaultEnableA2ui === "boolean" ? { a2ui: item.defaultEnableA2ui } : undefined),
+    );
+
     workspaces.push({
       id,
       name,
@@ -220,12 +231,14 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       defaultPreferredChildModelRef: asOptionalString(item.defaultPreferredChildModelRef),
       defaultAllowedChildModelRefs: asOptionalStringArray(item.defaultAllowedChildModelRefs),
       defaultToolOutputOverflowChars: asOptionalNullableNonNegativeInteger(item.defaultToolOutputOverflowChars),
+      defaultFeatureFlags,
       providerOptions: normalizeWorkspaceProviderOptions(item.providerOptions),
       userName: asDefinedString(item.userName),
       userProfile: isRecord(item.userProfile)
         ? normalizeWorkspaceUserProfile(item.userProfile as Partial<WorkspaceUserProfile>)
         : undefined,
       defaultEnableMcp: typeof item.defaultEnableMcp === "boolean" ? item.defaultEnableMcp : true,
+      defaultEnableA2ui: defaultFeatureFlags.a2ui,
       defaultBackupsEnabled: typeof item.defaultBackupsEnabled === "boolean" ? item.defaultBackupsEnabled : true,
       yolo: typeof item.yolo === "boolean" ? item.yolo : false,
     });
@@ -305,6 +318,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
     developerMode: typeof value.developerMode === "boolean" ? value.developerMode : false,
     showHiddenFiles: typeof value.showHiddenFiles === "boolean" ? value.showHiddenFiles : false,
     perWorkspaceSettings: typeof value.perWorkspaceSettings === "boolean" ? value.perWorkspaceSettings : false,
+    desktopFeatureFlagOverrides: normalizeDesktopFeatureFlagOverrides(value.desktopFeatureFlagOverrides),
     ...(providerState ? { providerState } : {}),
     providerUiState,
     ...(onboarding ? { onboarding } : {}),

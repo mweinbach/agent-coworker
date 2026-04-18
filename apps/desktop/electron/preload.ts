@@ -64,7 +64,11 @@ import {
   updaterStateSchema,
   windowDragPointInputSchema,
 } from "../src/lib/desktopSchemas";
-import { resolveDesktopFeatureFlags } from "../src/lib/desktopFeatureFlags";
+import {
+  normalizeDesktopFeatureFlagOverrides,
+  resolveDesktopFeatureFlags,
+  type DesktopFeatureFlagOverrides,
+} from "../src/lib/desktopFeatureFlags";
 
 function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
   const parsed = schema.safeParse(value);
@@ -188,13 +192,21 @@ function assertSystemAppearance(value: unknown): asserts value is SystemAppearan
   parseWithSchema(systemAppearanceSchema, value, "system appearance");
 }
 
-const desktopFeatures = Object.freeze(resolveDesktopFeatureFlags({
-  isPackaged: !import.meta.env.DEV,
-  env: process.env,
-}));
+function resolvePreloadDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides) {
+  return resolveDesktopFeatureFlags({
+    isPackaged: !import.meta.env.DEV,
+    env: process.env,
+    ...(overrides ? { overrides } : {}),
+  });
+}
+
+const desktopFeatures = Object.freeze(resolvePreloadDesktopFeatureFlags());
 
 const desktopApi = Object.freeze<DesktopApi>({
   features: desktopFeatures,
+  resolveDesktopFeatureFlags: (overrides) => resolvePreloadDesktopFeatureFlags(
+    normalizeDesktopFeatureFlagOverrides(overrides),
+  ),
   startWorkspaceServer: (opts: StartWorkspaceServerInput) => {
     assertStartWorkspaceServerInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.startWorkspaceServer, opts);

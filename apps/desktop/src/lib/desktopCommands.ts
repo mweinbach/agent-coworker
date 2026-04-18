@@ -10,7 +10,11 @@ import type {
   SystemAppearance,
   UpdaterState,
 } from "./desktopApi";
-import type { DesktopFeatureFlags } from "./desktopFeatureFlags";
+import type {
+  DesktopFeatureFlagId,
+  DesktopFeatureFlagOverrides,
+  DesktopFeatureFlags,
+} from "./desktopFeatureFlags";
 
 function getDesktopApi(): DesktopApi | undefined {
   return typeof window === "undefined" ? undefined : window.cowork;
@@ -24,12 +28,36 @@ function requireDesktopApi(): DesktopApi {
   return api;
 }
 
-export function getDesktopFeatureFlags(): DesktopFeatureFlags {
-  return getDesktopApi()?.features ?? {
+function getDefaultDesktopFeatureFlags(): DesktopFeatureFlags {
+  return {
     remoteAccess: false,
     workspacePicker: false,
     workspaceLifecycle: false,
   };
+}
+
+export function getDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides): DesktopFeatureFlags {
+  const api = getDesktopApi();
+  if (!api) {
+    return getDefaultDesktopFeatureFlags();
+  }
+
+  if (typeof api.resolveDesktopFeatureFlags === "function") {
+    return api.resolveDesktopFeatureFlags(overrides);
+  }
+
+  const base = api.features ?? getDefaultDesktopFeatureFlags();
+  if (!overrides) {
+    return base;
+  }
+
+  const next: DesktopFeatureFlags = { ...base };
+  for (const key of Object.keys(overrides) as DesktopFeatureFlagId[]) {
+    if (typeof overrides[key] === "boolean") {
+      next[key] = overrides[key];
+    }
+  }
+  return next;
 }
 
 export function isRemoteAccessEnabled(): boolean {

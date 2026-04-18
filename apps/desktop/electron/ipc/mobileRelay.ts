@@ -41,10 +41,6 @@ function toBridgeWorkspaceRecords(
 
 export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
   const { deps, handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
-  const remoteAccessEnabled = resolveDesktopFeatureFlags({
-    isPackaged: app.isPackaged,
-    env: process.env,
-  }).remoteAccess;
 
   const disabledState = () => mobileRelayBridgeStateSchema.parse({
     status: "idle",
@@ -63,32 +59,22 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
     lastError: REMOTE_ACCESS_DISABLED_MESSAGE,
   });
 
-  const assertRemoteAccessEnabled = () => {
-    if (!remoteAccessEnabled) {
+  const isRemoteAccessEnabled = async () => {
+    const persistedState = await deps.persistence.loadState().catch(() => null);
+    return resolveDesktopFeatureFlags({
+      isPackaged: app.isPackaged,
+      env: process.env,
+      ...(persistedState?.desktopFeatureFlagOverrides
+        ? { overrides: persistedState.desktopFeatureFlagOverrides }
+        : {}),
+    }).remoteAccess;
+  };
+
+  const assertRemoteAccessEnabled = async () => {
+    if (!await isRemoteAccessEnabled()) {
       throw new Error(REMOTE_ACCESS_DISABLED_MESSAGE);
     }
   };
-
-  if (!remoteAccessEnabled) {
-    handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayStart, async () => {
-      assertRemoteAccessEnabled();
-      return disabledState();
-    });
-
-    handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayStop, async () => disabledState());
-    handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayGetState, async () => disabledState());
-
-    handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayRotateSession, async () => {
-      assertRemoteAccessEnabled();
-      return disabledState();
-    });
-
-    handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayForgetTrustedPhone, async () => {
-      assertRemoteAccessEnabled();
-      return disabledState();
-    });
-    return;
-  }
 
   // Provide workspace list to the bridge for workspace/list and workspace/switch.
   // Uses persistence service to read the latest workspace records on demand.
@@ -147,7 +133,7 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayStart, async (_event, args: MobileRelayStartInput) => {
-    assertRemoteAccessEnabled();
+    await assertRemoteAccessEnabled();
     const input = parseWithSchema(mobileRelayStartInputSchema, args, "mobileRelay.start options");
     const workspacePath = await workspaceRoots.assertApprovedWorkspacePath(input.workspacePath);
     return mobileRelayBridgeStateSchema.parse(await deps.mobileRelayBridge.start({
@@ -157,21 +143,30 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayStop, async () => {
+    if (!await isRemoteAccessEnabled()) {
+      await deps.mobileRelayBridge.stop().catch(() => {
+        // best effort while toggling feature flags at runtime
+      });
+      return disabledState();
+    }
     return mobileRelayBridgeStateSchema.parse(await deps.mobileRelayBridge.stop());
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayGetState, async () => {
+    if (!await isRemoteAccessEnabled()) {
+      return disabledState();
+    }
     deps.mobileRelayBridge.initialize();
     return mobileRelayBridgeStateSchema.parse(deps.mobileRelayBridge.getSnapshot());
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayRotateSession, async () => {
-    assertRemoteAccessEnabled();
+    await assertRemoteAccessEnabled();
     return mobileRelayBridgeStateSchema.parse(await deps.mobileRelayBridge.rotateSession());
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayForgetTrustedPhone, async () => {
-    assertRemoteAccessEnabled();
+    await assertRemoteAccessEnabled();
     return mobileRelayBridgeStateSchema.parse(await deps.mobileRelayBridge.forgetTrustedPhone());
   });
 }

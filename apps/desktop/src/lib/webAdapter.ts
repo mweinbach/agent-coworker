@@ -9,7 +9,7 @@ import type {
   SystemAppearance,
   UpdaterState,
 } from "./desktopApi";
-import type { DesktopFeatureFlags } from "./desktopFeatureFlags";
+import type { DesktopFeatureFlagOverrides, DesktopFeatureFlags } from "./desktopFeatureFlags";
 import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
 import { hydrateTranscriptSnapshot } from "../app/transcriptHydration";
 import {
@@ -364,14 +364,26 @@ export function configureWebAdapter(serverUrl: string, workspacePath: string): v
 
 export function createWebAdapter(): DesktopApi {
   const fullDesktopMode = !getWorkspacePath().trim();
-  const features: DesktopFeatureFlags = {
-    remoteAccess: false,
-    workspacePicker: fullDesktopMode,
-    workspaceLifecycle: fullDesktopMode,
+  const resolveWebDesktopFeatureFlags = (
+    overrides?: DesktopFeatureFlagOverrides,
+  ): DesktopFeatureFlags => {
+    const normalizedPicker = typeof overrides?.workspacePicker === "boolean"
+      ? overrides.workspacePicker
+      : fullDesktopMode;
+    const normalizedLifecycle = typeof overrides?.workspaceLifecycle === "boolean"
+      ? overrides.workspaceLifecycle
+      : fullDesktopMode;
+    return {
+      remoteAccess: false,
+      workspacePicker: normalizedPicker,
+      workspaceLifecycle: normalizedLifecycle,
+    };
   };
+  const features = resolveWebDesktopFeatureFlags();
 
   return {
     features,
+    resolveDesktopFeatureFlags: (overrides) => resolveWebDesktopFeatureFlags(overrides),
 
     async startWorkspaceServer(opts): Promise<{ url: string }> {
       const started = await maybePostWebJson<{ url: string }>("/cowork/desktop/workspace/start", opts);

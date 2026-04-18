@@ -25,6 +25,7 @@ import {
   getGoogleNativeWebSearchFromProviderOptions,
   isCodexWebSearchMode,
 } from "./shared/openaiCompatibleOptions";
+import { resolveWorkspaceFeatureFlags } from "./shared/featureFlags";
 import { isUserFacingProviderEnabled } from "./providers/catalog";
 import type { ProviderName } from "./types";
 import { buildWorkspaceMapSection } from "./workspace/map";
@@ -279,6 +280,13 @@ function renderA2uiSpecificPrompt(prompt: string, enabled: boolean): string {
 
   out = out.replace(/\n{3,}/g, "\n\n").trimEnd();
   return `${out}\n\n## A2UI Disabled\n\nGenerative UI (A2UI) is disabled for this workspace. Do not call the \`a2ui\` tool and do not load the \`a2ui\` skill.`;
+}
+
+function isA2uiEnabled(config: Pick<AgentConfig, "enableA2ui" | "featureFlags">): boolean {
+  if (config.featureFlags?.workspace !== undefined) {
+    return resolveWorkspaceFeatureFlags(config.featureFlags.workspace).a2ui;
+  }
+  return config.enableA2ui ?? false;
 }
 
 function configuredCodexWebSearchMode(config: AgentConfig): "disabled" | "cached" | "live" | undefined {
@@ -621,7 +629,8 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   let prompt = await loadPromptTemplate(systemPath);
 
   const discoveredSkills = await discoverSkillsForConfig(config);
-  const skills = (config.enableA2ui ?? true)
+  const a2uiEnabled = isA2uiEnabled(config);
+  const skills = a2uiEnabled
     ? discoveredSkills
     : discoveredSkills.filter((skill) => skill.name !== "a2ui");
 
@@ -673,7 +682,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt = renderTemplateVariables(prompt, vars);
   prompt = renderCapabilitySpecificPrompt(prompt, supportedModel);
   prompt = renderMemorySpecificPrompt(prompt, config.enableMemory ?? true);
-  prompt = renderA2uiSpecificPrompt(prompt, config.enableA2ui ?? true);
+  prompt = renderA2uiSpecificPrompt(prompt, a2uiEnabled);
   prompt = renderCodexNativeWebSearchPrompt(prompt, config);
   prompt = renderGoogleNativeToolsPrompt(prompt, config);
   prompt = renderSpawnAgentSpecificPrompt(prompt, config);

@@ -4,6 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import { discoverSkillsForConfig, stripSkillFrontMatter } from "../skills";
+import { resolveWorkspaceFeatureFlags } from "../shared/featureFlags";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
@@ -44,7 +45,11 @@ async function readIfExists(p: string): Promise<string | null> {
 }
 
 export function createSkillTool(ctx: ToolContext) {
-  const skills = ctx.availableSkills ?? [];
+  const a2uiEnabled =
+    ctx.config.featureFlags?.workspace !== undefined
+      ? resolveWorkspaceFeatureFlags(ctx.config.featureFlags.workspace).a2ui
+      : (ctx.config.enableA2ui ?? false);
+  const skills = (ctx.availableSkills ?? []).filter((skill) => a2uiEnabled || skill.name !== "a2ui");
   const searchOrder = [
     "project",
     "global (~/.cowork/skills)",
@@ -75,6 +80,10 @@ export function createSkillTool(ctx: ToolContext) {
     }),
     execute: async ({ skillName }: { skillName: string }) => {
       ctx.log(`tool> skill ${JSON.stringify({ skillName })}`);
+      if (!a2uiEnabled && skillName === "a2ui") {
+        ctx.log(`tool< skill ${JSON.stringify({ ok: false, reason: "feature_disabled" })}`);
+        return `Skill "${skillName}" not found.`;
+      }
       const discovered = await discoverSkillsForConfig(ctx.config);
       const selected = discovered.find((s) => s.enabled && s.name === skillName);
       if (!selected) {

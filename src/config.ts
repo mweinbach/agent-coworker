@@ -8,6 +8,11 @@ import { z } from "zod";
 import { getAiCoworkerPaths } from "./connect";
 import { parseConnectionStoreJson } from "./store/connections";
 import { getModelForProvider, getProviderKeyCandidates } from "./providers";
+import {
+  WORKSPACE_FEATURE_FLAG_IDS,
+  resolveWorkspaceFeatureFlags,
+  type WorkspaceFeatureFlagOverrides,
+} from "./shared/featureFlags";
 import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
 import {
   normalizeRuntimeNameForProvider,
@@ -258,6 +263,22 @@ function asBoolean(v: unknown): boolean | null {
   return parsed.success ? parsed.data : null;
 }
 
+function normalizeWorkspaceFeatureFlagLayer(value: unknown): WorkspaceFeatureFlagOverrides | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+
+  const flags: WorkspaceFeatureFlagOverrides = {};
+  for (const flagId of WORKSPACE_FEATURE_FLAG_IDS) {
+    const parsed = asBoolean(value[flagId]);
+    if (parsed !== null) {
+      flags[flagId] = parsed;
+    }
+  }
+
+  return Object.keys(flags).length > 0 ? flags : undefined;
+}
+
 function asNonEmptyString(v: unknown): string | undefined {
   const parsed = nonEmptyTrimmedStringSchema.safeParse(v);
   return parsed.success ? parsed.data : undefined;
@@ -503,6 +524,23 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     work: asString(mergedUserProfile.work) ?? "",
     details: asString(mergedUserProfile.details) ?? "",
   };
+  const mergedFeatureFlagsLayer =
+    isPlainObject((merged as Record<string, unknown>).featureFlags)
+      ? ((merged as Record<string, unknown>).featureFlags as Record<string, unknown>)
+      : undefined;
+  const workspaceFeatureFlagOverrides = normalizeWorkspaceFeatureFlagLayer(mergedFeatureFlagsLayer?.workspace);
+  const legacyA2uiOverride =
+    asBoolean(env.AGENT_ENABLE_A2UI) ??
+    asBoolean(projectConfig.enableA2ui) ??
+    asBoolean(userConfig.enableA2ui);
+  const mergedWorkspaceFeatureFlagOverrides =
+    workspaceFeatureFlagOverrides?.a2ui === undefined && legacyA2uiOverride !== null
+      ? {
+          ...workspaceFeatureFlagOverrides,
+          a2ui: legacyA2uiOverride,
+        }
+      : workspaceFeatureFlagOverrides;
+  const resolvedWorkspaceFeatureFlags = resolveWorkspaceFeatureFlags(mergedWorkspaceFeatureFlagOverrides);
   const knowledgeCutoff = supportedModel.knowledgeCutoff;
 
   const enableMcp =
@@ -533,12 +571,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.includeRawChunks) ??
     true;
 
-  const enableA2ui =
-    asBoolean(env.AGENT_ENABLE_A2UI) ??
-    asBoolean(projectConfig.enableA2ui) ??
-    asBoolean(userConfig.enableA2ui) ??
-    asBoolean(builtInDefaults.enableA2ui) ??
-    false;
+  const enableA2ui = resolvedWorkspaceFeatureFlags.a2ui;
 
   const backupsEnabled =
     asBoolean(env.AGENT_BACKUPS_ENABLED) ??
@@ -653,6 +686,13 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     observability,
     harness,
     command,
+    ...(mergedWorkspaceFeatureFlagOverrides
+      ? {
+          featureFlags: {
+            workspace: resolveWorkspaceFeatureFlags(mergedWorkspaceFeatureFlagOverrides),
+          },
+        }
+      : {}),
     ...(normalizedProviderOptions ? { providerOptions: normalizedProviderOptions } : {}),
     ...(normalizedModelSettings ? { modelSettings: normalizedModelSettings } : {}),
   };

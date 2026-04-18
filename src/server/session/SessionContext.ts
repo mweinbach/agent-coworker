@@ -66,6 +66,7 @@ export type PersistedProjectConfigPatch = Partial<
     | "backupsEnabled"
     | "toolOutputOverflowChars"
     | "userName"
+    | "featureFlags"
   >
 > & {
   userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;

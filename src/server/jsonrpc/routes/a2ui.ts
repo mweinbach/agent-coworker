@@ -41,6 +41,14 @@ export function createA2uiRouteHandlers(
         return;
       }
 
+      if (session.getSessionConfigEvent().config.enableA2ui !== true) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `${message.method}: A2UI is disabled for this workspace`,
+        });
+        return;
+      }
+
       const validation = session.validateA2uiAction({ surfaceId, componentId });
       if (!validation.ok) {
         context.jsonrpc.sendError(ws, message.id, {

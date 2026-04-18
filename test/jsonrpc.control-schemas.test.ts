@@ -180,6 +180,12 @@ describe("shared JSON-RPC control schemas", () => {
         childModelRoutingMode: "cross-provider-allowlist",
         preferredChildModelRef: "openai:gpt-5.4-mini",
         allowedChildModelRefs: ["openai:gpt-5.4-mini"],
+        featureFlags: {
+          workspace: {
+            experimentalApi: true,
+            a2ui: false,
+          },
+        },
         providerOptions: {
           google: {
             nativeWebSearch: true,
@@ -211,12 +217,20 @@ describe("shared JSON-RPC control schemas", () => {
           config: {
             backupsEnabled: false,
             preferredChildModelRef: "openai:gpt-5.4-mini",
+            featureFlags: {
+              workspace: {
+                experimentalApi: true,
+                a2ui: false,
+              },
+            },
           },
         },
       ],
     });
 
     expect(request.config?.providerOptions?.google?.nativeWebSearch).toBe(true);
+    expect(request.config?.featureFlags?.workspace?.experimentalApi).toBe(true);
+    expect(request.config?.featureFlags?.workspace?.a2ui).toBe(false);
     expect(state.events[2]?.type).toBe("session_config");
   });
 

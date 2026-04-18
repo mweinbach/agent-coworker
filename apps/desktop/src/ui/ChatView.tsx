@@ -478,26 +478,23 @@ const FeedRow = memo(function FeedRow(props: {
       const a2uiAction = parseA2uiActionMessage(item.text);
       if (a2uiAction) {
         return (
-          <Message from="user">
-            <MessageContent>
-              <Card className="max-w-3xl border-border/60 bg-muted/20">
-                <CardContent className="space-y-1.5 p-3">
-                  <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                    <MousePointerClickIcon className="size-3.5 text-primary" />
-                    A2UI Action
-                  </div>
-                  <div className="text-sm font-medium text-foreground">
-                    {summarizeA2uiActionMessage(a2uiAction)}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    Surface <code className="font-mono">{a2uiAction.surfaceId}</code>
-                    {" • "}
-                    Event <code className="font-mono">{a2uiAction.eventType}</code>
-                  </div>
-                </CardContent>
-              </Card>
-            </MessageContent>
-          </Message>
+          <div className="flex w-full justify-end">
+            <div
+              role="status"
+              className="inline-flex max-w-[32rem] items-center gap-2 rounded-full border border-border/45 bg-muted/25 py-1 pl-2.5 pr-3 text-xs text-foreground shadow-sm"
+              title={`Surface ${a2uiAction.surfaceId} • Event ${a2uiAction.eventType}`}
+            >
+              <span className="flex size-4 items-center justify-center rounded-full bg-primary/15 text-primary">
+                <MousePointerClickIcon className="size-2.5" />
+              </span>
+              <span className="truncate font-medium text-foreground/90">
+                {summarizeA2uiActionMessage(a2uiAction)}
+              </span>
+              <span className="truncate font-mono text-[10px] text-muted-foreground">
+                {a2uiAction.surfaceId}
+              </span>
+            </div>
+          </div>
         );
       }
     }

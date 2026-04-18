@@ -173,10 +173,10 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
         <HeadingTag
           className={cn(
             "font-semibold tracking-tight text-foreground",
-            level === 1 && "text-xl",
-            level === 2 && "text-lg",
-            level === 3 && "text-base",
-            level >= 4 && "text-sm",
+            level === 1 && "text-[22px] leading-7",
+            level === 2 && "text-lg leading-6",
+            level === 3 && "text-[15px] leading-6",
+            level >= 4 && "text-sm leading-5",
           )}
         >
           {text}
@@ -194,7 +194,7 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
       return (
         <div
           className={cn(
-            "flex flex-col gap-2",
+            "flex flex-col gap-3",
             resolveOptionalAlignmentClass(props, "justify"),
             resolveOptionalAlignmentClass(props, "items"),
           )}
@@ -211,7 +211,7 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
       return (
         <div
           className={cn(
-            "flex flex-row flex-wrap gap-2",
+            "flex flex-row flex-wrap gap-2.5",
             resolveOptionalAlignmentClass(props, "justify"),
             resolveOptionalAlignmentClass(props, "items") ?? "items-center",
           )}
@@ -237,8 +237,8 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
 
     case "Card":
       return (
-        <div className="rounded-xl border border-border/50 bg-background/70 p-4 shadow-sm">
-          <div className="flex flex-col gap-2">
+        <div className="rounded-xl border border-border/40 bg-gradient-to-b from-background/85 to-background/55 p-4 shadow-sm">
+          <div className="flex flex-col gap-2.5">
             {children.map((child, index) => (
               <Fragment key={childKey(child, index)}>
                 <RenderNode component={child} context={childContext} />
@@ -270,12 +270,21 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
       const tooltip = canClick
         ? undefined
         : "Interactions are not wired up for this surface.";
+      const variant = typeof props?.variant === "string" ? props.variant.toLowerCase() : "primary";
+      const buttonClass = variant === "secondary" || variant === "ghost" || variant === "outline"
+        ? "border-border/60 bg-background/70 text-foreground hover:bg-muted/40"
+        : "border-transparent bg-primary text-primary-foreground shadow-sm hover:bg-primary/90";
       return (
         <button
           type="button"
           disabled={!canClick}
           title={tooltip}
-          className="inline-flex h-10 items-center justify-center rounded-lg border border-primary/25 bg-primary px-3.5 text-[13px] font-medium text-primary-foreground shadow-sm transition hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-75"
+          className={cn(
+            "inline-flex h-9 items-center justify-center rounded-lg border px-3.5 text-[13px] font-medium transition-colors",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+            "disabled:cursor-not-allowed disabled:opacity-70",
+            buttonClass,
+          )}
           onClick={(event) => {
             event.preventDefault();
             if (!canClick || !context.onAction) return;
@@ -454,20 +463,20 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
       const label = resolveText(props, context.dataModel, "label");
       const pct = Math.max(0, Math.min(100, (value / max) * 100));
       return (
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between gap-3">
-            {label ? <span className="text-xs text-muted-foreground">{label}</span> : <span />}
-            <span className="text-[11px] font-medium text-muted-foreground">{Math.round(pct)}%</span>
+            {label ? <span className="text-xs font-medium text-muted-foreground">{label}</span> : <span />}
+            <span className="tabular-nums text-[11px] font-semibold text-foreground/80">{Math.round(pct)}%</span>
           </div>
           <div
             role="progressbar"
             aria-valuemin={0}
             aria-valuemax={max}
             aria-valuenow={value}
-            className="h-2 w-full overflow-hidden rounded-full bg-muted/50"
+            className="h-1.5 w-full overflow-hidden rounded-full bg-muted/60"
           >
             <div
-              className="h-full rounded-full bg-primary transition-all duration-150"
+              className="h-full rounded-full bg-gradient-to-r from-primary/85 to-primary transition-[width] duration-300 ease-out"
               style={{ width: `${pct}%` } as CSSProperties}
             />
           </div>
@@ -479,15 +488,17 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
       const text = resolveText(props, context.dataModel, "text", "label");
       const tone = typeof props?.tone === "string" ? props.tone.toLowerCase() : "default";
       const toneClass = tone === "success"
-        ? "border-success/40 bg-success/15 text-success"
+        ? "border-success/30 bg-success/10 text-success"
         : tone === "warning"
-          ? "border-warning/40 bg-warning/15 text-warning"
+          ? "border-warning/30 bg-warning/10 text-warning"
           : tone === "danger" || tone === "error"
-            ? "border-destructive/40 bg-destructive/15 text-destructive"
-            : "border-border/50 bg-muted/40 text-muted-foreground";
+            ? "border-destructive/30 bg-destructive/10 text-destructive"
+            : tone === "info" || tone === "primary"
+              ? "border-primary/25 bg-primary/10 text-primary"
+              : "border-border/50 bg-muted/50 text-muted-foreground";
       return (
         <span className={cn(
-          "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+          "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-none",
           toneClass,
         )}>{text}</span>
       );
@@ -519,18 +530,24 @@ function RenderNode({ component, context }: { component: A2uiRenderableComponent
         return <UnknownComponent component={component} context={childContext} reason="Table requires props.columns" />;
       }
       return (
-        <div className="overflow-x-auto rounded-lg border border-border/50 bg-background/50">
+        <div className="overflow-hidden overflow-x-auto rounded-lg border border-border/45 bg-background/55">
           <table className="min-w-full text-left text-xs">
-            <thead className="bg-muted/30 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            <thead className="bg-muted/35 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
               <tr>
                 {columns.map((col) => (
-                  <th key={col.key} className="px-3 py-2.5 font-semibold">{col.label}</th>
+                  <th key={col.key} className="border-b border-border/40 px-3 py-2 font-semibold">{col.label}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {rows.map((row, rowIndex) => (
-                <tr key={`row-${rowIndex}`} className={rowIndex % 2 === 0 ? "bg-transparent" : "bg-muted/15"}>
+                <tr
+                  key={`row-${rowIndex}`}
+                  className={cn(
+                    "transition-colors hover:bg-muted/15",
+                    rowIndex !== rows.length - 1 && "border-b border-border/25",
+                  )}
+                >
                   {columns.map((col) => (
                     <td key={`cell-${rowIndex}-${col.key}`} className="px-3 py-2 align-top text-foreground/90">
                       {tableCellRender(row, col.key)}

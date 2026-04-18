@@ -48,6 +48,7 @@ function buildThemeStyle(theme?: Record<string, unknown>): CSSProperties | undef
 function extractSurfaceTitle(root: A2uiRenderableComponent | null, dataModel: unknown): string | null {
   if (!root) return null;
   const queue: A2uiRenderableComponent[] = [root];
+  let bestHeading: { text: string; level: number } | null = null;
   let fallbackText: string | null = null;
   while (queue.length > 0) {
     const current = queue.shift()!;
@@ -61,8 +62,16 @@ function extractSurfaceTitle(root: A2uiRenderableComponent | null, dataModel: un
         resolveDynamicWithFunctions(props.text ?? props.label ?? props.value, dataModel),
       ).trim();
       if (text) {
-        if (current.type === "Heading") return text;
-        if (!fallbackText) fallbackText = text;
+        if (current.type === "Heading") {
+          const rawLevel = Number(props.level);
+          const level = Number.isFinite(rawLevel) ? Math.min(Math.max(rawLevel, 1), 6) : 2;
+          if (!bestHeading || level < bestHeading.level) {
+            bestHeading = { text, level };
+            if (level === 1) return text;
+          }
+        } else if (!fallbackText) {
+          fallbackText = text;
+        }
       }
     }
     if (Array.isArray(current.children)) {
@@ -73,7 +82,7 @@ function extractSurfaceTitle(root: A2uiRenderableComponent | null, dataModel: un
       }
     }
   }
-  return fallbackText;
+  return bestHeading?.text ?? fallbackText;
 }
 
 export const A2uiSurfaceCard = memo(function A2uiSurfaceCard({ item }: A2uiSurfaceCardProps) {
@@ -123,37 +132,43 @@ export const A2uiSurfaceCard = memo(function A2uiSurfaceCard({ item }: A2uiSurfa
 
   return (
     <>
-      <Card className="w-full max-w-4xl overflow-hidden border-border/50 bg-background/80 shadow-sm">
+      <Card
+        className={cn(
+          "group/a2ui w-full max-w-4xl overflow-hidden border-border/45 shadow-sm",
+          "bg-gradient-to-b from-background to-muted/10",
+        )}
+      >
         <Collapsible open={expanded} onOpenChange={setExpanded}>
-          <div className="flex items-center gap-1 border-b border-border/40 pr-2">
+          <div
+            className={cn(
+              "flex items-center gap-1 pr-2 transition-colors",
+              expanded ? "border-b border-border/35 bg-muted/[0.06]" : "bg-transparent",
+            )}
+          >
             <CollapsibleTrigger asChild>
               <button
                 type="button"
-                className={cn(
-                  "flex flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/20",
-                  !expanded && "border-b-transparent",
-                )}
+                className="flex flex-1 items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-muted/15"
               >
-                <span className="flex min-w-0 flex-col gap-1">
-                  <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                    <SparklesIcon className="size-3.5 text-primary" />
-                    Generative UI
-                    <code className="rounded bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-foreground/70">
-                      {item.surfaceId}
-                    </code>
-                    {unsupportedCatalog ? (
-                      <span className="rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium uppercase text-warning">
-                        unknown catalog
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="truncate text-sm font-semibold text-foreground">
+                <span className="flex size-6 flex-none items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <SparklesIcon className="size-3.5" />
+                </span>
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
                     {surfaceTitle}
                   </span>
+                  {unsupportedCatalog ? (
+                    <span className="flex-none rounded-full border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warning">
+                      unknown catalog
+                    </span>
+                  ) : null}
+                  <code className="flex-none rounded-full bg-muted/45 px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
+                    {item.surfaceId}
+                  </code>
                 </span>
                 <ChevronDownIcon
                   className={cn(
-                    "size-3.5 text-muted-foreground transition-transform",
+                    "size-3.5 flex-none text-muted-foreground transition-transform duration-150",
                     expanded ? "rotate-0" : "-rotate-90",
                   )}
                 />
@@ -164,28 +179,26 @@ export const A2uiSurfaceCard = memo(function A2uiSurfaceCard({ item }: A2uiSurfa
               title="Open in larger view"
               aria-label="Open in larger view"
               onClick={() => setPoppedOut(true)}
-              className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/30 hover:text-foreground"
+              className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/70 opacity-0 transition-all hover:bg-muted/30 hover:text-foreground group-hover/a2ui:opacity-100 focus-visible:opacity-100"
             >
               <ExpandIcon className="size-3.5" />
             </button>
           </div>
           <CollapsibleContent>
-            <CardContent className="p-4" style={themeStyle}>
+            <CardContent className="p-4 pt-3.5" style={themeStyle}>
               {unsupportedCatalog ? (
-                <div className="mb-3 rounded border border-warning/35 bg-warning/[0.08] p-2 text-xs text-warning">
+                <div className="mb-3 rounded-md border border-warning/35 bg-warning/[0.08] px-3 py-2 text-xs text-warning">
                   This surface uses an unsupported catalog. Rendering with best-effort basic primitives — some components may be skipped.
                   <div className="mt-1 font-mono text-[10px] text-warning/80">
                     {item.catalogId}
                   </div>
                 </div>
               ) : null}
-              <div className="rounded-xl border border-border/40 bg-background/35 p-4">
-                <A2uiRenderer
-                  root={rootComponent}
-                  dataModel={item.dataModel}
-                  {...(onAction ? { onAction } : {})}
-                />
-              </div>
+              <A2uiRenderer
+                root={rootComponent}
+                dataModel={item.dataModel}
+                {...(onAction ? { onAction } : {})}
+              />
             </CardContent>
           </CollapsibleContent>
         </Collapsible>
@@ -195,14 +208,16 @@ export const A2uiSurfaceCard = memo(function A2uiSurfaceCard({ item }: A2uiSurfa
           <DialogHeader>
             <DialogTitle>
               <span className="flex items-center gap-2 text-sm font-semibold">
-                <SparklesIcon className="size-4 text-primary" />
+                <span className="flex size-6 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <SparklesIcon className="size-3.5" />
+                </span>
                 {surfaceTitle}
               </span>
             </DialogTitle>
           </DialogHeader>
-          <div className="max-h-[70vh] overflow-y-auto rounded-xl border border-border/40 bg-background/35 p-4" style={themeStyle}>
+          <div className="max-h-[70vh] overflow-y-auto px-1" style={themeStyle}>
             {unsupportedCatalog ? (
-              <div className="mb-3 rounded border border-warning/35 bg-warning/[0.08] p-2 text-xs text-warning">
+              <div className="mb-3 rounded-md border border-warning/35 bg-warning/[0.08] px-3 py-2 text-xs text-warning">
                 Unsupported catalog: <span className="font-mono text-[10px] text-warning/80">{item.catalogId}</span>
               </div>
             ) : null}

@@ -35,7 +35,8 @@ function createItem(partial: Partial<UiSurfaceItem> = {}): UiSurfaceItem {
 describe("A2uiSurfaceCard", () => {
   test("renders basic catalog components with dynamic bindings", () => {
     const html = renderToStaticMarkup(createElement(A2uiSurfaceCard, { item: createItem() }));
-    expect(html).toContain("Generative UI");
+    // Surface id chip is always shown in the header.
+    expect(html).toContain(">s1<");
     expect(html).toContain("Hello, world");
     expect(html).toContain("bound value");
   });

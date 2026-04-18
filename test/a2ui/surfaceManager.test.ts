@@ -100,4 +100,23 @@ describe("A2uiSurfaceManager", () => {
     expect(res.error).toContain("ghost");
     expect(events).toHaveLength(0);
   });
+
+  test("eviction removes the oldest retained surface while still emitting a delete event", () => {
+    const { manager, events } = createManager();
+    for (let index = 1; index <= 16; index += 1) {
+      const result = manager.applyEnvelope(createEnvelope(`s${index}`), `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`);
+      expect(result.ok).toBe(true);
+    }
+
+    const result = manager.applyEnvelope(createEnvelope("s17"), "2026-01-01T00:00:17.000Z");
+
+    expect(result.ok).toBe(true);
+    expect(Object.keys(manager.getSurfaces())).toHaveLength(16);
+    expect(manager.getSurfaces()).not.toHaveProperty("s1");
+    expect(manager.getSurfaces()).toHaveProperty("s17");
+
+    const deleteEvent = events.findLast((event) => event.type === "a2ui_surface" && event.surfaceId === "s1");
+    expect(deleteEvent).toBeTruthy();
+    expect((deleteEvent as Extract<ServerEvent, { type: "a2ui_surface" }>).deleted).toBe(true);
+  });
 });

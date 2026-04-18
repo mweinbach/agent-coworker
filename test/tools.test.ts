@@ -3702,6 +3702,21 @@ describe("createTools", () => {
     expect(tools).toHaveProperty("a2ui");
   });
 
+  test("includes a2ui for google when enabled", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(makeCtx(dir, {
+      config: makeConfig(dir, {
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        preferredChildModel: "gemini-3-flash-preview",
+        enableA2ui: true,
+      }),
+      applyA2uiEnvelope: () => ({ ok: true, surfaceId: "surface-1", change: "created" }),
+    }));
+
+    expect(tools).toHaveProperty("a2ui");
+  });
+
   test("omits a2ui when explicitly disabled", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir, {

@@ -252,7 +252,8 @@ export class A2uiSurfaceManager {
       revision: victim.revision + 1,
       updatedAt: now,
     };
-    this.surfaces = { ...this.surfaces, [victim.surfaceId]: next };
+    const { [victim.surfaceId]: _evicted, ...rest } = this.surfaces;
+    this.surfaces = rest;
     this.deps.emit(this.resolvedEvent(next, { changeKind: "deleteSurface" }));
   }
 }

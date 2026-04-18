@@ -109,7 +109,7 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     notebookEdit: createNotebookEditTool(ctx),
     skill: createSkillTool(ctx),
     ...(ctx.config.enableMemory ?? true ? { memory: createMemoryTool(ctx) } : {}),
-    ...(ctx.config.provider !== "google" && ctx.config.enableA2ui === true && ctx.applyA2uiEnvelope
+    ...(ctx.config.enableA2ui === true && ctx.applyA2uiEnvelope
       ? { a2ui: createA2uiTool(ctx) }
       : {}),
     usage: createUsageTool(ctx),

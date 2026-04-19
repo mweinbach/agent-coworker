@@ -82,4 +82,19 @@ describe("parseA2uiEnvelope", () => {
     const result = parseA2uiEnvelope(big);
     expect(result.ok).toBe(false);
   });
+
+  test("enforces envelope size cap for object payloads", () => {
+    const result = parseA2uiEnvelope({
+      version: A2UI_PROTOCOL_VERSION,
+      createSurface: {
+        surfaceId: "s1",
+        catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
+        dataModel: {
+          payload: "x".repeat(130 * 1024),
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("envelope exceeds");
+  });
 });

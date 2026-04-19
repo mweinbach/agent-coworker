@@ -173,13 +173,23 @@ export type ParsedEnvelope =
   | { ok: true; envelope: A2uiEnvelope }
   | { ok: false; error: string };
 
+function serializedEnvelopeBytes(value: unknown): number | null {
+  try {
+    const serialized = typeof value === "string" ? value : JSON.stringify(value);
+    return new TextEncoder().encode(serialized).length;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Parse an unknown value into an A2UI v0.9 envelope. Returns a discriminated
  * union so callers can render a user-visible error without throwing.
  */
 export function parseA2uiEnvelope(value: unknown): ParsedEnvelope {
   if (typeof value === "string") {
-    if (value.length > A2UI_MAX_ENVELOPE_BYTES) {
+    const bytes = serializedEnvelopeBytes(value);
+    if (bytes !== null && bytes > A2UI_MAX_ENVELOPE_BYTES) {
       return { ok: false, error: `envelope exceeds ${A2UI_MAX_ENVELOPE_BYTES} bytes` };
     }
     try {
@@ -200,6 +210,11 @@ export function parseA2uiEnvelope(value: unknown): ParsedEnvelope {
       ok: false,
       error: `unsupported A2UI version: expected ${A2UI_PROTOCOL_VERSION}, got ${JSON.stringify(observed)}`,
     };
+  }
+
+  const bytes = serializedEnvelopeBytes(value);
+  if (bytes !== null && bytes > A2UI_MAX_ENVELOPE_BYTES) {
+    return { ok: false, error: `envelope exceeds ${A2UI_MAX_ENVELOPE_BYTES} bytes` };
   }
 
   const parsed = a2uiEnvelopeSchema.safeParse(value);

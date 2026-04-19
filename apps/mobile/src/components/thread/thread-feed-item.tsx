@@ -6,6 +6,7 @@ import { MarkdownText } from "./markdown-text";
 import { ToolCallCard } from "./tool-call-card";
 import { ReasoningCard } from "./reasoning-card";
 import { TodoCard } from "./todo-card";
+import { A2uiSurfaceCard } from "./a2ui-surface-card";
 
 type ThreadFeedItemProps = {
   item: SessionFeedItem;
@@ -80,6 +81,10 @@ export function ThreadFeedItem({ item }: ThreadFeedItemProps) {
 
   if (item.kind === "todos") {
     return <TodoCard todos={item.todos} />;
+  }
+
+  if (item.kind === "ui_surface") {
+    return <A2uiSurfaceCard item={item} />;
   }
 
   // log, error, system — simple chrome rendering

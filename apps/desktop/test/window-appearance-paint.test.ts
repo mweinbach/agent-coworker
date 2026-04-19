@@ -16,8 +16,8 @@ describe("windowsBackgroundMaterialForPlatform", () => {
 
 describe("desktopShellBackgroundColor", () => {
   test("tracks light vs dark shell presets", () => {
-    expect(desktopShellBackgroundColor(false)).toBe("#e7dfd4");
-    expect(desktopShellBackgroundColor(true)).toBe("#1f1913");
+    expect(desktopShellBackgroundColor(false)).toBe("#dfe2cc");
+    expect(desktopShellBackgroundColor(true)).toBe("#171d13");
   });
 });
 
@@ -30,7 +30,7 @@ describe("resolveWindowChromePaint", () => {
         useMacosNativeGlass: true,
       }),
     ).toEqual({
-      backgroundColor: "#e7dfd4",
+      backgroundColor: "#dfe2cc",
     });
 
     expect(
@@ -40,7 +40,7 @@ describe("resolveWindowChromePaint", () => {
         useMacosNativeGlass: true,
       }),
     ).toEqual({
-      backgroundColor: "#1f1913",
+      backgroundColor: "#171d13",
     });
   });
 
@@ -64,7 +64,7 @@ describe("resolveWindowChromePaint", () => {
         useMacosNativeGlass: false,
       }),
     ).toEqual({
-      backgroundColor: "#1f1913",
+      backgroundColor: "#171d13",
     });
   });
 
@@ -76,7 +76,7 @@ describe("resolveWindowChromePaint", () => {
         useMacosNativeGlass: true,
       }),
     ).toEqual({
-      backgroundColor: "#e7dfd4",
+      backgroundColor: "#dfe2cc",
       backgroundMaterial: "mica",
     });
   });

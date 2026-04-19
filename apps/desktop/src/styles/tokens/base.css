@@ -1,11 +1,11 @@
 /* App palette + surfaces (no platform-specific glass) */
 
 :root {
-  --app-bg: #e4ddd2;
+  --app-bg: #dde1ca;
   --window-bg: var(--app-bg);
   --shell-bg: var(--app-bg);
-  --sidebar-bg: #e8dfd2;
-  --panel-bg: #faf6ef;
+  --sidebar-bg: #e1e4cd;
+  --panel-bg: #f4f5e9;
   --workspace-pane-bg: var(--panel-bg);
   --sidebar-surface: color-mix(in srgb, var(--sidebar-bg) 92%, white 8%);
   /* Left rail fill; defaults to titlebar strip until glass platforms override */
@@ -16,21 +16,21 @@
     var(--app-bg) 18%
   );
   --glass-fill: color-mix(in srgb, var(--panel-bg) 92%, transparent);
-  --glass-border: rgba(94, 67, 41, 0.18);
+  --glass-border: rgba(62, 74, 40, 0.18);
   --sidebar-blur: 0px;
   --sidebar-titlebar-blur: 8px;
   --titlebar-blur: 7px;
-  --border-base: rgba(94, 67, 41, 0.12);
-  --text-base: #2f2318;
-  --muted-base: #5a4736;
-  --accent-base: #8e603f;
+  --border-base: rgba(62, 74, 40, 0.12);
+  --text-base: #232a18;
+  --muted-base: #556041;
+  --accent-base: #6f8042;
   --danger-base: #bb3e3e;
   --danger-bg: rgba(187, 62, 62, 0.12);
   --inverse-text: #ffffff;
   --success-base: oklch(0.69 0.16 151);
   --success-foreground-base: var(--inverse-text);
   --warning-base: oklch(0.78 0.16 80);
-  --warning-foreground-base: #2f2318;
+  --warning-foreground-base: #232a18;
   --radius-base: 0.5rem;
   --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.035);
   --shadow-overlay-base: 0 12px 30px rgba(0, 0, 0, 0.1);
@@ -39,11 +39,11 @@
 }
 
 :root[data-system-theme="dark"] {
-  --app-bg: #1f1913;
+  --app-bg: #171d13;
   --window-bg: var(--app-bg);
   --shell-bg: var(--app-bg);
-  --sidebar-bg: #29221b;
-  --panel-bg: #322920;
+  --sidebar-bg: #202719;
+  --panel-bg: #2a3120;
   --workspace-pane-bg: var(--panel-bg);
   --sidebar-surface: color-mix(in srgb, var(--sidebar-bg) 88%, black 12%);
   --sidebar-pane-surface: var(--sidebar-surface);
@@ -53,20 +53,20 @@
     var(--app-bg) 26%
   );
   --glass-fill: color-mix(in srgb, var(--panel-bg) 86%, transparent);
-  --glass-border: rgba(255, 233, 212, 0.16);
+  --glass-border: rgba(238, 241, 220, 0.16);
   --sidebar-titlebar-blur: 8px;
   --titlebar-blur: 7px;
-  --border-base: rgba(255, 233, 212, 0.14);
-  --text-base: #f6ece0;
-  --muted-base: #d8c7b6;
-  --accent-base: #d39261;
+  --border-base: rgba(238, 241, 220, 0.14);
+  --text-base: #eef0dc;
+  --muted-base: #c7ceaf;
+  --accent-base: #a8b963;
   --danger-base: #e86060;
   --danger-bg: rgba(232, 96, 96, 0.14);
   --inverse-text: #ffffff;
   --success-base: oklch(0.76 0.15 151);
-  --success-foreground-base: #1a150f;
+  --success-foreground-base: #121a10;
   --warning-base: oklch(0.8 0.16 80);
-  --warning-foreground-base: #23160d;
+  --warning-foreground-base: #1a2012;
   --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.24);
   --shadow-overlay-base: 0 12px 30px rgba(0, 0, 0, 0.35);
 
@@ -75,11 +75,11 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-system-theme]) {
-    --app-bg: #1f1913;
+    --app-bg: #171d13;
     --window-bg: var(--app-bg);
     --shell-bg: var(--app-bg);
-    --sidebar-bg: #29221b;
-    --panel-bg: #322920;
+    --sidebar-bg: #202719;
+    --panel-bg: #2a3120;
     --workspace-pane-bg: var(--panel-bg);
     --sidebar-surface: color-mix(in srgb, var(--sidebar-bg) 88%, black 12%);
     --sidebar-pane-surface: var(--sidebar-surface);
@@ -89,20 +89,20 @@
       var(--app-bg) 26%
     );
     --glass-fill: color-mix(in srgb, var(--panel-bg) 86%, transparent);
-    --glass-border: rgba(255, 233, 212, 0.16);
+    --glass-border: rgba(238, 241, 220, 0.16);
     --sidebar-titlebar-blur: 8px;
     --titlebar-blur: 7px;
-    --border-base: rgba(255, 233, 212, 0.14);
-    --text-base: #f6ece0;
-    --muted-base: #d8c7b6;
-    --accent-base: #d39261;
+    --border-base: rgba(238, 241, 220, 0.14);
+    --text-base: #eef0dc;
+    --muted-base: #c7ceaf;
+    --accent-base: #a8b963;
     --danger-base: #e86060;
     --danger-bg: rgba(232, 96, 96, 0.14);
     --inverse-text: #ffffff;
     --success-base: oklch(0.76 0.15 151);
-    --success-foreground-base: #1a150f;
+    --success-foreground-base: #121a10;
     --warning-base: oklch(0.8 0.16 80);
-    --warning-foreground-base: #23160d;
+    --warning-foreground-base: #1a2012;
     --shadow-surface-base: 0 1px 2px rgba(0, 0, 0, 0.24);
     --shadow-overlay-base: 0 12px 30px rgba(0, 0, 0, 0.35);
 

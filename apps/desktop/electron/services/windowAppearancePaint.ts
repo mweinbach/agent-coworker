@@ -1,7 +1,7 @@
 import type { WindowsBackgroundMaterial } from "../../src/lib/desktopApi";
 
-export const LIGHT_SHELL_BACKGROUND = "#e7dfd4";
-export const DARK_SHELL_BACKGROUND = "#1f1913";
+export const LIGHT_SHELL_BACKGROUND = "#dfe2cc";
+export const DARK_SHELL_BACKGROUND = "#171d13";
 
 /** Solid shell tint behind web content (no Electron imports — safe for unit tests). */
 export function desktopShellBackgroundColor(useDarkColors: boolean): string {

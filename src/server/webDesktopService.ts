@@ -90,6 +90,13 @@ type SourceWorkspaceServerLaunch = {
   url: string;
 };
 
+type WorkspaceServerOutputSource = "stdout" | "stderr";
+
+type WorkspaceServerMonitor = {
+  ready: Promise<{ url: string }>;
+  drained: Promise<void>;
+};
+
 type SourceWorkspaceServerManagerDeps = {
   repoRoot?: string;
   sourceEntry?: string;
@@ -345,65 +352,148 @@ async function assertWorkspaceDirectory(workspacePath: string): Promise<string> 
 }
 
 function waitForServerListening(child: ChildProcessByStdio<null, Readable, Readable>): Promise<{ url: string }> {
-  return new Promise((resolve, reject) => {
-    const recentLines: string[] = [];
-    const lineReader = readline.createInterface({ input: child.stdout });
+  const monitor = createWorkspaceServerMonitor(child);
+  void monitor.drained.catch(() => {});
+  return monitor.ready;
+}
 
-    const recordLine = (line: string) => {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        return;
-      }
-      recentLines.push(trimmed);
-      if (recentLines.length > 5) {
-        recentLines.shift();
-      }
-    };
+function createWorkspaceServerMonitor(
+  child: ChildProcessByStdio<null, Readable, Readable>,
+  onOutputLine: (source: WorkspaceServerOutputSource, line: string) => void = () => {},
+): WorkspaceServerMonitor {
+  let resolveReady!: (value: { url: string }) => void;
+  let rejectReady!: (error: Error) => void;
+  const ready = new Promise<{ url: string }>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
 
-    const withRecentLines = (message: string) =>
-      recentLines.length > 0 ? `${message}; output=${recentLines.join(" | ")}` : message;
+  let resolveDrained!: () => void;
+  let rejectDrained!: (error: Error) => void;
+  const drained = new Promise<void>((resolve, reject) => {
+    resolveDrained = resolve;
+    rejectDrained = reject;
+  });
 
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error(withRecentLines(`Workspace server startup timed out after ${SERVER_STARTUP_TIMEOUT_MS / 1000} seconds`)));
-    }, SERVER_STARTUP_TIMEOUT_MS);
+  const recentLines: string[] = [];
+  const stdoutReader = readline.createInterface({ input: child.stdout });
+  const stderrReader = readline.createInterface({ input: child.stderr });
+  let readySeen = false;
+  let finished = false;
+  let readySettled = false;
 
-    const cleanup = () => {
-      clearTimeout(timeout);
-      lineReader.off("line", onLine);
-      child.off("exit", onExit);
-      child.off("error", onError);
-      lineReader.close();
-    };
+  const settleReadyResolve = (value: { url: string }) => {
+    if (readySettled) {
+      return;
+    }
+    readySettled = true;
+    resolveReady(value);
+  };
 
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
+  const settleReadyReject = (error: Error) => {
+    if (readySettled) {
+      return;
+    }
+    readySettled = true;
+    rejectReady(error);
+  };
 
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      reject(new Error(withRecentLines(`Workspace server exited before reporting readiness (code=${code ?? "null"}, signal=${signal ?? "null"})`)));
-    };
+  const recordLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+    recentLines.push(trimmed);
+    if (recentLines.length > 5) {
+      recentLines.shift();
+    }
+  };
 
-    const onLine = (line: string) => {
-      recordLine(line);
+  const withRecentLines = (message: string) =>
+    recentLines.length > 0 ? `${message}; output=${recentLines.join(" | ")}` : message;
+
+  const cleanup = () => {
+    if (finished) {
+      return false;
+    }
+    finished = true;
+    clearTimeout(timeout);
+    stdoutReader.off("line", onStdoutLine);
+    stderrReader.off("line", onStderrLine);
+    child.off("exit", onExit);
+    child.off("error", onError);
+    stdoutReader.close();
+    stderrReader.close();
+    return true;
+  };
+
+  const onTimeout = () => {
+    if (!cleanup()) {
+      return;
+    }
+    const error = new Error(withRecentLines(`Workspace server startup timed out after ${SERVER_STARTUP_TIMEOUT_MS / 1000} seconds`));
+    settleReadyReject(error);
+    rejectDrained(error);
+  };
+
+  const timeout = setTimeout(onTimeout, SERVER_STARTUP_TIMEOUT_MS);
+
+  const onError = (error: Error) => {
+    if (!cleanup()) {
+      return;
+    }
+    settleReadyReject(error);
+    rejectDrained(error);
+  };
+
+  const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    if (!cleanup()) {
+      return;
+    }
+    if (!readySeen) {
+      settleReadyReject(new Error(withRecentLines(`Workspace server exited before reporting readiness (code=${code ?? "null"}, signal=${signal ?? "null"})`)));
+    }
+    resolveDrained();
+  };
+
+  const handleOutputLine = (source: WorkspaceServerOutputSource, line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    recordLine(trimmed);
+    if (!readySeen && source === "stdout") {
       try {
-        const parsed = serverListeningSchema.safeParse(JSON.parse(line));
-        if (!parsed.success) {
+        const parsed = serverListeningSchema.safeParse(JSON.parse(trimmed));
+        if (parsed.success) {
+          readySeen = true;
+          clearTimeout(timeout);
+          settleReadyResolve({ url: parsed.data.url });
           return;
         }
-        cleanup();
-        resolve({ url: parsed.data.url });
       } catch {
         // Ignore non-JSON startup noise while waiting for the server_listening event.
       }
-    };
+    }
 
-    lineReader.on("line", onLine);
-    child.once("exit", onExit);
-    child.once("error", onError);
-  });
+    onOutputLine(source, trimmed);
+  };
+
+  const onStdoutLine = (line: string) => {
+    handleOutputLine("stdout", line);
+  };
+
+  const onStderrLine = (line: string) => {
+    handleOutputLine("stderr", line);
+  };
+
+  stdoutReader.on("line", onStdoutLine);
+  stderrReader.on("line", onStderrLine);
+  child.once("exit", onExit);
+  child.once("error", onError);
+
+  return { ready, drained };
 }
 
 async function gracefulKill(child: ChildProcessByStdio<null, Readable, Readable>): Promise<void> {
@@ -730,4 +820,6 @@ export class WebDesktopService implements WebDesktopServiceLike {
 
 export const __internal = {
   SourceWorkspaceServerManager,
+  createWorkspaceServerMonitor,
+  waitForServerListening,
 };

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 
 import { __internal, WebDesktopService } from "../src/server/webDesktopService";
 import { handleWebDesktopRoute } from "../src/server/webDesktopRoutes";
@@ -16,6 +18,15 @@ async function makeTempDir(prefix: string): Promise<string> {
 
 async function readJson(response: Response): Promise<unknown> {
   return JSON.parse(await response.text());
+}
+
+function createMockWorkspaceChild() {
+  return Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    exitCode: null,
+    signalCode: null,
+  });
 }
 
 afterEach(async () => {
@@ -182,5 +193,65 @@ describe("web desktop routes", () => {
       { workspacePath: await fs.realpath(workspaceB), yolo: true },
     ]);
     expect(kills).toEqual(["child-1"]);
+  });
+
+  test("serves active-content files as attachments while keeping plain text inline", async () => {
+    const workspace = await makeTempDir("cowork-web-desktop-open-");
+    const htmlPath = path.join(workspace, "preview.html");
+    const svgPath = path.join(workspace, "vector.svg");
+    const textPath = path.join(workspace, "notes.txt");
+    await fs.writeFile(htmlPath, "<!doctype html><script>window.hacked = true</script>", "utf8");
+    await fs.writeFile(svgPath, "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>", "utf8");
+    await fs.writeFile(textPath, "hello", "utf8");
+
+    const htmlResponse = await handleWebDesktopRoute(
+      new Request(`http://localhost/cowork/fs/open?path=${encodeURIComponent(htmlPath)}`),
+      { cwd: workspace },
+    );
+    const svgResponse = await handleWebDesktopRoute(
+      new Request(`http://localhost/cowork/fs/open?path=${encodeURIComponent(svgPath)}`),
+      { cwd: workspace },
+    );
+    const textResponse = await handleWebDesktopRoute(
+      new Request(`http://localhost/cowork/fs/open?path=${encodeURIComponent(textPath)}`),
+      { cwd: workspace },
+    );
+
+    expect(htmlResponse).not.toBeNull();
+    expect(svgResponse).not.toBeNull();
+    expect(textResponse).not.toBeNull();
+    expect(htmlResponse!.headers.get("Content-Disposition")).toStartWith("attachment;");
+    expect(svgResponse!.headers.get("Content-Disposition")).toStartWith("attachment;");
+    expect(textResponse!.headers.get("Content-Disposition")).toStartWith("inline;");
+    expect(htmlResponse!.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(svgResponse!.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  });
+
+  test("workspace server monitor keeps draining stdout and stderr after readiness", async () => {
+    const child = createMockWorkspaceChild();
+    const seenLines: Array<{ source: string; line: string }> = [];
+    const monitor = __internal.createWorkspaceServerMonitor(
+      child as any,
+      (source, line) => {
+        seenLines.push({ source, line });
+      },
+    );
+
+    child.stdout.write("{\"type\":\"server_listening\",\"url\":\"ws://127.0.0.1:7337/ws\"}\n");
+    await expect(monitor.ready).resolves.toEqual({ url: "ws://127.0.0.1:7337/ws" });
+
+    child.stdout.write("stdout after ready\n");
+    child.stderr.write("stderr after ready\n");
+    await Bun.sleep(0);
+
+    expect(seenLines).toEqual([
+      { source: "stdout", line: "stdout after ready" },
+      { source: "stderr", line: "stderr after ready" },
+    ]);
+
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("exit", 0, null);
+    await expect(monitor.drained).resolves.toBeUndefined();
   });
 });

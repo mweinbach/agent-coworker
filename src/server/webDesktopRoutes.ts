@@ -15,6 +15,13 @@ type ExplorerEntryPayload = {
 
 const DEFAULT_TEXT_READ_BYTES = 256 * 1024;
 const DEFAULT_PREVIEW_MAX_BYTES = 15 * 1024 * 1024;
+const ACTIVE_FILE_PREVIEW_MIME_TYPES = new Set([
+  "application/xhtml+xml",
+  "application/xml",
+  "image/svg+xml",
+  "text/html",
+  "text/xml",
+]);
 
 function normalizeBoundaryPath(targetPath: string): string {
   const resolved = path.resolve(targetPath);
@@ -203,6 +210,32 @@ function escapeHtml(value: string): string {
 
 function contentDispositionInline(filePath: string): string {
   return `inline; filename*=UTF-8''${encodeURIComponent(path.basename(filePath))}`;
+}
+
+function contentDispositionAttachment(filePath: string): string {
+  return `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(filePath))}`;
+}
+
+function normalizeMimeType(mimeType: string): string {
+  return mimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+}
+
+function shouldServeOpenPathAsAttachment(filePath: string, mimeType: string): boolean {
+  const normalizedMimeType = normalizeMimeType(mimeType);
+  if (ACTIVE_FILE_PREVIEW_MIME_TYPES.has(normalizedMimeType)) {
+    return true;
+  }
+
+  switch (path.extname(filePath).toLowerCase()) {
+    case ".htm":
+    case ".html":
+    case ".svg":
+    case ".xhtml":
+    case ".xml":
+      return true;
+    default:
+      return false;
+  }
 }
 
 function buildOpenRoute(pathValue: string): string {
@@ -411,12 +444,17 @@ async function handleOpenPathRequest(workspaceRoots: string[], requestedPath: st
   }
 
   const file = Bun.file(safePath);
+  const contentType = file.type || "application/octet-stream";
+  const contentDisposition = shouldServeOpenPathAsAttachment(safePath, contentType)
+    ? contentDispositionAttachment(safePath)
+    : contentDispositionInline(safePath);
   return new Response(file, {
     status: 200,
     headers: {
-      "Content-Type": file.type || "application/octet-stream",
-      "Content-Disposition": contentDispositionInline(safePath),
+      "Content-Type": contentType,
+      "Content-Disposition": contentDisposition,
       "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
     },
   });
 }

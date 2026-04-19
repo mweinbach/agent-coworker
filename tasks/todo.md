@@ -1,5 +1,12 @@
 # Task Plan
 
+## Fix PR #83 Remaining `desktop:web` Review Threads
+
+- [x] Confirm the two unresolved `scripts/start_web_dev.ts` review threads are still real against current `HEAD`.
+- [x] Keep draining server stdout after the readiness event so long-running web dev sessions do not block on a full pipe.
+- [x] Propagate failing child exit codes from `bun run desktop:web` instead of always exiting `0`.
+- [x] Add focused regression coverage for the readiness/drain and exit-code helpers, then rerun targeted verification plus `bun run typecheck`.
+
 ## Fix Desktop Preview Discoverability and Modal Polish
 
 - [x] Inspect the current live Electron desktop behavior before editing, including the context sidebar file tree baseline.

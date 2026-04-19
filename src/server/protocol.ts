@@ -17,6 +17,8 @@ import type {
   SkillInstallationEntry,
   SkillUpdateCheckResult,
   TodoItem,
+  WorkspaceFeatureFlagOverrides,
+  WorkspaceFeatureFlags,
 } from "../types";
 import type { SessionUsageSnapshot, TurnUsage } from "../session/costTracker";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
@@ -26,10 +28,6 @@ import type { ProviderCatalogEntry } from "../providers/connectionCatalog";
 import type { ModelStreamPartType, ModelStreamRawFormat } from "./modelStream";
 import type { PersistedSessionSummary } from "./sessionStore";
 import type { SessionSnapshot } from "../shared/sessionSnapshot";
-import type {
-  WorkspaceFeatureFlagOverrides,
-  WorkspaceFeatureFlags,
-} from "../shared/featureFlags";
 import type {
   SessionBackupPublicState,
   WorkspaceBackupDeltaPreview,

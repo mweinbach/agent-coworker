@@ -389,6 +389,7 @@ export function createWebAdapter(): DesktopApi {
       remoteAccess: false,
       workspacePicker: normalizedPicker,
       workspaceLifecycle: normalizedLifecycle,
+      a2ui: false,
     };
   };
   const features = resolveWebDesktopFeatureFlags();

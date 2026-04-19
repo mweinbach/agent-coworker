@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { WorkspaceFeatureFlagOverrides } from "./shared/featureFlags";
 
 export const PROVIDER_NAMES = [
   "google",
@@ -115,6 +114,14 @@ export interface UserProfile {
   work?: string;
   details?: string;
 }
+
+export type WorkspaceFeatureFlagOverrides = {
+  a2ui?: boolean;
+};
+
+export type WorkspaceFeatureFlags = {
+  a2ui: boolean;
+};
 
 export interface AgentConfig {
   provider: ProviderName;

@@ -680,7 +680,6 @@ describe("server JSON-RPC control methods", () => {
       `${JSON.stringify({
         featureFlags: {
           workspace: {
-            experimentalApi: false,
             a2ui: false,
           },
         },
@@ -693,7 +692,6 @@ describe("server JSON-RPC control methods", () => {
       const rpc = await connectJsonRpc(url);
       const before = await rpc.request("cowork/session/state/read", { cwd: workspace });
       expect(before.result.events[2]?.type).toBe("session_config");
-      expect(before.result.events[2]?.config?.featureFlags?.workspace?.experimentalApi).toBe(false);
       expect(before.result.events[2]?.config?.featureFlags?.workspace?.a2ui).toBe(false);
       expect(before.result.events[2]?.config?.enableA2ui).toBe(false);
 
@@ -702,23 +700,19 @@ describe("server JSON-RPC control methods", () => {
         config: {
           featureFlags: {
             workspace: {
-              experimentalApi: true,
               a2ui: true,
             },
           },
         },
       });
       expect(apply.result.event.type).toBe("session_config");
-      expect(apply.result.event.config.featureFlags.workspace.experimentalApi).toBe(true);
       expect(apply.result.event.config.featureFlags.workspace.a2ui).toBe(true);
       expect(apply.result.event.config.enableA2ui).toBe(true);
 
       const persisted = JSON.parse(await fs.readFile(`${workspace}/.agent/config.json`, "utf-8"));
-      expect(persisted.featureFlags.workspace.experimentalApi).toBe(true);
       expect(persisted.featureFlags.workspace.a2ui).toBe(true);
 
       const after = await rpc.request("cowork/session/state/read", { cwd: workspace });
-      expect(after.result.events[2]?.config?.featureFlags?.workspace?.experimentalApi).toBe(true);
       expect(after.result.events[2]?.config?.featureFlags?.workspace?.a2ui).toBe(true);
       expect(after.result.events[2]?.config?.enableA2ui).toBe(true);
 

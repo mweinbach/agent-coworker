@@ -16,7 +16,6 @@ import {
   trashPath,
 } from "../../lib/desktopCommands";
 import { type ProviderName } from "../../lib/wsProtocol";
-import { resolveWorkspaceFeatureFlags } from "../../../../../src/shared/featureFlags";
 
 import {
   type AppStoreActions,
@@ -97,7 +96,6 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       }
   
       const stayInSettings = get().view === "settings";
-      const defaultFeatureFlags = resolveWorkspaceFeatureFlags();
       const ws: WorkspaceRecord = {
         id: makeId(),
         name: basename(dir),
@@ -113,8 +111,6 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
         defaultAllowedChildModelRefs: [],
         defaultEnableMcp: true,
         defaultBackupsEnabled: true,
-        defaultFeatureFlags,
-        defaultEnableA2ui: defaultFeatureFlags.a2ui,
         yolo: false,
       };
   

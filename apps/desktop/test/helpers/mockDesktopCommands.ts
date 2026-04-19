@@ -44,10 +44,16 @@ const DEFAULT_MOBILE_RELAY_STATE = {
 export function createDesktopCommandsMock(
   overrides: Partial<DesktopCommandsModule> = {},
 ): DesktopCommandsModule {
-  const resolveFlags = (featureOverrides?: { remoteAccess?: boolean; workspacePicker?: boolean; workspaceLifecycle?: boolean }) => ({
+  const resolveFlags = (featureOverrides?: {
+    remoteAccess?: boolean;
+    workspacePicker?: boolean;
+    workspaceLifecycle?: boolean;
+    a2ui?: boolean;
+  }) => ({
     remoteAccess: typeof featureOverrides?.remoteAccess === "boolean" ? featureOverrides.remoteAccess : true,
     workspacePicker: typeof featureOverrides?.workspacePicker === "boolean" ? featureOverrides.workspacePicker : true,
     workspaceLifecycle: typeof featureOverrides?.workspaceLifecycle === "boolean" ? featureOverrides.workspaceLifecycle : true,
+    a2ui: typeof featureOverrides?.a2ui === "boolean" ? featureOverrides.a2ui : false,
   });
 
   return {

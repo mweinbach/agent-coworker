@@ -25,7 +25,6 @@ import {
   getGoogleNativeWebSearchFromProviderOptions,
   isCodexWebSearchMode,
 } from "./shared/openaiCompatibleOptions";
-import { resolveWorkspaceFeatureFlags } from "./shared/featureFlags";
 import { isUserFacingProviderEnabled } from "./providers/catalog";
 import type { ProviderName } from "./types";
 import { buildWorkspaceMapSection } from "./workspace/map";
@@ -283,8 +282,8 @@ function renderA2uiSpecificPrompt(prompt: string, enabled: boolean): string {
 }
 
 function isA2uiEnabled(config: Pick<AgentConfig, "enableA2ui" | "featureFlags">): boolean {
-  if (config.featureFlags?.workspace !== undefined) {
-    return resolveWorkspaceFeatureFlags(config.featureFlags.workspace).a2ui;
+  if (typeof config.featureFlags?.workspace?.a2ui === "boolean") {
+    return config.featureFlags.workspace.a2ui;
   }
   return config.enableA2ui ?? false;
 }

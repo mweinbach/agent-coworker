@@ -33,6 +33,7 @@ function getDefaultDesktopFeatureFlags(): DesktopFeatureFlags {
     remoteAccess: false,
     workspacePicker: false,
     workspaceLifecycle: false,
+    a2ui: false,
   };
 }
 

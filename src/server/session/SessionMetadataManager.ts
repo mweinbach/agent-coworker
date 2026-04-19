@@ -4,11 +4,6 @@ import {
   mergeEditableOpenAiCompatibleProviderOptions,
   pickEditableOpenAiCompatibleProviderOptions,
 } from "../../shared/openaiCompatibleOptions";
-import {
-  WORKSPACE_FEATURE_FLAG_IDS,
-  resolveWorkspaceFeatureFlags,
-  type WorkspaceFeatureFlagOverrides,
-} from "../../shared/featureFlags";
 import { effectiveToolOutputOverflowChars } from "../../shared/toolOutputOverflow";
 import type { AgentConfig, HarnessContextPayload } from "../../types";
 import type { SessionConfigPatch } from "../protocol";
@@ -48,13 +43,9 @@ function userProfileEqual(
   );
 }
 
-function workspaceFeatureFlagsEqual(
-  left: WorkspaceFeatureFlagOverrides | undefined,
-  right: WorkspaceFeatureFlagOverrides | undefined,
-): boolean {
-  const normalizedLeft = resolveWorkspaceFeatureFlags(left);
-  const normalizedRight = resolveWorkspaceFeatureFlags(right);
-  return WORKSPACE_FEATURE_FLAG_IDS.every((flagId) => normalizedLeft[flagId] === normalizedRight[flagId]);
+function resolveWorkspaceA2ui(config: Pick<AgentConfig, "featureFlags" | "enableA2ui">): boolean {
+  const workspaceFlag = config.featureFlags?.workspace?.a2ui;
+  return typeof workspaceFlag === "boolean" ? workspaceFlag : (config.enableA2ui ?? false);
 }
 
 export class SessionMetadataManager {
@@ -142,17 +133,18 @@ export class SessionMetadataManager {
       };
     }
     if (patch.featureFlags?.workspace !== undefined || patch.enableA2ui !== undefined) {
-      const nextWorkspaceFeatureFlags = resolveWorkspaceFeatureFlags({
-        ...nextConfig.featureFlags?.workspace,
-        ...patch.featureFlags?.workspace,
-        ...(patch.enableA2ui !== undefined ? { a2ui: patch.enableA2ui } : {}),
-      });
+      const nextWorkspaceA2ui =
+        patch.enableA2ui
+        ?? (typeof patch.featureFlags?.workspace?.a2ui === "boolean"
+          ? patch.featureFlags.workspace.a2ui
+          : undefined)
+        ?? resolveWorkspaceA2ui(nextConfig);
       nextConfig = {
         ...nextConfig,
-        enableA2ui: nextWorkspaceFeatureFlags.a2ui,
+        enableA2ui: nextWorkspaceA2ui,
         featureFlags: {
           ...nextConfig.featureFlags,
-          workspace: nextWorkspaceFeatureFlags,
+          workspace: { a2ui: nextWorkspaceA2ui },
         },
       };
     }
@@ -197,11 +189,15 @@ export class SessionMetadataManager {
     if (patch.userProfile !== undefined) {
       persistPatch.userProfile = patch.userProfile;
     }
-    if (patch.featureFlags?.workspace !== undefined || patch.enableA2ui !== undefined) {
+    const patchWorkspaceA2ui =
+      patch.enableA2ui
+      ?? (typeof patch.featureFlags?.workspace?.a2ui === "boolean"
+        ? patch.featureFlags.workspace.a2ui
+        : undefined);
+    if (patchWorkspaceA2ui !== undefined) {
       persistPatch.featureFlags = {
         workspace: {
-          ...(patch.featureFlags?.workspace ?? {}),
-          ...(patch.enableA2ui !== undefined ? { a2ui: patch.enableA2ui } : {}),
+          a2ui: patchWorkspaceA2ui,
         },
       };
     }
@@ -241,7 +237,6 @@ export class SessionMetadataManager {
       )
       || (baseConfig.userName ?? "") !== (nextConfig.userName ?? "")
       || !userProfileEqual(baseConfig.userProfile, nextConfig.userProfile)
-      || !workspaceFeatureFlagsEqual(baseConfig.featureFlags?.workspace, nextConfig.featureFlags?.workspace)
     );
   }
 
@@ -268,7 +263,7 @@ export class SessionMetadataManager {
     const backupsEnabled = this.context.state.backupsEnabledOverride ?? defaultBackupsEnabled;
     const defaultToolOutputOverflowChars = this.context.state.config.projectConfigOverrides?.toolOutputOverflowChars;
     const toolOutputOverflowChars = effectiveToolOutputOverflowChars(this.context.state.config.toolOutputOverflowChars);
-    const workspaceFeatureFlags = resolveWorkspaceFeatureFlags(this.context.state.config.featureFlags?.workspace);
+    const workspaceA2ui = resolveWorkspaceA2ui(this.context.state.config);
     return {
       type: "session_config",
       sessionId: this.context.id,
@@ -276,7 +271,7 @@ export class SessionMetadataManager {
         yolo: this.context.state.yolo,
         observabilityEnabled: this.context.state.config.observabilityEnabled ?? false,
         backupsEnabled,
-        enableA2ui: workspaceFeatureFlags.a2ui,
+        enableA2ui: workspaceA2ui,
         enableMemory: this.context.state.config.enableMemory ?? true,
         memoryRequireApproval: this.context.state.config.memoryRequireApproval ?? false,
         defaultBackupsEnabled,
@@ -293,7 +288,9 @@ export class SessionMetadataManager {
         userName: this.context.state.config.userName,
         userProfile: this.effectiveUserProfile(),
         featureFlags: {
-          workspace: workspaceFeatureFlags,
+          workspace: {
+            a2ui: workspaceA2ui,
+          },
         },
       },
     };

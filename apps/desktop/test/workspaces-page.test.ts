@@ -63,6 +63,7 @@ mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
     remoteAccess: true,
     workspacePicker: workspacePickerEnabled,
     workspaceLifecycle: workspaceLifecycleEnabled,
+    a2ui: false,
   }),
   checkForUpdates: async () => {},
   quitAndInstallUpdate: async () => {},
@@ -400,10 +401,6 @@ describe("desktop workspaces page", () => {
           defaultChildModelRoutingMode: "same-provider",
           defaultPreferredChildModelRef: "google:gemini-3-flash-preview",
           defaultAllowedChildModelRefs: [],
-          defaultFeatureFlags: {
-            experimentalApi: true,
-            a2ui: false,
-          },
           defaultEnableMcp: true,
           defaultBackupsEnabled: true,
           yolo: false,
@@ -466,7 +463,6 @@ describe("desktop workspaces page", () => {
           defaultPreferredChildModelRef: "google:gemini-3-flash-preview",
           defaultAllowedChildModelRefs: [],
           defaultEnableMcp: true,
-          defaultEnableA2ui: true,
           defaultBackupsEnabled: true,
           yolo: false,
         },
@@ -491,6 +487,7 @@ describe("desktop workspaces page", () => {
         remoteAccess: true,
         workspacePicker: false,
         workspaceLifecycle: false,
+        a2ui: false,
       },
     }));
 

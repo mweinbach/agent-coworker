@@ -25,8 +25,6 @@ import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
 import { safeParseServerEvent, type ProviderName } from "../../lib/wsProtocol";
 import {
   normalizeDesktopFeatureFlagOverrides,
-  normalizeWorkspaceFeatureFlagOverrides,
-  resolveWorkspaceFeatureFlags,
 } from "../../../../../src/shared/featureFlags";
 
 import {
@@ -52,6 +50,7 @@ import {
   providerAuthMethodsFor,
   pushNotification,
   queuePendingThreadMessage,
+  requestJsonRpcControlEvent,
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,
@@ -179,13 +178,6 @@ const persistedWorkspaceSchema = z.object({
     }
     return undefined;
   }, z.number().int().nonnegative().nullable().optional()),
-  defaultFeatureFlags: z.preprocess(
-    (value) => normalizeWorkspaceFeatureFlagOverrides(value),
-    z.object({
-      experimentalApi: z.boolean().optional(),
-      a2ui: z.boolean().optional(),
-    }).passthrough().optional(),
-  ),
   providerOptions: z.unknown().optional(),
   userName: optionalStringSchema,
   userProfile: z.object({
@@ -194,7 +186,6 @@ const persistedWorkspaceSchema = z.object({
     details: optionalStringSchema,
   }).passthrough().optional(),
   defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
-  defaultEnableA2ui: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
   defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough().transform((workspace): WorkspaceRecord => {
@@ -211,10 +202,6 @@ const persistedWorkspaceSchema = z.object({
     ?? (legacyPreferredValue
       ? (legacyPreferredValue.includes(":") ? legacyPreferredValue : `${workspace.defaultProvider}:${legacyPreferredValue}`)
       : "");
-  const defaultFeatureFlags = resolveWorkspaceFeatureFlags(
-    workspace.defaultFeatureFlags
-    ?? (workspace.defaultEnableA2ui !== undefined ? { a2ui: workspace.defaultEnableA2ui } : undefined),
-  );
   return {
     id: workspace.id,
     name: workspace.name,
@@ -229,12 +216,10 @@ const persistedWorkspaceSchema = z.object({
     defaultPreferredChildModelRef: preferredChildModelRef,
     defaultAllowedChildModelRefs: workspace.defaultAllowedChildModelRefs ?? [],
     defaultToolOutputOverflowChars: workspace.defaultToolOutputOverflowChars,
-    defaultFeatureFlags,
     providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
     userName: workspace.userName,
     userProfile: workspace.userProfile ? normalizeWorkspaceUserProfile(workspace.userProfile) : undefined,
     defaultEnableMcp: workspace.defaultEnableMcp,
-    defaultEnableA2ui: defaultFeatureFlags.a2ui,
     defaultBackupsEnabled: workspace.defaultBackupsEnabled,
     yolo: workspace.yolo,
   };
@@ -313,6 +298,7 @@ const persistedStateSchema = z.object({
       remoteAccess: z.boolean().optional(),
       workspacePicker: z.boolean().optional(),
       workspaceLifecycle: z.boolean().optional(),
+      a2ui: z.boolean().optional(),
     }).passthrough().optional(),
   ),
 }).passthrough().transform((state) => {
@@ -779,7 +765,6 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
             "userProfile",
             "defaultEnableMcp",
             "defaultBackupsEnabled",
-            "defaultFeatureFlags",
             "yolo",
           ];
           const patch: Record<string, unknown> = {};
@@ -821,6 +806,33 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
         settingsPage: normalizeSettingsPageId(state.settingsPage, nextFeatureFlags),
       }));
       void persistNow(get);
+      if (flagId === "a2ui") {
+        const state = get();
+        const activeControlWorkspaces = state.workspaces.filter((workspace) =>
+          Boolean(state.workspaceRuntimeById[workspace.id]?.controlSessionId)
+        );
+
+        await Promise.all(activeControlWorkspaces.map(async (workspace) => {
+          await requestJsonRpcControlEvent(get, set, workspace.id, "cowork/session/defaults/apply", {
+            cwd: workspace.path,
+            config: {
+              featureFlags: {
+                workspace: {
+                  a2ui: enabled,
+                },
+              },
+            },
+          }).catch(() => false);
+        }));
+
+        const activeWorkspaceIds = new Set(activeControlWorkspaces.map((workspace) => workspace.id));
+        const activeThreadIds = get().threads
+          .filter((thread) => activeWorkspaceIds.has(thread.workspaceId))
+          .map((thread) => thread.id);
+        for (const threadId of activeThreadIds) {
+          void get().applyWorkspaceDefaultsToThread(threadId, "explicit");
+        }
+      }
       if (flagId === "remoteAccess" && currentFeatureFlags.remoteAccess === true && enabled === false) {
         await stopMobileRelay().catch(() => {
           // Best-effort teardown: disabling the flag should not fail if the relay is already gone.

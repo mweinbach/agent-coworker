@@ -70,6 +70,7 @@ mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
     workspaceLifecycle: typeof featureOverrides?.workspaceLifecycle === "boolean"
       ? featureOverrides.workspaceLifecycle
       : true,
+    a2ui: typeof featureOverrides?.a2ui === "boolean" ? featureOverrides.a2ui : false,
   }),
   onSystemAppearanceChanged: () => () => {},
   onMenuCommand: () => () => {},
@@ -117,6 +118,7 @@ describe("settings nav (store)", () => {
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
+        a2ui: false,
       },
       notifications: [],
       workspaces: [],
@@ -190,6 +192,7 @@ describe("settings nav (store)", () => {
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
+        a2ui: false,
       },
     });
     useAppStore.getState().openSettings("remoteAccess");
@@ -204,6 +207,7 @@ describe("settings nav (store)", () => {
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
+        a2ui: false,
       },
       desktopFeatureFlagOverrides: {},
     });

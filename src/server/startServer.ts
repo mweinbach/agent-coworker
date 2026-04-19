@@ -20,7 +20,6 @@ import {
   mergeEditableOpenAiCompatibleProviderOptions,
   pickEditableOpenAiCompatibleProviderOptions,
 } from "../shared/openaiCompatibleOptions";
-import { resolveWorkspaceFeatureFlags } from "../shared/featureFlags";
 import { effectiveToolOutputOverflowChars } from "../shared/toolOutputOverflow";
 import { ensureDefaultGlobalSkillsReady } from "../skills/defaultGlobalSkills";
 import { writeTextFileAtomic } from "../utils/atomicFile";
@@ -122,6 +121,28 @@ function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
   return out as T;
 }
 
+function readWorkspaceA2uiFlag(value: unknown): boolean | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+  return typeof value.a2ui === "boolean" ? value.a2ui : undefined;
+}
+
+function withWorkspaceA2uiFeatureFlags(
+  featureFlags: AgentConfig["featureFlags"] | undefined,
+  a2ui: boolean,
+): AgentConfig["featureFlags"] {
+  return {
+    ...featureFlags,
+    workspace: { a2ui },
+  };
+}
+
+function resolveWorkspaceA2ui(config: Pick<AgentConfig, "featureFlags" | "enableA2ui">): boolean {
+  const workspaceFlag = config.featureFlags?.workspace?.a2ui;
+  return typeof workspaceFlag === "boolean" ? workspaceFlag : (config.enableA2ui ?? false);
+}
+
 async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unknown>> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
@@ -181,15 +202,11 @@ async function persistProjectConfigPatch(
   const next: Record<string, unknown> = { ...current };
   for (const [key, value] of entries) {
     if (key === "enableA2ui" && typeof value === "boolean") {
-      const currentFeatureFlags = isPlainObject(current.featureFlags) ? { ...current.featureFlags } : {};
-      const mergedWorkspaceFlags = resolveWorkspaceFeatureFlags({
-        ...(isPlainObject(currentFeatureFlags.workspace) ? currentFeatureFlags.workspace : {}),
-        a2ui: value,
-      });
-      next.featureFlags = {
-        ...currentFeatureFlags,
-        workspace: mergedWorkspaceFlags,
-      };
+      const currentFeatureFlags = isPlainObject(current.featureFlags)
+        ? (current.featureFlags as AgentConfig["featureFlags"])
+        : undefined;
+      next.featureFlags = withWorkspaceA2uiFeatureFlags(currentFeatureFlags, value);
+      next.enableA2ui = value;
       continue;
     }
     if (key === "providerOptions") {
@@ -230,16 +247,20 @@ async function persistProjectConfigPatch(
       continue;
     }
     if (key === "featureFlags" && isPlainObject(value)) {
-      const currentFeatureFlags = isPlainObject(current.featureFlags) ? { ...current.featureFlags } : {};
+      const currentFeatureFlags = isPlainObject(current.featureFlags)
+        ? (current.featureFlags as Record<string, unknown>)
+        : {};
       const incomingFeatureFlags: Record<string, unknown> = value;
-      const mergedWorkspaceFlags = resolveWorkspaceFeatureFlags({
-        ...(isPlainObject(currentFeatureFlags.workspace) ? currentFeatureFlags.workspace : {}),
-        ...(isPlainObject(incomingFeatureFlags.workspace) ? incomingFeatureFlags.workspace : {}),
-      });
+      const incomingA2ui = readWorkspaceA2uiFlag(incomingFeatureFlags.workspace);
+      const currentA2ui = readWorkspaceA2uiFlag(currentFeatureFlags.workspace);
+      const resolvedA2ui = incomingA2ui ?? currentA2ui;
       next[key] = {
         ...currentFeatureFlags,
-        workspace: mergedWorkspaceFlags,
+        ...(resolvedA2ui !== undefined ? { workspace: { a2ui: resolvedA2ui } } : {}),
       };
+      if (resolvedA2ui !== undefined) {
+        next.enableA2ui = resolvedA2ui;
+      }
       continue;
     }
     next[key] = value;
@@ -308,17 +329,14 @@ function mergeConfigPatch(
       ...patch.userProfile,
     };
   }
-  if (patch.featureFlags?.workspace !== undefined || legacyEnableA2uiPatch !== undefined) {
-    const nextWorkspaceFeatureFlags = resolveWorkspaceFeatureFlags({
-      ...config.featureFlags?.workspace,
-      ...patch.featureFlags?.workspace,
-      ...(legacyEnableA2uiPatch !== undefined ? { a2ui: legacyEnableA2uiPatch } : {}),
-    });
-    next.featureFlags = {
-      ...config.featureFlags,
-      workspace: nextWorkspaceFeatureFlags,
-    };
-    next.enableA2ui = nextWorkspaceFeatureFlags.a2ui;
+  const patchedWorkspaceA2ui = readWorkspaceA2uiFlag(patch.featureFlags?.workspace);
+  const nextWorkspaceA2ui =
+    legacyEnableA2uiPatch
+    ?? patchedWorkspaceA2ui
+    ?? (config.featureFlags?.workspace?.a2ui ?? config.enableA2ui);
+  if (nextWorkspaceA2ui !== undefined) {
+    next.featureFlags = withWorkspaceA2uiFeatureFlags(config.featureFlags, nextWorkspaceA2ui);
+    next.enableA2ui = nextWorkspaceA2ui;
   }
   return next;
 }
@@ -600,7 +618,7 @@ export async function startAgentServer(
     const defaultBackupsEnabled = controlConfig.backupsEnabled ?? true;
     const defaultToolOutputOverflowChars = controlConfig.projectConfigOverrides?.toolOutputOverflowChars;
     const toolOutputOverflowChars = effectiveToolOutputOverflowChars(controlConfig.toolOutputOverflowChars);
-    const workspaceFeatureFlags = resolveWorkspaceFeatureFlags(controlConfig.featureFlags?.workspace);
+    const workspaceA2ui = resolveWorkspaceA2ui(controlConfig);
     const preferredChildModelRef =
       controlConfig.preferredChildModelRef ?? `${controlConfig.provider}:${controlConfig.preferredChildModel}`;
 
@@ -630,7 +648,7 @@ export async function startAgentServer(
           observabilityEnabled: controlConfig.observabilityEnabled ?? false,
           backupsEnabled: defaultBackupsEnabled,
           defaultBackupsEnabled,
-          enableA2ui: workspaceFeatureFlags.a2ui,
+          enableA2ui: workspaceA2ui,
           enableMemory: controlConfig.enableMemory ?? true,
           memoryRequireApproval: controlConfig.memoryRequireApproval ?? false,
           preferredChildModel: controlConfig.preferredChildModel,
@@ -648,7 +666,9 @@ export async function startAgentServer(
             details: controlConfig.userProfile?.details ?? "",
           },
           featureFlags: {
-            workspace: workspaceFeatureFlags,
+            workspace: {
+              a2ui: workspaceA2ui,
+            },
           },
         },
       },

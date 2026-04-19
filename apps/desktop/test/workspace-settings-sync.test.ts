@@ -1155,7 +1155,7 @@ describe("workspace settings sync", () => {
       },
       featureFlags: {
         workspace: {
-          experimentalApi: false,
+          a2ui: false,
         },
       },
       providerOptions: {
@@ -1188,11 +1188,6 @@ describe("workspace settings sync", () => {
       work: "Platform engineer",
       details: "Prefers Bun and TypeScript",
     });
-    expect(workspace?.defaultFeatureFlags).toEqual({
-      experimentalApi: false,
-      a2ui: false,
-    });
-    expect(workspace?.defaultEnableA2ui).toBe(false);
 
     expect(latestRequest("cowork/session/defaults/apply")?.params).toMatchObject({
       cwd: "/tmp/workspace",

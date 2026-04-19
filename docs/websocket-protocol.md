@@ -93,7 +93,7 @@ Any request before the handshake completes is rejected with a JSON-RPC error:
 
 `initialize.params.capabilities` currently supports:
 
-- `experimentalApi: boolean`
+- `experimentalApi: boolean` (reserved compatibility field; server currently returns `true` regardless of this input)
 - `optOutNotificationMethods: string[]`
 
 ### Core JSON-RPC methods currently available
@@ -2716,7 +2716,7 @@ Update runtime configuration values.
     },
     "featureFlags": {
       "workspace": {
-        "experimentalApi": true
+        "a2ui": true
       }
     }
   }
@@ -2766,7 +2766,6 @@ Update runtime configuration values.
 | `config.userProfile.details` | `string` | No | Extra user details the agent should know. An empty string clears it |
 | `config.featureFlags` | `object` | No | Workspace-scoped feature-flag patch |
 | `config.featureFlags.workspace` | `object` | No | Workspace feature-flag overrides merged into project config |
-| `config.featureFlags.workspace.experimentalApi` | `boolean` | No | Toggle experimental JSON-RPC capability metadata for this workspace config |
 | `config.featureFlags.workspace.a2ui` | `boolean` | No | Toggle A2UI generative UI surfaces and action routing for this workspace |
 
 **Response:** `session_config`
@@ -4566,7 +4565,6 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.userProfile.details` | `string` | Effective profile details |
 | `config.featureFlags` | `object` | Effective workspace-scoped feature-flag state |
 | `config.featureFlags.workspace` | `object` | Effective workspace feature flags |
-| `config.featureFlags.workspace.experimentalApi` | `boolean` | Effective experimental JSON-RPC capability metadata flag |
 | `config.featureFlags.workspace.a2ui` | `boolean` | Effective A2UI feature-flag state for this workspace |
 | `config.providerOptions.openai.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable OpenAI reasoning effort |
 | `config.providerOptions.openai.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | Current editable OpenAI reasoning summary |

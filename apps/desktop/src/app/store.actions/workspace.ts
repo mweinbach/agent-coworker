@@ -50,10 +50,10 @@ import {
   truncateTitle,
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
-import { reorderSidebarItemsById } from "../../ui/sidebarHelpers";
+import { applyWorkspaceOrder, reorderSidebarItemsById } from "../../ui/sidebarHelpers";
 import { hydrateThreadSelection } from "./thread";
 
-export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "addWorkspace" | "removeWorkspace" | "selectWorkspace" | "reorderWorkspaces" | "restartWorkspaceServer"> {
+export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "addWorkspace" | "removeWorkspace" | "selectWorkspace" | "reorderWorkspaces" | "setWorkspacesOrder" | "restartWorkspaceServer"> {
   const closeThreadSession = (threadId: string) => {
     sendThread(get, threadId, (sessionId) => ({ type: "session_close", sessionId }));
   };
@@ -232,6 +232,18 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
         sourceWorkspaceId,
         targetWorkspaceId,
       );
+
+      if (nextWorkspaces === get().workspaces) {
+        return;
+      }
+
+      set({ workspaces: nextWorkspaces });
+      await persistNow(get);
+    },
+
+    setWorkspacesOrder: async (orderedIds: string[]) => {
+      if (!isWorkspaceLifecycleEnabled()) return;
+      const nextWorkspaces = applyWorkspaceOrder(get().workspaces, orderedIds);
 
       if (nextWorkspaces === get().workspaces) {
         return;

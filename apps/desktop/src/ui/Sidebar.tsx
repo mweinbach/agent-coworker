@@ -1,11 +1,11 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
+import { Reorder, useDragControls } from "framer-motion";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from "react";
 
 import {
   ChevronRightIcon,
   FolderIcon,
   FolderOpenIcon,
   FolderPlusIcon,
-  MessageSquareIcon,
   PanelLeftIcon,
   Settings2Icon,
   SquarePenIcon,
@@ -14,15 +14,65 @@ import {
 
 import { resolvePluginCatalogWorkspaceSelection } from "../app/pluginManagement";
 import { useAppStore } from "../app/store";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
+import type { ThreadRecord, ThreadRuntime, WorkspaceRecord } from "../app/types";
+import { Collapsible, CollapsibleTrigger } from "../components/ui/collapsible";
 import { confirmAction, showContextMenu } from "../lib/desktopCommands";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/utils";
-import { formatSidebarRelativeAge, getVisibleSidebarThreads, shouldEmphasizeWorkspaceRow } from "./sidebarHelpers";
+import { formatSidebarRelativeAge, getVisibleSidebarThreads, shouldEmphasizeWorkspaceRow, swapSidebarItemsById } from "./sidebarHelpers";
 import { useWindowDragHandle } from "./layout/useWindowDragHandle";
 
 const MAX_VISIBLE_THREADS = 10;
+const WORKSPACE_ITEM_CLASSNAME = "sidebar-workspace-item [&:not(:last-child)]:mb-3";
+/** Matches `.sidebar-thread-region` transition duration in styles.css (fallback when transitionend does not fire). */
+const SIDEBAR_THREAD_REGION_DURATION_MS = 240;
+
+type WorkspaceMoveDirection = "up" | "down";
+
+function usePrefersReducedMotion(): boolean {
+  const [prefers, setPrefers] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setPrefers(mql.matches);
+    const handleChange = () => setPrefers(mql.matches);
+    mql.addEventListener("change", handleChange);
+    return () => mql.removeEventListener("change", handleChange);
+  }, []);
+  return prefers;
+}
+
+type SidebarWorkspaceItemProps = {
+  active: boolean;
+  editInputRef: RefObject<HTMLInputElement | null>;
+  editingThreadId: string | null;
+  editingTitle: string;
+  emphasizeWorkspace: boolean;
+  expanded: boolean;
+  hiddenThreadCount: number;
+  moveWorkspace: (workspaceId: string, direction: WorkspaceMoveDirection) => void;
+  onCancelRename: () => void;
+  onCommitRename: (threadId: string, title: string) => void;
+  onEditingTitleChange: (title: string) => void;
+  onSelectWorkspace: (workspaceId: string) => void;
+  onStartEditing: (threadId: string, currentTitle: string) => void;
+  onThreadContextMenu: (event: MouseEvent<HTMLElement>, threadId: string, title: string) => void;
+  onToggleThreadList: (workspaceId: string) => void;
+  onWorkspaceContextMenu: (event: MouseEvent<HTMLElement>, workspaceId: string, workspaceName: string) => void;
+  onWorkspaceOpenChange: (workspaceId: string, nextOpen: boolean) => void;
+  reorderEnabled: boolean;
+  selectedThreadId: string | null;
+  selectThread: (threadId: string) => void;
+  showAllThreads: boolean;
+  threadRuntimeById: Record<string, ThreadRuntime | undefined>;
+  visibleThreads: ThreadRecord[];
+  workspace: WorkspaceRecord;
+  workspaceMeta: string;
+  workspaceThreads: ThreadRecord[];
+};
 
 function formatWorkspaceMeta(opts: {
   threadCount: number;
@@ -49,6 +99,300 @@ function formatWorkspaceMeta(opts: {
   return sessionLabel;
 }
 
+const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
+  active,
+  editInputRef,
+  editingThreadId,
+  editingTitle,
+  emphasizeWorkspace,
+  expanded,
+  hiddenThreadCount,
+  moveWorkspace,
+  onCancelRename,
+  onCommitRename,
+  onEditingTitleChange,
+  onSelectWorkspace,
+  onStartEditing,
+  onThreadContextMenu,
+  onToggleThreadList,
+  onWorkspaceContextMenu,
+  onWorkspaceOpenChange,
+  reorderEnabled,
+  selectedThreadId,
+  selectThread,
+  showAllThreads,
+  threadRuntimeById,
+  visibleThreads,
+  workspace,
+  workspaceMeta,
+  workspaceThreads,
+}: SidebarWorkspaceItemProps) {
+  const controls = useDragControls();
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const threadRegionRef = useRef<HTMLDivElement | null>(null);
+  const prevExpandedRef = useRef(expanded);
+  const [renderThreadRegion, setRenderThreadRegion] = useState(expanded);
+  const [threadRegionOpen, setThreadRegionOpen] = useState(expanded);
+
+  useLayoutEffect(() => {
+    const wasExpanded = prevExpandedRef.current;
+    prevExpandedRef.current = expanded;
+
+    if (expanded) {
+      if (prefersReducedMotion) {
+        setRenderThreadRegion(true);
+        setThreadRegionOpen(true);
+        return;
+      }
+      if (wasExpanded) {
+        setRenderThreadRegion(true);
+        return;
+      }
+      setRenderThreadRegion(true);
+      setThreadRegionOpen(false);
+      return;
+    }
+
+    setThreadRegionOpen(false);
+    if (prefersReducedMotion) {
+      setRenderThreadRegion(false);
+    }
+  }, [expanded, prefersReducedMotion]);
+
+  useLayoutEffect(() => {
+    if (!expanded || prefersReducedMotion) return;
+    if (!renderThreadRegion || threadRegionOpen) return;
+
+    void threadRegionRef.current?.offsetHeight;
+
+    let raf2: number | undefined;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setThreadRegionOpen(true));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      if (raf2 !== undefined) cancelAnimationFrame(raf2);
+    };
+  }, [expanded, prefersReducedMotion, renderThreadRegion, threadRegionOpen]);
+
+  useEffect(() => {
+    if (expanded) return;
+    if (prefersReducedMotion) return;
+
+    const node = threadRegionRef.current;
+    const fallbackMs = SIDEBAR_THREAD_REGION_DURATION_MS + 48;
+    let finished = false;
+    const finishUnmount = () => {
+      if (finished) return;
+      finished = true;
+      setRenderThreadRegion(false);
+    };
+
+    const onTransitionEnd = (event: TransitionEvent) => {
+      if (event.target !== node) return;
+      if (event.propertyName !== "grid-template-rows") return;
+      finishUnmount();
+    };
+
+    node?.addEventListener("transitionend", onTransitionEnd);
+    const timeoutId = window.setTimeout(finishUnmount, fallbackMs);
+
+    return () => {
+      node?.removeEventListener("transitionend", onTransitionEnd);
+      window.clearTimeout(timeoutId);
+    };
+  }, [expanded, prefersReducedMotion]);
+
+  const content = (
+    <Collapsible
+      className="flex flex-col"
+      onContextMenu={(event) => onWorkspaceContextMenu(event, workspace.id, workspace.name)}
+      onOpenChange={(nextOpen) => onWorkspaceOpenChange(workspace.id, nextOpen)}
+      open={expanded}
+      title={workspace.path}
+    >
+      <div
+        className={cn(
+          "sidebar-workspace-card flex items-center gap-1 rounded-lg px-1 py-1",
+          reorderEnabled && "sidebar-workspace-card--reorderable",
+          emphasizeWorkspace
+            ? "border-border/45 bg-foreground/[0.05] text-foreground"
+            : active
+              ? "text-foreground hover:bg-foreground/[0.03]"
+              : "text-foreground/78 hover:bg-foreground/[0.03] hover:text-foreground",
+        )}
+        onPointerDown={reorderEnabled
+          ? (event) => {
+              if (event.button !== 0) {
+                return;
+              }
+              controls.start(event);
+            }
+          : undefined}
+      >
+        <CollapsibleTrigger asChild>
+          <Button
+            aria-label={expanded ? `Collapse ${workspace.name}` : `Expand ${workspace.name}`}
+            className="sidebar-symbol-slot group h-6 w-6 shrink-0 rounded-md bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent"
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+          >
+            {expanded ? (
+              <FolderOpenIcon className="sidebar-symbol-default h-4 w-4" />
+            ) : (
+              <FolderIcon className="sidebar-symbol-default h-4 w-4" />
+            )}
+            <ChevronRightIcon
+              className={cn(
+                "sidebar-symbol-hover sidebar-chevron absolute h-4 w-4",
+                expanded ? "rotate-90 text-foreground" : "rotate-0",
+              )}
+            />
+          </Button>
+        </CollapsibleTrigger>
+        <Button
+          aria-keyshortcuts={reorderEnabled ? "Alt+ArrowUp Alt+ArrowDown Meta+ArrowUp Meta+ArrowDown" : undefined}
+          className="sidebar-lift flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left"
+          onKeyDown={reorderEnabled
+            ? (event) => {
+                if (!(event.altKey || event.metaKey)) {
+                  return;
+                }
+                if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+                  return;
+                }
+                event.preventDefault();
+                moveWorkspace(workspace.id, event.key === "ArrowUp" ? "up" : "down");
+              }
+            : undefined}
+          onClick={() => onSelectWorkspace(workspace.id)}
+          title={workspace.path}
+          type="button"
+          variant="ghost"
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] font-medium tracking-[-0.015em]">{workspace.name}</span>
+            <span className="mt-0.5 block truncate text-[11px] font-medium text-muted-foreground">
+              {workspaceMeta}
+            </span>
+          </span>
+        </Button>
+      </div>
+
+      {renderThreadRegion ? (
+        <div
+          ref={threadRegionRef}
+          className="sidebar-thread-region"
+          data-state={threadRegionOpen ? "open" : "closed"}
+        >
+          <div className="min-h-0 overflow-hidden">
+            <div className="ml-3 space-y-1 border-l border-border/45 pl-3 pt-1">
+              {workspaceThreads.length === 0 ? (
+                <div className="px-3 py-2 text-[12px] text-muted-foreground">No sessions yet</div>
+              ) : (
+                <>
+                  {visibleThreads.map((thread) => {
+                    const runtime = threadRuntimeById[thread.id];
+                    const busy = runtime?.busy === true;
+                    const isActive = thread.id === selectedThreadId;
+                    const isEditing = editingThreadId === thread.id;
+                    const displayTitle = thread.title || "New thread";
+                    const ageLabel = formatSidebarRelativeAge(thread.lastMessageAt);
+
+                    return isEditing ? (
+                      <div
+                        key={thread.id}
+                        className="sidebar-thread-item flex w-full items-center gap-2.5 rounded-lg border border-border/40 bg-foreground/[0.04] px-2.5 py-1.5 text-left text-foreground"
+                      >
+                        <Input
+                          ref={editInputRef}
+                          className="min-w-0 w-full h-7 rounded-md border-border/70 text-[13px] shadow-none [&_[data-slot=input]]:h-7 [&_[data-slot=input]]:px-2 [&_[data-slot=input]]:text-[13px]"
+                          value={editingTitle}
+                          onBlur={() => onCommitRename(thread.id, editingTitle)}
+                          onChange={(event) => onEditingTitleChange(event.target.value)}
+                          onClick={(event) => event.stopPropagation()}
+                          onDoubleClick={(event) => event.stopPropagation()}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              onCommitRename(thread.id, editingTitle);
+                            } else if (event.key === "Escape") {
+                              event.preventDefault();
+                              onCancelRename();
+                            }
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <Button
+                        key={thread.id}
+                        className={cn(
+                          "sidebar-thread-item sidebar-lift flex w-full items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
+                          isActive
+                            ? "border-border/45 bg-foreground/[0.05] text-foreground"
+                            : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
+                        )}
+                        onClick={() => selectThread(thread.id)}
+                        onContextMenu={(event) => onThreadContextMenu(event, thread.id, displayTitle)}
+                        onDoubleClick={() => onStartEditing(thread.id, displayTitle)}
+                        type="button"
+                        variant="ghost"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
+                            {displayTitle}
+                          </span>
+                        </span>
+
+                        <span className="flex shrink-0 items-center gap-2 pl-2">
+                          {busy ? (
+                            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
+                          ) : null}
+                          {ageLabel ? (
+                            <span className="text-[11px] font-medium text-muted-foreground">{ageLabel}</span>
+                          ) : null}
+                        </span>
+                      </Button>
+                    );
+                  })}
+
+                  {workspaceThreads.length > MAX_VISIBLE_THREADS ? (
+                    <Button
+                      className="sidebar-lift px-2.5 py-1 text-left text-[12px] font-medium text-muted-foreground transition-colors duration-200 hover:text-foreground"
+                      onClick={() => onToggleThreadList(workspace.id)}
+                      type="button"
+                      variant="ghost"
+                    >
+                      {showAllThreads ? "Show less" : `Show ${hiddenThreadCount} more`}
+                    </Button>
+                  ) : null}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </Collapsible>
+  );
+
+  if (!reorderEnabled) {
+    return <div className={WORKSPACE_ITEM_CLASSNAME}>{content}</div>;
+  }
+
+  return (
+    <Reorder.Item
+      as="div"
+      className={WORKSPACE_ITEM_CLASSNAME}
+      dragControls={controls}
+      dragListener={false}
+      value={workspace}
+    >
+      {content}
+    </Reorder.Item>
+  );
+});
+
 export const Sidebar = memo(function Sidebar() {
   const platform = typeof document !== "undefined" ? document.documentElement.dataset.platform : undefined;
   const isWin32 = platform === "win32";
@@ -65,7 +409,7 @@ export const Sidebar = memo(function Sidebar() {
 
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
-  const reorderWorkspaces = useAppStore((s) => s.reorderWorkspaces);
+  const setWorkspacesOrder = useAppStore((s) => s.setWorkspacesOrder);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const setPluginManagementWorkspace = useAppStore((s) => s.setPluginManagementWorkspace);
   const newThread = useAppStore((s) => s.newThread);
@@ -80,8 +424,6 @@ export const Sidebar = memo(function Sidebar() {
   const [editingTitle, setEditingTitle] = useState("");
   const [expandedWorkspaceSections, setExpandedWorkspaceSections] = useState<Record<string, boolean>>({});
   const [expandedThreadLists, setExpandedThreadLists] = useState<Record<string, boolean>>({});
-  const [draggedWorkspaceId, setDraggedWorkspaceId] = useState<string | null>(null);
-  const [dropTargetWorkspaceId, setDropTargetWorkspaceId] = useState<string | null>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
 
   const pluginSelection = useMemo(() => resolvePluginCatalogWorkspaceSelection({
@@ -179,47 +521,25 @@ export const Sidebar = memo(function Sidebar() {
     }));
   }, []);
 
-  const handleWorkspaceDragStart = useCallback((event: DragEvent<HTMLElement>, workspaceId: string) => {
-    if (!workspaceLifecycleEnabled) {
-      return;
-    }
-    setDraggedWorkspaceId(workspaceId);
-    setDropTargetWorkspaceId(workspaceId);
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", workspaceId);
-  }, [workspaceLifecycleEnabled]);
+  const reorderEnabled = workspaceLifecycleEnabled && visibleWorkspaces.length > 1;
 
-  const handleWorkspaceDragOver = useCallback((event: DragEvent<HTMLElement>, workspaceId: string) => {
-    if (!workspaceLifecycleEnabled) {
-      return;
-    }
-    if (!draggedWorkspaceId || draggedWorkspaceId === workspaceId) {
-      return;
-    }
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    setDropTargetWorkspaceId(workspaceId);
-  }, [draggedWorkspaceId, workspaceLifecycleEnabled]);
+  const handleReorder = useCallback((nextWorkspaces: WorkspaceRecord[]) => {
+    void setWorkspacesOrder(nextWorkspaces.map((workspace) => workspace.id));
+  }, [setWorkspacesOrder]);
 
-  const clearWorkspaceDragState = useCallback(() => {
-    setDraggedWorkspaceId(null);
-    setDropTargetWorkspaceId(null);
-  }, []);
-
-  const handleWorkspaceDrop = useCallback(async (event: DragEvent<HTMLElement>, targetWorkspaceId: string) => {
-    if (!workspaceLifecycleEnabled) {
+  const moveWorkspace = useCallback((workspaceId: string, direction: WorkspaceMoveDirection) => {
+    const nextWorkspaces = swapSidebarItemsById(workspaces, workspaceId, direction);
+    if (nextWorkspaces === workspaces) {
       return;
     }
-    event.preventDefault();
-    const sourceWorkspaceId = draggedWorkspaceId || event.dataTransfer.getData("text/plain");
-    clearWorkspaceDragState();
-    if (!sourceWorkspaceId || sourceWorkspaceId === targetWorkspaceId) {
-      return;
-    }
-    await reorderWorkspaces(sourceWorkspaceId, targetWorkspaceId);
-  }, [clearWorkspaceDragState, draggedWorkspaceId, reorderWorkspaces, workspaceLifecycleEnabled]);
+    void setWorkspacesOrder(nextWorkspaces.map((workspace) => workspace.id));
+  }, [setWorkspacesOrder, workspaces]);
 
-  const handleWorkspaceContextMenu = async (e: MouseEvent, wsId: string, wsName: string) => {
+  const handleSelectWorkspace = useCallback((workspaceId: string) => {
+    void (view === "skills" ? setPluginManagementWorkspace(workspaceId) : selectWorkspace(workspaceId));
+  }, [selectWorkspace, setPluginManagementWorkspace, view]);
+
+  const handleWorkspaceContextMenu = async (e: MouseEvent<HTMLElement>, wsId: string, wsName: string) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -246,7 +566,7 @@ export const Sidebar = memo(function Sidebar() {
     }
   };
 
-  const handleThreadContextMenu = async (e: MouseEvent, tId: string, tTitle: string) => {
+  const handleThreadContextMenu = async (e: MouseEvent<HTMLElement>, tId: string, tTitle: string) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -292,6 +612,73 @@ export const Sidebar = memo(function Sidebar() {
 
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const win32TitlebandButtonDragHandle = useWindowDragHandle<HTMLButtonElement>(isWin32);
+  const workspaceItems = visibleWorkspaces.map((workspace) => {
+    const active = workspace.id === activeWorkspaceId;
+    const expanded = expandedWorkspaceSections[workspace.id] ?? false;
+    const workspaceRuntime = workspaceRuntimeById[workspace.id];
+    const workspaceThreads = threadsByWorkspaceId.get(workspace.id) ?? [];
+    const threadCount = workspaceThreads.length;
+    const isCurrentThreadWorkspace = selectedThreadId !== null
+      && workspaceThreads.some((thread) => thread.id === selectedThreadId);
+    const emphasizeWorkspace = shouldEmphasizeWorkspaceRow(
+      active,
+      selectedThreadId,
+      workspaceThreads.map((thread) => thread.id),
+    );
+    const showAllThreads = expandedThreadLists[workspace.id] === true;
+    const { visibleThreads, hiddenThreadCount } = getVisibleSidebarThreads(
+      workspaceThreads,
+      showAllThreads,
+      MAX_VISIBLE_THREADS,
+    );
+    const workspaceMeta = formatWorkspaceMeta({
+      threadCount,
+      isActive: active,
+      view,
+      isCurrentThreadWorkspace,
+      isStarting: workspaceRuntime?.starting === true,
+      hasError: workspaceRuntime?.error !== null && workspaceRuntime?.error !== undefined,
+    });
+
+    return (
+      <SidebarWorkspaceItem
+        key={workspace.id}
+        active={active}
+        editInputRef={editInputRef}
+        editingThreadId={editingThreadId}
+        editingTitle={editingTitle}
+        emphasizeWorkspace={emphasizeWorkspace}
+        expanded={expanded}
+        hiddenThreadCount={hiddenThreadCount}
+        moveWorkspace={moveWorkspace}
+        onCancelRename={cancelRename}
+        onCommitRename={commitRename}
+        onEditingTitleChange={setEditingTitle}
+        onSelectWorkspace={handleSelectWorkspace}
+        onStartEditing={startEditing}
+        onThreadContextMenu={handleThreadContextMenu}
+        onToggleThreadList={toggleThreadList}
+        onWorkspaceContextMenu={handleWorkspaceContextMenu}
+        onWorkspaceOpenChange={(workspaceId, nextOpen) => {
+          setExpandedWorkspaceSections((current) => ({
+            ...current,
+            [workspaceId]: nextOpen,
+          }));
+        }}
+        reorderEnabled={reorderEnabled}
+        selectedThreadId={selectedThreadId}
+        selectThread={(threadId) => {
+          void selectThread(threadId);
+        }}
+        showAllThreads={showAllThreads}
+        threadRuntimeById={threadRuntimeById}
+        visibleThreads={visibleThreads}
+        workspace={workspace}
+        workspaceMeta={workspaceMeta}
+        workspaceThreads={workspaceThreads}
+      />
+    );
+  });
 
   return (
     <aside className="app-sidebar sidebar-rail-enter relative flex h-full w-full flex-col gap-1.5 px-2 pt-1.5 pb-3">
@@ -356,8 +743,8 @@ export const Sidebar = memo(function Sidebar() {
           ) : null}
         </div>
 
-        <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">
-          {workspaces.length === 0 ? (
+        {workspaces.length === 0 ? (
+          <div className="min-h-0 flex-1 overflow-auto pr-1">
             <div className="rounded-xl border border-border/55 bg-foreground/[0.03] px-4 py-4 text-center text-xs text-muted-foreground">
               <FolderPlusIcon strokeWidth={1.5} className="mx-auto mb-2 h-6 w-6 text-muted-foreground/70" />
               <div>No workspaces yet</div>
@@ -367,218 +754,23 @@ export const Sidebar = memo(function Sidebar() {
                 </Button>
               ) : null}
             </div>
-          ) : (
-            visibleWorkspaces.map((workspace) => {
-              const active = workspace.id === activeWorkspaceId;
-              const expanded = expandedWorkspaceSections[workspace.id] ?? false;
-              const workspaceRuntime = workspaceRuntimeById[workspace.id];
-              const workspaceThreads = threadsByWorkspaceId.get(workspace.id) ?? [];
-              const threadCount = workspaceThreads.length;
-              const isCurrentThreadWorkspace = selectedThreadId !== null
-                && workspaceThreads.some((thread) => thread.id === selectedThreadId);
-              const emphasizeWorkspace = shouldEmphasizeWorkspaceRow(
-                active,
-                selectedThreadId,
-                workspaceThreads.map((thread) => thread.id),
-              );
-              const showAllThreads = expandedThreadLists[workspace.id] === true;
-              const { visibleThreads, hiddenThreadCount } = getVisibleSidebarThreads(
-                workspaceThreads,
-                showAllThreads,
-                MAX_VISIBLE_THREADS,
-              );
-              const workspaceMeta = formatWorkspaceMeta({
-                threadCount,
-                isActive: active,
-                view,
-                isCurrentThreadWorkspace,
-                isStarting: workspaceRuntime?.starting === true,
-                hasError: workspaceRuntime?.error !== null && workspaceRuntime?.error !== undefined,
-              });
-
-              return (
-                <Collapsible
-                  key={workspace.id}
-                  className="space-y-1.5"
-                  data-dragging={draggedWorkspaceId === workspace.id ? "true" : "false"}
-                  data-drop-target={
-                    dropTargetWorkspaceId === workspace.id && draggedWorkspaceId !== workspace.id ? "true" : "false"
-                  }
-                  draggable={workspaceLifecycleEnabled && visibleWorkspaces.length > 1}
-                  onContextMenu={(e) => handleWorkspaceContextMenu(e, workspace.id, workspace.name)}
-                  onDragEnd={clearWorkspaceDragState}
-                  onDragOver={(event: DragEvent<HTMLDivElement>) => handleWorkspaceDragOver(event, workspace.id)}
-                  onDragStart={(event: DragEvent<HTMLDivElement>) => handleWorkspaceDragStart(event, workspace.id)}
-                  onDrop={(event: DragEvent<HTMLDivElement>) => void handleWorkspaceDrop(event, workspace.id)}
-                  onOpenChange={(nextOpen) => {
-                    setExpandedWorkspaceSections((current) => ({
-                      ...current,
-                      [workspace.id]: nextOpen,
-                    }));
-                  }}
-                  open={expanded}
-                  title={workspace.path}
-                >
-                  <div
-                    className={cn(
-                      "sidebar-workspace-card flex items-center gap-1 rounded-lg px-1 py-1",
-                      emphasizeWorkspace
-                        ? "border-border/45 bg-foreground/[0.05] text-foreground"
-                        : active
-                          ? "text-foreground hover:bg-foreground/[0.03]"
-                          : "text-foreground/78 hover:bg-foreground/[0.03] hover:text-foreground",
-                      dropTargetWorkspaceId === workspace.id &&
-                        draggedWorkspaceId !== workspace.id &&
-                        "bg-foreground/[0.08] ring-1 ring-foreground/10",
-                    )}
-                  >
-                    <CollapsibleTrigger asChild>
-                      <Button
-                        aria-label={expanded ? `Collapse ${workspace.name}` : `Expand ${workspace.name}`}
-                        className="sidebar-symbol-slot group h-6 w-6 shrink-0 rounded-md bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent"
-                        size="icon-sm"
-                        variant="ghost"
-                      >
-                        {expanded ? (
-                          <FolderOpenIcon className="sidebar-symbol-default h-4 w-4" />
-                        ) : (
-                          <FolderIcon className="sidebar-symbol-default h-4 w-4" />
-                        )}
-                        <ChevronRightIcon
-                          className={cn(
-                            "sidebar-symbol-hover sidebar-chevron absolute h-4 w-4",
-                            expanded ? "rotate-90 text-foreground" : "rotate-0",
-                          )}
-                        />
-                      </Button>
-                    </CollapsibleTrigger>
-                    <Button
-                      className="sidebar-lift flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left"
-                      onClick={() => void (view === "skills"
-                        ? setPluginManagementWorkspace(workspace.id)
-                        : selectWorkspace(workspace.id))}
-                      title={workspace.path}
-                      type="button"
-                      variant="ghost"
-                    >
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] font-medium tracking-[-0.015em]">{workspace.name}</span>
-                        <span className="mt-0.5 block truncate text-[11px] font-medium text-muted-foreground">
-                          {workspaceMeta}
-                        </span>
-                      </span>
-                    </Button>
-                  </div>
-
-                  <CollapsibleContent className="sidebar-thread-region overflow-hidden">
-                    <div className="ml-3 space-y-1 border-l border-border/45 pl-3 pt-1">
-                      {workspaceThreads.length === 0 ? (
-                        <div
-                          className={cn(
-                            "px-3 py-2 text-[12px] text-muted-foreground transition-[opacity,transform] duration-200",
-                            expanded ? "translate-y-0 opacity-100" : "translate-y-2 opacity-0",
-                          )}
-                        >
-                          No sessions yet
-                        </div>
-                      ) : (
-                        <>
-                          {visibleThreads.map((thread, index) => {
-                            const runtime = threadRuntimeById[thread.id];
-                            const busy = runtime?.busy === true;
-                            const isActive = thread.id === selectedThreadId;
-                            const isEditing = editingThreadId === thread.id;
-                            const displayTitle = thread.title || "New thread";
-                            const ageLabel = formatSidebarRelativeAge(thread.lastMessageAt);
-
-                            return (
-                              isEditing ? (
-                                <div
-                                  key={thread.id}
-                                  className={cn(
-                                    "sidebar-thread-item flex w-full items-center gap-2.5 rounded-lg border border-border/40 bg-foreground/[0.04] px-2.5 py-1.5 text-left text-foreground",
-                                    expanded ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-2 opacity-0",
-                                  )}
-                                  style={{ transitionDelay: expanded ? `${Math.min(index, 6) * 26}ms` : "0ms" }}
-                                >
-                                  <Input
-                                    ref={editInputRef}
-                                    className="min-w-0 w-full h-7 rounded-md border-border/70 text-[13px] shadow-none [&_[data-slot=input]]:h-7 [&_[data-slot=input]]:px-2 [&_[data-slot=input]]:text-[13px]"
-                                    value={editingTitle}
-                                    onBlur={() => commitRename(thread.id, editingTitle)}
-                                    onChange={(e) => setEditingTitle(e.target.value)}
-                                    onClick={(e) => e.stopPropagation()}
-                                    onDoubleClick={(e) => e.stopPropagation()}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") {
-                                        e.preventDefault();
-                                        commitRename(thread.id, editingTitle);
-                                      } else if (e.key === "Escape") {
-                                        e.preventDefault();
-                                        cancelRename();
-                                      }
-                                    }}
-                                  />
-                                </div>
-                              ) : (
-                                <Button
-                                  key={thread.id}
-                                  className={cn(
-                                    "sidebar-thread-item sidebar-lift flex w-full items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
-                                    isActive
-                                      ? "border-border/45 bg-foreground/[0.05] text-foreground"
-                                      : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
-                                    expanded ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-2 opacity-0",
-                                  )}
-                                  onClick={() => void selectThread(thread.id)}
-                                  onContextMenu={(e) => handleThreadContextMenu(e, thread.id, displayTitle)}
-                                  onDoubleClick={() => startEditing(thread.id, displayTitle)}
-                                  style={{ transitionDelay: expanded ? `${Math.min(index, 6) * 26}ms` : "0ms" }}
-                                  type="button"
-                                  variant="ghost"
-                                >
-                                  <span className="min-w-0 flex-1">
-                                    <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
-                                      {displayTitle}
-                                    </span>
-                                  </span>
-
-                                  <span className="flex shrink-0 items-center gap-2 pl-2">
-                                    {busy ? (
-                                      <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
-                                    ) : null}
-                                    {ageLabel ? (
-                                      <span className="text-[11px] font-medium text-muted-foreground">{ageLabel}</span>
-                                    ) : null}
-                                  </span>
-                                </Button>
-                              )
-                            );
-                          })}
-
-                          {workspaceThreads.length > MAX_VISIBLE_THREADS ? (
-                            <Button
-                              className={cn(
-                                "sidebar-lift px-2.5 py-1 text-left text-[12px] font-medium text-muted-foreground transition-[opacity,transform,color] duration-200 hover:text-foreground",
-                                expanded ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-2 opacity-0",
-                              )}
-                              onClick={() => toggleThreadList(workspace.id)}
-                              style={{ transitionDelay: expanded ? `${Math.min(visibleThreads.length, 6) * 26}ms` : "0ms" }}
-                              type="button"
-                              variant="ghost"
-                            >
-                              {showAllThreads ? "Show less" : `Show ${hiddenThreadCount} more`}
-                            </Button>
-                          ) : null}
-                        </>
-                      )}
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
-              );
-            })
-          )}
-        </div>
+          </div>
+        ) : reorderEnabled ? (
+          <Reorder.Group
+            as="div"
+            axis="y"
+            className="min-h-0 flex-1 overflow-auto pr-1"
+            layoutScroll
+            onReorder={handleReorder}
+            values={visibleWorkspaces}
+          >
+            {workspaceItems}
+          </Reorder.Group>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-auto pr-1">
+            {workspaceItems}
+          </div>
+        )}
       </section>
 
       <div className="border-t border-border/60 pt-2">

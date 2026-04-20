@@ -1,5 +1,6 @@
 # Lessons
 
+- When the user rejects a dedicated desktop drag handle, move the drag affordance onto the row itself and keep any extra drag chrome out of the sidebar unless they explicitly ask for it.
 - For PR review work in this repo, always fetch the unresolved thread set first and verify each comment against current `HEAD` before editing; do not assume an open thread is still a real issue.
 - For plugin install flows in this repo, only synthesize default `.mcp.json` / `.app.json` paths when the file actually exists, require explicitly declared `skills` directories to exist on disk, and normalize local `.codex-plugin/plugin.json` inputs back to the plugin root before discovery.
 - When the user asks for desktop UI verification in this repo, prefer live Computer Use inspection of the running app in addition to local tests whenever the bridge is healthy.
@@ -248,3 +249,4 @@
 - When adding prompt-side tool guidance in this repo, use the actual callable tool IDs (`bash`, `glob`, `grep`, etc.) instead of generic names like `shell` or `search`, or the first model turn can be steered into nonexistent tool calls.
 - For prompt-only workspace path helpers in this repo, account for macOS's default case-insensitive volumes separately from the stricter shared POSIX path helpers so same-tree paths that differ only by case are not mislabeled as outside the workspace.
 - When runtime workspace context corrects project-root paths in this repo, rewrite the legacy relative `.agent/...` prompt copy for any off-root execution cwd so the first turn sees one authoritative project config/memory/MCP location.
+- For the desktop sidebar's expand/collapse animation in this repo, prefer a CSS `grid-template-rows: 1fr <-> 0fr` transition with a coordinated `setTimeout`-driven unmount over `framer-motion`'s `AnimatePresence`; framer-motion freezes its `isBrowser` check at module load, which happens before the jsdom harness installs `window`, so exit animations never complete in these tests and `AnimatePresence` keeps the content mounted.

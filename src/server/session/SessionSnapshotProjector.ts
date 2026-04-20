@@ -133,6 +133,8 @@ export function createLegacySessionSnapshot(record: PersistedSessionRecord): Ses
   };
 }
 
+const MAX_FEED_ITEMS = 2000;
+
 export class SessionSnapshotProjector {
   private snapshot: SessionSnapshot;
   private projectionTs = new Date().toISOString();
@@ -294,6 +296,13 @@ export class SessionSnapshotProjector {
     }
 
     this.conversationProjection.handle(evt);
+
+    if (this.snapshot.feed.length > MAX_FEED_ITEMS) {
+      // Cap feed to prevent unbounded growth. Old items are dropped;
+      // if a stale delta arrives for a dropped item, the projection
+      // helpers will create a new entry (benign fallback).
+      this.snapshot.feed = this.snapshot.feed.slice(-MAX_FEED_ITEMS);
+    }
   }
 
   private createProjection() {

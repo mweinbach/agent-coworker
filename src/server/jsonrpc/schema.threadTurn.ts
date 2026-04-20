@@ -94,6 +94,11 @@ export const jsonRpcThreadTurnRequestSchemas = {
   "thread/unsubscribe": z.object({
     threadId: nonEmptyTrimmedStringSchema,
   }).strict(),
+  "thread/hydrate": z.object({
+    threadId: nonEmptyTrimmedStringSchema,
+    afterSeq: z.number().int().nonnegative().optional(),
+    includeTurns: z.boolean().optional(),
+  }).strict(),
   "turn/start": z.object({
     threadId: nonEmptyTrimmedStringSchema,
     clientMessageId: nonEmptyTrimmedStringSchema.optional(),
@@ -201,6 +206,17 @@ export const jsonRpcThreadTurnResultSchemas = {
   }).strict(),
   "thread/unsubscribe": z.object({
     status: z.enum(["unsubscribed", "notSubscribed", "notLoaded"]),
+  }).strict(),
+  "thread/hydrate": z.object({
+    thread: jsonRpcThreadSchema.extend({
+      turns: z.array(z.object({
+        id: nonEmptyTrimmedStringSchema,
+        status: z.string(),
+        items: z.array(projectedItemSchema),
+      }).strict()).optional(),
+    }),
+    coworkSnapshot: sessionSnapshotSchema.nullable(),
+    journalTailSeq: z.number().int().nonnegative().optional(),
   }).strict(),
   "turn/start": z.object({
     turn: z.object({

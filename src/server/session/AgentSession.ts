@@ -321,6 +321,7 @@ export class AgentSession {
   private bufferDisconnectedEvents = false;
   private disconnectedReplayEvents: ServerEvent[] = [];
   private persistedLastEventSeq: number;
+  private costTrackerUnsubscribe?: () => void;
 
   constructor(opts: {
     config: AgentConfig;
@@ -1532,8 +1533,17 @@ export class AgentSession {
   dispose(reason: string) {
     this.state.abortController?.abort();
     this.interactionManager.rejectAllPending(`Session disposed (${reason})`);
+    this.costTrackerUnsubscribe?.();
     void this.waitForPersistenceIdle().finally(() => {
       this.deps.harnessContextStore.clear(this.id);
+      // Null managers to help GC
+      this.mcpManager = null;
+      this.providerAuthManager = null;
+      this.providerCatalogManager = null;
+      this.turnExecutionManager = null;
+      this.a2uiSurfaceManager = null;
+      this.skillManager = null;
+      this.adminManager = null;
     });
     void this.backupController.closeSessionBackup();
   }
@@ -1822,7 +1832,7 @@ export class AgentSession {
   }
 
   private attachCostTrackerListeners(tracker: SessionCostTracker) {
-    tracker.addListener((event) => {
+    this.costTrackerUnsubscribe = tracker.addListener((event) => {
       if (event.type === "budget_warning") {
         this.context.emit({
           type: "budget_warning",

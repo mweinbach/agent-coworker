@@ -11,6 +11,7 @@ import { createSkillsRouteHandlers } from "./skills";
 import { createThreadRouteHandlers } from "./thread";
 import { createTurnRouteHandlers } from "./turn";
 import { createWorkspaceBackupRouteHandlers } from "./workspaceBackups";
+import { createWorkspaceRouteHandlers } from "./workspace";
 import type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 export type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
@@ -27,6 +28,7 @@ export function createJsonRpcRequestRouter(context: JsonRpcRouteContext): JsonRp
     ...createSkillsRouteHandlers(context),
     ...createMemoryRouteHandlers(context),
     ...createWorkspaceBackupRouteHandlers(context),
+    ...createWorkspaceRouteHandlers(context),
     ...createA2uiRouteHandlers(context),
   };
 

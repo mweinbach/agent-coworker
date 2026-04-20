@@ -98,6 +98,8 @@ export type CostTrackerListener = (event: CostTrackerEvent) => void;
 
 // ── Implementation ─────────────────────────────────────────────────────
 
+const MAX_TURNS = 512;
+
 export class SessionCostTracker {
     private static readonly COMPACT_SNAPSHOT_TURNS_LIMIT = 8;
     private readonly sessionId: string;
@@ -202,12 +204,18 @@ export class SessionCostTracker {
         };
 
         this.turns.push(entry);
-        this.totalPromptTokens += usage.promptTokens;
-        this.totalCompletionTokens += usage.completionTokens;
-        this.totalTokens += usage.totalTokens;
-        this.recordSessionCost(costUsd);
 
-        this.updateModelSummary(provider, model, usage, costUsd);
+        if (this.turns.length > MAX_TURNS) {
+            this.turns.splice(0, this.turns.length - MAX_TURNS);
+            this.recalculateTotals();
+        } else {
+            this.totalPromptTokens += usage.promptTokens;
+            this.totalCompletionTokens += usage.completionTokens;
+            this.totalTokens += usage.totalTokens;
+            this.recordSessionCost(costUsd);
+            this.updateModelSummary(provider, model, usage, costUsd);
+        }
+
         this.updatedAt = entry.timestamp;
 
         // Emit turn-recorded event
@@ -469,6 +477,25 @@ export class SessionCostTracker {
         }
         return `${date.toISOString().slice(11, 19)}Z`;
     }
+
+    private recalculateTotals(): void {
+        this.totalPromptTokens = 0;
+        this.totalCompletionTokens = 0;
+        this.totalTokens = 0;
+        this.estimatedTotalCostUsd = null;
+        this.hasUnknownCostTurns = false;
+        this.costTrackingAvailable = false;
+        this.modelSummaries.clear();
+
+        for (const turn of this.turns) {
+            this.totalPromptTokens += turn.usage.promptTokens;
+            this.totalCompletionTokens += turn.usage.completionTokens;
+            this.totalTokens += turn.usage.totalTokens;
+            this.recordSessionCost(turn.estimatedCostUsd);
+            this.updateModelSummary(turn.provider, turn.model, turn.usage, turn.estimatedCostUsd);
+        }
+    }
+
     private emit(event: CostTrackerEvent): void {
         for (const listener of this.listeners) {
             try {

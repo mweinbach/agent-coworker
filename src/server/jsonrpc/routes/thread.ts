@@ -178,6 +178,101 @@ export function createThreadRouteHandlers(
       });
     },
 
+    "thread/hydrate": async (ws, message) => {
+      const params = toJsonRpcParams(message.params);
+      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
+      const afterSeq = typeof params.afterSeq === "number" && Number.isFinite(params.afterSeq)
+        ? Math.max(0, Math.floor(params.afterSeq))
+        : 0;
+      if (!threadId) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: "thread/hydrate requires threadId",
+        });
+        return;
+      }
+      const binding = context.threads.load(threadId);
+      if (!binding?.session) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `Unknown thread: ${threadId}`,
+        });
+        return;
+      }
+      const thread = context.utils.buildThreadFromSession(binding.session);
+      let replayedRequestIds: ReadonlySet<string> | undefined;
+      if (afterSeq > 0) {
+        await context.journal.waitForIdle(threadId);
+        binding.session.beginDisconnectedReplayBuffer();
+        replayedRequestIds = context.journal.replay(ws, threadId, afterSeq);
+      }
+      const pendingPromptEvents = binding.session.getPendingPromptEventsForReplay();
+      context.threads.subscribe(
+        ws,
+        threadId,
+        {
+          ...(binding.session.activeTurnId
+            ? {
+                initialActiveTurnId: binding.session.activeTurnId,
+                initialAgentText: binding.session.getLatestAssistantText() ?? "",
+              }
+            : {}),
+          ...(afterSeq > 0 ? { drainDisconnectedReplayBuffer: true } : {}),
+          pendingPromptEvents,
+          ...(replayedRequestIds?.size ? { skipPendingPromptRequestIds: replayedRequestIds } : {}),
+        },
+      );
+
+      // Read snapshot (same as thread/read)
+      const snapshot = context.threads.readSnapshot(threadId);
+      if (!snapshot) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.internalError,
+          message: `Failed to read snapshot for thread: ${threadId}`,
+        });
+        return;
+      }
+      await context.journal.waitForIdle(threadId);
+      const enrichedSnapshot = enrichSessionSnapshotCitationsFromCache(snapshot);
+      let journalTailSeq = 0;
+      let turns: ReturnType<ReturnType<typeof createThreadTurnProjector>["build"]> | undefined;
+      if (params.includeTurns === true) {
+        const projector = createThreadTurnProjector();
+        let seq = 0;
+        while (true) {
+          const batch = context.journal.list(threadId, {
+            afterSeq: seq,
+            limit: THREAD_READ_JOURNAL_BATCH_SIZE,
+          });
+          if (batch.length === 0) {
+            break;
+          }
+          for (const event of batch) {
+            projector.handle(event);
+          }
+          journalTailSeq = batch.at(-1)?.seq ?? journalTailSeq;
+          if (batch.length < THREAD_READ_JOURNAL_BATCH_SIZE) {
+            break;
+          }
+          seq = journalTailSeq;
+        }
+        turns = projector.build();
+      }
+      context.jsonrpc.sendResult(ws, message.id, {
+        thread: {
+          ...thread,
+          ...(turns ? { turns } : {}),
+        },
+        coworkSnapshot: enrichedSnapshot,
+        ...(params.includeTurns === true
+          ? { journalTailSeq }
+          : {}),
+      });
+      queueMicrotask(() => {
+        primeSessionSnapshotCitationCache(enrichedSnapshot);
+      });
+    },
+
     "thread/unsubscribe": (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";

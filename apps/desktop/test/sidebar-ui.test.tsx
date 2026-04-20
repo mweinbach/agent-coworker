@@ -457,6 +457,60 @@ describe("desktop sidebar", () => {
     }
   });
 
+  test.serial("moves a workspace with Alt+ArrowUp from the workspace row", async () => {
+    const harness = setupSidebarJsdom();
+    const setWorkspacesOrder = mock(async () => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        resetAppStore({
+          workspaces: [
+            makeWorkspace(),
+            makeWorkspace({
+              id: "ws-2",
+              name: "Research Lab",
+              path: "/tmp/research-lab",
+            }),
+          ],
+          threads: makeThreads(1),
+          selectedWorkspaceId: "ws-2",
+          selectedThreadId: "thread-1",
+          setWorkspacesOrder,
+        });
+        root.render(createElement(Sidebar));
+      });
+
+      const secondWorkspaceButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Research Lab"),
+      );
+      if (!(secondWorkspaceButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing workspace button");
+      }
+
+      await act(async () => {
+        secondWorkspaceButton.dispatchEvent(new harness.dom.window.KeyboardEvent("keydown", {
+          altKey: true,
+          bubbles: true,
+          key: "ArrowUp",
+        }));
+      });
+
+      expect(setWorkspacesOrder).toHaveBeenCalledWith(["ws-2", "ws-1"]);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test.serial("limits the workspace list to the active workspace when workspace picker is disabled", async () => {
     const harness = setupSidebarJsdom();
     let root: ReturnType<typeof createRoot> | null = null;

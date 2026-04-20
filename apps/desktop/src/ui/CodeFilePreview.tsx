@@ -81,15 +81,20 @@ export function CodeFilePreview({ content, filePath }: { content: string; filePa
   const language = useMemo(() => detectLanguage(filePath), [filePath]);
   const markdown = useMemo(() => wrapInFence(content, language), [content, language]);
   const lineCount = useMemo(() => countLines(content), [content]);
+  const maxLines = 10_000;
+  const lineNumbersText = useMemo(() => {
+    const count = Math.min(lineCount, maxLines);
+    const lines = Array.from({ length: count }, (_, i) => String(i + 1));
+    if (lineCount > maxLines) {
+      lines.push("…");
+    }
+    return lines.join("\n");
+  }, [lineCount]);
 
   return (
     <div className="code-file-preview flex">
-      <pre className="m-0 shrink-0 select-none pr-4 text-right text-sm text-muted-foreground/50">
-        {Array.from({ length: lineCount }, (_, i) => (
-          <span key={i} className="block">
-            {i + 1}
-          </span>
-        ))}
+      <pre className="m-0 shrink-0 select-none pr-4 text-right text-sm text-muted-foreground/50 tabular-nums">
+        {lineNumbersText}
       </pre>
       <div className="min-w-0 flex-1">
         <Streamdown

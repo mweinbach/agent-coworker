@@ -237,6 +237,7 @@ export class SessionMetadataManager {
       )
       || (baseConfig.userName ?? "") !== (nextConfig.userName ?? "")
       || !userProfileEqual(baseConfig.userProfile, nextConfig.userProfile)
+      || JSON.stringify(baseConfig.featureFlags ?? null) !== JSON.stringify(nextConfig.featureFlags ?? null)
     );
   }
 

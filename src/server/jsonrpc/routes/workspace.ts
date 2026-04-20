@@ -1,4 +1,5 @@
 import { JSONRPC_ERROR_CODES } from "../protocol";
+import { jsonRpcWorkspaceRequestSchemas } from "../schema.workspace";
 
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
@@ -8,7 +9,15 @@ export function createWorkspaceRouteHandlers(
 ): JsonRpcRequestHandlerMap {
   return {
     "cowork/workspace/bootstrap": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
+      const parsed = jsonRpcWorkspaceRequestSchemas["cowork/workspace/bootstrap"].safeParse(message.params);
+      if (!parsed.success) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: "Invalid params",
+        });
+        return;
+      }
+      const params = parsed.data;
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
 
       const threads = new Map<string, ReturnType<JsonRpcRouteContext["utils"]["buildThreadFromRecord"]>>();

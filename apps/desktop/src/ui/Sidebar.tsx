@@ -196,6 +196,10 @@ const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
               if (event.button !== 0) {
                 return;
               }
+              const target = event.target as HTMLElement;
+              if (target.closest("button, input, a, textarea")) {
+                return;
+              }
               controls.start(event);
             }
           : undefined}
@@ -491,6 +495,17 @@ export const Sidebar = memo(function Sidebar() {
 
   const reorderEnabled = workspaceLifecycleEnabled && visibleWorkspaces.length > 1;
 
+  const handleWorkspaceOpenChange = useCallback((workspaceId: string, nextOpen: boolean) => {
+    setExpandedWorkspaceSections((current) => ({
+      ...current,
+      [workspaceId]: nextOpen,
+    }));
+  }, []);
+
+  const handleSelectThread = useCallback((threadId: string) => {
+    void selectThread(threadId);
+  }, [selectThread]);
+
   const handleReorder = useCallback((nextWorkspaces: WorkspaceRecord[]) => {
     void setWorkspacesOrder(nextWorkspaces.map((workspace) => workspace.id));
   }, [setWorkspacesOrder]);
@@ -615,17 +630,10 @@ export const Sidebar = memo(function Sidebar() {
         onThreadContextMenu={handleThreadContextMenu}
         onToggleThreadList={toggleThreadList}
         onWorkspaceContextMenu={handleWorkspaceContextMenu}
-        onWorkspaceOpenChange={(workspaceId, nextOpen) => {
-          setExpandedWorkspaceSections((current) => ({
-            ...current,
-            [workspaceId]: nextOpen,
-          }));
-        }}
+        onWorkspaceOpenChange={handleWorkspaceOpenChange}
         reorderEnabled={reorderEnabled}
         selectedThreadId={selectedThreadId}
-        selectThread={(threadId) => {
-          void selectThread(threadId);
-        }}
+        selectThread={handleSelectThread}
         showAllThreads={showAllThreads}
         threadRuntimeById={threadRuntimeById}
         visibleThreads={visibleThreads}

@@ -341,6 +341,10 @@ describe("mcp config registry", () => {
   });
 
   test("plugin MCP stdio transports reject symlinked paths that escape the plugin root", async () => {
+    if (process.platform === "win32") {
+      // Symlinks require elevated privileges on Windows
+      return;
+    }
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-symlink-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-symlink-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-plugin-symlink-builtin-"));

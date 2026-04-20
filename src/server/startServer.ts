@@ -568,7 +568,7 @@ export async function startAgentServer(
 
   const removeBindingSink = (binding: SessionBinding, sinkId: string) => {
     binding.sinks.delete(sinkId);
-    if (binding.session && countLiveConnectionSinks(binding) === 0) {
+    if (binding.session && binding.sinks.size === 0) {
       sessionIdleSince.set(binding.session.id, Date.now());
     }
   };
@@ -1007,12 +1007,20 @@ export async function startAgentServer(
 
   const evictLeastCriticalSend = (queue: string[]) => {
     for (let i = 0; i < queue.length; i++) {
-      if (
-        queue[i].includes('"model_stream_chunk"')
-        || queue[i].includes('"agentMessage/delta"')
-      ) {
-        queue.splice(i, 1);
-        return;
+      try {
+        const parsed = JSON.parse(queue[i]) as {
+          method?: string;
+          params?: { type?: string };
+        };
+        if (
+          parsed.method === "model_stream_chunk"
+          || parsed.params?.type === "agentMessage/delta"
+        ) {
+          queue.splice(i, 1);
+          return;
+        }
+      } catch {
+        // ignore malformed JSON
       }
     }
     queue.shift();
@@ -1024,11 +1032,15 @@ export async function startAgentServer(
     const queue = pendingSends.get(connectionId);
     if (!queue) return;
     while (queue.length > 0) {
-      const status = ws.send(queue[0]);
-      if (status === -1) {
-        break;
+      try {
+        const status = ws.send(queue[0]);
+        if (status === -1) {
+          break;
+        }
+        queue.shift();
+      } catch {
+        queue.shift();
       }
-      queue.shift();
     }
     if (queue.length === 0) {
       pendingSends.delete(connectionId);
@@ -1043,16 +1055,20 @@ export async function startAgentServer(
       return;
     }
 
-    const status = ws.send(serialized);
-    if (status === 0 || status === -1) {
-      const connectionId = ws.data.connectionId;
-      if (!connectionId) return;
-      const queue = pendingSends.get(connectionId) ?? [];
-      if (queue.length >= SEND_QUEUE_MAX) {
-        evictLeastCriticalSend(queue);
+    try {
+      const status = ws.send(serialized);
+      if (status === 0 || status === -1) {
+        const connectionId = ws.data.connectionId;
+        if (!connectionId) return;
+        const queue = pendingSends.get(connectionId) ?? [];
+        if (queue.length >= SEND_QUEUE_MAX) {
+          evictLeastCriticalSend(queue);
+        }
+        queue.push(serialized);
+        pendingSends.set(connectionId, queue);
       }
-      queue.push(serialized);
-      pendingSends.set(connectionId, queue);
+    } catch {
+      // Socket closed or send failed; drop the message
     }
   };
 
@@ -1572,7 +1588,7 @@ export async function startAgentServer(
   const evictIdleSessionBindings = () => {
     const now = Date.now();
     for (const [sessionId, binding] of sessionBindings) {
-      if (binding.session && countLiveConnectionSinks(binding) === 0) {
+      if (binding.session && binding.sinks.size === 0) {
         const idleSince = sessionIdleSince.get(sessionId) ?? 0;
         if (idleSince > 0 && now - idleSince > IDLE_TIMEOUT_MS) {
           binding.session.dispose("idle eviction");

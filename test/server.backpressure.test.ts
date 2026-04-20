@@ -15,19 +15,27 @@ function createFakeBackpressureQueue(max: number): FakeQueue {
 
   const evictLeastCritical = () => {
     for (let i = 0; i < queue.length; i++) {
-      if (
-        queue[i].includes('"model_stream_chunk"')
-        || queue[i].includes('"agentMessage/delta"')
-      ) {
-        queue.splice(i, 1);
-        return;
+      try {
+        const parsed = JSON.parse(queue[i]) as {
+          method?: string;
+          params?: { type?: string };
+        };
+        if (
+          parsed.method === "model_stream_chunk"
+          || parsed.params?.type === "agentMessage/delta"
+        ) {
+          queue.splice(i, 1);
+          return;
+        }
+      } catch {
+        // ignore malformed JSON
       }
     }
     queue.shift();
   };
 
   const send = (serialized: string) => {
-    const status = 1; // simulate success
+    const status = 0; // simulate backpressure
     if (status === 0 || status === -1) {
       if (queue.length >= max) {
         evictLeastCritical();
@@ -53,23 +61,41 @@ function createFakeBackpressureQueue(max: number): FakeQueue {
 describe("WebSocket backpressure queue", () => {
   test("queues messages when send returns backpressure", () => {
     const q = createFakeBackpressureQueue(500);
-    q.send('{"type":"model_stream_chunk"}');
-    expect(q.queue.length).toBe(0);
+    q.send('{"jsonrpc":"2.0","method":"model_stream_chunk","params":{}}');
+    expect(q.queue.length).toBe(1);
   });
 
   test("evicts stream deltas first when queue is full", () => {
     const q = createFakeBackpressureQueue(3);
-    q.send('{"type":"ask"}');
-    q.send('{"type":"model_stream_chunk"}');
-    q.send('{"type":"approval"}');
-    expect(q.queue.length).toBe(0);
+    q.send('{"jsonrpc":"2.0","method":"ask","params":{}}');
+    q.send('{"jsonrpc":"2.0","method":"model_stream_chunk","params":{}}');
+    q.send('{"jsonrpc":"2.0","method":"approval","params":{}}');
+    expect(q.queue.length).toBe(3);
+    q.send('{"jsonrpc":"2.0","method":"other","params":{}}');
+    expect(q.queue.length).toBe(3);
+    expect(q.queue[0]).toBe('{"jsonrpc":"2.0","method":"ask","params":{}}');
+    expect(q.queue[1]).toBe('{"jsonrpc":"2.0","method":"approval","params":{}}');
+    expect(q.queue[2]).toBe('{"jsonrpc":"2.0","method":"other","params":{}}');
+  });
+
+  test("evicts agentMessage/delta params first when queue is full", () => {
+    const q = createFakeBackpressureQueue(3);
+    q.send('{"jsonrpc":"2.0","method":"ask","params":{}}');
+    q.send('{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"type":"agentMessage/delta"}}');
+    q.send('{"jsonrpc":"2.0","method":"approval","params":{}}');
+    expect(q.queue.length).toBe(3);
+    q.send('{"jsonrpc":"2.0","method":"other","params":{}}');
+    expect(q.queue.length).toBe(3);
+    expect(q.queue[0]).toBe('{"jsonrpc":"2.0","method":"ask","params":{}}');
+    expect(q.queue[1]).toBe('{"jsonrpc":"2.0","method":"approval","params":{}}');
+    expect(q.queue[2]).toBe('{"jsonrpc":"2.0","method":"other","params":{}}');
   });
 
   test("flush clears the queue", () => {
     const q = createFakeBackpressureQueue(500);
-    q.send('{"type":"ask"}');
-    q.send('{"type":"approval"}');
-    expect(q.queue.length).toBe(0);
+    q.send('{"jsonrpc":"2.0","method":"ask","params":{}}');
+    q.send('{"jsonrpc":"2.0","method":"approval","params":{}}');
+    expect(q.queue.length).toBe(2);
     q.flush();
     expect(q.queue.length).toBe(0);
   });

@@ -325,8 +325,50 @@ const persistedStateSchema = z.object({
 
 type HydratedPersistedDesktopState = z.infer<typeof persistedStateSchema>;
 
+function hasLegacyA2uiEnabled(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const workspaces = Array.isArray(record.workspaces) ? record.workspaces : [];
+  for (const workspace of workspaces) {
+    if (!workspace || typeof workspace !== "object") continue;
+    const ws = workspace as Record<string, unknown>;
+    if (ws.defaultEnableA2ui === true) {
+      return true;
+    }
+    const featureFlags = ws.defaultFeatureFlags;
+    if (
+      featureFlags
+      && typeof featureFlags === "object"
+      && !Array.isArray(featureFlags)
+    ) {
+      const workspaceFlags = (featureFlags as Record<string, unknown>).workspace;
+      if (
+        workspaceFlags
+        && typeof workspaceFlags === "object"
+        && !Array.isArray(workspaceFlags)
+        && (workspaceFlags as Record<string, unknown>).a2ui === true
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function hydratePersistedDesktopState(value: unknown): HydratedPersistedDesktopState {
-  return persistedStateSchema.parse(value);
+  const parsed = persistedStateSchema.parse(value);
+  if (hasLegacyA2uiEnabled(value) && !parsed.desktopFeatureFlagOverrides?.a2ui) {
+    return {
+      ...parsed,
+      desktopFeatureFlagOverrides: {
+        ...parsed.desktopFeatureFlagOverrides,
+        a2ui: true,
+      },
+    };
+  }
+  return parsed;
 }
 
 function buildResolvedDesktopUiState(

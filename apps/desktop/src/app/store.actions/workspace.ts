@@ -76,8 +76,11 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
     return workspaceThreads[0]?.id ?? null;
   };
 
+  const isWorkspaceLifecycleEnabled = () => get().desktopFeatureFlags.workspaceLifecycle !== false;
+
   return {
     addWorkspace: async () => {
+      if (!isWorkspaceLifecycleEnabled()) return;
       if (RUNTIME.workspacePickerOpen) return;
       RUNTIME.workspacePickerOpen = true;
   
@@ -128,6 +131,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
   
 
     removeWorkspace: async (workspaceId: string) => {
+      if (!isWorkspaceLifecycleEnabled()) return;
       bumpWorkspaceStartGeneration(workspaceId);
       bumpWorkspaceJsonRpcSocketGeneration(workspaceId);
 
@@ -222,6 +226,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
     },
 
     reorderWorkspaces: async (sourceWorkspaceId: string, targetWorkspaceId: string) => {
+      if (!isWorkspaceLifecycleEnabled()) return;
       const nextWorkspaces = reorderSidebarItemsById(
         get().workspaces,
         sourceWorkspaceId,
@@ -238,6 +243,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
   
 
     restartWorkspaceServer: async (workspaceId) => {
+      if (!isWorkspaceLifecycleEnabled()) return;
       bumpWorkspaceStartGeneration(workspaceId);
       bumpWorkspaceJsonRpcSocketGeneration(workspaceId);
 

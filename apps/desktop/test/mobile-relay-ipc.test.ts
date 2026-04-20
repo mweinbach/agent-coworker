@@ -229,7 +229,7 @@ describe("mobile relay IPC", () => {
       status: "idle",
       relaySource: "unavailable",
       relayServiceStatus: "unavailable",
-      lastError: "Remote access is only available in development builds.",
+      lastError: "Remote access is disabled. Enable it in Settings -> Feature Flags.",
     });
     expect(stop).toHaveBeenCalledTimes(1);
     expect(initialize).not.toHaveBeenCalled();
@@ -272,7 +272,7 @@ describe("mobile relay IPC", () => {
       workspaceId: "ws_1",
       workspacePath: "/tmp/workspace",
       yolo: false,
-    })).rejects.toThrow("Remote access is only available in development builds.");
+    })).rejects.toThrow("Remote access is disabled. Enable it in Settings -> Feature Flags.");
     expect(start).not.toHaveBeenCalled();
   });
 

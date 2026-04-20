@@ -75,7 +75,6 @@ mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   onSystemAppearanceChanged: () => () => {},
   onMenuCommand: () => () => {},
   onUpdateStateChanged: () => () => {},
-  isRemoteAccessEnabled: () => remoteAccessEnabled,
   stopMobileRelay: async () => {
     stopMobileRelayCalls += 1;
     return {

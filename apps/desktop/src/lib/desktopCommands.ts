@@ -61,18 +61,6 @@ export function getDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides):
   return next;
 }
 
-export function isRemoteAccessEnabled(): boolean {
-  return getDesktopFeatureFlags().remoteAccess;
-}
-
-export function isWorkspacePickerEnabled(): boolean {
-  return getDesktopFeatureFlags().workspacePicker;
-}
-
-export function isWorkspaceLifecycleEnabled(): boolean {
-  return getDesktopFeatureFlags().workspaceLifecycle;
-}
-
 export async function startWorkspaceServer(opts: {
   workspaceId: string;
   workspacePath: string;

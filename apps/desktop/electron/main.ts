@@ -42,6 +42,9 @@ if (process.platform === "win32") {
   app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
 }
 
+// Keep packaged-mode feature resolution consistent across main and preload.
+process.env.COWORK_IS_PACKAGED = String(app.isPackaged);
+
 const serverManager = new ServerManager();
 const mobileRelayBridge = new MobileRelayBridge({ serverManager });
 const persistence = new PersistenceService();

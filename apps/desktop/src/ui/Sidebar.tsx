@@ -95,6 +95,18 @@ export const Sidebar = memo(function Sidebar() {
   const activeWorkspaceId = view === "skills"
     ? pluginSelection.displayWorkspaceId
     : selectedWorkspaceId;
+  const visibleWorkspaces = useMemo(() => {
+    if (workspacePickerEnabled || workspaces.length <= 1) {
+      return workspaces;
+    }
+    if (activeWorkspaceId) {
+      const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
+      if (activeWorkspace) {
+        return [activeWorkspace];
+      }
+    }
+    return workspaces[0] ? [workspaces[0]] : [];
+  }, [activeWorkspaceId, workspacePickerEnabled, workspaces]);
 
   useEffect(() => {
     if (editingThreadId) {
@@ -168,20 +180,26 @@ export const Sidebar = memo(function Sidebar() {
   }, []);
 
   const handleWorkspaceDragStart = useCallback((event: DragEvent<HTMLElement>, workspaceId: string) => {
+    if (!workspaceLifecycleEnabled) {
+      return;
+    }
     setDraggedWorkspaceId(workspaceId);
     setDropTargetWorkspaceId(workspaceId);
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", workspaceId);
-  }, []);
+  }, [workspaceLifecycleEnabled]);
 
   const handleWorkspaceDragOver = useCallback((event: DragEvent<HTMLElement>, workspaceId: string) => {
+    if (!workspaceLifecycleEnabled) {
+      return;
+    }
     if (!draggedWorkspaceId || draggedWorkspaceId === workspaceId) {
       return;
     }
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
     setDropTargetWorkspaceId(workspaceId);
-  }, [draggedWorkspaceId]);
+  }, [draggedWorkspaceId, workspaceLifecycleEnabled]);
 
   const clearWorkspaceDragState = useCallback(() => {
     setDraggedWorkspaceId(null);
@@ -189,6 +207,9 @@ export const Sidebar = memo(function Sidebar() {
   }, []);
 
   const handleWorkspaceDrop = useCallback(async (event: DragEvent<HTMLElement>, targetWorkspaceId: string) => {
+    if (!workspaceLifecycleEnabled) {
+      return;
+    }
     event.preventDefault();
     const sourceWorkspaceId = draggedWorkspaceId || event.dataTransfer.getData("text/plain");
     clearWorkspaceDragState();
@@ -196,7 +217,7 @@ export const Sidebar = memo(function Sidebar() {
       return;
     }
     await reorderWorkspaces(sourceWorkspaceId, targetWorkspaceId);
-  }, [clearWorkspaceDragState, draggedWorkspaceId, reorderWorkspaces]);
+  }, [clearWorkspaceDragState, draggedWorkspaceId, reorderWorkspaces, workspaceLifecycleEnabled]);
 
   const handleWorkspaceContextMenu = async (e: MouseEvent, wsId: string, wsName: string) => {
     e.preventDefault();
@@ -322,7 +343,7 @@ export const Sidebar = memo(function Sidebar() {
       <section className="flex min-h-0 flex-1 flex-col gap-2">
         <div className="flex items-center justify-between px-1">
           <div className="text-[11px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Workspaces</div>
-          {workspacePickerEnabled ? (
+          {workspaceLifecycleEnabled ? (
             <Button
               size="icon-sm"
               variant="ghost"
@@ -340,14 +361,14 @@ export const Sidebar = memo(function Sidebar() {
             <div className="rounded-xl border border-border/55 bg-foreground/[0.03] px-4 py-4 text-center text-xs text-muted-foreground">
               <FolderPlusIcon strokeWidth={1.5} className="mx-auto mb-2 h-6 w-6 text-muted-foreground/70" />
               <div>No workspaces yet</div>
-              {workspacePickerEnabled ? (
+              {workspaceLifecycleEnabled ? (
                 <Button className="mt-3 h-7 rounded-lg px-3" size="sm" variant="outline" type="button" onClick={() => void addWorkspace()}>
                   Add workspace
                 </Button>
               ) : null}
             </div>
           ) : (
-            workspaces.map((workspace) => {
+            visibleWorkspaces.map((workspace) => {
               const active = workspace.id === activeWorkspaceId;
               const expanded = expandedWorkspaceSections[workspace.id] ?? false;
               const workspaceRuntime = workspaceRuntimeById[workspace.id];
@@ -383,7 +404,7 @@ export const Sidebar = memo(function Sidebar() {
                   data-drop-target={
                     dropTargetWorkspaceId === workspace.id && draggedWorkspaceId !== workspace.id ? "true" : "false"
                   }
-                  draggable={workspaces.length > 1}
+                  draggable={workspaceLifecycleEnabled && visibleWorkspaces.length > 1}
                   onContextMenu={(e) => handleWorkspaceContextMenu(e, workspace.id, workspace.name)}
                   onDragEnd={clearWorkspaceDragState}
                   onDragOver={(event: DragEvent<HTMLDivElement>) => handleWorkspaceDragOver(event, workspace.id)}

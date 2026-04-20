@@ -194,7 +194,7 @@ function assertSystemAppearance(value: unknown): asserts value is SystemAppearan
 
 function resolvePreloadDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides) {
   return resolveDesktopFeatureFlags({
-    isPackaged: !import.meta.env.DEV,
+    isPackaged: process.env.COWORK_IS_PACKAGED === "true",
     env: process.env,
     ...(overrides ? { overrides } : {}),
   });

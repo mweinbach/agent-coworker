@@ -120,6 +120,7 @@ function WelcomeStep({ onContinue, onDismiss }: { onContinue: () => void; onDism
 function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack: () => void }) {
   const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
+  const workspaceLifecycleEnabled = desktopFeatures.workspaceLifecycle !== false;
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const workspaces = useAppStore((s) => s.workspaces);
@@ -173,7 +174,7 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
       </div>
 
       {/* Workspace picker for rerun with multiple workspaces */}
-      {hasMultipleWorkspaces ? (
+      {workspacePickerEnabled && hasMultipleWorkspaces ? (
         <div className="space-y-2">
           <div className="text-sm font-medium">Active workspace</div>
           <Select
@@ -226,7 +227,7 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
         </Card>
       ) : null}
 
-      {workspacePickerEnabled ? (
+      {workspaceLifecycleEnabled ? (
         <div className="flex gap-3">
           <Button variant={hasWorkspace ? "outline" : "default"} onClick={() => void addWorkspace()}>
             {hasWorkspace ? "Add different folder" : "Choose folder"}

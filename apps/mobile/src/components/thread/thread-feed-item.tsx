@@ -10,9 +10,10 @@ import { A2uiSurfaceCard } from "./a2ui-surface-card";
 
 type ThreadFeedItemProps = {
   item: SessionFeedItem;
+  a2uiEnabled: boolean;
 };
 
-export function ThreadFeedItem({ item }: ThreadFeedItemProps) {
+export function ThreadFeedItem({ item, a2uiEnabled }: ThreadFeedItemProps) {
   const theme = useAppTheme();
 
   if (item.kind === "message") {
@@ -84,6 +85,9 @@ export function ThreadFeedItem({ item }: ThreadFeedItemProps) {
   }
 
   if (item.kind === "ui_surface") {
+    if (!a2uiEnabled) {
+      return null;
+    }
     return <A2uiSurfaceCard item={item} />;
   }
 

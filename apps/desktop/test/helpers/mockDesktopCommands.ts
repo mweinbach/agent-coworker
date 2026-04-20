@@ -58,7 +58,6 @@ export function createDesktopCommandsMock(
 
   return {
     getDesktopFeatureFlags: (featureOverrides) => resolveFlags(featureOverrides),
-    isRemoteAccessEnabled: () => resolveFlags().remoteAccess,
     startWorkspaceServer: async () => ({ url: "ws://mock" }),
     stopWorkspaceServer: async () => {},
     loadState: async () => ({ version: 2, workspaces: [], threads: [] }),

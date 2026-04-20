@@ -59,11 +59,31 @@ describe("mobile ThreadFeedItem", () => {
         deleted: false,
         root: { id: "root", type: "Column" },
       },
+      a2uiEnabled: true,
     });
 
     expect(rendered.type).toBeDefined();
     expect(typeof rendered.type).toBe("function");
     expect((rendered.type as { name?: string }).name).toBe("A2uiSurfaceCard");
     expect(rendered.props.item.surfaceId).toBe("s1");
+  });
+
+  test("hides ui_surface items when a2ui is disabled", () => {
+    const rendered = ThreadFeedItem({
+      item: {
+        id: "uiSurface:s1",
+        kind: "ui_surface",
+        ts: "2026-04-19T00:00:00.000Z",
+        surfaceId: "s1",
+        catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
+        version: "v0.9",
+        revision: 1,
+        deleted: false,
+        root: { id: "root", type: "Column" },
+      },
+      a2uiEnabled: false,
+    });
+
+    expect(rendered).toBeNull();
   });
 });

@@ -94,11 +94,10 @@ Use subagents liberally to keep main context window clean
 Offload research, exploration, and parallel analysis to subagents
 For complex problems, throw more compute at it via subagents
 One tack per subagent for focused execution
-### 3. Self-Improvement Loop
-After ANY correction from the user: update `tasks/lessons.md` with the pattern
-Write rules for yourself that prevent the same mistake
-Ruthlessly iterate on these lessons until mistake rate drops
-Review lessons at session start for relevant project
+### 3. Self-Improvement
+After ANY correction from the user, distill the pattern into a durable rule and add it to the Engineering Rules section below.
+Apply existing rules before editing, not after.
+Review the rules at session start.
 ### 4. Verification Before Done
 Never mark a task complete without proving it works
 Diff behavior between main and your changes when relevant
@@ -114,13 +113,62 @@ When given a bug report: just fix it. Don't ask for hand-holding Point at logs, 
 Zero context switching required from the user
 Go fix failing CI tests without being told how
 ## Task Management
-1. **Plan First**: Write plan to tasks/todo.md with checkable items
-2. **Verify Plan**: Check in before starting implementation
-3. **Track Progress**: Mark items complete as you go
-4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to `tasks/todo.md`
-6. **Capture Lessons**: Update `tasks/lessons.md` after corrections
+1. **Plan First**: Write a plan with checkable items using the built-in todo/tasks tool.
+2. **Verify Plan**: Check in before starting implementation.
+3. **Track Progress**: Mark items complete as you go.
+4. **Explain Changes**: High-level summary at each step.
+
 ## Core Principles
 **Simplicity First**: Make every change as simple as possible. Impact minimal code.
 **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
 **Minimal Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
+
+## Engineering Rules
+
+Durable rules distilled from prior corrections. Apply before editing, not after. When the user corrects you, add the new rule here.
+
+### PR Review Workflow
+- Re-fetch unresolved review threads and verify each comment against current `HEAD` before editing — don't assume an open thread is still real.
+- After fixing locally, reply on each addressed GitHub thread and resolve it in the same pass.
+- Re-scan the latest SHA for both unresolved threads AND newer top-level review bodies before declaring PR feedback handled.
+- When the user asks for subagent verification, spawn one targeted subagent per reported issue before editing — never batch.
+- Before claiming a comment is fixed, re-check the exact current branch path it points at.
+- Inspect the latest GitHub Actions run when babysitting a PR; flaky lanes (e.g. remote MCP smoke) can still be the real blocker after comments resolve.
+
+### Scope & Plan Discipline
+- When the user narrows a contract, apply that exact direction; don't preserve broader backward-compat assumptions.
+- When the user expands scope mid-task ("include the failures you found"), treat every surfaced error as in-scope.
+- When cleaning unrelated local diffs, never revert adjacent user-wanted changes without confirming intent.
+- Carry user-added requirements (commit trailers, contract changes) forward into the plan and the eventual commit message.
+- When the user explicitly accepts a change ("delete the workflow"), execute that — don't keep refining the prior approach.
+- Confirm the active branch is rebased on current `origin/main` before stacking multi-commit work; if `main` moved mid-feature, rebase before more branch work.
+- When the user says a surface is "retired" or "archived", do the full deletion in one pass: code, tests, docs, entrypoints, now-unused deps. No dormant compatibility shells.
+
+### Verification Before Done
+- Run the same lane CI runs (`bun test --max-concurrency 1` plus `bun run typecheck` and `bun run docs:check`); cross-file Bun module mocks can pass in isolation and still fail in the full suite.
+- For desktop UI changes, verify the live running app via the Playwright/CDP workflow with `COWORK_ELECTRON_REMOTE_DEBUG=1`. Tests alone are not proof.
+- For Expo mobile changes, run an explicit Metro bundle path (e.g. `expo export`) — `run:ios`/`run:android` success alone misses repo-root import and Babel/plugin drift.
+- Before creating a GitHub release from a local tag, confirm the tag has been pushed to `origin`.
+
+### Repo-Specific Contracts
+- **Auth home**: `~/.cowork` is the only auth home. Never derive auth from a workspace `.agent` path. Pin `HOME` in tests that fabricate auth state.
+- **Codex auth**: lives only at `~/.cowork/auth/codex-cli/auth.json`. No copies, restores, or fallbacks to other tool stores.
+- **Workspace settings**: any new field must round-trip through `PersistenceService.sanitizeWorkspaces()` — partial sanitizer updates silently drop fields on save/load. Audit every new field, not just the headline one.
+- **Tool prompt guidance**: use actual callable tool IDs (`bash`, `glob`, `grep`); generic names like `shell`/`search` route the model into nonexistent calls.
+- **JSON-RPC projector**: item IDs must be occurrence-stable within a turn. Always forward `itemId` on `item/agentMessage/delta`. Close the current assistant item before reasoning/tool phases. Don't key assistant items only by `turnId`.
+- **New provider**: audit every provider-gated tool factory in `src/tools/*` and add a `createTools(...)` regression — missing branches crash PI tool mapping before the turn starts.
+- **MCP tool schemas**: normalize tuple-style JSON Schema arrays (`items: [{...}, {...}]`) to provider-safe object/boolean nodes before registration; OpenAI-compatible runtimes reject otherwise.
+- **Settings toggles**: shared `Switch` for binary on/off; reserve `Checkbox` for checklist selection.
+- **Optimistic chat sends**: preserve `clientMessageId` through `turn/start`/`turn/steer` and the projected `item/userMessage` notifications, or duplicate user bubbles render.
+- **OAuth**: never share one constant between listener bind host and advertised redirect host. Bind both `::1` and `127.0.0.1` when using `localhost`. Pin the production redirect URI to the provider-accepted host and cover the advertised URL in tests.
+- **Bun-compiled sidecars**: never read `package.json` via runtime `__dirname` paths — compiled binaries run from `/$bunfs`. Use bundled imports or build-time injection.
+- **Three-tier inherit semantics**: never overload `undefined` for both "no-op" and "inherit"; add a dedicated clear/inherit path end-to-end so reset-to-default deletes persisted overrides instead of pinning the current built-in.
+- **Tool output overflow**: spill-to-workspace truncation is the default; the `read` tool is exempted so large file contents stay inline when explicitly requested.
+
+### Desktop UI Patterns
+- Use the Playwright/CDP workflow (`COWORK_ELECTRON_REMOTE_DEBUG=1`) before declaring a UI change done.
+- For shared dialogs/modals: portal to `document.body`, own the centered overlay, never let the backdrop sit at a higher `z-*` than the dialog body.
+- For desktop renderer wrappers re-exporting core types, prefer repo-root relative imports over `@cowork/*` aliases — `electron-vite` accepts the alias in TS but Rollup can fail at renderer build.
+- For Electron preloads, bundle deps like `zod` into `out/preload/preload.js`; do not externalize runtime deps.
+- For Electron main-process CommonJS deps, use `createRequire` interop, not named ESM imports.
+- For dense desktop settings panels, prefer compact controls and separators over nested rounded subcards.

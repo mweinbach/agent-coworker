@@ -75,6 +75,7 @@ export function createResearchActions(
   | "selectResearch"
   | "startResearch"
   | "cancelResearch"
+  | "renameResearch"
   | "sendResearchFollowUp"
   | "setResearchDraftSettings"
   | "loadResearchMcpServers"
@@ -530,6 +531,38 @@ export function createResearchActions(
         }
       } catch (error) {
         notify("error", "Unable to cancel research", error instanceof Error ? error.message : String(error));
+      }
+    },
+
+    renameResearch: async (researchId, title) => {
+      const trimmed = title.trim();
+      if (!trimmed) {
+        return;
+      }
+      const previous = get().researchById[researchId];
+      if (previous && previous.title === trimmed) {
+        return;
+      }
+      if (previous) {
+        applyResearchRecord({ ...previous, title: trimmed });
+      }
+      try {
+        const workspaceId = await ensureResearchTransportWorkspace();
+        if (!workspaceId) {
+          return;
+        }
+        const result = await requestJsonRpc(get, set, workspaceId, "research/rename", {
+          researchId,
+          title: trimmed,
+        });
+        if (isResearchRecord(result?.research)) {
+          applyResearchRecord(result.research);
+        }
+      } catch (error) {
+        if (previous) {
+          applyResearchRecord(previous);
+        }
+        notify("error", "Unable to rename research", error instanceof Error ? error.message : String(error));
       }
     },
 

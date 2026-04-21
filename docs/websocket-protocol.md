@@ -279,6 +279,10 @@ Requests:
   - params: `{ researchId }`
   - result: `{ research: ResearchRecord | null }`
   - best-effort cancels the upstream Google interaction, then marks the local row `cancelled`
+- `research/rename`
+  - params: `{ researchId, title }`
+  - result: `{ research: ResearchRecord | null }`
+  - updates the stored `title` on a research row, persists, and broadcasts `research/updated`
 - `research/followup`
   - params: `{ parentResearchId, input, title?, settings?, attachedFileIds?, attachedFiles? }`
   - result: `{ research }`

@@ -27,6 +27,10 @@ export const jsonRpcResearchRequestSchemas = {
   "research/cancel": z.object({
     researchId: nonEmptyTrimmedStringSchema,
   }).strict(),
+  "research/rename": z.object({
+    researchId: nonEmptyTrimmedStringSchema,
+    title: z.string().trim().min(1).max(200),
+  }).strict(),
   "research/followup": z.object({
     parentResearchId: nonEmptyTrimmedStringSchema,
     input: z.string().trim().min(1),
@@ -71,6 +75,9 @@ export const jsonRpcResearchResultSchemas = {
     research: researchSummarySchema.nullable(),
   }).strict(),
   "research/cancel": z.object({
+    research: researchSummarySchema.nullable(),
+  }).strict(),
+  "research/rename": z.object({
     research: researchSummarySchema.nullable(),
   }).strict(),
   "research/followup": z.object({

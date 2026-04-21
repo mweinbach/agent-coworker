@@ -284,6 +284,7 @@ export type AppStoreState = {
     settings?: Partial<ResearchSettingsState>;
   }) => Promise<ResearchCard | null>;
   cancelResearch: (researchId: string) => Promise<void>;
+  renameResearch: (researchId: string, title: string) => Promise<void>;
   sendResearchFollowUp: (opts: {
     parentResearchId: string;
     input: string;

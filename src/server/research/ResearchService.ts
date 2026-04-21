@@ -318,6 +318,27 @@ export class ResearchService {
     return state.record;
   }
 
+  async rename(id: string, title: string): Promise<ResearchRecord | null> {
+    await this.init();
+    const existing = await this.get(id);
+    if (!existing) {
+      return null;
+    }
+    const trimmed = title.trim();
+    if (!trimmed) {
+      throw new Error("Title cannot be empty.");
+    }
+    const capped = trimmed.length > 200 ? `${trimmed.slice(0, 197)}...` : trimmed;
+    const state = this.getOrCreateState(existing);
+    this.updateRecord(state, {
+      title: capped,
+      updatedAt: new Date().toISOString(),
+    });
+    await this.flushPersistNow(state);
+    this.broadcast(state, "research/updated", { research: state.record }, state.record.lastEventId);
+    return state.record;
+  }
+
   async cancel(id: string): Promise<ResearchRecord | null> {
     await this.init();
     const existing = await this.get(id);

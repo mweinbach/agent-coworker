@@ -88,6 +88,23 @@ export function createResearchRouteHandlers(
       }
     },
 
+    "research/rename": async (ws, message) => {
+      const parsed = jsonRpcResearchRequestSchemas["research/rename"].safeParse(message.params ?? {});
+      if (!parsed.success) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: parsed.error.issues[0]?.message ?? "Invalid research/rename params",
+        });
+        return;
+      }
+      try {
+        const research = await context.research.rename(parsed.data.researchId, parsed.data.title);
+        context.jsonrpc.sendResult(ws, message.id, { research });
+      } catch (error) {
+        sendExecutionError(context, ws, message.id, error instanceof Error ? error.message : String(error));
+      }
+    },
+
     "research/followup": async (ws, message) => {
       const parsed = jsonRpcResearchRequestSchemas["research/followup"].safeParse(message.params ?? {});
       if (!parsed.success) {

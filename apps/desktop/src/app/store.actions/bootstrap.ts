@@ -852,6 +852,9 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
     },
 
     setDesktopFeatureFlagOverride: async (flagId, enabled) => {
+      if (get().updateState.packaged) {
+        return;
+      }
       const currentFeatureFlags = get().desktopFeatureFlags;
       const currentOverrides = get().desktopFeatureFlagOverrides ?? {};
       const nextOverrides = {

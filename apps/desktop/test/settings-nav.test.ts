@@ -113,6 +113,7 @@ describe("settings nav (store)", () => {
       view: "chat",
       lastNonSettingsView: "chat",
       settingsPage: "providers",
+      updateState: MOCK_UPDATE_STATE,
       desktopFeatureFlags: {
         remoteAccess: true,
         workspacePicker: true,
@@ -229,6 +230,28 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().desktopFeatureFlagOverrides).toEqual({ remoteAccess: false });
     expect(useAppStore.getState().settingsPage).toBe("providers");
     expect(stopMobileRelayCalls).toBe(1);
+  });
+
+  test("setDesktopFeatureFlagOverride is a no-op in packaged builds", async () => {
+    const priorSaved = savedStates.length;
+    useAppStore.setState({
+      updateState: {
+        ...useAppStore.getState().updateState,
+        packaged: true,
+      },
+      desktopFeatureFlags: {
+        remoteAccess: false,
+        workspacePicker: true,
+        workspaceLifecycle: true,
+        a2ui: false,
+      },
+      desktopFeatureFlagOverrides: { remoteAccess: true },
+    });
+
+    await useAppStore.getState().setDesktopFeatureFlagOverride("remoteAccess", true);
+
+    expect(useAppStore.getState().desktopFeatureFlagOverrides).toEqual({ remoteAccess: true });
+    expect(savedStates.length).toBe(priorSaved);
   });
 
   test("setDeveloperMode updates developer mode state", () => {

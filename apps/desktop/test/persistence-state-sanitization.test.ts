@@ -3,10 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
+
 let userDataDir = "";
 let appDataDir = "";
 
-mock.module("electron", () => ({
+const electronMockOverrides = {
   app: {
     getPath: (name: string) => (name === "appData" ? appDataDir : userDataDir),
   },
@@ -22,13 +24,21 @@ mock.module("electron", () => ({
       };
     },
   },
-}));
+};
+
+setElectronMockOverrides(electronMockOverrides);
+
+mock.module("electron", () => createElectronMock());
 
 const { PersistenceService } = await import("../electron/services/persistence");
 
 const TS = "2024-01-01T00:00:00.000Z";
 
 describe("desktop persistence state validation", () => {
+  beforeEach(() => {
+    setElectronMockOverrides(electronMockOverrides);
+  });
+
   beforeEach(async () => {
     appDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-appdata-"));
     userDataDir = path.join(appDataDir, "Cowork");

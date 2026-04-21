@@ -1,7 +1,8 @@
-import { describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
 
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
+import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
 type FakeWindow = {
   destroyed: boolean;
@@ -18,7 +19,7 @@ type FakeWindow = {
 
 const windowsBySenderId = new Map<number, FakeWindow>();
 
-mock.module("electron", () => ({
+const electronMockOverrides = {
   app: {
     getPath: () => process.cwd(),
     getAppPath: () => process.cwd(),
@@ -47,7 +48,11 @@ mock.module("electron", () => ({
       return { canceled: true, filePaths: [] };
     },
   },
-}));
+};
+
+setElectronMockOverrides(electronMockOverrides);
+
+mock.module("electron", () => createElectronMock());
 
 const { registerWindowIpc } = await import("../electron/ipc/window");
 
@@ -103,6 +108,10 @@ function createHandlers() {
 }
 
 describe("window IPC", () => {
+  beforeEach(() => {
+    setElectronMockOverrides(electronMockOverrides);
+  });
+
   test("cleans up drag state when the renderer is destroyed", () => {
     windowsBySenderId.clear();
     const { handlers } = createHandlers();

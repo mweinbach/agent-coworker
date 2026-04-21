@@ -1,10 +1,11 @@
 import path from "node:path";
 import { EventEmitter } from "node:events";
 
-import { describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { resolveTrayIconPath } from "../electron/services/trayIcon";
 import { createTrayMaskBitmap } from "../electron/services/trayImage";
+import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
 const createdTrays: FakeTray[] = [];
 
@@ -39,7 +40,7 @@ class FakeTray extends EventEmitter {
   }
 }
 
-mock.module("electron", () => ({
+const electronMockOverrides = {
   app: {
     quit: () => {},
   },
@@ -89,7 +90,11 @@ mock.module("electron", () => ({
       return { x: 0, y: 0 };
     },
   },
-}));
+};
+
+setElectronMockOverrides(electronMockOverrides);
+
+mock.module("electron", () => createElectronMock());
 
 const { QuickChatController } = await import("../electron/services/quickChatController");
 
@@ -145,6 +150,10 @@ class FakeWindow extends EventEmitter {
 }
 
 describe("resolveTrayIconPath", () => {
+  beforeEach(() => {
+    setElectronMockOverrides(electronMockOverrides);
+  });
+
   test("uses the packaged resources tray asset on macOS", () => {
     const resolvedPath = resolveTrayIconPath("/tmp/app.asar/out/main", {
       isPackaged: true,

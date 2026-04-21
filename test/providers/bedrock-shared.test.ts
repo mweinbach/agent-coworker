@@ -129,9 +129,11 @@ describe("providers/bedrockShared", () => {
   });
 
   test("recognizes EC2/IMDS-backed ambient auth as aws_default", async () => {
+    const home = await makeTmpHome();
     const auth = await resolveBedrockAuthConfig({
+      paths: getAiCoworkerPaths({ homedir: home }),
       env: {
-        HOME: await makeTmpHome(),
+        HOME: home,
         AWS_EC2_METADATA_DISABLED: "false",
       } as NodeJS.ProcessEnv,
     });

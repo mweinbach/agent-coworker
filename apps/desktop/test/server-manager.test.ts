@@ -1,13 +1,15 @@
-import { describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 
+import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
+
 let userDataDir = process.cwd();
 
-mock.module("electron", () => ({
+const electronMockOverrides = {
   app: {
     getPath: (name: string) => (name === "userData" ? userDataDir : process.cwd()),
     getAppPath: () => process.cwd(),
@@ -25,7 +27,11 @@ mock.module("electron", () => ({
       };
     },
   },
-}));
+};
+
+setElectronMockOverrides(electronMockOverrides);
+
+mock.module("electron", () => createElectronMock());
 
 const { ServerManager, __internal } = await import("../electron/services/serverManager");
 
@@ -54,6 +60,10 @@ function createFakeChild(): FakeChild {
 }
 
 describe("desktop server manager startup parsing", () => {
+  beforeEach(() => {
+    setElectronMockOverrides(electronMockOverrides);
+  });
+
   test("waitForServerListening ignores non-JSON lines and resolves on server_listening", async () => {
     const child = createFakeChild();
     const waitPromise = __internal.waitForServerListening(child as any);
@@ -88,6 +98,10 @@ describe("desktop server manager startup parsing", () => {
 });
 
 describe("desktop server manager startup mode", () => {
+  beforeEach(() => {
+    setElectronMockOverrides(electronMockOverrides);
+  });
+
   test("resolveSourceStartup does not resolve repo root when source mode is disabled", () => {
     const startup = __internal.resolveSourceStartup(false, () => {
       throw new Error("resolveRepoRoot should not be called");
@@ -144,6 +158,10 @@ describe("desktop server manager startup mode", () => {
 });
 
 describe("desktop server manager bun crash detection", () => {
+  beforeEach(() => {
+    setElectronMockOverrides(electronMockOverrides);
+  });
+
   test("detects bun panic output", () => {
     expect(__internal.isLikelyBunSegfault("panic(main thread): Segmentation fault at address 0x1")).toBe(true);
     expect(__internal.isLikelyBunSegfault("oh no: Bun has crashed.")).toBe(true);

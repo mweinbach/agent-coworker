@@ -120,6 +120,7 @@ export function FeatureFlagsPage() {
         </CardContent>
       </Card>
 
+      {desktopFeatureFlags.menuBar ? (
       <Card className="border-border/80 bg-card/85">
         <CardHeader>
           <CardTitle>Quick chat shortcut</CardTitle>
@@ -195,6 +196,7 @@ export function FeatureFlagsPage() {
           </div>
         </CardContent>
       </Card>
+      ) : null}
     </div>
   );
 }

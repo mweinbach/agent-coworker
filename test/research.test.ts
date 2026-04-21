@@ -254,6 +254,51 @@ describe("research service", () => {
       await fs.rm(paths.home, { recursive: true, force: true });
     }
   });
+
+  test("renames a research row, persists, and broadcasts research/updated", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const sent: Array<{ payload: Record<string, unknown> }> = [];
+
+    await sessionDb.upsertResearch(makeResearchRecord({
+      id: "research-rename",
+      status: "completed",
+      title: "Original title",
+      interactionId: "interaction-rename",
+      lastEventId: "evt-rename",
+    }));
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] } as any),
+      sendJsonRpc: (ws, payload) => {
+        sent.push({ payload: payload as Record<string, unknown> });
+      },
+    });
+
+    try {
+      const subscriber = { data: { connectionId: "socket-rename" } } as any;
+      await service.subscribe(subscriber, "research-rename");
+
+      const renamed = await service.rename("research-rename", "  Refined benchmark brief  ");
+      expect(renamed?.title).toBe("Refined benchmark brief");
+
+      const persisted = sessionDb.getResearch("research-rename");
+      expect(persisted?.title).toBe("Refined benchmark brief");
+
+      const updates = sent.filter((entry) => entry.payload.method === "research/updated");
+      expect(updates.length).toBeGreaterThan(0);
+      const last = updates.at(-1)?.payload.params as { research?: ResearchRecord } | undefined;
+      expect(last?.research?.title).toBe("Refined benchmark brief");
+
+      await expect(service.rename("research-rename", "   ")).rejects.toThrow(/empty/i);
+      expect(await service.rename("missing-id", "x")).toBeNull();
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("research export", () => {

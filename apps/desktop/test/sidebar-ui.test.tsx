@@ -29,6 +29,7 @@ const MOCK_UPDATE_STATE = {
 };
 let workspacePickerEnabled = true;
 let workspaceLifecycleEnabled = true;
+const showQuickChatWindowMock = mock(async (_opts?: { threadId?: string }) => {});
 
 mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   appendTranscriptBatch: async () => {},
@@ -71,6 +72,7 @@ mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   onSystemAppearanceChanged: () => () => {},
   onMenuCommand: () => () => {},
   onUpdateStateChanged: () => () => {},
+  showQuickChatWindow: showQuickChatWindowMock,
 }));
 
 class MockResizeObserver {
@@ -193,6 +195,7 @@ describe("desktop sidebar", () => {
   beforeEach(() => {
     workspacePickerEnabled = true;
     workspaceLifecycleEnabled = true;
+    showQuickChatWindowMock.mockClear();
     useAppStore.setState(defaultStoreState);
   });
 
@@ -255,6 +258,45 @@ describe("desktop sidebar", () => {
           root?.unmount();
         });
       }
+      harness.restore();
+    }
+  });
+
+  test.serial("opens a selected thread in quick chat from the sidebar pop-out button", async () => {
+    const harness = setupSidebarJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        resetAppStore({
+          workspaces: [makeWorkspace()],
+          threads: makeThreads(2),
+          selectedWorkspaceId: "ws-1",
+          selectedThreadId: "thread-2",
+        });
+        root.render(createElement(Sidebar));
+      });
+
+      const popOutButton = container.querySelector('button[aria-label="Open Thread 2 in quick chat"]');
+      if (!(popOutButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing pop-out button");
+      }
+
+      await act(async () => {
+        popOutButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(showQuickChatWindowMock).toHaveBeenCalledTimes(1);
+      expect(showQuickChatWindowMock).toHaveBeenCalledWith({ threadId: "thread-2" });
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
       harness.restore();
     }
   });

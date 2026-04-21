@@ -501,7 +501,7 @@ export function createWebAdapter(): DesktopApi {
 
     async showMainWindow(): Promise<void> {},
 
-    async showQuickChatWindow(): Promise<void> {},
+    async showQuickChatWindow(_opts?: { threadId?: string }): Promise<void> {},
 
     async listDirectory(opts): Promise<ExplorerEntry[]> {
       return await readWebJson<ExplorerEntry[]>("/cowork/fs/list", {

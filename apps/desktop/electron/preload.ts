@@ -24,6 +24,7 @@ import {
   type RenamePathInput,
   type RevealPathInput,
   type SetWindowAppearanceInput,
+  type ShowQuickChatWindowInput,
   type ShowContextMenuInput,
   type StartWorkspaceServerInput,
   type StopWorkspaceServerInput,
@@ -55,6 +56,7 @@ import {
   renamePathInputSchema,
   revealPathInputSchema,
   setWindowAppearanceInputSchema,
+  showQuickChatWindowInputSchema,
   showContextMenuInputSchema,
   startWorkspaceServerInputSchema,
   stopWorkspaceServerInputSchema,
@@ -310,7 +312,12 @@ const desktopApi = Object.freeze<DesktopApi>({
 
   showMainWindow: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showMainWindow),
 
-  showQuickChatWindow: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showQuickChatWindow),
+  showQuickChatWindow: (opts?: ShowQuickChatWindowInput) => {
+    if (opts !== undefined) {
+      parseWithSchema(showQuickChatWindowInputSchema, opts, "showQuickChatWindow options");
+    }
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showQuickChatWindow, opts);
+  },
 
   listDirectory: (opts: ListDirectoryInput) => {
     assertListDirectoryInput(opts);

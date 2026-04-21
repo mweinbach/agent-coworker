@@ -24,6 +24,7 @@ import { PrimaryContent } from "./ui/layout/PrimaryContent";
 import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
 import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
+import { MenuBarUtilityShell } from "./ui/menuBar/MenuBarUtilityShell";
 import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
 import { getDesktopWindowMode } from "./lib/windowMode";
 
@@ -379,6 +380,8 @@ export default function App() {
     <>
       {windowMode === "quick-chat" ? (
         <QuickChatShell init={init} ready={ready} startupError={startupError} />
+      ) : windowMode === "utility" ? (
+        <MenuBarUtilityShell init={init} ready={ready} startupError={startupError} />
       ) : view === "settings" ? (
         <div className="app-shell app-shell--settings flex h-full min-h-0 flex-col text-foreground">
           <div className="app-window-drag-strip" aria-hidden="true" />

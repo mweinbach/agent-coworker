@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { usePrefersReducedMotion } from "../lib/usePrefersReducedMotion";
 
 import {
+  ArrowUpRightIcon,
   ChevronRightIcon,
   FolderIcon,
   FolderOpenIcon,
@@ -18,7 +19,7 @@ import { resolvePluginCatalogWorkspaceSelection } from "../app/pluginManagement"
 import { useAppStore } from "../app/store";
 import type { ThreadRecord, ThreadRuntime, WorkspaceRecord } from "../app/types";
 import { Collapsible, CollapsibleTrigger } from "../components/ui/collapsible";
-import { confirmAction, showContextMenu } from "../lib/desktopCommands";
+import { confirmAction, showContextMenu, showQuickChatWindow } from "../lib/desktopCommands";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/utils";
@@ -296,35 +297,53 @@ const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                         />
                       </div>
                     ) : (
-                      <Button
-                        key={thread.id}
-                        className={cn(
-                          "sidebar-thread-item sidebar-lift flex w-full items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
-                          isActive
-                            ? "border-border/45 bg-foreground/[0.05] text-foreground"
-                            : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
-                        )}
-                        onClick={() => selectThread(thread.id)}
-                        onContextMenu={(event) => onThreadContextMenu(event, thread.id, displayTitle)}
-                        onDoubleClick={() => onStartEditing(thread.id, displayTitle)}
-                        type="button"
-                        variant="ghost"
-                      >
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
-                            {displayTitle}
+                      <div key={thread.id} className="group/sidebar-thread flex items-stretch gap-1">
+                        <Button
+                          className={cn(
+                            "sidebar-thread-item sidebar-lift flex min-w-0 flex-1 items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-1.5 text-left",
+                            isActive
+                              ? "border-border/45 bg-foreground/[0.05] text-foreground"
+                              : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
+                          )}
+                          onClick={() => selectThread(thread.id)}
+                          onContextMenu={(event) => onThreadContextMenu(event, thread.id, displayTitle)}
+                          onDoubleClick={() => onStartEditing(thread.id, displayTitle)}
+                          type="button"
+                          variant="ghost"
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[13px] font-medium tracking-[-0.018em]">
+                              {displayTitle}
+                            </span>
                           </span>
-                        </span>
 
-                        <span className="flex shrink-0 items-center gap-2 pl-2">
-                          {busy ? (
-                            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
-                          ) : null}
-                          {ageLabel ? (
-                            <span className="text-[11px] font-medium text-muted-foreground">{ageLabel}</span>
-                          ) : null}
-                        </span>
-                      </Button>
+                          <span className="flex shrink-0 items-center gap-2 pl-2">
+                            {busy ? (
+                              <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
+                            ) : null}
+                            {ageLabel ? (
+                              <span className="text-[11px] font-medium text-muted-foreground">{ageLabel}</span>
+                            ) : null}
+                          </span>
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          className={cn(
+                            "h-auto rounded-lg border border-transparent px-2 text-muted-foreground opacity-0 transition hover:bg-foreground/[0.04] hover:text-foreground group-hover/sidebar-thread:opacity-100 group-focus-within/sidebar-thread:opacity-100",
+                            isActive && "opacity-100",
+                          )}
+                          aria-label={`Open ${displayTitle} in quick chat`}
+                          title="Open in quick chat"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void showQuickChatWindow({ threadId: thread.id });
+                          }}
+                        >
+                          <ArrowUpRightIcon className="h-4 w-4" />
+                        </Button>
+                      </div>
                     );
                   })}
 

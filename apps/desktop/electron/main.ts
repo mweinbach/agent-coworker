@@ -5,7 +5,12 @@ import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, Menu, Notification, shell } from "electron";
 
 import type { PersistedState } from "../src/app/types";
-import { DESKTOP_EVENT_CHANNELS, type DesktopMenuCommand, type UpdaterState } from "../src/lib/desktopApi";
+import {
+  DESKTOP_EVENT_CHANNELS,
+  type DesktopMenuCommand,
+  type ShowQuickChatWindowInput,
+  type UpdaterState,
+} from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
 import {
   applySystemAppearanceToWindow,
@@ -268,7 +273,11 @@ async function maybeRunPackagedSmoke(): Promise<boolean> {
   }
 }
 
-async function loadRendererWindow(win: BrowserWindow, windowMode: "main" | "quick-chat"): Promise<void> {
+async function loadRendererWindow(
+  win: BrowserWindow,
+  windowMode: "main" | "quick-chat" | "utility",
+  query: Record<string, string> = {},
+): Promise<void> {
   if (!app.isPackaged) {
     const { url, warning } = resolveDesktopRendererUrl(
       process.env.ELECTRON_RENDERER_URL,
@@ -278,16 +287,20 @@ async function loadRendererWindow(win: BrowserWindow, windowMode: "main" | "quic
       console.warn(`[desktop] ${warning}`);
     }
     const target = new URL(url);
-    if (windowMode === "quick-chat") {
-      target.searchParams.set("window", "quick-chat");
+    if (windowMode !== "main") {
+      target.searchParams.set("window", windowMode);
+    }
+    for (const [key, value] of Object.entries(query)) {
+      target.searchParams.set(key, value);
     }
     await win.loadURL(target.toString());
     return;
   }
 
-  await win.loadFile(path.join(__dirname, "../renderer/index.html"), windowMode === "quick-chat"
-    ? { query: { window: "quick-chat" } }
-    : undefined);
+  await win.loadFile(
+    path.join(__dirname, "../renderer/index.html"),
+    windowMode === "main" ? undefined : { query: { window: windowMode, ...query } },
+  );
 }
 
 async function createMainWindow(): Promise<BrowserWindow> {
@@ -377,7 +390,7 @@ async function createMainWindow(): Promise<BrowserWindow> {
   return win;
 }
 
-async function createQuickChatWindow(): Promise<BrowserWindow> {
+async function createQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<BrowserWindow> {
   const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
     prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
   });
@@ -385,10 +398,10 @@ async function createQuickChatWindow(): Promise<BrowserWindow> {
 
   const win = new BrowserWindow({
     title: "Cowork Quick Chat",
-    width: 880,
-    height: 640,
-    minWidth: 720,
-    minHeight: 520,
+    width: 660,
+    height: 480,
+    minWidth: 540,
+    minHeight: 390,
     show: false,
     frame: false,
     resizable: true,
@@ -415,6 +428,9 @@ async function createQuickChatWindow(): Promise<BrowserWindow> {
   });
 
   applyPlatformWindowCreated(win, process.platform);
+  if (process.platform === "darwin") {
+    win.setWindowButtonVisibility(false);
+  }
   applyWindowSecurity(win);
   syncWindowAppearance(win, {
     platform: process.platform,
@@ -422,7 +438,65 @@ async function createQuickChatWindow(): Promise<BrowserWindow> {
     useMacosNativeGlass,
   });
   win.setAlwaysOnTop(true, process.platform === "darwin" ? "pop-up-menu" : "normal");
-  await loadRendererWindow(win, "quick-chat");
+  await loadRendererWindow(
+    win,
+    "quick-chat",
+    opts?.threadId ? { threadId: opts.threadId } : {},
+  );
+  return win;
+}
+
+async function createUtilityWindow(): Promise<BrowserWindow> {
+  const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
+    prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
+  });
+  const useDarkColors = getSystemAppearanceSnapshot().shouldUseDarkColors;
+
+  const win = new BrowserWindow({
+    title: "Cowork Menu",
+    width: 420,
+    height: 520,
+    minWidth: 420,
+    minHeight: 420,
+    maxWidth: 520,
+    maxHeight: 680,
+    show: false,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    autoHideMenuBar: true,
+    roundedCorners: true,
+    hasShadow: true,
+    backgroundColor: useDarkColors ? "#1f1d1a" : "#f5f0e5",
+    ...getInitialWindowAppearanceOptions({ useDarkColors, useMacosNativeGlass }),
+    webPreferences: {
+      preload: path.join(__dirname, "../preload/preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+      safeDialogs: true,
+      devTools: !app.isPackaged,
+    },
+  });
+
+  applyPlatformWindowCreated(win, process.platform);
+  if (process.platform === "darwin") {
+    win.setWindowButtonVisibility(false);
+  }
+  applyWindowSecurity(win);
+  syncWindowAppearance(win, {
+    platform: process.platform,
+    useDarkColors,
+    useMacosNativeGlass,
+  });
+  win.setAlwaysOnTop(true, process.platform === "darwin" ? "pop-up-menu" : "normal");
+  await loadRendererWindow(win, "utility");
   return win;
 }
 
@@ -460,6 +534,7 @@ if (!gotSingleInstanceLock) {
       getMainWindow: () => mainWindow,
       createMainWindow,
       createQuickChatWindow,
+      createUtilityWindow,
     });
     const initialState: PersistedState | null = await persistence.loadState().catch(() => null);
     if (initialState) {
@@ -473,7 +548,7 @@ if (!gotSingleInstanceLock) {
       serverManager,
       updater,
       showMainWindow: () => quickChatController?.showMainWindow(),
-      showQuickChatWindow: () => quickChatController?.showQuickChatWindow(),
+      showQuickChatWindow: (opts) => quickChatController?.showQuickChatWindow(opts),
       applyPersistedState: (state) => {
         quickChatController?.applyPersistedState(state);
       },

@@ -151,9 +151,10 @@ describe("window IPC", () => {
     const sender = new FakeWebContents(21);
 
     await handlers.get(DESKTOP_IPC_CHANNELS.showMainWindow)?.({ sender });
-    await handlers.get(DESKTOP_IPC_CHANNELS.showQuickChatWindow)?.({ sender });
+    await handlers.get(DESKTOP_IPC_CHANNELS.showQuickChatWindow)?.({ sender }, { threadId: "thread-21" });
 
     expect(showMainWindow).toHaveBeenCalledTimes(1);
     expect(showQuickChatWindow).toHaveBeenCalledTimes(1);
+    expect(showQuickChatWindow).toHaveBeenCalledWith({ threadId: "thread-21" });
   });
 });

@@ -5,6 +5,7 @@ import { ArrowUpRightIcon, SquarePenIcon, XIcon } from "lucide-react";
 import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
 import { showMainWindow, windowClose } from "../../lib/desktopCommands";
+import { getDesktopWindowThreadId } from "../../lib/windowMode";
 import { ChatView } from "../ChatView";
 
 type QuickChatShellProps = {
@@ -18,6 +19,8 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
   const threads = useAppStore((s) => s.threads);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const newThread = useAppStore((s) => s.newThread);
+  const selectThread = useAppStore((s) => s.selectThread);
+  const requestedThreadId = getDesktopWindowThreadId();
 
   const activeThread = useMemo(
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
@@ -29,11 +32,27 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
   );
 
   useEffect(() => {
+    if (!ready || startupError || !requestedThreadId) {
+      return;
+    }
+    if (!threads.some((thread) => thread.id === requestedThreadId)) {
+      return;
+    }
+    if (selectedThreadId === requestedThreadId) {
+      return;
+    }
+    void selectThread(requestedThreadId);
+  }, [ready, requestedThreadId, selectThread, selectedThreadId, startupError, threads]);
+
+  useEffect(() => {
     if (!ready || startupError || selectedThreadId || workspaces.length === 0) {
       return;
     }
+    if (requestedThreadId && threads.some((thread) => thread.id === requestedThreadId)) {
+      return;
+    }
     void newThread();
-  }, [newThread, ready, selectedThreadId, startupError, workspaces.length]);
+  }, [newThread, ready, requestedThreadId, selectedThreadId, startupError, threads, workspaces.length]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -49,8 +68,8 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
   }, []);
 
   return (
-    <div className="flex h-screen min-h-0 min-w-0 bg-[radial-gradient(circle_at_top,var(--surface-overlay),transparent_52%),linear-gradient(180deg,var(--surface-shell),var(--surface-window))] p-3 text-foreground">
-      <div className="app-surface-overlay app-shadow-overlay flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[32px] border border-border/55 backdrop-blur-xl">
+    <div className="flex h-screen min-h-0 min-w-0 bg-[radial-gradient(circle_at_top,var(--surface-overlay),transparent_52%),linear-gradient(180deg,var(--surface-shell),var(--surface-window))] p-2 text-foreground">
+      <div className="app-surface-overlay app-shadow-overlay flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[28px] border border-border/55 backdrop-blur-xl">
         <div
           className="flex items-center justify-between gap-3 px-4 py-3"
           style={{ WebkitAppRegion: "drag" } as CSSProperties}
@@ -102,7 +121,7 @@ export function QuickChatShell({ init, ready, startupError }: QuickChatShellProp
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden px-2 pb-2">
-          <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[28px] border border-border/45 bg-panel/75">
+          <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[24px] border border-border/45 bg-panel/75">
             {!ready ? (
               <div className="flex h-full items-center justify-center">
                 <div className="text-sm font-medium text-muted-foreground">Starting quick chat…</div>

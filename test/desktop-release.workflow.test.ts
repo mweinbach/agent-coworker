@@ -49,6 +49,11 @@ describe("desktop release workflow", () => {
     expect(workflow).toContain("- name: Build Windows ARM64 unpacked desktop directory");
     expect(workflow).toContain("runs-on: windows-11-arm");
     expect(workflow).toContain("name: Smoke Windows ARM64 Desktop");
+    expect(workflow).toContain('Start-Process -FilePath $installer.FullName -ArgumentList "/S", "/D=$installRoot" -PassThru -Wait');
+    expect(workflow).toContain('throw "ARM64 installer exited with code $($installProcess.ExitCode)"');
+    expect(workflow).toContain('Get-ChildItem $installRoot -Recurse -Filter "cowork-server-manifest.json" -File |');
+    expect(workflow).toContain('throw "ARM64 installer did not install cowork-server-manifest.json under $installRoot"');
+    expect(workflow).toContain('throw "ARM64 installer manifest was found outside resources\\\\binaries: $sidecarRoot"');
     expect(workflow).toContain("COWORK_DESKTOP_SMOKE_WORKSPACE");
     expect(workflow).toContain("COWORK_DESKTOP_SMOKE_OUTPUT");
     expect(workflow).toContain("Start-Process -FilePath $appExe.FullName -WorkingDirectory $appExe.DirectoryName -PassThru");

@@ -193,12 +193,34 @@ jobs:
             Remove-Item $installRoot -Recurse -Force
           }
 
-          Start-Process -FilePath $installer.FullName -ArgumentList "/S", "/D=$installRoot" -Wait
+          $installProcess = Start-Process -FilePath $installer.FullName -ArgumentList "/S", "/D=$installRoot" -PassThru -Wait
+          if ($installProcess.ExitCode -ne 0) {
+            throw "ARM64 installer exited with code $($installProcess.ExitCode)"
+          }
+
+          $manifest = Get-ChildItem $installRoot -Recurse -Filter "cowork-server-manifest.json" -File |
+            Sort-Object FullName |
+            Select-Object -First 1
+
+          if (-not $manifest) {
+            if (Test-Path $installRoot) {
+              Write-Host "Installer tree under $installRoot:"
+              Get-ChildItem $installRoot -Recurse -Force |
+                Select-Object -First 50 -ExpandProperty FullName |
+                ForEach-Object { Write-Host $_ }
+            }
+
+            throw "ARM64 installer did not install cowork-server-manifest.json under $installRoot"
+          }
+
+          $sidecarRoot = Split-Path $manifest.FullName -Parent
+          if ($sidecarRoot -notmatch "[\\\\/]resources[\\\\/]binaries$") {
+            throw "ARM64 installer manifest was found outside resources\\binaries: $sidecarRoot"
+          }
 
           $requiredPaths = @(
-            (Join-Path $installRoot "resources\\binaries\\bun.exe"),
-            (Join-Path $installRoot "resources\\binaries\\cowork-server-manifest.json"),
-            (Join-Path $installRoot "resources\\binaries\\server\\index.js")
+            (Join-Path $sidecarRoot "bun.exe"),
+            (Join-Path $sidecarRoot "server\\index.js")
           )
 
           foreach ($requiredPath in $requiredPaths) {
@@ -207,10 +229,9 @@ jobs:
             }
           }
 
-          $manifestPath = Join-Path $installRoot "resources\\binaries\\cowork-server-manifest.json"
-          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          $manifestJson = Get-Content $manifest.FullName -Raw | ConvertFrom-Json
 
-          if ($manifest.launch.kind -ne "bun" -or $manifest.launch.runtime -ne "bun.exe" -or $manifest.launch.entrypoint -ne "server/index.js") {
+          if ($manifestJson.launch.kind -ne "bun" -or $manifestJson.launch.runtime -ne "bun.exe" -or $manifestJson.launch.entrypoint -ne "server/index.js") {
             throw "ARM64 installer sidecar manifest does not point at the expected Bun runtime payload"
           }
 

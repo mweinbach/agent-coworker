@@ -123,10 +123,10 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div
-        className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/55 px-4 py-2"
+        className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/55 px-4 py-2"
         role="tablist"
       >
-        <div className="flex items-center gap-1 rounded-lg bg-muted/30 p-0.5">
+        <div className="flex shrink-0 items-center gap-1 overflow-x-auto rounded-lg bg-muted/30 p-0.5">
           <TabButton active={tab === "report"} onClick={() => setTab("report")}>
             Report
           </TabButton>
@@ -141,26 +141,26 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
           </TabButton>
         </div>
 
-        <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-          <Badge className={cn(statusClassName(research.status))}>
+        <div className="flex min-w-0 flex-1 basis-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          <Badge className={cn("shrink-0", statusClassName(research.status))}>
             {statusLabel(research.status)}
           </Badge>
           {running ? (
             <>
-              <span className="tabular-nums text-foreground/80">{formatElapsed(elapsedMs)}</span>
+              <span className="whitespace-nowrap tabular-nums text-foreground/80">{formatElapsed(elapsedMs)}</span>
               <span aria-hidden="true">·</span>
-              <span>
+              <span className="whitespace-nowrap">
                 <span className="tabular-nums text-foreground/80">{sourceCount}</span>{" "}
                 {sourceCount === 1 ? "source" : "sources"}
               </span>
               <span aria-hidden="true">·</span>
-              <span>
+              <span className="whitespace-nowrap">
                 <span className="tabular-nums text-foreground/80">{thoughtCount}</span>{" "}
                 {thoughtCount === 1 ? "note" : "notes"}
               </span>
             </>
           ) : startedAgo ? (
-            <span>{startedAgo} ago</span>
+            <span className="whitespace-nowrap">{startedAgo} ago</span>
           ) : null}
         </div>
 

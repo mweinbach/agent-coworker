@@ -7,12 +7,35 @@ export function ResearchReportRenderer({
   markdown: string;
   status: "pending" | "running" | "completed" | "cancelled" | "failed";
 }) {
-  if (!markdown.trim()) {
+  const hasMarkdown = markdown.trim().length > 0;
+  const running = status === "running" || status === "pending";
+
+  if (!hasMarkdown && running) {
+    return (
+      <div
+        className="rounded-2xl border border-border/65 bg-card/70 px-5 py-5"
+        role="status"
+        aria-label="Report streaming"
+      >
+        <div className="mb-3 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
+          Report streaming…
+        </div>
+        <div className="space-y-2.5" aria-hidden="true">
+          <div className="h-3 w-[88%] animate-pulse rounded bg-muted/55" />
+          <div className="h-3 w-[72%] animate-pulse rounded bg-muted/45" />
+          <div className="h-3 w-[95%] animate-pulse rounded bg-muted/55" />
+          <div className="h-3 w-[60%] animate-pulse rounded bg-muted/40" />
+          <div className="h-3 w-[80%] animate-pulse rounded bg-muted/50" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!hasMarkdown) {
     return (
       <div className="rounded-2xl border border-border/65 bg-card/70 px-4 py-5 text-sm text-muted-foreground">
-        {status === "running" || status === "pending"
-          ? "Waiting for the report stream to produce content..."
-          : "This research run did not produce a markdown report."}
+        This research run did not produce a markdown report.
       </div>
     );
   }
@@ -25,4 +48,3 @@ export function ResearchReportRenderer({
     </div>
   );
 }
-

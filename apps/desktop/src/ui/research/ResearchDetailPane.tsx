@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { MessageSquareIcon } from "lucide-react";
+import { MessageSquareIcon, PanelLeftIcon } from "lucide-react";
 
 import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 
@@ -15,7 +15,7 @@ import { ResearchReportRenderer } from "./ResearchReportRenderer";
 import { ResearchSourcesList } from "./ResearchSourcesList";
 import { cn } from "../../lib/utils";
 
-type DetailTab = "report" | "notes" | "sources" | "prompt";
+type DetailTab = "report" | "notes" | "prompt";
 
 function statusClassName(status: ResearchDetail["status"]): string {
   switch (status) {
@@ -104,10 +104,13 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const exportPendingIds = useAppStore((s) => s.researchExportPendingIds);
   const running = research ? research.status === "running" || research.status === "pending" : false;
   const elapsedMs = useRunningElapsed(research?.createdAt ?? new Date().toISOString(), running);
+  const prefersReducedMotion = usePrefersReducedMotion();
   const [tab, setTab] = useState<DetailTab>("report");
+  const [sourcesOpen, setSourcesOpen] = useState(false);
 
   useEffect(() => {
     setTab("report");
+    setSourcesOpen(false);
   }, [research?.id]);
 
   if (!research) {
@@ -136,9 +139,6 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
           </TabButton>
           <TabButton active={tab === "notes"} count={thoughtCount} onClick={() => setTab("notes")}>
             Notes
-          </TabButton>
-          <TabButton active={tab === "sources"} count={sourceCount} onClick={() => setTab("sources")}>
-            Sources
           </TabButton>
           <TabButton active={tab === "prompt"} onClick={() => setTab("prompt")}>
             Prompt
@@ -169,6 +169,27 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          {sourceCount > 0 ? (
+            <Button
+              size="sm"
+              type="button"
+              variant="outline"
+              onClick={() => setSourcesOpen((open) => !open)}
+              aria-pressed={sourcesOpen}
+              aria-expanded={sourcesOpen}
+              aria-label={sourcesOpen ? "Hide sources panel" : "Show sources panel"}
+              className={cn(
+                "h-7 gap-1.5 rounded-full border-border/60 px-3 text-xs",
+                sourcesOpen ? "bg-primary/10 border-primary/30 text-primary" : "bg-muted/15",
+              )}
+            >
+              <PanelLeftIcon className={cn("h-3.5 w-3.5 transition-transform", sourcesOpen && "rotate-180")} aria-hidden="true" />
+              Sources
+              <span className="rounded-full bg-muted/80 px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                {sourceCount}
+              </span>
+            </Button>
+          ) : null}
           <ResearchExportMenu
             researchId={research.id}
             pending={exportPending}
@@ -182,43 +203,73 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
-        <div className="mx-auto flex max-w-4xl flex-col gap-6">
-          {research.error && tab !== "prompt" ? (
-            <div className="rounded-xl border border-destructive/35 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-              {research.error}
-            </div>
-          ) : null}
-
-          {tab === "report" ? (
-            <ResearchReportRenderer
-              markdown={research.outputsMarkdown}
-              status={research.status}
-              sources={research.sources}
-            />
-          ) : null}
-
-          {tab === "notes" ? (
-            <ResearchNotesTab
-              thoughtSummaries={research.thoughtSummaries}
-              status={research.status}
-            />
-          ) : null}
-
-          {tab === "sources" ? (
-            <ResearchSourcesList sources={research.sources} />
-          ) : null}
-
-          {tab === "prompt" ? (
-            <section className="rounded-2xl border border-border/55 bg-card/60 px-5 py-5">
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                Prompt
+      <div className="flex min-h-0 flex-1 flex-row">
+        <AnimatePresence initial={false}>
+          {sourcesOpen && sourceCount > 0 ? (
+            <motion.aside
+              key="sources-drawer"
+              initial={prefersReducedMotion ? false : { width: 0, opacity: 0 }}
+              animate={prefersReducedMotion
+                ? { width: "20rem", opacity: 1 }
+                : { width: "20rem", opacity: 1 }}
+              exit={prefersReducedMotion ? { width: 0, opacity: 0 } : { width: 0, opacity: 0 }}
+              transition={prefersReducedMotion
+                ? { duration: 0 }
+                : { type: "spring", stiffness: 420, damping: 34, mass: 0.9 }}
+              className="min-h-0 shrink-0 overflow-hidden border-r border-border/55 bg-muted/10"
+              aria-label="Sources"
+            >
+              <div className="flex h-full w-80 min-h-0 flex-col">
+                <div className="flex items-center justify-between gap-2 border-b border-border/55 px-4 py-2.5">
+                  <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                    Sources
+                    <span className="rounded-full bg-muted/80 px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                      {sourceCount}
+                    </span>
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+                  <ResearchSourcesList sources={research.sources} variant="inline" />
+                </div>
               </div>
-              <p className="whitespace-pre-wrap text-sm leading-6 text-foreground/90">
-                {research.prompt}
-              </p>
-            </section>
+            </motion.aside>
           ) : null}
+        </AnimatePresence>
+
+        <div className="min-w-0 flex-1 overflow-y-auto px-8 py-6">
+          <div className="mx-auto flex max-w-4xl flex-col gap-6">
+            {research.error && tab !== "prompt" ? (
+              <div className="rounded-xl border border-destructive/35 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                {research.error}
+              </div>
+            ) : null}
+
+            {tab === "report" ? (
+              <ResearchReportRenderer
+                markdown={research.outputsMarkdown}
+                status={research.status}
+                sources={research.sources}
+              />
+            ) : null}
+
+            {tab === "notes" ? (
+              <ResearchNotesTab
+                thoughtSummaries={research.thoughtSummaries}
+                status={research.status}
+              />
+            ) : null}
+
+            {tab === "prompt" ? (
+              <section className="rounded-2xl border border-border/55 bg-card/60 px-5 py-5">
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  Prompt
+                </div>
+                <p className="whitespace-pre-wrap text-sm leading-6 text-foreground/90">
+                  {research.prompt}
+                </p>
+              </section>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -273,14 +324,14 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
     : { type: "spring" as const, stiffness: 420, damping: 34, mass: 0.9 };
 
   return (
-    <div className="pointer-events-none absolute bottom-4 left-4 right-4 z-30 flex items-end">
+    <div className="pointer-events-none absolute bottom-4 left-4 right-4 z-30 flex items-end justify-end">
       <AnimatePresence mode="popLayout" initial={false}>
         {expanded ? (
           <motion.div
             key="composer"
             ref={composerShellRef}
             layout
-            className="pointer-events-auto w-full max-w-2xl origin-bottom-left"
+            className="pointer-events-auto w-full max-w-2xl origin-bottom-right"
             initial={{ opacity: 0, scale: 0.88, y: 6 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.88, y: 6 }}
@@ -297,7 +348,7 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
           <motion.div
             key="fab"
             layout
-            className="pointer-events-auto origin-bottom-left"
+            className="pointer-events-auto origin-bottom-right"
             initial={{ opacity: 0, scale: 0.7 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.7 }}

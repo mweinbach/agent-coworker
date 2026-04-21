@@ -17,6 +17,7 @@ import { cn } from "../../lib/utils";
 
 type DetailTab = "report" | "notes" | "prompt";
 const RESEARCH_SOURCES_PANEL_WIDTH = "clamp(18rem, 30vw, 26rem)";
+const RESEARCH_INLINE_SOURCES_MIN_DETAIL_WIDTH = 36 * 16;
 
 function statusClassName(status: ResearchDetail["status"]): string {
   switch (status) {
@@ -66,6 +67,35 @@ function useRunningElapsed(startedAtIso: string, running: boolean): number {
   return Math.max(0, nowMs - startedMs);
 }
 
+function useElementWidth<T extends HTMLElement>(ref: React.RefObject<T | null>, watchKey?: string | null): number {
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) {
+      return;
+    }
+
+    setWidth(node.getBoundingClientRect().width);
+
+    if (typeof ResizeObserver !== "function") {
+      return;
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const nextWidth = entries[0]?.contentRect.width;
+      if (typeof nextWidth === "number") {
+        setWidth(nextWidth);
+      }
+    });
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref, watchKey]);
+
+  return width;
+}
+
 function TabButton({
   active,
   children,
@@ -107,8 +137,10 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const elapsedMs = useRunningElapsed(research?.createdAt ?? new Date().toISOString(), running);
   const prefersReducedMotion = usePrefersReducedMotion();
   const sourcesPanelId = useId();
+  const detailBodyRef = useRef<HTMLDivElement | null>(null);
   const [tab, setTab] = useState<DetailTab>("report");
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const detailBodyWidth = useElementWidth(detailBodyRef, research?.id ?? null);
 
   useEffect(() => {
     setTab("report");
@@ -129,10 +161,15 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const sourceCount = research.sources.length;
   const thoughtCount = research.thoughtSummaries.length;
   const showSourcesPanel = sourcesOpen && sourceCount > 0;
+  const sourcesOverlay = detailBodyWidth > 0 && detailBodyWidth < RESEARCH_INLINE_SOURCES_MIN_DETAIL_WIDTH;
   const sourcesPanelStyle = {
     "--research-sources-panel-width": RESEARCH_SOURCES_PANEL_WIDTH,
-    flexBasis: showSourcesPanel ? "var(--research-sources-panel-width)" : "0px",
-    width: showSourcesPanel ? "var(--research-sources-panel-width)" : "0px",
+    flexBasis: sourcesOverlay ? undefined : showSourcesPanel ? "var(--research-sources-panel-width)" : "0px",
+    width: showSourcesPanel
+      ? sourcesOverlay
+        ? "min(var(--research-sources-panel-width), calc(100% - 0.75rem))"
+        : "var(--research-sources-panel-width)"
+      : "0px",
   } as CSSProperties;
 
   return (
@@ -217,7 +254,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
         </div>
       </div>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-row">
+      <div ref={detailBodyRef} className="relative flex min-h-0 min-w-0 flex-1 flex-row">
         <div className="min-w-0 flex-1 overflow-y-auto px-8 py-6">
           <div className="mx-auto flex max-w-4xl flex-col gap-6">
             {research.error && tab !== "prompt" ? (
@@ -257,12 +294,17 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
         {sourceCount > 0 ? (
           <aside
             id={sourcesPanelId}
+            data-sources-presentation={sourcesOverlay ? "overlay" : "inline"}
             className={cn(
-              "min-h-0 shrink-0 overflow-hidden bg-muted/15 transition-[width,opacity,border-color] ease-out",
+              "min-h-0 overflow-hidden bg-muted/15 transition-[width,opacity,border-color,transform] ease-out",
               prefersReducedMotion ? "duration-0" : "duration-200",
-              showSourcesPanel
-                ? "border-l border-border/55 opacity-100"
-                : "pointer-events-none border-l border-transparent opacity-0",
+              sourcesOverlay
+                ? showSourcesPanel
+                  ? "absolute inset-y-0 right-0 z-20 border-l border-border/55 bg-background/96 opacity-100 shadow-2xl shadow-black/10 backdrop-blur-sm"
+                  : "pointer-events-none absolute inset-y-0 right-0 z-20 border-l border-transparent opacity-0 translate-x-3"
+                : showSourcesPanel
+                  ? "shrink-0 border-l border-border/55 opacity-100"
+                  : "pointer-events-none shrink-0 border-l border-transparent opacity-0",
             )}
             aria-label="Sources"
             aria-hidden={!showSourcesPanel}
@@ -270,7 +312,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
           >
             <div
               className="flex h-full min-h-0 min-w-0 flex-col"
-              style={{ width: "var(--research-sources-panel-width)" }}
+              style={{ width: sourcesOverlay ? "100%" : "var(--research-sources-panel-width)" }}
             >
               <div className="flex h-9 items-center gap-2 border-b border-border/55 px-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                 Sources

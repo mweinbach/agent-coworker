@@ -28,6 +28,42 @@ const { DEFAULT_RESEARCH_SETTINGS } = await import("../src/app/types");
 const { ResearchDetailPane } = await import("../src/ui/research/ResearchDetailPane");
 mock.restore();
 
+class MockResizeObserver {
+  static width = 640;
+
+  private readonly callback: ResizeObserverCallback;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+  }
+
+  observe(target: Element) {
+    this.callback(
+      [
+        {
+          target,
+          contentRect: {
+            width: MockResizeObserver.width,
+            height: 0,
+            top: 0,
+            left: 0,
+            bottom: 0,
+            right: MockResizeObserver.width,
+            x: 0,
+            y: 0,
+            toJSON: () => ({}),
+          },
+        } as ResizeObserverEntry,
+      ],
+      this as unknown as ResizeObserver,
+    );
+  }
+
+  unobserve() {}
+
+  disconnect() {}
+}
+
 function resetAppStore(overrides: Record<string, unknown> = {}) {
   const state = useAppStore.getInitialState();
   useAppStore.setState({
@@ -111,6 +147,7 @@ describe("research detail pane layout", () => {
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
       expect(toggle.getAttribute("aria-controls")).toBe(drawer.id);
       expect(drawer.getAttribute("aria-hidden")).toBe("true");
+      expect(drawer.getAttribute("data-sources-presentation")).toBe("inline");
       expect(drawer.getAttribute("style")).toContain("--research-sources-panel-width: clamp(18rem, 30vw, 26rem)");
       expect(drawer.getAttribute("style")).toContain("width: 0px");
       expect(drawer.getAttribute("style")).toContain("flex-basis: 0px");
@@ -131,9 +168,102 @@ describe("research detail pane layout", () => {
 
       expect(openToggle.getAttribute("aria-expanded")).toBe("true");
       expect(openDrawer.getAttribute("aria-hidden")).toBe("false");
+      expect(openDrawer.getAttribute("data-sources-presentation")).toBe("inline");
       expect(openDrawer.getAttribute("style")).toContain("--research-sources-panel-width: clamp(18rem, 30vw, 26rem)");
       expect(openDrawer.getAttribute("style")).toContain("width: var(--research-sources-panel-width)");
       expect(openDrawer.getAttribute("style")).toContain("flex-basis: var(--research-sources-panel-width)");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      resetAppStore();
+      harness.restore();
+    }
+  });
+
+  test("switches the sources panel to an overlay drawer when the detail pane gets too narrow", async () => {
+    MockResizeObserver.width = 320;
+    const harness = setupJsdom({
+      extraGlobals: {
+        ResizeObserver: MockResizeObserver,
+      },
+    });
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      resetAppStore();
+
+      await act(async () => {
+        root.render(
+          createElement(ResearchDetailPane, {
+            research: {
+              id: "research-overlay",
+              parentResearchId: null,
+              title: "Research title",
+              prompt: "Research prompt",
+              status: "completed",
+              interactionId: null,
+              lastEventId: null,
+              inputs: {
+                fileSearchStoreName: undefined,
+                files: [],
+              },
+              settings: DEFAULT_RESEARCH_SETTINGS,
+              outputsMarkdown: "# Research title\n\nSummary",
+              thoughtSummaries: [],
+              sources: [
+                {
+                  url: "https://example.com/one",
+                  title: "Example One",
+                  sourceType: "url",
+                },
+              ],
+              createdAt: "2026-04-21T21:00:00.000Z",
+              updatedAt: "2026-04-21T21:10:00.000Z",
+              error: null,
+            },
+          }),
+        );
+      });
+
+      const toggle = container.querySelector('button[aria-label="Show sources panel"]');
+      const drawer = container.querySelector('aside[aria-label="Sources"]');
+
+      if (!(toggle instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing sources toggle");
+      }
+      if (!(drawer instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing sources drawer");
+      }
+
+      expect(drawer.getAttribute("data-sources-presentation")).toBe("overlay");
+      expect(drawer.className).toContain("absolute");
+      expect(drawer.getAttribute("style")).toContain("width: 0px");
+      expect(drawer.getAttribute("style")).not.toContain("flex-basis");
+
+      await act(async () => {
+        toggle.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await Promise.resolve();
+      });
+
+      const openDrawer = container.querySelector('aside[aria-label="Sources"]');
+      if (!(openDrawer instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing expanded sources drawer");
+      }
+
+      expect(openDrawer.getAttribute("aria-hidden")).toBe("false");
+      expect(openDrawer.getAttribute("data-sources-presentation")).toBe("overlay");
+      expect(openDrawer.getAttribute("style")).toContain(
+        "width: min(var(--research-sources-panel-width), calc(100% - 0.75rem))",
+      );
+      expect(openDrawer.getAttribute("style")).not.toContain("flex-basis");
 
       await act(async () => {
         root.unmount();

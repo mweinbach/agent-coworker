@@ -312,6 +312,10 @@ const desktopApi = Object.freeze<DesktopApi>({
 
   getPlatform: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getPlatform),
 
+  showMainWindow: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showMainWindow),
+
+  showQuickChatWindow: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showQuickChatWindow),
+
   listDirectory: (opts: ListDirectoryInput) => {
     assertListDirectoryInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.listDirectory, opts);

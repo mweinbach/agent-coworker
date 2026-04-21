@@ -8,7 +8,7 @@ import {
   type AppStoreState,
   createDefaultUpdaterState,
 } from "./store.helpers";
-import { DEFAULT_RESEARCH_SETTINGS } from "./types";
+import { DEFAULT_RESEARCH_SETTINGS, normalizeDesktopSettings } from "./types";
 
 const initialState: AppStoreDataState = {
   ready: false,
@@ -54,6 +54,7 @@ const initialState: AppStoreDataState = {
   developerMode: false,
   showHiddenFiles: false,
   perWorkspaceSettings: false,
+  desktopSettings: normalizeDesktopSettings(),
   desktopFeatureFlags: {
     remoteAccess: false,
     workspacePicker: true,

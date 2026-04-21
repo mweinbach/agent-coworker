@@ -1,4 +1,8 @@
 import type { PersistedState } from "../app/types";
+import {
+  DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR,
+  normalizeQuickChatShortcutAccelerator,
+} from "./quickChatShortcut";
 
 const LEGACY_STATE_KEY = "cowork:web:state";
 const STATE_KEY_PREFIX = "cowork:web:state:v2";
@@ -66,6 +70,12 @@ function createEmptyState(): PersistedState {
     threads: [],
     developerMode: false,
     showHiddenFiles: false,
+    desktopSettings: {
+      quickChat: {
+        shortcutEnabled: false,
+        shortcutAccelerator: DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR,
+      },
+    },
     onboarding: {
       status: "completed",
       completedAt: new Date().toISOString(),
@@ -85,6 +95,14 @@ export function loadPersistedState(): PersistedState {
       threads: parsed.threads ?? [],
       developerMode: parsed.developerMode ?? false,
       showHiddenFiles: parsed.showHiddenFiles ?? false,
+      desktopSettings: {
+        quickChat: {
+          shortcutEnabled: parsed.desktopSettings?.quickChat?.shortcutEnabled === true,
+          shortcutAccelerator: normalizeQuickChatShortcutAccelerator(
+            parsed.desktopSettings?.quickChat?.shortcutAccelerator,
+          ),
+        },
+      },
       desktopFeatureFlagOverrides: parsed.desktopFeatureFlagOverrides ?? {},
       perWorkspaceSettings: parsed.perWorkspaceSettings,
       providerState: parsed.providerState,

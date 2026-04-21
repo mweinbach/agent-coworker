@@ -196,6 +196,41 @@ describe("desktop persistence state validation", () => {
     });
   });
 
+  test("saveState persists quick chat shortcut preferences", async () => {
+    const persistence = new PersistenceService();
+    const validWorkspace = path.join(userDataDir, "workspace-quick-chat");
+    await fs.mkdir(validWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_quick_chat",
+          name: "Quick chat workspace",
+          path: validWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+      desktopSettings: {
+        quickChat: {
+          shortcutEnabled: true,
+          shortcutAccelerator: "Alt+Space",
+        },
+      },
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.desktopSettings?.quickChat?.shortcutEnabled).toBe(true);
+    expect(loaded.desktopSettings?.quickChat?.shortcutAccelerator).toBe("Alt+Space");
+  });
+
   test("loadState enables LM Studio UI by default when the saved provider status is already connected", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-lmstudio-default");
@@ -536,6 +571,12 @@ describe("desktop persistence state validation", () => {
       developerMode: false,
       showHiddenFiles: false,
       perWorkspaceSettings: false,
+      desktopSettings: {
+        quickChat: {
+          shortcutEnabled: false,
+          shortcutAccelerator: "CommandOrControl+Shift+Space",
+        },
+      },
       desktopFeatureFlagOverrides: {},
       providerUiState: {
         lmstudio: {

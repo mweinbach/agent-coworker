@@ -13,6 +13,7 @@ import {
   setWindowAppearance,
   showNotification,
 } from "./lib/desktopCommands";
+import { getDesktopWindowMode } from "./lib/windowMode";
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { ContextSidebar } from "./ui/ContextSidebar";
 import { FilePreviewModal } from "./ui/FilePreviewModal";
@@ -23,6 +24,7 @@ import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
 import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
 import { PromptModal } from "./ui/PromptModal";
+import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
 import { Sidebar } from "./ui/Sidebar";
 
 const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed: boolean }) {
@@ -244,6 +246,7 @@ const ChatShell = memo(function ChatShell({
 });
 
 export default function App() {
+  const windowMode = getDesktopWindowMode();
   const ready = useAppStore((s) => s.ready);
   const bootstrapPending = useAppStore((s) => s.bootstrapPending);
   const startupError = useAppStore((s) => s.startupError);
@@ -412,7 +415,9 @@ export default function App() {
 
   return (
     <>
-      {view === "settings" ? (
+      {windowMode === "quick-chat" ? (
+        <QuickChatShell init={init} ready={ready} startupError={startupError} />
+      ) : view === "settings" ? (
         <div className="app-shell app-shell--settings flex h-full min-h-0 flex-col text-foreground">
           <div className="app-window-drag-strip" aria-hidden="true" />
           <div className="min-h-0 flex-1">

@@ -10,6 +10,10 @@ import { z } from "zod";
 import type { DesktopFeatureFlagOverrides } from "../shared/featureFlags";
 import { normalizeDesktopFeatureFlagOverrides } from "../shared/featureFlags";
 import { writeTextFileAtomic } from "../utils/atomicFile";
+import {
+  DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR,
+  normalizeQuickChatShortcutAccelerator,
+} from "../../apps/desktop/src/lib/quickChatShortcut";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const PRIVATE_FILE_MODE = 0o600;
@@ -50,6 +54,12 @@ export type DesktopPersistedState = {
   developerMode: boolean;
   showHiddenFiles: boolean;
   perWorkspaceSettings: boolean;
+  desktopSettings: {
+    quickChat: {
+      shortcutEnabled: boolean;
+      shortcutAccelerator: string;
+    };
+  };
   desktopFeatureFlagOverrides: DesktopFeatureFlagOverrides;
   providerState?: unknown;
   providerUiState?: unknown;
@@ -210,6 +220,12 @@ function defaultState(): DesktopPersistedState {
     developerMode: false,
     showHiddenFiles: false,
     perWorkspaceSettings: false,
+    desktopSettings: {
+      quickChat: {
+        shortcutEnabled: false,
+        shortcutAccelerator: DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR,
+      },
+    },
     desktopFeatureFlagOverrides: {},
   };
 }
@@ -310,6 +326,21 @@ async function normalizeState(raw: unknown): Promise<DesktopPersistedState> {
     developerMode: asBoolean(raw.developerMode, false),
     showHiddenFiles: asBoolean(raw.showHiddenFiles, false),
     perWorkspaceSettings: asBoolean(raw.perWorkspaceSettings, false),
+    desktopSettings: {
+      quickChat: {
+        shortcutEnabled:
+          isRecord(raw.desktopSettings) &&
+          isRecord(raw.desktopSettings.quickChat) &&
+          raw.desktopSettings.quickChat.shortcutEnabled === true,
+        shortcutAccelerator: normalizeQuickChatShortcutAccelerator(
+          isRecord(raw.desktopSettings) &&
+            isRecord(raw.desktopSettings.quickChat) &&
+            typeof raw.desktopSettings.quickChat.shortcutAccelerator === "string"
+            ? raw.desktopSettings.quickChat.shortcutAccelerator
+            : undefined,
+        ),
+      },
+    },
     desktopFeatureFlagOverrides:
       normalizeDesktopFeatureFlagOverrides(raw.desktopFeatureFlagOverrides) ?? {},
     ...(raw.providerState !== undefined ? { providerState: raw.providerState } : {}),

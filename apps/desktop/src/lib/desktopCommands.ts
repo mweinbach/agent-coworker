@@ -160,6 +160,14 @@ export async function getPlatform(): Promise<string> {
   return await requireDesktopApi().getPlatform();
 }
 
+export async function showMainWindow(): Promise<void> {
+  await requireDesktopApi().showMainWindow();
+}
+
+export async function showQuickChatWindow(): Promise<void> {
+  await requireDesktopApi().showQuickChatWindow();
+}
+
 export async function listDirectory(opts: {
   path: string;
   includeHidden?: boolean;

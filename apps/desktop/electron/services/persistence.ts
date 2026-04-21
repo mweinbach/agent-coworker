@@ -1,15 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { app } from "electron";
 import { z } from "zod";
-import { normalizeDesktopFeatureFlagOverrides } from "../../../../src/shared/featureFlags";
-import { normalizeWorkspaceProviderOptions } from "../../src/app/openaiCompatibleProviderOptions";
-import { normalizePersistedProviderState } from "../../src/app/persistedProviderState";
-import {
-  deriveDefaultLmStudioUiEnabled,
-  normalizePersistedProviderUiState,
-} from "../../src/app/providerUiState";
+
+import { app } from "electron";
+
 import type {
+  PersistedDesktopSettings,
   PersistedOnboardingState,
   PersistedState,
   ThreadRecord,
@@ -17,8 +13,14 @@ import type {
   WorkspaceRecord,
   WorkspaceUserProfile,
 } from "../../src/app/types";
-import { normalizeWorkspaceUserProfile } from "../../src/app/types";
+import { normalizeDesktopSettings, normalizeWorkspaceUserProfile } from "../../src/app/types";
+import { normalizeWorkspaceProviderOptions } from "../../src/app/openaiCompatibleProviderOptions";
+import { normalizePersistedProviderState } from "../../src/app/persistedProviderState";
+import { deriveDefaultLmStudioUiEnabled, normalizePersistedProviderUiState } from "../../src/app/providerUiState";
 import type { TranscriptBatchInput } from "../../src/lib/desktopApi";
+import {
+  normalizeDesktopFeatureFlagOverrides,
+} from "../../../../src/shared/featureFlags";
 
 import { assertDirection, assertSafeId, assertWithinTranscriptsDir } from "./validation";
 
@@ -53,6 +55,7 @@ function defaultState(): PersistedState {
     developerMode: false,
     showHiddenFiles: false,
     perWorkspaceSettings: false,
+    desktopSettings: normalizeDesktopSettings(),
     desktopFeatureFlagOverrides: {},
     providerUiState: normalizePersistedProviderUiState(undefined),
   };
@@ -62,7 +65,9 @@ function sanitizeOnboarding(value: unknown): PersistedOnboardingState | undefine
   if (!isRecord(value)) return undefined;
   const status = value.status;
   const normalizedStatus =
-    status === "pending" || status === "dismissed" || status === "completed" ? status : "pending";
+    status === "pending" || status === "dismissed" || status === "completed"
+      ? status
+      : "pending";
   const completedAt =
     typeof value.completedAt === "string" && value.completedAt.trim()
       ? value.completedAt.trim()
@@ -116,6 +121,20 @@ function asOptionalString(value: unknown): string | undefined {
   return candidate ?? undefined;
 }
 
+function sanitizeDesktopSettings(value: unknown): PersistedDesktopSettings {
+  const normalized = normalizeDesktopSettings(
+    value && typeof value === "object" && !Array.isArray(value)
+      ? value as PersistedDesktopSettings
+      : undefined,
+  );
+  return {
+    quickChat: {
+      shortcutEnabled: normalized.quickChat.shortcutEnabled,
+      shortcutAccelerator: normalized.quickChat.shortcutAccelerator,
+    },
+  };
+}
+
 function asLegacyPreferredChildModel(item: Record<string, unknown>): string | undefined {
   return asOptionalString(item.defaultSubAgentModel);
 }
@@ -151,9 +170,7 @@ function asThreadStatus(value: unknown): ThreadRecord["status"] {
 
 function isPlaceholderThreadTitle(title: string): boolean {
   const normalized = title.trim().toLowerCase();
-  return (
-    normalized === "new thread" || normalized === "new session" || normalized === "new conversation"
-  );
+  return normalized === "new thread" || normalized === "new session" || normalized === "new conversation";
 }
 
 function asThreadTitleSource(value: unknown, fallbackTitle: string): ThreadRecord["titleSource"] {
@@ -163,14 +180,12 @@ function asThreadTitleSource(value: unknown, fallbackTitle: string): ThreadRecor
   return isPlaceholderThreadTitle(fallbackTitle) ? "default" : "manual";
 }
 
-const transcriptEventSchema = z
-  .object({
-    ts: z.string().trim().min(1),
-    threadId: z.string().trim().min(1),
-    direction: z.enum(["server", "client"]),
-    payload: z.unknown(),
-  })
-  .passthrough();
+const transcriptEventSchema = z.object({
+  ts: z.string().trim().min(1),
+  threadId: z.string().trim().min(1),
+  direction: z.enum(["server", "client"]),
+  payload: z.unknown(),
+}).passthrough();
 
 async function resolveWorkspacePath(value: unknown): Promise<string | null> {
   const candidate = asNonEmptyString(value);
@@ -220,22 +235,18 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       wsProtocol: "jsonrpc",
       defaultProvider: asOptionalString(item.defaultProvider) as WorkspaceRecord["defaultProvider"],
       defaultModel: asOptionalString(item.defaultModel),
-      defaultPreferredChildModel:
-        asOptionalString(item.defaultPreferredChildModel) ?? asLegacyPreferredChildModel(item),
+      defaultPreferredChildModel: asOptionalString(item.defaultPreferredChildModel) ?? asLegacyPreferredChildModel(item),
       defaultChildModelRoutingMode: asChildModelRoutingMode(item.defaultChildModelRoutingMode),
       defaultPreferredChildModelRef: asOptionalString(item.defaultPreferredChildModelRef),
       defaultAllowedChildModelRefs: asOptionalStringArray(item.defaultAllowedChildModelRefs),
-      defaultToolOutputOverflowChars: asOptionalNullableNonNegativeInteger(
-        item.defaultToolOutputOverflowChars,
-      ),
+      defaultToolOutputOverflowChars: asOptionalNullableNonNegativeInteger(item.defaultToolOutputOverflowChars),
       providerOptions: normalizeWorkspaceProviderOptions(item.providerOptions),
       userName: asDefinedString(item.userName),
       userProfile: isRecord(item.userProfile)
         ? normalizeWorkspaceUserProfile(item.userProfile as Partial<WorkspaceUserProfile>)
         : undefined,
       defaultEnableMcp: typeof item.defaultEnableMcp === "boolean" ? item.defaultEnableMcp : true,
-      defaultBackupsEnabled:
-        typeof item.defaultBackupsEnabled === "boolean" ? item.defaultBackupsEnabled : true,
+      defaultBackupsEnabled: typeof item.defaultBackupsEnabled === "boolean" ? item.defaultBackupsEnabled : true,
       yolo: typeof item.yolo === "boolean" ? item.yolo : false,
     });
     seenWorkspaceIds.add(id);
@@ -313,11 +324,9 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
     threads,
     developerMode: typeof value.developerMode === "boolean" ? value.developerMode : false,
     showHiddenFiles: typeof value.showHiddenFiles === "boolean" ? value.showHiddenFiles : false,
-    perWorkspaceSettings:
-      typeof value.perWorkspaceSettings === "boolean" ? value.perWorkspaceSettings : false,
-    desktopFeatureFlagOverrides: normalizeDesktopFeatureFlagOverrides(
-      value.desktopFeatureFlagOverrides,
-    ),
+    perWorkspaceSettings: typeof value.perWorkspaceSettings === "boolean" ? value.perWorkspaceSettings : false,
+    desktopSettings: sanitizeDesktopSettings(value.desktopSettings),
+    desktopFeatureFlagOverrides: normalizeDesktopFeatureFlagOverrides(value.desktopFeatureFlagOverrides),
     ...(providerState ? { providerState } : {}),
     providerUiState,
     ...(onboarding ? { onboarding } : {}),
@@ -325,12 +334,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
 }
 
 function isNotFound(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as NodeJS.ErrnoException).code === "ENOENT"
-  );
+  return typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
 export class PersistenceService {
@@ -420,11 +424,7 @@ export class PersistenceService {
       }
 
       const anyFs = fs as typeof fs & {
-        cp?: (
-          src: string,
-          dest: string,
-          options?: { recursive?: boolean; force?: boolean },
-        ) => Promise<void>;
+        cp?: (src: string, dest: string, options?: { recursive?: boolean; force?: boolean }) => Promise<void>;
       };
 
       if (typeof anyFs.cp === "function") {
@@ -467,11 +467,7 @@ export class PersistenceService {
 
       const sanitizedState = await sanitizePersistedState(state);
       const tempPath = `${this.stateFilePath}.tmp`;
-      const payload = JSON.stringify(
-        { ...sanitizedState, version: sanitizedState.version || 2 },
-        null,
-        2,
-      );
+      const payload = JSON.stringify({ ...sanitizedState, version: sanitizedState.version || 2 }, null, 2);
 
       await fs.writeFile(tempPath, payload, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
       await fs.rename(tempPath, this.stateFilePath);
@@ -545,7 +541,7 @@ export class PersistenceService {
 
     for (const [threadId, chunk] of grouped) {
       const filePath = this.transcriptFilePath(threadId);
-      const payload = `${chunk.map((event) => JSON.stringify(event)).join("\n")}\n`;
+      const payload = chunk.map((event) => JSON.stringify(event)).join("\n") + "\n";
       await fs.appendFile(filePath, payload, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
       await fs.chmod(filePath, PRIVATE_FILE_MODE);
     }

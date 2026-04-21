@@ -11,6 +11,7 @@ import {
   OPENAI_TEXT_VERBOSITY_VALUES,
 } from "../../../../src/shared/openaiCompatibleOptions";
 import type { PersistedState } from "../app/types";
+import { normalizeQuickChatShortcutAccelerator } from "./quickChatShortcut";
 import type {
   ConfirmActionInput,
   ContextMenuItem,
@@ -346,6 +347,27 @@ const persistedProviderUiStateSchema = z
   })
   .optional();
 
+const persistedDesktopSettingsSchema = z
+  .object({
+    quickChat: z
+      .object({
+        shortcutEnabled: z
+          .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
+          .optional(),
+        shortcutAccelerator: z
+          .preprocess(
+            (value) =>
+              typeof value === "string"
+                ? normalizeQuickChatShortcutAccelerator(value)
+                : undefined,
+            z.string().optional(),
+          )
+          .optional(),
+      })
+      .optional(),
+  })
+  .optional();
+
 export const persistedStateInputSchema: z.ZodType<PersistedState> = z
   .object({
     workspaces: z.array(persistedWorkspaceSchema),
@@ -361,6 +383,7 @@ export const persistedStateInputSchema: z.ZodType<PersistedState> = z
     perWorkspaceSettings: z
       .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
       .optional(),
+    desktopSettings: persistedDesktopSettingsSchema,
     desktopFeatureFlagOverrides: desktopFeatureFlagOverridesSchema,
     version: z.preprocess(
       (value) =>

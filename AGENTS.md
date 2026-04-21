@@ -168,6 +168,8 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 
 ### Scope & Plan Discipline
 - When the user narrows a contract, apply that exact direction; don't preserve broader backward-compat assumptions.
+- When the user excludes an artifact type for delivery, remove it from the final output and any PR metadata instead of keeping it as optional context.
+- When the user excludes screenshots or recordings from a PR, keep the PR body text-only and summarize verification in prose.
 - When the user expands scope mid-task ("include the failures you found"), treat every surfaced error as in-scope.
 - When cleaning unrelated local diffs, never revert adjacent user-wanted changes without confirming intent.
 - Carry user-added requirements (commit trailers, contract changes) forward into the plan and the eventual commit message.
@@ -198,6 +200,8 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 
 ### Desktop UI Patterns
 - Use the Playwright/CDP workflow (`COWORK_ELECTRON_REMOTE_DEBUG=1`) before declaring a UI change done.
+- For macOS menu bar and Windows tray features, verify the packaged app bundles and resolves the tray asset correctly; dev-only checks are not enough.
+- When both an installed app and a repo-local app bundle exist, verify the exact on-disk bundle path for the running process instead of trusting the shared app name or bundle ID.
 - For shared dialogs/modals: portal to `document.body`, own the centered overlay, never let the backdrop sit at a higher `z-*` than the dialog body.
 - For desktop renderer wrappers re-exporting core types, prefer repo-root relative imports over `@cowork/*` aliases — `electron-vite` accepts the alias in TS but Rollup can fail at renderer build.
 - For Electron preloads, bundle deps like `zod` into `out/preload/preload.js`; do not externalize runtime deps.

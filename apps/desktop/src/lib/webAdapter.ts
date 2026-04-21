@@ -532,6 +532,10 @@ export function createWebAdapter(): DesktopApi {
       return "web";
     },
 
+    async showMainWindow(): Promise<void> {},
+
+    async showQuickChatWindow(): Promise<void> {},
+
     async listDirectory(opts): Promise<ExplorerEntry[]> {
       return await readWebJson<ExplorerEntry[]>("/cowork/fs/list", {
         path: opts.path,

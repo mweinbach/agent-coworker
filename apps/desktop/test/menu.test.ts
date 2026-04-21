@@ -9,6 +9,7 @@ describe("desktop application menu", () => {
       {
         includeDevTools: false,
         openExternal: () => {},
+        openQuickChat: () => {},
         sendCommand: (command) => {
           commands.push(command);
         },
@@ -34,6 +35,7 @@ describe("desktop application menu", () => {
       {
         includeDevTools: true,
         openExternal: () => {},
+        openQuickChat: () => {},
         sendCommand: (command) => {
           commands.push(command);
         },
@@ -57,6 +59,7 @@ describe("desktop application menu", () => {
       {
         includeDevTools: false,
         openExternal: () => {},
+        openQuickChat: () => {},
         sendCommand: () => {},
       },
       "linux",
@@ -64,5 +67,26 @@ describe("desktop application menu", () => {
 
     expect(template[0]?.role).not.toBe("appMenu");
     expect(template[0]?.label).toBe("&File");
+  });
+
+  test("includes quick chat entry in the file menu", () => {
+    let openedQuickChat = 0;
+    const template = buildDesktopMenuTemplate(
+      {
+        includeDevTools: false,
+        openExternal: () => {},
+        openQuickChat: () => {
+          openedQuickChat += 1;
+        },
+        sendCommand: () => {},
+      },
+      "darwin",
+    );
+
+    const fileMenu = template.find((item: any) => item.label === "File");
+    const quickChatEntry = fileMenu?.submenu?.find((entry: any) => entry.label === "Open Quick Chat");
+    expect(quickChatEntry).toBeTruthy();
+    quickChatEntry?.click?.();
+    expect(openedQuickChat).toBe(1);
   });
 });

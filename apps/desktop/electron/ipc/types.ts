@@ -12,6 +12,9 @@ export type DesktopIpcDeps = {
   persistence: PersistenceService;
   serverManager: ServerManager;
   updater: DesktopUpdaterService;
+  showMainWindow: () => Promise<void> | void;
+  showQuickChatWindow: () => Promise<void> | void;
+  applyPersistedState?: (state: PersistedState) => void;
 };
 
 export type HandleDesktopInvoke = <TArgs extends unknown[], TResult>(

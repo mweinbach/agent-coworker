@@ -55,6 +55,7 @@ import {
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
 import { createTranscriptBuffer } from "./store.helpers/transcriptBuffer";
 import type {
+  DesktopSettings,
   Notification,
   OnboardingStep,
   PersistedOnboardingState,
@@ -191,6 +192,7 @@ export type AppStoreState = {
   developerMode: boolean;
   showHiddenFiles: boolean;
   perWorkspaceSettings: boolean;
+  desktopSettings: DesktopSettings;
   desktopFeatureFlags: DesktopFeatureFlags;
   desktopFeatureFlagOverrides: DesktopFeatureFlagOverrides;
   updateState: UpdaterState;
@@ -268,6 +270,8 @@ export type AppStoreState = {
   setDeveloperMode: (v: boolean) => void;
   setShowHiddenFiles: (v: boolean) => void;
   setPerWorkspaceSettings: (enabled: boolean) => void;
+  setQuickChatShortcutEnabled: (enabled: boolean) => void;
+  setQuickChatShortcutAccelerator: (accelerator: string) => void;
   setDesktopFeatureFlagOverride: (flagId: DesktopFeatureFlagId, enabled: boolean) => Promise<void>;
   setUpdateState: (state: UpdaterState) => void;
   checkForUpdates: () => Promise<void>;

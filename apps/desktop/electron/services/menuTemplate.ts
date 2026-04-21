@@ -5,6 +5,7 @@ import type { DesktopMenuCommand } from "../../src/lib/desktopApi";
 export type InstallDesktopMenuOptions = {
   includeDevTools: boolean;
   openExternal: (url: string) => void;
+  openQuickChat: () => void;
   sendCommand: (command: DesktopMenuCommand) => void;
 };
 
@@ -76,6 +77,12 @@ export function buildDesktopMenuTemplate(
           "CmdOrCtrl+Shift+R",
           sfSymbol("book.pages"),
         ),
+        {
+          label: "Open Quick Chat",
+          click: () => {
+            options.openQuickChat();
+          },
+        },
         commandItem(
           "Skills",
           "openSkills",
@@ -198,6 +205,12 @@ export function buildDesktopMenuTemplate(
             "CmdOrCtrl+Shift+R",
             sfSymbol("book.pages"),
           ),
+          {
+            label: "Open Quick Chat",
+            click: () => {
+              options.openQuickChat();
+            },
+          },
           commandItem(
             "Skills",
             "openSkills",

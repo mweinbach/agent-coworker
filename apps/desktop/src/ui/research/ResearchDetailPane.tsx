@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { MessageSquareIcon, PanelLeftIcon } from "lucide-react";
+import { MessageSquareIcon, PanelRightIcon } from "lucide-react";
 
 import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 
@@ -183,7 +183,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                 sourcesOpen ? "bg-primary/10 border-primary/30 text-primary" : "bg-muted/15",
               )}
             >
-              <PanelLeftIcon className={cn("h-3.5 w-3.5 transition-transform", sourcesOpen && "rotate-180")} aria-hidden="true" />
+              <PanelRightIcon className={cn("h-3.5 w-3.5 transition-transform", sourcesOpen && "rotate-180")} aria-hidden="true" />
               Sources
               <span className="rounded-full bg-muted/80 px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
                 {sourceCount}
@@ -208,13 +208,13 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
           {sourcesOpen && sourceCount > 0 ? (
             <motion.aside
               key="sources-drawer"
-              initial={prefersReducedMotion ? false : { x: "-100%" }}
+              initial={prefersReducedMotion ? false : { x: "100%" }}
               animate={{ x: "0%" }}
-              exit={prefersReducedMotion ? { x: "-100%" } : { x: "-100%" }}
+              exit={prefersReducedMotion ? { x: "100%" } : { x: "100%" }}
               transition={prefersReducedMotion
                 ? { duration: 0 }
                 : { type: "spring", stiffness: 380, damping: 36, mass: 0.85 }}
-              className="absolute inset-y-0 left-0 z-20 flex w-80 min-h-0 flex-col border-r border-border/55 bg-panel shadow-xl shadow-black/10"
+              className="absolute inset-y-0 right-0 z-20 flex w-80 min-h-0 flex-col border-l border-border/55 bg-panel shadow-xl shadow-black/10"
               aria-label="Sources"
             >
               <div className="flex items-center justify-between gap-2 border-b border-border/55 bg-muted/20 px-4 py-2.5">
@@ -320,14 +320,14 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
     : { type: "spring" as const, stiffness: 420, damping: 34, mass: 0.9 };
 
   return (
-    <div className="pointer-events-none absolute bottom-4 left-4 right-4 z-30 flex items-end justify-end">
+    <div className="pointer-events-none absolute bottom-4 left-4 right-4 z-30 flex items-end justify-start">
       <AnimatePresence mode="popLayout" initial={false}>
         {expanded ? (
           <motion.div
             key="composer"
             ref={composerShellRef}
             layout
-            className="pointer-events-auto w-full max-w-2xl origin-bottom-right"
+            className="pointer-events-auto w-full max-w-2xl origin-bottom-left"
             initial={{ opacity: 0, scale: 0.88, y: 6 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.88, y: 6 }}
@@ -344,7 +344,7 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
           <motion.div
             key="fab"
             layout
-            className="pointer-events-auto origin-bottom-right"
+            className="pointer-events-auto origin-bottom-left"
             initial={{ opacity: 0, scale: 0.7 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.7 }}

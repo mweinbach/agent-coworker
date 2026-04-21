@@ -35,6 +35,7 @@ const badgeVariants = ({
 
 type BadgeProps = Omit<React.ComponentProps<typeof Chip>, "color" | "variant" | "size"> & {
   variant?: BadgeVariant;
+  title?: string;
 };
 
 function Badge({ className, variant = "default", children, ...props }: BadgeProps) {

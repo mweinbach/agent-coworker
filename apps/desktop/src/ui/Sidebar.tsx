@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { usePrefersReducedMotion } from "../lib/usePrefersReducedMotion";
 
 import {
+  BookOpenIcon,
   ChevronRightIcon,
   FolderIcon,
   FolderOpenIcon,
@@ -390,6 +391,7 @@ export const Sidebar = memo(function Sidebar() {
   const selectThread = useAppStore((s) => s.selectThread);
   const renameThread = useAppStore((s) => s.renameThread);
   const openSkills = useAppStore((s) => s.openSkills);
+  const openResearch = useAppStore((s) => s.openResearch);
   const openSettings = useAppStore((s) => s.openSettings);
 
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
@@ -675,6 +677,19 @@ export const Sidebar = memo(function Sidebar() {
         </div>
       </div>
       <nav className="grid w-full gap-1.5">
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+            "hover:bg-foreground/[0.045] hover:text-foreground",
+            view === "research" && "bg-foreground/[0.055] text-foreground",
+          )}
+          onClick={() => void openResearch()}
+        >
+          <BookOpenIcon className="h-4 w-4 text-muted-foreground" />
+          Research
+        </Button>
         <Button
           variant="ghost"
           size="sm"

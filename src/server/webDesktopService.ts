@@ -308,13 +308,13 @@ async function normalizeState(raw: unknown): Promise<DesktopPersistedState> {
   };
 }
 
-function resolveDesktopUserDataDir(explicitDir?: string): string {
+function resolveDesktopUserDataDir(explicitDir?: string, explicitHomeDir?: string): string {
   const override = explicitDir?.trim() || process.env.COWORK_DESKTOP_USER_DATA_DIR?.trim();
   if (override) {
     return path.resolve(override);
   }
 
-  const homeDir = os.homedir();
+  const homeDir = explicitHomeDir?.trim() || os.homedir();
   if (process.platform === "darwin") {
     return path.join(homeDir, "Library", "Application Support", DEFAULT_APP_NAME);
   }
@@ -647,8 +647,8 @@ export class WebDesktopService implements WebDesktopServiceLike {
   private readonly userDataDir: string;
   private readonly serverManager: SourceWorkspaceServerManager;
 
-  constructor(opts: { userDataDir?: string; serverManager?: SourceWorkspaceServerManager } = {}) {
-    this.userDataDir = resolveDesktopUserDataDir(opts.userDataDir);
+  constructor(opts: { userDataDir?: string; homedir?: string; serverManager?: SourceWorkspaceServerManager } = {}) {
+    this.userDataDir = resolveDesktopUserDataDir(opts.userDataDir, opts.homedir);
     this.serverManager = opts.serverManager ?? new SourceWorkspaceServerManager();
   }
 

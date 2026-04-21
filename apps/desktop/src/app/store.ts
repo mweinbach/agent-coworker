@@ -5,6 +5,7 @@ import { buildCachedDesktopStateSeed } from "./store.actions/bootstrap";
 import { loadDesktopStateCacheRaw } from "./localStateCache";
 import { DEFAULT_PROVIDER_UI_STATE } from "./providerUiState";
 import { createDefaultUpdaterState, type AppStoreDataState, type AppStoreState } from "./store.helpers";
+import { DEFAULT_RESEARCH_SETTINGS } from "./types";
 
 const initialState: AppStoreDataState = {
   ready: false,
@@ -62,6 +63,19 @@ const initialState: AppStoreDataState = {
   onboardingVisible: false,
   onboardingStep: "welcome" as const,
   onboardingState: { status: "pending" as const, completedAt: null, dismissedAt: null },
+
+  researchTransportWorkspaceId: null,
+  researchById: {},
+  researchOrder: [],
+  selectedResearchId: null,
+  researchListLoading: false,
+  researchListError: null,
+  researchDraftSettings: DEFAULT_RESEARCH_SETTINGS,
+  researchMcpServers: [],
+  researchMcpServersLoading: false,
+  researchMcpServersError: null,
+  researchSubscribedIds: [],
+  researchExportPendingIds: [],
 
   sidebarCollapsed: false,
   contextSidebarCollapsed: false,

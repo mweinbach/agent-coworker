@@ -16,12 +16,15 @@ Core tables:
 - `sessions(...)` metadata row per session (`status`, `message_count`, `last_event_seq`, etc.)
 - `session_state(...)` materialized state (`system_prompt`, `messages_json`, `todos_json`, `harness_context_json`)
 - `session_events(...)` append-only semantic event log keyed by `(session_id, seq)`
+- `research(...)` global research metadata rows (`status`, `interaction_id`, `last_event_id`, `inputs_json`, `settings_json`, `outputs_markdown`, `thought_summaries_json`, `sources_json`, `error`)
 
 Indexes:
 
 - `sessions(updated_at DESC)`
 - `session_events(session_id, seq DESC)`
 - `sessions(status, updated_at DESC)`
+- `research(status, updated_at DESC)`
+- `research(parent_research_id, updated_at DESC)`
 
 SQLite pragmas at init:
 
@@ -64,6 +67,7 @@ When connecting with `resumeSessionId`:
 ## Surface Behavior
 
 - Core server: writes semantic events + state updates transactionally to SQLite.
+- Research service: writes debounced markdown/thought/source state into `research` rows and mirrors exported artifacts under `~/.cowork/research/<id>/`.
 - CLI/TUI/desktop: list/resume/history operations go through server APIs (`list_sessions`, `get_messages`, etc.).
 - Desktop transcript JSONL remains a cache for fast local rendering, not an authority.
 - Desktop thread removal sends `session_close` only; explicit "Delete session history" sends `delete_session`.

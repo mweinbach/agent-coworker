@@ -7,6 +7,7 @@ import { createExplorerActions } from "./store.actions/explorer";
 import { createWorkspaceMcpActions } from "./store.actions/mcp";
 import { createWorkspaceMemoryActions } from "./store.actions/memory";
 import { createProviderActions } from "./store.actions/provider";
+import { createResearchActions } from "./store.actions/research";
 import { createSkillActions } from "./store.actions/skills";
 import { createThreadActions } from "./store.actions/thread";
 import { createWorkspaceActions } from "./store.actions/workspace";
@@ -20,6 +21,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     ...createWorkspaceBackupActions(set, get),
     ...createThreadActions(set, get),
     ...createSkillActions(set, get),
+    ...createResearchActions(set, get),
     ...createWorkspaceDefaultsActions(set, get),
     ...createWorkspaceMcpActions(set, get),
     ...createWorkspaceMemoryActions(set, get),

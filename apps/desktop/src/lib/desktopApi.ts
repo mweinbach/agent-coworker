@@ -150,6 +150,7 @@ export type DesktopMenuCommand =
   | "toggleSidebar"
   | "openSettings"
   | "openWorkspacesSettings"
+  | "openResearch"
   | "openSkills"
   | "openUpdates";
 

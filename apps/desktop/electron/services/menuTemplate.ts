@@ -56,6 +56,7 @@ export function buildDesktopMenuTemplate(
       label: labels.file,
       submenu: [
         commandItem("New Thread", "newThread", options.sendCommand, "CmdOrCtrl+N", sfSymbol("plus.message")),
+        commandItem("Research", "openResearch", options.sendCommand, "CmdOrCtrl+Shift+R", sfSymbol("book.pages")),
         commandItem("Skills", "openSkills", options.sendCommand, "CmdOrCtrl+Shift+K", sfSymbol("wand.and.stars")),
         { type: "separator" },
         commandItem("Settings", "openSettings", options.sendCommand, "CmdOrCtrl+,", sfSymbol("gearshape")),
@@ -141,6 +142,7 @@ export function buildDesktopMenuTemplate(
         label: "File",
         submenu: [
           commandItem("New Thread", "newThread", options.sendCommand, "CmdOrCtrl+N", sfSymbol("plus.message")),
+          commandItem("Research", "openResearch", options.sendCommand, "CmdOrCtrl+Shift+R", sfSymbol("book.pages")),
           commandItem("Skills", "openSkills", options.sendCommand, "CmdOrCtrl+Shift+K", sfSymbol("wand.and.stars")),
           { type: "separator" },
           commandItem("Settings", "openSettings", options.sendCommand, "CmdOrCtrl+,", sfSymbol("gearshape")),

@@ -603,6 +603,7 @@ export function createWebAdapter(): DesktopApi {
         "n": "newThread",
         "b": "toggleSidebar",
         ",": "openSettings",
+        "r": "openResearch",
       };
 
       const handler = (e: KeyboardEvent) => {

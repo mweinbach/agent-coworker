@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
+import { defaultWorkspaceRuntime, RUNTIME } from "../src/app/store.helpers/runtimeState";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -106,6 +107,23 @@ const { useAppStore } = await import("../src/app/store");
 
 describe("settings nav (store)", () => {
   beforeEach(() => {
+    RUNTIME.jsonRpcSockets.clear();
+    RUNTIME.workspaceJsonRpcSocketGenerations.clear();
+    RUNTIME.skillInstallWaiters.clear();
+    RUNTIME.pluginInstallWaiters.clear();
+    RUNTIME.optimisticUserMessageIds.clear();
+    RUNTIME.pendingThreadMessages.clear();
+    RUNTIME.pendingThreadAttachments.clear();
+    RUNTIME.pendingThreadSteers.clear();
+    RUNTIME.threadSelectionRequests.clear();
+    RUNTIME.nextThreadSelectionRequestId = 0;
+    RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
+    RUNTIME.workspaceStartPromises.clear();
+    RUNTIME.workspaceStartGenerations.clear();
+    RUNTIME.modelStreamByThread.clear();
+    RUNTIME.sessionSnapshots.clear();
+    RUNTIME.workspacePickerOpen = false;
+    RUNTIME.providerStatusRefreshGeneration = 0;
     savedStates.length = 0;
     startWorkspaceServerCalls = 0;
     agentSocketConnectCalls = 0;
@@ -125,7 +143,11 @@ describe("settings nav (store)", () => {
       },
       notifications: [],
       workspaces: [],
+      workspaceRuntimeById: {},
       selectedWorkspaceId: null,
+      threads: [],
+      threadRuntimeById: {},
+      selectedThreadId: null,
     });
   });
 
@@ -312,6 +334,53 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().view).toBe("chat");
     const last = useAppStore.getState().notifications.at(-1);
     expect(last?.title).toBe("Skills need a workspace");
+  });
+
+  test("openResearch switches to the research view before transport refresh completes", async () => {
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/ws-1",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          lastOpenedAt: "2024-01-01T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+        },
+      },
+    });
+
+    RUNTIME.jsonRpcSockets.set("ws-1", {
+      readyPromise: Promise.resolve(),
+      request: (method: string) => {
+        if (method === "research/list") {
+          return Promise.resolve({ research: [] });
+        }
+        return Promise.resolve({});
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    const openPromise = useAppStore.getState().openResearch();
+
+    expect(useAppStore.getState().view).toBe("research");
+    expect(useAppStore.getState().lastNonSettingsView).toBe("research");
+    expect(useAppStore.getState().researchListLoading).toBe(true);
+
+    await openPromise;
+
+    expect(useAppStore.getState().researchListLoading).toBe(false);
+    expect(useAppStore.getState().researchListError).toBeNull();
   });
 
   test("newThread falls back to first workspace when none is selected", async () => {

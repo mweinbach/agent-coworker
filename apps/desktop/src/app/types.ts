@@ -20,6 +20,11 @@ import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
 import type {
   DesktopFeatureFlagOverrides,
 } from "../../../../src/shared/featureFlags";
+import type {
+  ResearchExportFormat,
+  ResearchRecord,
+  ResearchSettings,
+} from "../../../../src/server/research/types";
 import type { WorkspaceProviderOptions } from "./openaiCompatibleProviderOptions";
 
 export type WorkspaceUserProfile = {
@@ -143,7 +148,7 @@ export type PersistedOnboardingState = {
 };
 
 export type OnboardingStep = "welcome" | "workspace" | "provider" | "defaults" | "firstThread";
-export type ViewId = "chat" | "skills" | "settings";
+export type ViewId = "chat" | "skills" | "research" | "settings";
 export type PluginViewMode = "plugins" | "skills";
 export type SettingsPageId =
   | "providers"
@@ -177,6 +182,32 @@ export type DesktopStateCache = {
   persistedState: PersistedState;
   ui: CachedDesktopUiState;
   sessionSnapshots?: Record<string, CachedSessionSnapshot>;
+};
+
+export type ResearchMcpServer = {
+  name: string;
+  source: string;
+  authMode: string;
+  workspaceId: string;
+  workspaceName: string;
+};
+
+export type ResearchSettingsState = ResearchSettings;
+export type ResearchCard = ResearchRecord;
+export type ResearchDetail = ResearchRecord;
+
+export const DEFAULT_RESEARCH_SETTINGS: ResearchSettingsState = {
+  googleSearch: true,
+  urlContext: true,
+  codeExecution: true,
+  mcpServersEnabled: false,
+  planApproval: false,
+  mcpServerNames: [],
+};
+
+export type ResearchExportRequest = {
+  researchId: string;
+  format: ResearchExportFormat;
 };
 
 export type PluginManagementMode = "auto" | "global" | "workspace";

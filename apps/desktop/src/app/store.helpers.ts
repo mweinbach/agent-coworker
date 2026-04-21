@@ -16,6 +16,10 @@ import type {
   PersistedOnboardingState,
   PluginManagementMode,
   PromptModalState,
+  ResearchCard,
+  ResearchDetail,
+  ResearchMcpServer,
+  ResearchSettingsState,
   SettingsPageId,
   ThreadRecord,
   ThreadBusyPolicy,
@@ -187,6 +191,19 @@ export type AppStoreState = {
   onboardingStep: OnboardingStep;
   onboardingState: PersistedOnboardingState;
 
+  researchTransportWorkspaceId: string | null;
+  researchById: Record<string, ResearchDetail>;
+  researchOrder: string[];
+  selectedResearchId: string | null;
+  researchListLoading: boolean;
+  researchListError: string | null;
+  researchDraftSettings: ResearchSettingsState;
+  researchMcpServers: ResearchMcpServer[];
+  researchMcpServersLoading: boolean;
+  researchMcpServersError: string | null;
+  researchSubscribedIds: string[];
+  researchExportPendingIds: string[];
+
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   contextSidebarCollapsed: boolean;
@@ -234,6 +251,7 @@ export type AppStoreState = {
   quitAndInstallUpdate: () => Promise<void>;
 
   openSkills: () => Promise<void>;
+  openResearch: () => Promise<void>;
   refreshSkillsCatalog: () => Promise<void>;
   refreshPluginsCatalog: () => Promise<void>;
   selectPlugin: (pluginId: string | null, scope?: "workspace" | "user" | null) => Promise<void>;
@@ -256,6 +274,26 @@ export type AppStoreState = {
   copySkillInstallation: (installationId: string, targetScope: "project" | "global") => Promise<void>;
   checkSkillInstallationUpdate: (installationId: string) => Promise<void>;
   updateSkillInstallation: (installationId: string) => Promise<void>;
+
+  refreshResearchList: () => Promise<void>;
+  selectResearch: (researchId: string | null) => Promise<void>;
+  startResearch: (opts: {
+    input: string;
+    title?: string;
+    files?: File[];
+    settings?: Partial<ResearchSettingsState>;
+  }) => Promise<ResearchCard | null>;
+  cancelResearch: (researchId: string) => Promise<void>;
+  sendResearchFollowUp: (opts: {
+    parentResearchId: string;
+    input: string;
+    title?: string;
+    files?: File[];
+    settings?: Partial<ResearchSettingsState>;
+  }) => Promise<ResearchCard | null>;
+  setResearchDraftSettings: (patch: Partial<ResearchSettingsState>) => void;
+  loadResearchMcpServers: () => Promise<void>;
+  exportResearch: (researchId: string, format: import("../../../../src/server/research/types").ResearchExportFormat) => Promise<string | null>;
 
   applyWorkspaceDefaultsToThread: (
     threadId: string,

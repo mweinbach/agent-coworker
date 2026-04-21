@@ -11,7 +11,7 @@ import {
 
 import { cn } from "@/lib/utils";
 
-type CardProps = Omit<HeroCardProps, "variant"> & {
+type CardProps = Omit<HeroCardProps, "variant"> & React.HTMLAttributes<HTMLDivElement> & {
   variant?: "default" | "secondary" | "tertiary" | "transparent";
 };
 

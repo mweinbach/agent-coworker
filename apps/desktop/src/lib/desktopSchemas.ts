@@ -332,6 +332,7 @@ export const desktopMenuCommandSchema: z.ZodType<DesktopMenuCommand> = z.enum([
   "toggleSidebar",
   "openSettings",
   "openWorkspacesSettings",
+  "openResearch",
   "openSkills",
   "openUpdates",
 ]);

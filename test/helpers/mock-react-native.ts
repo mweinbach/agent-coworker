@@ -77,6 +77,7 @@ const reactNativeMockFactory = () => {
 };
 
 // Mock the workspace-local react-native (has Flow syntax Bun can't parse)
+mock.module("react-native", reactNativeMockFactory);
 mock.module(rnMobilePath, reactNativeMockFactory);
 // Mock the root-hoisted expo-modules-core (resolved from test/)
 mock.module("expo-modules-core", expoModulesCoreMockFactory);

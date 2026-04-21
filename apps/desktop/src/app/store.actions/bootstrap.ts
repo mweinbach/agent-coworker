@@ -110,8 +110,8 @@ const normalizedLastEventSeqSchema = z.preprocess(
   z.number().int().nonnegative()
 );
 const normalizedViewSchema = z.preprocess(
-  (value) => (value === "chat" || value === "skills" || value === "settings" ? value : "chat"),
-  z.enum(["chat", "skills", "settings"])
+  (value) => (value === "chat" || value === "skills" || value === "research" || value === "settings" ? value : "chat"),
+  z.enum(["chat", "skills", "research", "settings"])
 );
 
 function normalizeSettingsPageId(

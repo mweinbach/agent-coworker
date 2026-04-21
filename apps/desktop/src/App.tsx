@@ -94,6 +94,7 @@ const ChatShell = memo(function ChatShell({
   const threads = useAppStore((s) => s.threads);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const researchTransportWorkspaceId = useAppStore((s) => s.researchTransportWorkspaceId);
   const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
   const pluginManagementMode = useAppStore((s) => s.pluginManagementMode);
   const setPluginManagementWorkspace = useAppStore((s) => s.setPluginManagementWorkspace);
@@ -122,6 +123,10 @@ const ChatShell = memo(function ChatShell({
     () => workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null,
     [selectedWorkspaceId, workspaces],
   );
+  const researchWorkspace = useMemo(
+    () => workspaces.find((workspace) => workspace.id === researchTransportWorkspaceId) ?? null,
+    [researchTransportWorkspaceId, workspaces],
+  );
   const pluginSelection = useMemo(() => resolvePluginCatalogWorkspaceSelection({
     workspaces,
     selectedWorkspaceId,
@@ -141,9 +146,13 @@ const ChatShell = memo(function ChatShell({
     : "plugins";
   const topBarTitle = view === "skills"
     ? (pluginViewMode === "skills" ? "Skills" : "Plugins")
+    : view === "research"
+      ? "Research"
     : activeThread?.title?.trim() || "New thread";
   const topBarSubtitle = view === "skills"
     ? pluginManagementWorkspace?.name ?? "Global"
+    : view === "research"
+      ? researchWorkspace?.name ?? "Global"
     : activeWorkspace?.name ?? "Cowork";
   const canClearHardCap = runtime?.sessionUsage?.budgetStatus.stopTriggered === true
     && runtime?.transcriptOnly !== true
@@ -205,7 +214,7 @@ const ChatShell = memo(function ChatShell({
                 init={init}
                 ready={ready}
                 startupError={startupError}
-                view={view === "skills" ? "skills" : "chat"}
+                view={view === "skills" ? "skills" : view === "research" ? "research" : "chat"}
               />
             </div>
             {showContextSidebar ? <RightSidebarPane collapsed={contextSidebarCollapsed} /> : null}
@@ -313,6 +322,10 @@ export default function App() {
       if (command === "openUpdates") {
         state.openSettings("updates");
         void state.checkForUpdates();
+        return;
+      }
+      if (command === "openResearch") {
+        void state.openResearch();
         return;
       }
       if (command === "openSkills") {

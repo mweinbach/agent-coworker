@@ -19,7 +19,7 @@ describe("main CI workflow", () => {
     expect(workflow).toContain("apps/mobile/node_modules");
     expect(workflow).toContain("~/.bun/install/cache");
     expect(workflow).toContain(
-      "${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'apps/desktop/bun.lock', 'apps/mobile/bun.lock') }}",
+      "${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}",
     );
   });
 

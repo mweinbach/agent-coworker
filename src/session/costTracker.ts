@@ -98,6 +98,8 @@ export type CostTrackerListener = (event: CostTrackerEvent) => void;
 
 // ── Implementation ─────────────────────────────────────────────────────
 
+const MAX_TURNS = 512;
+
 export class SessionCostTracker {
     private static readonly COMPACT_SNAPSHOT_TURNS_LIMIT = 8;
     private readonly sessionId: string;
@@ -105,6 +107,7 @@ export class SessionCostTracker {
     private readonly modelSummaries = new Map<string, ModelUsageSummary>();
     private readonly listeners = new Set<CostTrackerListener>();
 
+    private lifetimeTurnCount = 0;
     private totalPromptTokens = 0;
     private totalCompletionTokens = 0;
     private totalTokens = 0;
@@ -146,6 +149,7 @@ export class SessionCostTracker {
             );
         }
 
+        tracker.lifetimeTurnCount = Math.max(snapshot.totalTurns, snapshot.turns.length);
         tracker.totalPromptTokens = snapshot.totalPromptTokens;
         tracker.totalCompletionTokens = snapshot.totalCompletionTokens;
         tracker.totalTokens = snapshot.totalTokens;
@@ -192,7 +196,7 @@ export class SessionCostTracker {
 
         const entry: TurnCostEntry = {
             turnId,
-            turnIndex: this.turns.length,
+            turnIndex: this.lifetimeTurnCount,
             timestamp: new Date().toISOString(),
             provider,
             model,
@@ -202,12 +206,18 @@ export class SessionCostTracker {
         };
 
         this.turns.push(entry);
+        this.lifetimeTurnCount += 1;
+
         this.totalPromptTokens += usage.promptTokens;
         this.totalCompletionTokens += usage.completionTokens;
         this.totalTokens += usage.totalTokens;
         this.recordSessionCost(costUsd);
-
         this.updateModelSummary(provider, model, usage, costUsd);
+
+        if (this.turns.length > MAX_TURNS) {
+            this.turns.splice(0, this.turns.length - MAX_TURNS);
+        }
+
         this.updatedAt = entry.timestamp;
 
         // Emit turn-recorded event
@@ -270,7 +280,7 @@ export class SessionCostTracker {
             : this.turns;
         return {
             sessionId: this.sessionId,
-            totalTurns: this.turns.length,
+            totalTurns: this.lifetimeTurnCount,
             totalPromptTokens: this.totalPromptTokens,
             totalCompletionTokens: this.totalCompletionTokens,
             totalTokens: this.totalTokens,
@@ -469,7 +479,8 @@ export class SessionCostTracker {
         }
         return `${date.toISOString().slice(11, 19)}Z`;
     }
-    private emit(event: CostTrackerEvent): void {
+
+private emit(event: CostTrackerEvent): void {
         for (const listener of this.listeners) {
             try {
                 listener(event);

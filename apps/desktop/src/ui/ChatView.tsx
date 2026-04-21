@@ -468,6 +468,7 @@ const FeedRow = memo(function FeedRow(props: {
   citationUrlsByIndex?: ReadonlyMap<number, string>;
   citationSources?: CitationSource[];
   isLatestUiSurface?: boolean;
+  a2uiEnabled: boolean;
 }) {
   const { developerMode } = useChatViewContext();
   const item = props.item;
@@ -480,6 +481,9 @@ const FeedRow = memo(function FeedRow(props: {
     if (item.role === "user") {
       const a2uiAction = parseA2uiActionMessage(item.text);
       if (a2uiAction) {
+        if (!props.a2uiEnabled) {
+          return null;
+        }
         return (
           <div className="flex w-full justify-end">
             <div
@@ -547,6 +551,9 @@ const FeedRow = memo(function FeedRow(props: {
   }
 
   if (item.kind === "ui_surface") {
+    if (!props.a2uiEnabled) {
+      return null;
+    }
     return props.isLatestUiSurface
       ? <A2uiInlineCard item={item} />
       : <A2uiSurfaceHistoryRow item={item} />;
@@ -732,6 +739,7 @@ export function ChatView() {
   const hasPromptModal = useAppStore((s) => s.promptModal !== null);
   const hasFilePreview = useAppStore((s) => s.filePreview !== null);
   const developerMode = useAppStore((s) => s.developerMode);
+  const desktopA2uiEnabled = useAppStore((s) => s.desktopFeatureFlags.a2ui);
   const messageBarHeight = useAppStore((s) => s.messageBarHeight);
   const [overflowCitationUrlsByMessageId, setOverflowCitationUrlsByMessageId] = useState<Map<string, Map<number, string>>>(
     () => new Map(),
@@ -821,7 +829,30 @@ export function ChatView() {
 
   const feed = rt?.feed ?? [];
   const normalizedFeed = normalizeFeedForToolCards(feed, developerMode);
-  const visibleFeed = filterFeedForDeveloperMode(normalizedFeed, developerMode);
+  const a2uiEnabled = useMemo(() => {
+    if (typeof rt?.sessionConfig?.enableA2ui === "boolean") {
+      return rt.sessionConfig.enableA2ui;
+    }
+    if (typeof rt?.sessionConfig?.featureFlags?.workspace?.a2ui === "boolean") {
+      return rt.sessionConfig.featureFlags.workspace.a2ui;
+    }
+    return desktopA2uiEnabled === true;
+  }, [desktopA2uiEnabled, rt?.sessionConfig?.enableA2ui, rt?.sessionConfig?.featureFlags?.workspace?.a2ui]);
+  const visibleFeed = useMemo(() => {
+    const baseVisibleFeed = filterFeedForDeveloperMode(normalizedFeed, developerMode);
+    if (a2uiEnabled) {
+      return baseVisibleFeed;
+    }
+    return baseVisibleFeed.filter((item) => {
+      if (item.kind === "ui_surface") {
+        return false;
+      }
+      if (item.kind === "message" && item.role === "user" && parseA2uiActionMessage(item.text)) {
+        return false;
+      }
+      return true;
+    });
+  }, [a2uiEnabled, developerMode, normalizedFeed]);
   const inlineCitationUrlsByMessageId = useMemo(() => buildCitationUrlsByMessageId(visibleFeed), [visibleFeed]);
   const citationOverflowFilePathsByMessageId = useMemo(
     () => buildCitationOverflowFilePathsByMessageId(visibleFeed),
@@ -1222,6 +1253,7 @@ export function ChatView() {
                     citationUrlsByIndex={citationUrlsByMessageId.get(item.item.id)}
                     citationSources={citationSourcesByMessageId.get(item.item.id)}
                     isLatestUiSurface={item.item.id === latestUiSurfaceItemId}
+                    a2uiEnabled={a2uiEnabled}
                   />
                 )
               )
@@ -1229,7 +1261,7 @@ export function ChatView() {
           </ConversationContent>
         </Conversation>
 
-        {selectedThreadId ? (
+        {selectedThreadId && a2uiEnabled ? (
           <div className="shrink-0 bg-panel px-4">
             <A2uiSurfaceDock threadId={selectedThreadId} />
           </div>

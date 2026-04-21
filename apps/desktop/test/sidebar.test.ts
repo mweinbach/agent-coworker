@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  applyWorkspaceOrder,
   getVisibleSidebarThreads,
   reorderSidebarItemsById,
   shouldEmphasizeWorkspaceRow,
+  swapSidebarItemsById,
 } from "../src/ui/sidebarHelpers";
 
 describe("desktop sidebar helpers", () => {
@@ -37,6 +39,60 @@ describe("desktop sidebar helpers", () => {
       { id: "ws-1", name: "agent-coworker" },
       { id: "ws-2", name: "Workouts-iOS" },
     ]);
+  });
+
+  test("applies a workspace order by ids and appends omitted entries", () => {
+    const workspaces = [
+      { id: "ws-1", name: "agent-coworker" },
+      { id: "ws-2", name: "Workouts-iOS" },
+      { id: "ws-3", name: "deep-research-knowledgebase" },
+    ];
+
+    expect(applyWorkspaceOrder(workspaces, ["ws-3", "ws-1"])).toEqual([
+      { id: "ws-3", name: "deep-research-knowledgebase" },
+      { id: "ws-1", name: "agent-coworker" },
+      { id: "ws-2", name: "Workouts-iOS" },
+    ]);
+  });
+
+  test("returns the original reference when the applied workspace order is unchanged", () => {
+    const workspaces = [
+      { id: "ws-1", name: "agent-coworker" },
+      { id: "ws-2", name: "Workouts-iOS" },
+      { id: "ws-3", name: "deep-research-knowledgebase" },
+    ];
+
+    expect(applyWorkspaceOrder(workspaces, ["ws-1", "ws-2", "ws-3"])).toBe(workspaces);
+  });
+
+  test("swaps workspace positions by direction for keyboard reordering", () => {
+    const workspaces = [
+      { id: "ws-1", name: "agent-coworker" },
+      { id: "ws-2", name: "Workouts-iOS" },
+      { id: "ws-3", name: "deep-research-knowledgebase" },
+    ];
+
+    expect(swapSidebarItemsById(workspaces, "ws-2", "up")).toEqual([
+      { id: "ws-2", name: "Workouts-iOS" },
+      { id: "ws-1", name: "agent-coworker" },
+      { id: "ws-3", name: "deep-research-knowledgebase" },
+    ]);
+    expect(swapSidebarItemsById(workspaces, "ws-2", "down")).toEqual([
+      { id: "ws-1", name: "agent-coworker" },
+      { id: "ws-3", name: "deep-research-knowledgebase" },
+      { id: "ws-2", name: "Workouts-iOS" },
+    ]);
+  });
+
+  test("does not swap workspaces past the list boundaries", () => {
+    const workspaces = [
+      { id: "ws-1", name: "agent-coworker" },
+      { id: "ws-2", name: "Workouts-iOS" },
+      { id: "ws-3", name: "deep-research-knowledgebase" },
+    ];
+
+    expect(swapSidebarItemsById(workspaces, "ws-1", "up")).toBe(workspaces);
+    expect(swapSidebarItemsById(workspaces, "ws-3", "down")).toBe(workspaces);
   });
 
   test("does not emphasize the workspace row when one of its threads is selected", () => {

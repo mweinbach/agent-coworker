@@ -94,6 +94,10 @@ samp {
   -webkit-app-region: no-drag;
 }
 
+.app-native-no-drag {
+  -webkit-app-region: no-drag;
+}
+
 .app-topbar__toolbar-layer {
   z-index: 1;
 }
@@ -116,6 +120,10 @@ samp {
 
 .app-topbar__thread-anchor--collapsed {
   padding-left: 4.5rem;
+}
+
+.app-topbar__thread-anchor--win32-collapsed {
+  padding-left: 0.5rem;
 }
 
 .app-topbar__thread-button {
@@ -144,6 +152,7 @@ samp {
   min-width: 0;
   font-size: 0.8rem;
   font-weight: 620;
+  line-height: 1;
   letter-spacing: -0.02em;
   color: var(--text-emphasis);
 }
@@ -152,6 +161,7 @@ samp {
   flex: 0 0 auto;
   font-size: 0.7rem;
   font-weight: 560;
+  line-height: 1;
 }
 
 .app-topbar__thread-subtitle {
@@ -159,6 +169,7 @@ samp {
   min-width: 0;
   font-size: 0.74rem;
   font-weight: 560;
+  line-height: 1;
   font-style: italic;
   color: var(--text-subtle);
 }
@@ -349,19 +360,6 @@ samp {
   }
 }
 
-@keyframes sidebarDropPulse {
-  0%,
-  100% {
-    background-color: var(--surface-sidebar-drop);
-    border-color: var(--border-accent-soft);
-  }
-
-  50% {
-    background-color: var(--surface-sidebar-drop-strong);
-    border-color: var(--border-accent-strong);
-  }
-}
-
 .sidebar-rail-enter {
   animation: sidebarRailIn 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -423,16 +421,16 @@ samp {
   transition:
     background-color 180ms ease,
     color 180ms ease,
-    border-color 180ms ease,
-    opacity 180ms ease;
+    border-color 180ms ease;
 }
 
-.sidebar-workspace-card[data-dragging="true"] {
-  opacity: 0.7;
+.sidebar-workspace-card--reorderable {
+  cursor: grab;
+  touch-action: none;
 }
 
-.sidebar-workspace-card[data-drop-target="true"] {
-  animation: sidebarDropPulse 1.6s ease-in-out infinite;
+.sidebar-workspace-card--reorderable:active {
+  cursor: grabbing;
 }
 
 .sidebar-thread-item {
@@ -441,6 +439,26 @@ samp {
     background-color 180ms ease,
     color 180ms ease,
     border-color 180ms ease;
+}
+
+.sidebar-thread-region {
+  display: grid;
+  overflow: hidden;
+  grid-template-rows: 0fr;
+  margin-top: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    grid-template-rows 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    margin-top 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.sidebar-thread-region[data-state="open"] {
+  grid-template-rows: 1fr;
+  margin-top: 0.375rem;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 body.app-resizing-sidebars {
@@ -490,8 +508,7 @@ body.app-animating-sidebars .app-topbar__content-fill {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sidebar-rail-enter,
-  .sidebar-workspace-card[data-drop-target="true"] {
+  .sidebar-rail-enter {
     animation: none !important;
   }
 

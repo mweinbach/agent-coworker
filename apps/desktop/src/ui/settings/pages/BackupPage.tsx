@@ -486,6 +486,7 @@ function CheckpointDeltaView({
 }
 
 export function BackupPage(props: BackupPageProps = {}) {
+  const desktopFeaturesFromStore = useAppStore((s) => s.desktopFeatureFlags);
   const selectedWorkspaceIdFromStore = useAppStore((s) => s.selectedWorkspaceId);
   const workspacesFromStore = useAppStore((s) => s.workspaces);
   const runtimeByIdFromStore = useAppStore((s) => s.workspaceRuntimeById);
@@ -504,6 +505,8 @@ export function BackupPage(props: BackupPageProps = {}) {
   // because there's no React store provider. Read directly from getState() as a fallback.
   const serverState = typeof window === "undefined" ? useAppStore.getState() : null;
 
+  const desktopFeatures = serverState?.desktopFeatureFlags ?? desktopFeaturesFromStore;
+  const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const selectedWorkspaceId = serverState?.selectedWorkspaceId ?? selectedWorkspaceIdFromStore;
   const workspaces = serverState?.workspaces ?? workspacesFromStore;
   const workspaceRuntimeById = serverState?.workspaceRuntimeById ?? runtimeByIdFromStore;
@@ -643,7 +646,7 @@ export function BackupPage(props: BackupPageProps = {}) {
             Keep recovery snapshots for this session
           </span>
         </label>
-        {workspaceList.length > 1 && props.workspace === undefined && (
+        {workspacePickerEnabled && workspaceList.length > 1 && props.workspace === undefined && (
           <Select value={workspace.id} onValueChange={(val) => { if (val !== workspace.id) void selectWorkspaceFromStore(val); }}>
             <SelectTrigger className="h-9 w-[min(200px,100%)] border-border/70 bg-background text-sm">
               <SelectValue placeholder="Select workspace" />

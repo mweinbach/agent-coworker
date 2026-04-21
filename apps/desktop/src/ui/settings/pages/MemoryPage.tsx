@@ -74,6 +74,8 @@ function relativeTime(isoString: string): string {
 }
 
 export function MemoryPage() {
+  const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
+  const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
@@ -192,7 +194,7 @@ export function MemoryPage() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          {workspaces.length > 1 && workspace ? (
+          {workspacePickerEnabled && workspaces.length > 1 && workspace ? (
             <Select value={workspace.id} onValueChange={(value) => void selectWorkspace(value)}>
               <SelectTrigger className="max-w-48" aria-label="Active workspace">
                 <SelectValue />

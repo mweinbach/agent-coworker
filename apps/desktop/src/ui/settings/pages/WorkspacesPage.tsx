@@ -1253,7 +1253,7 @@ export function WorkspacesPage() {
       {workspaces.length === 0 || !ws ? (
         <Card className="border-border/80 bg-card/85">
           <CardContent className="p-8 text-center">
-            {workspacePickerEnabled ? (
+            {workspaceLifecycleEnabled ? (
               <Button type="button" onClick={() => void addWorkspace()}>
                 Add workspace
               </Button>
@@ -1304,7 +1304,7 @@ export function WorkspacesPage() {
                     <CardTitle>Active workspace</CardTitle>
                     <CardDescription>Selected project for this desktop session.</CardDescription>
                   </div>
-                  {workspacePickerEnabled ? (
+                  {workspaceLifecycleEnabled ? (
                     <Button variant="outline" type="button" onClick={() => void addWorkspace()}>
                       Add
                     </Button>
@@ -1315,7 +1315,7 @@ export function WorkspacesPage() {
                     <div className="text-sm font-medium text-foreground">{ws.name}</div>
                     <div className="text-xs text-muted-foreground">{ws.path}</div>
                   </div>
-                  {workspaces.length > 1 ? (
+                  {workspacePickerEnabled && workspaces.length > 1 ? (
                     <Select value={ws.id} onValueChange={(value) => void selectWorkspace(value)}>
                       <SelectTrigger aria-label="Active workspace">
                         <SelectValue />

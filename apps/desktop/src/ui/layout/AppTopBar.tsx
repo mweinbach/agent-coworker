@@ -34,7 +34,7 @@ interface AppTopBarProps {
 
 // Keep the collapsed Windows corner rail aligned with the long-standing title offset
 // so the thread shell clears the left controls and existing layout tests.
-const WIN32_COLLAPSED_LEFT_RAIL_WIDTH = 96;
+const WIN32_COLLAPSED_LEFT_RAIL_WIDTH = 84;
 const WIN32_CAPTION_BUTTON_RESERVE = 136;
 const WIN32_RIGHT_TOOLBAR_GAP = 6;
 
@@ -183,7 +183,7 @@ export function AppTopBar({
       {showWin32CollapsedStrip ? (
         <div className="app-topbar__win32-left-rail absolute inset-y-0 left-0">
           <div className="app-topbar__win32-left-drag-zone" aria-hidden="true" />
-          <div className="app-topbar__sidebar-strip app-topbar__win32-left-strip app-topbar__toolbar-layer app-topbar__controls absolute inset-0 flex min-w-0 items-center gap-1 px-2">
+          <div className="app-topbar__sidebar-strip app-topbar__win32-left-strip app-topbar__toolbar-layer app-topbar__controls absolute inset-0 flex min-w-0 items-center gap-1 px-1.5">
             <Button
               size="icon-sm"
               variant="ghost"
@@ -244,6 +244,7 @@ export function AppTopBar({
             className={cn(
               "app-topbar__thread-anchor relative flex min-w-0 items-center",
               sidebarCollapsed && !showWin32CollapsedStrip && "app-topbar__thread-anchor--collapsed",
+              showWin32CollapsedStrip && "app-topbar__thread-anchor--win32-collapsed",
             )}
             style={collapsedThreadAnchorStyle}
           >
@@ -284,6 +285,7 @@ export function AppTopBar({
             className={cn(
               "app-topbar__thread-anchor relative flex min-w-0",
               sidebarCollapsed && !showWin32CollapsedStrip && "app-topbar__thread-anchor--collapsed",
+              showWin32CollapsedStrip && "app-topbar__thread-anchor--win32-collapsed",
             )}
             style={collapsedThreadAnchorStyle}
           >

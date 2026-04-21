@@ -1,26 +1,17 @@
-export const DESKTOP_FEATURE_FLAG_IDS = [
+export const FEATURE_FLAG_IDS = [
   "remoteAccess",
   "workspacePicker",
   "workspaceLifecycle",
-] as const;
-
-export type DesktopFeatureFlagId = (typeof DESKTOP_FEATURE_FLAG_IDS)[number];
-
-export type DesktopFeatureFlags = Record<DesktopFeatureFlagId, boolean>;
-export type DesktopFeatureFlagOverrides = Partial<DesktopFeatureFlags>;
-
-export const WORKSPACE_FEATURE_FLAG_IDS = [
-  "experimentalApi",
   "a2ui",
 ] as const;
 
-export type WorkspaceFeatureFlagId = (typeof WORKSPACE_FEATURE_FLAG_IDS)[number];
+export type FeatureFlagId = (typeof FEATURE_FLAG_IDS)[number];
 
-export type WorkspaceFeatureFlags = Record<WorkspaceFeatureFlagId, boolean>;
-export type WorkspaceFeatureFlagOverrides = Partial<WorkspaceFeatureFlags>;
+export type FeatureFlags = Record<FeatureFlagId, boolean>;
+export type FeatureFlagOverrides = Partial<FeatureFlags>;
 
-export type DesktopFeatureFlagDefinition = {
-  id: DesktopFeatureFlagId;
+export type FeatureFlagDefinition = {
+  id: FeatureFlagId;
   label: string;
   description: string;
   defaultEnabled: boolean;
@@ -29,14 +20,7 @@ export type DesktopFeatureFlagDefinition = {
   restartRequired?: boolean;
 };
 
-export type WorkspaceFeatureFlagDefinition = {
-  id: WorkspaceFeatureFlagId;
-  label: string;
-  description: string;
-  defaultEnabled: boolean;
-};
-
-export const DESKTOP_FEATURE_FLAG_DEFINITIONS: Record<DesktopFeatureFlagId, DesktopFeatureFlagDefinition> = {
+export const FEATURE_FLAG_DEFINITIONS: Record<FeatureFlagId, FeatureFlagDefinition> = {
   remoteAccess: {
     id: "remoteAccess",
     label: "Remote access",
@@ -49,28 +33,19 @@ export const DESKTOP_FEATURE_FLAG_DEFINITIONS: Record<DesktopFeatureFlagId, Desk
   workspacePicker: {
     id: "workspacePicker",
     label: "Workspace picker",
-    description: "Show the multi-workspace picker UI in desktop and onboarding flows.",
+    description: "Show multi-workspace switching UI in desktop settings, onboarding, and sidebar flows.",
     defaultEnabled: true,
   },
   workspaceLifecycle: {
     id: "workspaceLifecycle",
     label: "Workspace lifecycle actions",
-    description: "Allow adding, removing, and reordering workspace entries from the desktop UI.",
-    defaultEnabled: true,
-  },
-};
-
-export const WORKSPACE_FEATURE_FLAG_DEFINITIONS: Record<WorkspaceFeatureFlagId, WorkspaceFeatureFlagDefinition> = {
-  experimentalApi: {
-    id: "experimentalApi",
-    label: "Experimental JSON-RPC capabilities",
-    description: "Expose experimental JSON-RPC capability metadata for this workspace server.",
+    description: "Allow adding, removing, reordering, and restarting workspaces from the desktop UI.",
     defaultEnabled: true,
   },
   a2ui: {
     id: "a2ui",
     label: "Generative UI (A2UI)",
-    description: "Enable A2UI surfaces and action routing for this workspace.",
+    description: "Enable A2UI surfaces and action routing across all workspaces.",
     defaultEnabled: false,
   },
 };
@@ -96,21 +71,22 @@ function normalizeBooleanOverride(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-export type ResolveDesktopFeatureFlagsOptions = {
+export type ResolveFeatureFlagsOptions = {
   isPackaged: boolean;
   env?: Record<string, string | undefined>;
-  overrides?: DesktopFeatureFlagOverrides | null;
+  overrides?: FeatureFlagOverrides | null;
 };
 
-export function resolveDesktopFeatureFlags(options: ResolveDesktopFeatureFlagsOptions): DesktopFeatureFlags {
-  const values: DesktopFeatureFlags = {
-    remoteAccess: DESKTOP_FEATURE_FLAG_DEFINITIONS.remoteAccess.defaultEnabled,
-    workspacePicker: DESKTOP_FEATURE_FLAG_DEFINITIONS.workspacePicker.defaultEnabled,
-    workspaceLifecycle: DESKTOP_FEATURE_FLAG_DEFINITIONS.workspaceLifecycle.defaultEnabled,
+export function resolveFeatureFlags(options: ResolveFeatureFlagsOptions): FeatureFlags {
+  const values: FeatureFlags = {
+    remoteAccess: FEATURE_FLAG_DEFINITIONS.remoteAccess.defaultEnabled,
+    workspacePicker: FEATURE_FLAG_DEFINITIONS.workspacePicker.defaultEnabled,
+    workspaceLifecycle: FEATURE_FLAG_DEFINITIONS.workspaceLifecycle.defaultEnabled,
+    a2ui: FEATURE_FLAG_DEFINITIONS.a2ui.defaultEnabled,
   };
 
-  for (const flagId of DESKTOP_FEATURE_FLAG_IDS) {
-    const definition = DESKTOP_FEATURE_FLAG_DEFINITIONS[flagId];
+  for (const flagId of FEATURE_FLAG_IDS) {
+    const definition = FEATURE_FLAG_DEFINITIONS[flagId];
     if (definition.envOverride) {
       const envOverride = parseBooleanFlag(options.env?.[definition.envOverride]);
       if (envOverride !== null) {
@@ -119,9 +95,9 @@ export function resolveDesktopFeatureFlags(options: ResolveDesktopFeatureFlagsOp
     }
   }
 
-  const overrides = normalizeDesktopFeatureFlagOverrides(options.overrides);
+  const overrides = normalizeFeatureFlagOverrides(options.overrides);
   if (overrides) {
-    for (const flagId of DESKTOP_FEATURE_FLAG_IDS) {
+    for (const flagId of FEATURE_FLAG_IDS) {
       const override = normalizeBooleanOverride(overrides[flagId]);
       if (override !== undefined) {
         values[flagId] = override;
@@ -130,8 +106,8 @@ export function resolveDesktopFeatureFlags(options: ResolveDesktopFeatureFlagsOp
   }
 
   if (options.isPackaged) {
-    for (const flagId of DESKTOP_FEATURE_FLAG_IDS) {
-      const definition = DESKTOP_FEATURE_FLAG_DEFINITIONS[flagId];
+    for (const flagId of FEATURE_FLAG_IDS) {
+      const definition = FEATURE_FLAG_DEFINITIONS[flagId];
       if (definition.packagedAvailability === "forced-off") {
         values[flagId] = false;
       }
@@ -141,14 +117,14 @@ export function resolveDesktopFeatureFlags(options: ResolveDesktopFeatureFlagsOp
   return values;
 }
 
-export function normalizeDesktopFeatureFlagOverrides(value: unknown): DesktopFeatureFlagOverrides | undefined {
+export function normalizeFeatureFlagOverrides(value: unknown): FeatureFlagOverrides | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
 
   const source = value as Record<string, unknown>;
-  const overrides: DesktopFeatureFlagOverrides = {};
-  for (const flagId of DESKTOP_FEATURE_FLAG_IDS) {
+  const overrides: FeatureFlagOverrides = {};
+  for (const flagId of FEATURE_FLAG_IDS) {
     const parsed = normalizeBooleanOverride(source[flagId]);
     if (parsed !== undefined) {
       overrides[flagId] = parsed;
@@ -157,41 +133,13 @@ export function normalizeDesktopFeatureFlagOverrides(value: unknown): DesktopFea
   return Object.keys(overrides).length > 0 ? overrides : undefined;
 }
 
-export function resolveWorkspaceFeatureFlags(
-  overrides?: WorkspaceFeatureFlagOverrides | null,
-): WorkspaceFeatureFlags {
-  const values: WorkspaceFeatureFlags = {
-    experimentalApi: WORKSPACE_FEATURE_FLAG_DEFINITIONS.experimentalApi.defaultEnabled,
-    a2ui: WORKSPACE_FEATURE_FLAG_DEFINITIONS.a2ui.defaultEnabled,
-  };
-
-  const normalizedOverrides = normalizeWorkspaceFeatureFlagOverrides(overrides);
-  if (!normalizedOverrides) {
-    return values;
-  }
-
-  for (const flagId of WORKSPACE_FEATURE_FLAG_IDS) {
-    const override = normalizeBooleanOverride(normalizedOverrides[flagId]);
-    if (override !== undefined) {
-      values[flagId] = override;
-    }
-  }
-
-  return values;
-}
-
-export function normalizeWorkspaceFeatureFlagOverrides(value: unknown): WorkspaceFeatureFlagOverrides | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-
-  const source = value as Record<string, unknown>;
-  const overrides: WorkspaceFeatureFlagOverrides = {};
-  for (const flagId of WORKSPACE_FEATURE_FLAG_IDS) {
-    const parsed = normalizeBooleanOverride(source[flagId]);
-    if (parsed !== undefined) {
-      overrides[flagId] = parsed;
-    }
-  }
-  return Object.keys(overrides).length > 0 ? overrides : undefined;
-}
+// Backward-compat aliases while desktop migrates imports.
+export const DESKTOP_FEATURE_FLAG_IDS = FEATURE_FLAG_IDS;
+export type DesktopFeatureFlagId = FeatureFlagId;
+export type DesktopFeatureFlags = FeatureFlags;
+export type DesktopFeatureFlagOverrides = FeatureFlagOverrides;
+export type DesktopFeatureFlagDefinition = FeatureFlagDefinition;
+export const DESKTOP_FEATURE_FLAG_DEFINITIONS = FEATURE_FLAG_DEFINITIONS;
+export type ResolveDesktopFeatureFlagsOptions = ResolveFeatureFlagsOptions;
+export const resolveDesktopFeatureFlags = resolveFeatureFlags;
+export const normalizeDesktopFeatureFlagOverrides = normalizeFeatureFlagOverrides;

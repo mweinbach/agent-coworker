@@ -64,6 +64,7 @@ mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
     remoteAccess: true,
     workspacePicker: workspacePickerEnabled,
     workspaceLifecycle: workspaceLifecycleEnabled,
+    a2ui: false,
   }),
   checkForUpdates: async () => {},
   quitAndInstallUpdate: async () => {},
@@ -120,6 +121,7 @@ function resetAppStore(overrides: Record<string, unknown> = {}) {
       remoteAccess: true,
       workspacePicker: workspacePickerEnabled,
       workspaceLifecycle: workspaceLifecycleEnabled,
+      a2ui: false,
     },
     onboardingVisible: false,
     sidebarCollapsed: false,
@@ -240,6 +242,10 @@ describe("desktop sidebar", () => {
         collapseButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
       });
 
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      });
+
       expect(container.textContent).not.toContain("Thread 12");
       expect(container.querySelector('[aria-label="Expand Agent Coworker"]')).not.toBeNull();
 
@@ -302,7 +308,7 @@ describe("desktop sidebar", () => {
     }
   });
 
-  test.serial("shows chat navigation and clear workspace scope labels in the sidebar", async () => {
+  test.serial("shows chat navigation controls and workspace cards in the sidebar", async () => {
     const harness = setupSidebarJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
 
@@ -324,8 +330,7 @@ describe("desktop sidebar", () => {
 
       expect(container.textContent).toContain("New Chat");
       expect(container.textContent).toContain("Plugins");
-      expect(container.textContent).toContain("2 sessions");
-      expect(container.textContent).toContain("viewing plugins");
+      expect(container.textContent).toContain("Agent Coworker");
 
       const newChatButton = Array.from(container.querySelectorAll("button")).find((button) =>
         button.textContent?.includes("New Chat"),
@@ -360,12 +365,12 @@ describe("desktop sidebar", () => {
     }
   });
 
-  test.serial("hides add-workspace affordances when browser shell workspace picking is disabled", async () => {
+  test.serial("hides add-workspace affordances when workspace lifecycle actions are disabled", async () => {
     const harness = setupSidebarJsdom();
     let root: ReturnType<typeof createRoot> | null = null;
 
     try {
-      workspacePickerEnabled = false;
+      workspaceLifecycleEnabled = false;
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       root = createRoot(container);
@@ -382,6 +387,177 @@ describe("desktop sidebar", () => {
 
       expect(container.querySelector('[aria-label="Add workspace"]')).toBeNull();
       expect([...container.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Add workspace")).toBe(false);
+      expect(container.querySelector(".sidebar-workspace-card--reorderable")).toBeNull();
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("moves a workspace with Alt+ArrowDown from the workspace row", async () => {
+    const harness = setupSidebarJsdom();
+    const setWorkspacesOrder = mock(async () => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        resetAppStore({
+          workspaces: [
+            makeWorkspace(),
+            makeWorkspace({
+              id: "ws-2",
+              name: "Research Lab",
+              path: "/tmp/research-lab",
+            }),
+          ],
+          threads: makeThreads(1),
+          selectedWorkspaceId: "ws-1",
+          selectedThreadId: "thread-1",
+          setWorkspacesOrder,
+        });
+        root.render(createElement(Sidebar));
+      });
+
+      const workspaceCards = Array.from(container.querySelectorAll(".sidebar-workspace-card"));
+      expect(workspaceCards).toHaveLength(2);
+      expect(workspaceCards.every((card) => card.className.includes("sidebar-workspace-card--reorderable"))).toBe(true);
+      expect(container.querySelector('[aria-label^="Reorder "]')).toBeNull();
+
+      const firstWorkspaceButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Agent Coworker"),
+      );
+      if (!(firstWorkspaceButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing workspace button");
+      }
+
+      await act(async () => {
+        firstWorkspaceButton.dispatchEvent(new harness.dom.window.KeyboardEvent("keydown", {
+          altKey: true,
+          bubbles: true,
+          key: "ArrowDown",
+        }));
+      });
+
+      expect(setWorkspacesOrder).toHaveBeenCalledWith(["ws-2", "ws-1"]);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("moves a workspace with Alt+ArrowUp from the workspace row", async () => {
+    const harness = setupSidebarJsdom();
+    const setWorkspacesOrder = mock(async () => {});
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        resetAppStore({
+          workspaces: [
+            makeWorkspace(),
+            makeWorkspace({
+              id: "ws-2",
+              name: "Research Lab",
+              path: "/tmp/research-lab",
+            }),
+          ],
+          threads: makeThreads(1),
+          selectedWorkspaceId: "ws-2",
+          selectedThreadId: "thread-1",
+          setWorkspacesOrder,
+        });
+        root.render(createElement(Sidebar));
+      });
+
+      const secondWorkspaceButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Research Lab"),
+      );
+      if (!(secondWorkspaceButton instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing workspace button");
+      }
+
+      await act(async () => {
+        secondWorkspaceButton.dispatchEvent(new harness.dom.window.KeyboardEvent("keydown", {
+          altKey: true,
+          bubbles: true,
+          key: "ArrowUp",
+        }));
+      });
+
+      expect(setWorkspacesOrder).toHaveBeenCalledWith(["ws-2", "ws-1"]);
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
+  test.serial("limits the workspace list to the active workspace when workspace picker is disabled", async () => {
+    const harness = setupSidebarJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      workspacePickerEnabled = false;
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        resetAppStore({
+          workspaces: [
+            makeWorkspace(),
+            makeWorkspace({
+              id: "ws-2",
+              name: "Research Lab",
+              path: "/tmp/research-lab",
+            }),
+          ],
+          threads: [
+            ...makeThreads(1),
+            {
+              id: "thread-2",
+              workspaceId: "ws-2",
+              title: "Thread 2",
+              titleSource: "manual" as const,
+              createdAt: "2026-03-02T09:00:00.000Z",
+              lastMessageAt: "2026-03-02T10:00:00.000Z",
+              status: "active" as const,
+              sessionId: "session-2",
+              messageCount: 2,
+              lastEventSeq: 2,
+              draft: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          selectedThreadId: "thread-1",
+        });
+        root.render(createElement(Sidebar));
+      });
+
+      const workspaceCards = Array.from(container.querySelectorAll(".sidebar-workspace-card"));
+      expect(workspaceCards).toHaveLength(1);
+      expect(container.textContent).toContain("Agent Coworker");
+      expect(container.textContent).not.toContain("Research Lab");
+      expect(container.querySelector('[aria-label="Add workspace"]')).not.toBeNull();
     } finally {
       if (root) {
         await act(async () => {
@@ -439,8 +615,8 @@ describe("desktop sidebar", () => {
 
       const workspaceCards = Array.from(container.querySelectorAll(".sidebar-workspace-card"));
       expect(workspaceCards).toHaveLength(2);
-      expect(workspaceCards[0]?.textContent).not.toContain("viewing plugins");
-      expect(workspaceCards[1]?.textContent).toContain("viewing plugins");
+      expect(workspaceCards[0]?.className ?? "").not.toContain("bg-foreground/[0.05]");
+      expect(workspaceCards[1]?.className ?? "").toContain("bg-foreground/[0.05]");
 
       const firstWorkspaceButton = Array.from(container.querySelectorAll("button")).find((button) =>
         button.textContent?.includes("Agent Coworker"),

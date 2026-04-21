@@ -4,7 +4,7 @@ import type {
   DesktopFeatureFlagId,
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
-} from "../lib/desktopFeatureFlags";
+} from "../../../../src/shared/featureFlags";
 import { fallbackAuthMethods } from "../lib/providerDisplayNames";
 import type { MCPServerConfig, ProviderName, ServerEvent, TodoItem } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
@@ -203,6 +203,7 @@ export type AppStoreState = {
   removeWorkspace: (workspaceId: string) => Promise<void>;
   selectWorkspace: (workspaceId: string) => Promise<void>;
   reorderWorkspaces: (sourceWorkspaceId: string, targetWorkspaceId: string) => Promise<void>;
+  setWorkspacesOrder: (orderedIds: string[]) => Promise<void>;
 
   newThread: (opts?: { workspaceId?: string; titleHint?: string; firstMessage?: string; mode?: "draft" | "session"; attachments?: import("./store.helpers/jsonRpcSocket").FileAttachmentInput[] }) => Promise<boolean>;
   removeThread: (threadId: string) => Promise<void>;

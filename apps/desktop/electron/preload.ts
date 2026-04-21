@@ -68,7 +68,7 @@ import {
   normalizeDesktopFeatureFlagOverrides,
   resolveDesktopFeatureFlags,
   type DesktopFeatureFlagOverrides,
-} from "../src/lib/desktopFeatureFlags";
+} from "../../../src/shared/featureFlags";
 
 function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
   const parsed = schema.safeParse(value);
@@ -194,7 +194,7 @@ function assertSystemAppearance(value: unknown): asserts value is SystemAppearan
 
 function resolvePreloadDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides) {
   return resolveDesktopFeatureFlags({
-    isPackaged: !import.meta.env.DEV,
+    isPackaged: process.env.COWORK_IS_PACKAGED === "true",
     env: process.env,
     ...(overrides ? { overrides } : {}),
   });

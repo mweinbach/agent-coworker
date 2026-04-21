@@ -9,7 +9,7 @@ import type {
   SystemAppearance,
   UpdaterState,
 } from "./desktopApi";
-import type { DesktopFeatureFlagOverrides, DesktopFeatureFlags } from "./desktopFeatureFlags";
+import type { DesktopFeatureFlagOverrides, DesktopFeatureFlags } from "../../../../src/shared/featureFlags";
 import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
 import { hydrateTranscriptSnapshot } from "../app/transcriptHydration";
 import {
@@ -389,6 +389,7 @@ export function createWebAdapter(): DesktopApi {
       remoteAccess: false,
       workspacePicker: normalizedPicker,
       workspaceLifecycle: normalizedLifecycle,
+      a2ui: false,
     };
   };
   const features = resolveWebDesktopFeatureFlags();

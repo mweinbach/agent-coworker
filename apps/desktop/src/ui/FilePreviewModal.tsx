@@ -5,6 +5,7 @@ import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { ExternalLinkIcon } from "lucide-react";
+import { CodeFilePreview } from "./CodeFilePreview";
 
 import { useAppStore } from "../app/store";
 import { Badge } from "../components/ui/badge";
@@ -367,7 +368,7 @@ export function FilePreviewModal() {
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className="app-surface-opaque flex max-h-[90vh] max-w-5xl flex-col gap-0 overflow-hidden p-0">
+      <DialogContent className={cn("app-surface-opaque flex flex-col gap-0 overflow-hidden p-0", kind === "pdf" ? "h-[96vh] max-w-6xl" : "max-h-[90vh] max-w-5xl")}>
         <DialogHeader className="shrink-0 space-y-3 border-b border-border/60 px-5 py-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -399,7 +400,8 @@ export function FilePreviewModal() {
         <div
           data-file-preview-content="true"
           className={cn(
-            "min-h-0 flex-1 overflow-y-auto px-5 py-4",
+            "min-h-0 flex-1",
+            kind === "pdf" ? "overflow-hidden p-0" : "overflow-y-auto px-5 py-4",
             kind === "docx" && docxHtml && "bg-white px-6 py-6",
           )}
         >
@@ -408,7 +410,7 @@ export function FilePreviewModal() {
           ) : error ? (
             <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>
           ) : kind === "pdf" && blobUrl ? (
-            <embed src={blobUrl} type="application/pdf" className="h-[min(72vh,720px)] w-full rounded-md border border-border/80" title={titleName} />
+            <embed src={blobUrl} type="application/pdf" className="h-full w-full" title={titleName} />
           ) : kind === "image" && blobUrl ? (
             <img src={blobUrl} alt={titleName} className="mx-auto block max-h-[min(72vh,720px)] max-w-full object-contain" />
           ) : (kind === "markdown" || kind === "text") && textContent !== null ? (
@@ -425,7 +427,7 @@ export function FilePreviewModal() {
                 </Streamdown>
               </div>
             ) : (
-              <pre className="whitespace-pre-wrap break-words rounded-md border border-border/80 bg-muted/25 p-3 font-mono text-xs leading-relaxed">{textContent}</pre>
+              <CodeFilePreview content={textContent} filePath={path ?? ""} />
             )
           ) : kind === "docx" && docxHtml ? (
             <div
@@ -478,7 +480,7 @@ export function FilePreviewModal() {
               dangerouslySetInnerHTML={{ __html: xlsxHtml }}
             />
           ) : showUnknownAsText ? (
-            <pre className="whitespace-pre-wrap break-words rounded-md border border-border/80 bg-muted/25 p-3 font-mono text-xs leading-relaxed">{textContent}</pre>
+            <CodeFilePreview content={textContent} filePath={path ?? ""} />
           ) : showFallback || showUnknownFallback ? (
             <div className="space-y-4 py-8 text-center">
               <p className="text-sm text-muted-foreground">

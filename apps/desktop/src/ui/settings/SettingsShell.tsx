@@ -140,7 +140,7 @@ function SettingsNavigation({
           Back
         </Button>
         {perWorkspaceSettings && currentWorkspace && (
-          <div className="mt-2 truncate px-1 text-[11px] text-muted-foreground" title={currentWorkspace.name}>
+          <div className="mt-2 truncate px-1 text-[11px] text-foreground/68" title={currentWorkspace.name}>
             {currentWorkspace.name}
           </div>
         )}
@@ -153,7 +153,7 @@ function SettingsNavigation({
         <div className="flex flex-col gap-3 max-[860px]:flex-row max-[860px]:flex-wrap max-[860px]:gap-x-4 max-[860px]:gap-y-3">
           {settingsGroups.map((group) => (
             <div key={group.label} className="flex min-w-0 flex-col">
-              <div className="mb-0.5 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/80">
+              <div className="mb-0.5 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-foreground/72">
                 {group.label}
               </div>
               <div className="flex flex-col gap-0.5">
@@ -164,7 +164,7 @@ function SettingsNavigation({
                       "settings-shell__nav-button flex w-full items-center rounded-lg px-3 py-2 text-left text-[13px] transition-colors",
                       activePage === page.id
                         ? "bg-foreground/[0.08] font-medium text-foreground ring-1 ring-border/40"
-                        : "font-normal text-muted-foreground hover:bg-foreground/[0.05] hover:text-foreground",
+                        : "font-normal text-foreground/78 hover:bg-foreground/[0.05] hover:text-foreground",
                     )}
                     type="button"
                     onClick={() => onSelectPage(page.id)}

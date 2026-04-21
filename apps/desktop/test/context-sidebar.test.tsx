@@ -260,6 +260,7 @@ describe("desktop context sidebar", () => {
       const separator = container.querySelector('[aria-label="Resize context sidebar"]');
 
       expect(separator).not.toBeNull();
+      expect(separator?.className).toContain("app-native-no-drag");
       expect(separator?.className).toContain("-left-1");
       expect(separator?.className).toContain("w-3");
       expect(separator?.className).not.toContain("bg-primary/20");

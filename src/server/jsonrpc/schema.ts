@@ -33,6 +33,10 @@ import {
   jsonRpcThreadTurnResultSchemas,
   jsonRpcThreadTurnServerRequestSchemas,
 } from "./schema.threadTurn";
+import {
+  jsonRpcWorkspaceRequestSchemas,
+  jsonRpcWorkspaceResultSchemas,
+} from "./schema.workspace";
 
 export { jsonRpcInitializeParamsSchema, jsonRpcInitializedParamsSchema };
 
@@ -48,6 +52,7 @@ export const jsonRpcRequestSchemas = {
   ...jsonRpcMemoryRequestSchemas,
   ...jsonRpcBackupsRequestSchemas,
   ...jsonRpcA2uiRequestSchemas,
+  ...jsonRpcWorkspaceRequestSchemas,
 } as const;
 
 export const jsonRpcNotificationSchemas = {
@@ -73,6 +78,7 @@ export const jsonRpcResultSchemas = {
   ...jsonRpcMemoryResultSchemas,
   ...jsonRpcBackupsResultSchemas,
   ...jsonRpcA2uiResultSchemas,
+  ...jsonRpcWorkspaceResultSchemas,
 } as const;
 
 export const jsonRpcSchemaBundle = {

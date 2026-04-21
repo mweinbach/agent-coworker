@@ -4,6 +4,7 @@ import {
   primeSessionSnapshotCitationCache,
 } from "../../citationMetadata";
 import { JSONRPC_ERROR_CODES } from "../protocol";
+import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
 import { createThreadTurnProjector } from "../threadReadProjector";
 
 import { toJsonRpcParams } from "./shared";
@@ -172,6 +173,68 @@ export function createThreadRouteHandlers(
         ...(params.includeTurns === true
           ? { journalTailSeq }
           : {}),
+      });
+      queueMicrotask(() => {
+        primeSessionSnapshotCitationCache(enrichedSnapshot);
+      });
+    },
+
+    "thread/hydrate": async (ws, message) => {
+      const parsed = jsonRpcThreadTurnRequestSchemas["thread/hydrate"].safeParse(message.params);
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
+        });
+        return;
+      }
+      const { threadId, afterSeq = 0, includeTurns = false } = parsed.data;
+      const snapshot = context.threads.readSnapshot(threadId);
+      if (!snapshot) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `Unknown thread: ${threadId}`,
+        });
+        return;
+      }
+      const liveBinding = context.threads.getLive(threadId);
+      const thread = liveBinding?.session
+        ? context.utils.buildThreadFromSession(liveBinding.session)
+        : context.utils.buildThreadFromRecord(context.threads.getPersisted(threadId)!);
+      await context.journal.waitForIdle(threadId);
+      const enrichedSnapshot = enrichSessionSnapshotCitationsFromCache(snapshot);
+      let journalTailSeq = afterSeq;
+      let turns: ReturnType<ReturnType<typeof createThreadTurnProjector>["build"]> | undefined;
+      if (includeTurns) {
+        const projector = createThreadTurnProjector();
+        let seq = afterSeq;
+        while (true) {
+          const batch = context.journal.list(threadId, {
+            afterSeq: seq,
+            limit: THREAD_READ_JOURNAL_BATCH_SIZE,
+          });
+          if (batch.length === 0) {
+            break;
+          }
+          for (const event of batch) {
+            projector.handle(event);
+          }
+          journalTailSeq = batch.at(-1)?.seq ?? journalTailSeq;
+          if (batch.length < THREAD_READ_JOURNAL_BATCH_SIZE) {
+            break;
+          }
+          seq = journalTailSeq;
+        }
+        turns = projector.build();
+      }
+      context.jsonrpc.sendResult(ws, message.id, {
+        thread: {
+          ...thread,
+          ...(turns ? { turns } : {}),
+        },
+        coworkSnapshot: enrichedSnapshot,
+        ...(includeTurns ? { journalTailSeq } : {}),
       });
       queueMicrotask(() => {
         primeSessionSnapshotCitationCache(enrichedSnapshot);

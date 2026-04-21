@@ -4,8 +4,8 @@ import type { WindowChromeModule } from "./types";
 
 /** Match Windows overlay height so shared renderer topbar/drag CSS stays aligned. */
 const LINUX_TITLE_BAR_HEIGHT = 48;
-const LINUX_LIGHT_SYMBOL_COLOR = "#5a4736";
-const LINUX_DARK_SYMBOL_COLOR = "#f6ece0";
+const LINUX_LIGHT_SYMBOL_COLOR = "#556041";
+const LINUX_DARK_SYMBOL_COLOR = "#eef0dc";
 
 function linuxTitleBarOverlay(
   useDarkColors: boolean,

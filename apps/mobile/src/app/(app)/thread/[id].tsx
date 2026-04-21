@@ -12,6 +12,7 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { FileExplorerDrawer } from "@/components/FileExplorerDrawer";
 import { getActiveCoworkJsonRpcClient } from "@/features/cowork/runtimeClient";
 import { useThreadStore } from "@/features/cowork/threadStore";
+import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { useAppTheme } from "@/theme/use-app-theme";
 
 export default function ThreadDetailScreen() {
@@ -28,8 +29,16 @@ export default function ThreadDetailScreen() {
   const [askDraft, setAskDraft] = useState("");
   const [drawerVisible, setDrawerVisible] = useState(false);
   const runtimeClient = getActiveCoworkJsonRpcClient();
+  const controlSnapshot = useWorkspaceStore((state) => state.controlSnapshot);
 
   const isDraftThread = threadId.startsWith("draft-");
+  const a2uiEnabled = (
+    typeof controlSnapshot?.sessionConfig?.enableA2ui === "boolean"
+      ? controlSnapshot.sessionConfig.enableA2ui
+      : typeof controlSnapshot?.sessionConfig?.featureFlags?.workspace?.a2ui === "boolean"
+        ? controlSnapshot.sessionConfig.featureFlags.workspace.a2ui
+        : false
+  ) === true;
 
   if (!thread) {
     return (
@@ -162,7 +171,7 @@ export default function ThreadDetailScreen() {
                 />
               );
             }
-            return <ThreadFeedItem item={item.data as any} />;
+            return <ThreadFeedItem item={item.data as any} a2uiEnabled={a2uiEnabled} />;
           }}
         />
 

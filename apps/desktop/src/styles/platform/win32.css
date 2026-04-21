@@ -56,7 +56,7 @@
 :root[data-platform="win32"] .app-topbar__win32-left-strip {
   pointer-events: none;
   align-items: center;
-  padding-top: 11px;
+  height: 100%;
 }
 
 :root[data-platform="win32"] .app-topbar__win32-left-strip > * {

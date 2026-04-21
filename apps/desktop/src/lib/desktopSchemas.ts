@@ -118,15 +118,11 @@ const workspaceProviderOptionsSchema = z.object({
   }).strict().optional(),
 }).strict();
 
-const workspaceFeatureFlagOverridesSchema = z.object({
-  experimentalApi: z.preprocess((value) => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
-  a2ui: z.preprocess((value) => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
-}).passthrough().optional();
-
 const desktopFeatureFlagOverridesSchema = z.object({
   remoteAccess: z.preprocess((value) => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
   workspacePicker: z.preprocess((value) => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
   workspaceLifecycle: z.preprocess((value) => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
+  a2ui: z.preprocess((value) => (typeof value === "boolean" ? value : undefined), z.boolean().optional()),
 }).passthrough().optional();
 
 export const startWorkspaceServerInputSchema: z.ZodType<StartWorkspaceServerInput> = z.object({
@@ -216,7 +212,6 @@ const persistedWorkspaceSchema = z.object({
     }
     return undefined;
   }, z.number().int().nonnegative().nullable().optional()),
-  defaultFeatureFlags: workspaceFeatureFlagOverridesSchema,
   providerOptions: workspaceProviderOptionsSchema.optional(),
   userName: optionalStringSchema,
   userProfile: z.object({
@@ -225,7 +220,6 @@ const persistedWorkspaceSchema = z.object({
     details: optionalStringSchema,
   }).passthrough().optional(),
   defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
-  defaultEnableA2ui: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
   defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough();

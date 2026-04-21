@@ -20,7 +20,6 @@ import {
   mergeEditableOpenAiCompatibleProviderOptions,
   pickEditableOpenAiCompatibleProviderOptions,
 } from "../shared/openaiCompatibleOptions";
-import { resolveWorkspaceFeatureFlags } from "../shared/featureFlags";
 import { effectiveToolOutputOverflowChars } from "../shared/toolOutputOverflow";
 import { ensureDefaultGlobalSkillsReady } from "../skills/defaultGlobalSkills";
 import { writeTextFileAtomic } from "../utils/atomicFile";
@@ -122,6 +121,28 @@ function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
   return out as T;
 }
 
+function readWorkspaceA2uiFlag(value: unknown): boolean | undefined {
+  if (!isPlainObject(value)) {
+    return undefined;
+  }
+  return typeof value.a2ui === "boolean" ? value.a2ui : undefined;
+}
+
+function withWorkspaceA2uiFeatureFlags(
+  featureFlags: AgentConfig["featureFlags"] | undefined,
+  a2ui: boolean,
+): AgentConfig["featureFlags"] {
+  return {
+    ...featureFlags,
+    workspace: { a2ui },
+  };
+}
+
+function resolveWorkspaceA2ui(config: Pick<AgentConfig, "featureFlags" | "enableA2ui">): boolean {
+  const workspaceFlag = config.featureFlags?.workspace?.a2ui;
+  return typeof workspaceFlag === "boolean" ? workspaceFlag : (config.enableA2ui ?? false);
+}
+
 async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unknown>> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
@@ -181,15 +202,11 @@ async function persistProjectConfigPatch(
   const next: Record<string, unknown> = { ...current };
   for (const [key, value] of entries) {
     if (key === "enableA2ui" && typeof value === "boolean") {
-      const currentFeatureFlags = isPlainObject(current.featureFlags) ? { ...current.featureFlags } : {};
-      const mergedWorkspaceFlags = resolveWorkspaceFeatureFlags({
-        ...(isPlainObject(currentFeatureFlags.workspace) ? currentFeatureFlags.workspace : {}),
-        a2ui: value,
-      });
-      next.featureFlags = {
-        ...currentFeatureFlags,
-        workspace: mergedWorkspaceFlags,
-      };
+      const currentFeatureFlags = isPlainObject(current.featureFlags)
+        ? (current.featureFlags as AgentConfig["featureFlags"])
+        : undefined;
+      next.featureFlags = withWorkspaceA2uiFeatureFlags(currentFeatureFlags, value);
+      next.enableA2ui = value;
       continue;
     }
     if (key === "providerOptions") {
@@ -230,16 +247,20 @@ async function persistProjectConfigPatch(
       continue;
     }
     if (key === "featureFlags" && isPlainObject(value)) {
-      const currentFeatureFlags = isPlainObject(current.featureFlags) ? { ...current.featureFlags } : {};
+      const currentFeatureFlags = isPlainObject(current.featureFlags)
+        ? (current.featureFlags as Record<string, unknown>)
+        : {};
       const incomingFeatureFlags: Record<string, unknown> = value;
-      const mergedWorkspaceFlags = resolveWorkspaceFeatureFlags({
-        ...(isPlainObject(currentFeatureFlags.workspace) ? currentFeatureFlags.workspace : {}),
-        ...(isPlainObject(incomingFeatureFlags.workspace) ? incomingFeatureFlags.workspace : {}),
-      });
+      const incomingA2ui = readWorkspaceA2uiFlag(incomingFeatureFlags.workspace);
+      const currentA2ui = readWorkspaceA2uiFlag(currentFeatureFlags.workspace);
+      const resolvedA2ui = incomingA2ui ?? currentA2ui;
       next[key] = {
         ...currentFeatureFlags,
-        workspace: mergedWorkspaceFlags,
+        ...(resolvedA2ui !== undefined ? { workspace: { a2ui: resolvedA2ui } } : {}),
       };
+      if (resolvedA2ui !== undefined) {
+        next.enableA2ui = resolvedA2ui;
+      }
       continue;
     }
     next[key] = value;
@@ -308,17 +329,14 @@ function mergeConfigPatch(
       ...patch.userProfile,
     };
   }
-  if (patch.featureFlags?.workspace !== undefined || legacyEnableA2uiPatch !== undefined) {
-    const nextWorkspaceFeatureFlags = resolveWorkspaceFeatureFlags({
-      ...config.featureFlags?.workspace,
-      ...patch.featureFlags?.workspace,
-      ...(legacyEnableA2uiPatch !== undefined ? { a2ui: legacyEnableA2uiPatch } : {}),
-    });
-    next.featureFlags = {
-      ...config.featureFlags,
-      workspace: nextWorkspaceFeatureFlags,
-    };
-    next.enableA2ui = nextWorkspaceFeatureFlags.a2ui;
+  const patchedWorkspaceA2ui = readWorkspaceA2uiFlag(patch.featureFlags?.workspace);
+  const nextWorkspaceA2ui =
+    legacyEnableA2uiPatch
+    ?? patchedWorkspaceA2ui
+    ?? (config.featureFlags?.workspace?.a2ui ?? config.enableA2ui);
+  if (nextWorkspaceA2ui !== undefined) {
+    next.featureFlags = withWorkspaceA2uiFeatureFlags(config.featureFlags, nextWorkspaceA2ui);
+    next.enableA2ui = nextWorkspaceA2ui;
   }
   return next;
 }
@@ -411,6 +429,7 @@ export async function startAgentServer(
     },
   });
   const sessionBindings = new Map<string, SessionBinding>();
+  const sessionIdleSince = new Map<string, number>();
   const workspaceControlStateIds = new Map<string, string>();
   const workspaceControlSubscribers = new Map<string, Map<string, Bun.ServerWebSocket<StartServerSocketData>>>();
   const sharedSkillMutationSignalPath = resolveSharedSkillMutationSignalPath(config.userAgentDir);
@@ -542,10 +561,16 @@ export async function startAgentServer(
 
   const addBindingSink = (binding: SessionBinding, sinkId: string, sink: (evt: ServerEvent) => void) => {
     binding.sinks.set(sinkId, sink);
+    if (binding.session && !sinkId.startsWith("journal:")) {
+      sessionIdleSince.delete(binding.session.id);
+    }
   };
 
   const removeBindingSink = (binding: SessionBinding, sinkId: string) => {
     binding.sinks.delete(sinkId);
+    if (binding.session && binding.sinks.size === 0) {
+      sessionIdleSince.set(binding.session.id, Date.now());
+    }
   };
 
   const countLiveConnectionSinks = (binding: SessionBinding) => (
@@ -600,7 +625,7 @@ export async function startAgentServer(
     const defaultBackupsEnabled = controlConfig.backupsEnabled ?? true;
     const defaultToolOutputOverflowChars = controlConfig.projectConfigOverrides?.toolOutputOverflowChars;
     const toolOutputOverflowChars = effectiveToolOutputOverflowChars(controlConfig.toolOutputOverflowChars);
-    const workspaceFeatureFlags = resolveWorkspaceFeatureFlags(controlConfig.featureFlags?.workspace);
+    const workspaceA2ui = resolveWorkspaceA2ui(controlConfig);
     const preferredChildModelRef =
       controlConfig.preferredChildModelRef ?? `${controlConfig.provider}:${controlConfig.preferredChildModel}`;
 
@@ -630,7 +655,7 @@ export async function startAgentServer(
           observabilityEnabled: controlConfig.observabilityEnabled ?? false,
           backupsEnabled: defaultBackupsEnabled,
           defaultBackupsEnabled,
-          enableA2ui: workspaceFeatureFlags.a2ui,
+          enableA2ui: workspaceA2ui,
           enableMemory: controlConfig.enableMemory ?? true,
           memoryRequireApproval: controlConfig.memoryRequireApproval ?? false,
           preferredChildModel: controlConfig.preferredChildModel,
@@ -648,7 +673,9 @@ export async function startAgentServer(
             details: controlConfig.userProfile?.details ?? "",
           },
           featureFlags: {
-            workspace: workspaceFeatureFlags,
+            workspace: {
+              a2ui: workspaceA2ui,
+            },
           },
         },
       },
@@ -762,6 +789,7 @@ export async function startAgentServer(
           if (!candidateBinding?.session) continue;
           disposeBinding(candidateBinding, `session ${opts.targetSessionId} deleted`);
           sessionBindings.delete(sessionId);
+          sessionIdleSince.delete(sessionId);
         }
 
         await sessionDb.deleteSession(opts.targetSessionId);
@@ -974,11 +1002,73 @@ export async function startAgentServer(
   }>>();
   const scheduledThreadJournalFlushes = new Set<string>();
 
+  const pendingSends = new Map<string, string[]>();
+  const SEND_QUEUE_MAX = 500;
+
+  const evictLeastCriticalSend = (queue: string[]) => {
+    for (let i = 0; i < queue.length; i++) {
+      try {
+        const parsed = JSON.parse(queue[i]) as {
+          method?: string;
+          params?: { type?: string };
+        };
+        if (
+          parsed.method === "model_stream_chunk"
+          || parsed.params?.type === "agentMessage/delta"
+        ) {
+          queue.splice(i, 1);
+          return;
+        }
+      } catch {
+        // ignore malformed JSON
+      }
+    }
+    queue.shift();
+  };
+
+  const flushPendingSends = (ws: Bun.ServerWebSocket<StartServerSocketData>) => {
+    const connectionId = ws.data.connectionId;
+    if (!connectionId) return;
+    const queue = pendingSends.get(connectionId);
+    if (!queue) return;
+    while (queue.length > 0) {
+      try {
+        const status = ws.send(queue[0]);
+        if (status === -1) {
+          break;
+        }
+        queue.shift();
+      } catch {
+        queue.shift();
+      }
+    }
+    if (queue.length === 0) {
+      pendingSends.delete(connectionId);
+    }
+  };
+
   const sendJsonRpc = (ws: Bun.ServerWebSocket<StartServerSocketData>, payload: unknown) => {
+    let serialized: string;
     try {
-      ws.send(JSON.stringify(payload));
+      serialized = JSON.stringify(payload);
     } catch {
-      // ignore
+      return;
+    }
+
+    try {
+      const status = ws.send(serialized);
+      if (status === 0 || status === -1) {
+        const connectionId = ws.data.connectionId;
+        if (!connectionId) return;
+        const queue = pendingSends.get(connectionId) ?? [];
+        if (queue.length >= SEND_QUEUE_MAX) {
+          evictLeastCriticalSend(queue);
+        }
+        queue.push(serialized);
+        pendingSends.set(connectionId, queue);
+      }
+    } catch {
+      // Socket closed or send failed; drop the message
     }
   };
 
@@ -1001,6 +1091,7 @@ export async function startAgentServer(
       subscribers.delete(connectionId);
       if (subscribers.size === 0) {
         workspaceControlSubscribers.delete(registeredCwd);
+        workspaceControlStateIds.delete(registeredCwd);
       }
     }
     const subscribers = workspaceControlSubscribers.get(cwd) ?? new Map<string, Bun.ServerWebSocket<StartServerSocketData>>();
@@ -1019,6 +1110,7 @@ export async function startAgentServer(
       subscribers.delete(connectionId);
       if (subscribers.size === 0) {
         workspaceControlSubscribers.delete(cwd);
+        workspaceControlStateIds.delete(cwd);
       }
     }
   };
@@ -1145,6 +1237,7 @@ export async function startAgentServer(
           if (batch.length === 0) {
             pendingThreadJournalEvents.delete(event.threadId);
             scheduledThreadJournalFlushes.delete(event.threadId);
+            threadJournalWriteQueues.delete(event.threadId);
             return;
           }
           pendingThreadJournalEvents.set(event.threadId, []);
@@ -1430,7 +1523,7 @@ export async function startAgentServer(
         message(ws, raw) {
           const decoded = decodeJsonRpcMessage(raw);
           if (!decoded.ok) {
-            ws.send(JSON.stringify(decoded.response));
+            sendJsonRpc(ws, decoded.response);
             return;
           }
           jsonRpcTransport.handleMessage(
@@ -1442,6 +1535,10 @@ export async function startAgentServer(
         close(ws) {
           removeWorkspaceControlSubscriber(ws);
           jsonRpcTransport.closeConnection(ws);
+          pendingSends.delete(ws.data.connectionId ?? "");
+        },
+        drain(ws) {
+          flushPendingSends(ws);
         },
       },
     });
@@ -1487,10 +1584,27 @@ export async function startAgentServer(
 
   const server = serveWithPortFallback(requestedPort);
   const originalStop = server.stop.bind(server) as (closeActiveConnections?: boolean) => Promise<void>;
+  const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+  const evictIdleSessionBindings = () => {
+    const now = Date.now();
+    for (const [sessionId, binding] of sessionBindings) {
+      if (binding.session && binding.sinks.size === 0 && !binding.session.isBusy) {
+        const idleSince = sessionIdleSince.get(sessionId) ?? 0;
+        if (idleSince > 0 && now - idleSince > IDLE_TIMEOUT_MS) {
+          binding.session.dispose("idle eviction");
+          sessionBindings.delete(sessionId);
+          sessionIdleSince.delete(sessionId);
+        }
+      }
+    }
+  };
+  const evictionTimer = setInterval(evictIdleSessionBindings, 60_000);
+
   const stoppableServer = server as typeof server & { stop: (closeActiveConnections?: boolean) => Promise<void> };
   stoppableServer.stop = async (closeActiveConnections?: boolean) => {
     if (serverStopped) return;
     serverStopped = true;
+    clearInterval(evictionTimer);
     try {
       sharedSkillMutationWatcher?.close();
     } catch {
@@ -1506,6 +1620,7 @@ export async function startAgentServer(
     for (const [id, binding] of sessionBindings) {
       if (!binding.session) {
         sessionBindings.delete(id);
+        sessionIdleSince.delete(id);
         continue;
       }
       try {
@@ -1527,6 +1642,7 @@ export async function startAgentServer(
     await new Promise((resolve) => setTimeout(resolve, 0));
     await Promise.allSettled(persistenceFlushes);
     sessionBindings.clear();
+    sessionIdleSince.clear();
     try {
       sessionDb.close();
     } catch {

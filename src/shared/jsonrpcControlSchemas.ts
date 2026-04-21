@@ -35,7 +35,6 @@ const userProfileSchema = z.object({
 }).passthrough();
 
 const workspaceFeatureFlagOverridesSchema = z.object({
-  experimentalApi: z.boolean().optional(),
   a2ui: z.boolean().optional(),
 }).passthrough();
 

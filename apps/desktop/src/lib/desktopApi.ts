@@ -1,7 +1,7 @@
 import desktopPackage from "../../package.json";
 
 import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
-import type { DesktopFeatureFlagOverrides, DesktopFeatureFlags } from "./desktopFeatureFlags";
+import type { DesktopFeatureFlagOverrides, DesktopFeatureFlags } from "../../../../src/shared/featureFlags";
 
 export type StartWorkspaceServerInput = {
   workspaceId: string;

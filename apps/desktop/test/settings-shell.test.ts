@@ -21,4 +21,10 @@ describe("settings shell", () => {
     const markup = renderToStaticMarkup(createElement(SettingsShell));
     expect(markup).toContain("settings-shell__drag-zone absolute inset-x-0 top-0");
   });
+
+  test("keeps settings navigation copy on readable foreground-derived colors", () => {
+    const markup = renderToStaticMarkup(createElement(SettingsShell));
+    expect(markup).toContain("text-foreground/72");
+    expect(markup).toContain("font-normal text-foreground/78 hover:bg-foreground/[0.05] hover:text-foreground");
+  });
 });

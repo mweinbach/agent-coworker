@@ -56,6 +56,55 @@ export function reorderSidebarItemsById<T extends { id: string }>(
   return nextItems;
 }
 
+export function applyWorkspaceOrder<T extends { id: string }>(items: T[], orderedIds: string[]): T[] {
+  const itemsById = new Map(items.map((item) => [item.id, item]));
+  const seenIds = new Set<string>();
+  const nextItems: T[] = [];
+
+  for (const id of orderedIds) {
+    if (seenIds.has(id)) {
+      continue;
+    }
+    const item = itemsById.get(id);
+    if (!item) {
+      continue;
+    }
+    seenIds.add(id);
+    nextItems.push(item);
+  }
+
+  for (const item of items) {
+    if (seenIds.has(item.id)) {
+      continue;
+    }
+    nextItems.push(item);
+  }
+
+  const unchanged = nextItems.length === items.length
+    && nextItems.every((item, index) => item === items[index]);
+  return unchanged ? items : nextItems;
+}
+
+export function swapSidebarItemsById<T extends { id: string }>(
+  items: T[],
+  itemId: string,
+  direction: "up" | "down",
+): T[] {
+  const sourceIndex = items.findIndex((item) => item.id === itemId);
+  if (sourceIndex === -1) {
+    return items;
+  }
+
+  const targetIndex = direction === "up" ? sourceIndex - 1 : sourceIndex + 1;
+  if (targetIndex < 0 || targetIndex >= items.length) {
+    return items;
+  }
+
+  const nextItems = [...items];
+  [nextItems[sourceIndex], nextItems[targetIndex]] = [nextItems[targetIndex] as T, nextItems[sourceIndex] as T];
+  return nextItems;
+}
+
 export function shouldEmphasizeWorkspaceRow(
   isSelectedWorkspace: boolean,
   selectedThreadId: string | null,

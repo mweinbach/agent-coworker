@@ -265,7 +265,7 @@ describe("desktop app top bar", () => {
       expect(buttons).toHaveLength(2);
       expect(buttons[0]?.getAttribute("aria-label")).toBe("New Chat");
       expect(buttons[1]?.getAttribute("aria-label")).toBe("Show sidebar");
-      expect(titleShell?.getAttribute("style")).toContain("left: 96px");
+      expect(titleShell?.getAttribute("style")).toContain("left: 84px");
 
       await act(async () => {
         root.unmount();

@@ -14,7 +14,7 @@ import type {
   DesktopFeatureFlagId,
   DesktopFeatureFlagOverrides,
   DesktopFeatureFlags,
-} from "./desktopFeatureFlags";
+} from "../../../../src/shared/featureFlags";
 
 function getDesktopApi(): DesktopApi | undefined {
   return typeof window === "undefined" ? undefined : window.cowork;
@@ -33,6 +33,7 @@ function getDefaultDesktopFeatureFlags(): DesktopFeatureFlags {
     remoteAccess: false,
     workspacePicker: false,
     workspaceLifecycle: false,
+    a2ui: false,
   };
 }
 
@@ -58,18 +59,6 @@ export function getDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides):
     }
   }
   return next;
-}
-
-export function isRemoteAccessEnabled(): boolean {
-  return getDesktopFeatureFlags().remoteAccess;
-}
-
-export function isWorkspacePickerEnabled(): boolean {
-  return getDesktopFeatureFlags().workspacePicker;
-}
-
-export function isWorkspaceLifecycleEnabled(): boolean {
-  return getDesktopFeatureFlags().workspaceLifecycle;
 }
 
 export async function startWorkspaceServer(opts: {

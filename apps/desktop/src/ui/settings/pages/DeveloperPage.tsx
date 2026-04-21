@@ -23,6 +23,8 @@ function parseOverflowThresholdDraft(value: string): number | null {
 }
 
 export function DeveloperPage() {
+  const desktopFeatures = useAppStore((s) => s.desktopFeatureFlags);
+  const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const developerMode = useAppStore((s) => s.developerMode);
   const setDeveloperMode = useAppStore((s) => s.setDeveloperMode);
   const startOnboarding = useAppStore((s) => s.startOnboarding);
@@ -156,7 +158,7 @@ export function DeveloperPage() {
             </div>
           ) : (
             <>
-              {workspaces.length > 1 ? (
+              {workspacePickerEnabled && workspaces.length > 1 ? (
                 <div className="space-y-2">
                   <div className="text-sm font-medium">Workspace</div>
                   <Select value={workspace.id} onValueChange={(value) => void selectWorkspace(value)}>

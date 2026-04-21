@@ -20,13 +20,11 @@ import {
   renamePath,
   trashPath,
 } from "../../lib/desktopCommands";
-import type { DesktopFeatureFlags } from "../../lib/desktopFeatureFlags";
 import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
 import { safeParseServerEvent, type ProviderName } from "../../lib/wsProtocol";
 import {
   normalizeDesktopFeatureFlagOverrides,
-  normalizeWorkspaceFeatureFlagOverrides,
-  resolveWorkspaceFeatureFlags,
+  type DesktopFeatureFlags,
 } from "../../../../../src/shared/featureFlags";
 
 import {
@@ -52,6 +50,7 @@ import {
   providerAuthMethodsFor,
   pushNotification,
   queuePendingThreadMessage,
+  requestJsonRpcControlEvent,
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,
@@ -179,13 +178,6 @@ const persistedWorkspaceSchema = z.object({
     }
     return undefined;
   }, z.number().int().nonnegative().nullable().optional()),
-  defaultFeatureFlags: z.preprocess(
-    (value) => normalizeWorkspaceFeatureFlagOverrides(value),
-    z.object({
-      experimentalApi: z.boolean().optional(),
-      a2ui: z.boolean().optional(),
-    }).passthrough().optional(),
-  ),
   providerOptions: z.unknown().optional(),
   userName: optionalStringSchema,
   userProfile: z.object({
@@ -194,7 +186,6 @@ const persistedWorkspaceSchema = z.object({
     details: optionalStringSchema,
   }).passthrough().optional(),
   defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
-  defaultEnableA2ui: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
   defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough().transform((workspace): WorkspaceRecord => {
@@ -211,10 +202,6 @@ const persistedWorkspaceSchema = z.object({
     ?? (legacyPreferredValue
       ? (legacyPreferredValue.includes(":") ? legacyPreferredValue : `${workspace.defaultProvider}:${legacyPreferredValue}`)
       : "");
-  const defaultFeatureFlags = resolveWorkspaceFeatureFlags(
-    workspace.defaultFeatureFlags
-    ?? (workspace.defaultEnableA2ui !== undefined ? { a2ui: workspace.defaultEnableA2ui } : undefined),
-  );
   return {
     id: workspace.id,
     name: workspace.name,
@@ -229,12 +216,10 @@ const persistedWorkspaceSchema = z.object({
     defaultPreferredChildModelRef: preferredChildModelRef,
     defaultAllowedChildModelRefs: workspace.defaultAllowedChildModelRefs ?? [],
     defaultToolOutputOverflowChars: workspace.defaultToolOutputOverflowChars,
-    defaultFeatureFlags,
     providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
     userName: workspace.userName,
     userProfile: workspace.userProfile ? normalizeWorkspaceUserProfile(workspace.userProfile) : undefined,
     defaultEnableMcp: workspace.defaultEnableMcp,
-    defaultEnableA2ui: defaultFeatureFlags.a2ui,
     defaultBackupsEnabled: workspace.defaultBackupsEnabled,
     yolo: workspace.yolo,
   };
@@ -313,6 +298,7 @@ const persistedStateSchema = z.object({
       remoteAccess: z.boolean().optional(),
       workspacePicker: z.boolean().optional(),
       workspaceLifecycle: z.boolean().optional(),
+      a2ui: z.boolean().optional(),
     }).passthrough().optional(),
   ),
 }).passthrough().transform((state) => {
@@ -339,8 +325,54 @@ const persistedStateSchema = z.object({
 
 type HydratedPersistedDesktopState = z.infer<typeof persistedStateSchema>;
 
+function hasLegacyA2uiEnabled(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const workspaces = Array.isArray(record.workspaces) ? record.workspaces : [];
+  for (const workspace of workspaces) {
+    if (!workspace || typeof workspace !== "object") continue;
+    const ws = workspace as Record<string, unknown>;
+    if (ws.defaultEnableA2ui === true) {
+      return true;
+    }
+    const featureFlags = ws.defaultFeatureFlags;
+    if (
+      featureFlags
+      && typeof featureFlags === "object"
+      && !Array.isArray(featureFlags)
+    ) {
+      const flagsRecord = featureFlags as Record<string, unknown>;
+      if (flagsRecord.a2ui === true) {
+        return true;
+      }
+      const workspaceFlags = flagsRecord.workspace;
+      if (
+        workspaceFlags
+        && typeof workspaceFlags === "object"
+        && !Array.isArray(workspaceFlags)
+        && (workspaceFlags as Record<string, unknown>).a2ui === true
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function hydratePersistedDesktopState(value: unknown): HydratedPersistedDesktopState {
-  return persistedStateSchema.parse(value);
+  const parsed = persistedStateSchema.parse(value);
+  if (hasLegacyA2uiEnabled(value) && !parsed.desktopFeatureFlagOverrides?.a2ui) {
+    return {
+      ...parsed,
+      desktopFeatureFlagOverrides: {
+        ...parsed.desktopFeatureFlagOverrides,
+        a2ui: true,
+      },
+    };
+  }
+  return parsed;
 }
 
 function buildResolvedDesktopUiState(
@@ -779,7 +811,6 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
             "userProfile",
             "defaultEnableMcp",
             "defaultBackupsEnabled",
-            "defaultFeatureFlags",
             "yolo",
           ];
           const patch: Record<string, unknown> = {};
@@ -821,6 +852,65 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
         settingsPage: normalizeSettingsPageId(state.settingsPage, nextFeatureFlags),
       }));
       void persistNow(get);
+      if (flagId === "a2ui") {
+        const state = get();
+        const activeControlWorkspaces = state.workspaces.filter((workspace) =>
+          Boolean(state.workspaceRuntimeById[workspace.id]?.controlSessionId)
+        );
+
+        const fanoutResults = await Promise.all(activeControlWorkspaces.map(async (workspace) => {
+          try {
+            await requestJsonRpcControlEvent(get, set, workspace.id, "cowork/session/defaults/apply", {
+              cwd: workspace.path,
+              config: {
+                featureFlags: {
+                  workspace: {
+                    a2ui: enabled,
+                  },
+                },
+              },
+            });
+            return { workspaceId: workspace.id, ok: true as const };
+          } catch (error) {
+            return {
+              workspaceId: workspace.id,
+              ok: false as const,
+              detail: error instanceof Error ? error.message : String(error),
+            };
+          }
+        }));
+
+        const failedWorkspaceIds = new Set(
+          fanoutResults.filter((r) => !r.ok).map((r) => r.workspaceId),
+        );
+        if (failedWorkspaceIds.size > 0) {
+          const failedNames = activeControlWorkspaces
+            .filter((w) => failedWorkspaceIds.has(w.id))
+            .map((w) => w.name || w.path)
+            .join(", ");
+          set((s) => ({
+            notifications: pushNotification(s.notifications, {
+              id: makeId(),
+              ts: nowIso(),
+              kind: "error",
+              title: `Could not sync A2UI flag to ${failedWorkspaceIds.size} workspace${failedWorkspaceIds.size === 1 ? "" : "s"}`,
+              detail: `Reopen or restart: ${failedNames}`,
+            }),
+          }));
+        }
+
+        const activeWorkspaceIds = new Set(
+          activeControlWorkspaces
+            .filter((w) => !failedWorkspaceIds.has(w.id))
+            .map((workspace) => workspace.id),
+        );
+        const activeThreadIds = get().threads
+          .filter((thread) => activeWorkspaceIds.has(thread.workspaceId))
+          .map((thread) => thread.id);
+        for (const threadId of activeThreadIds) {
+          void get().applyWorkspaceDefaultsToThread(threadId, "explicit");
+        }
+      }
       if (flagId === "remoteAccess" && currentFeatureFlags.remoteAccess === true && enabled === false) {
         await stopMobileRelay().catch(() => {
           // Best-effort teardown: disabling the flag should not fail if the relay is already gone.

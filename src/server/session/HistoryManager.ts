@@ -19,8 +19,10 @@ export class HistoryManager {
   appendMessagesToHistory(messages: ModelMessage[]) {
     if (messages.length === 0) return;
 
-    this.context.state.allMessages.push(...messages);
-    this.context.state.messages.push(...messages);
+    // Avoid V8 max argument limit by concatenating instead of spreading large arrays
+    this.context.state.allMessages = this.context.state.allMessages.concat(messages);
+    this.context.state.messages = this.context.state.messages.concat(messages);
+
     if (this.context.state.messages.length > MAX_MESSAGE_HISTORY) {
       const first = this.context.state.messages[0];
       this.context.state.messages = [first, ...this.context.state.messages.slice(-(MAX_MESSAGE_HISTORY - 1))];

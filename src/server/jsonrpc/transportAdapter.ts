@@ -316,6 +316,7 @@ export function createJsonRpcTransportAdapter({
     dispatchJsonRpcMessage({
       ws,
       message,
+      send: sendJsonRpc,
       onRequest: (request) => {
         if (ws.data.rpc) {
           ws.data.rpc.pendingRequestCount += 1;

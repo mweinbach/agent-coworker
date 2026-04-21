@@ -18,9 +18,10 @@ type DispatchJsonRpcMessageArgs = {
   onRequest?: (message: JsonRpcLiteRequest) => void;
   onNotification?: (message: JsonRpcLiteNotification) => void;
   onResponse?: (message: JsonRpcLiteClientResponse) => void;
+  send?: (ws: StartServerSocket, payload: unknown) => void;
 };
 
-function sendJsonRpc(ws: StartServerSocket, payload: unknown) {
+function defaultSendJsonRpc(ws: StartServerSocket, payload: unknown) {
   try {
     ws.send(JSON.stringify(payload));
   } catch {
@@ -40,7 +41,8 @@ function isJsonRpcResponse(
   return "id" in message && !("method" in message);
 }
 
-export function dispatchJsonRpcMessage({ ws, message, onRequest, onNotification, onResponse }: DispatchJsonRpcMessageArgs): void {
+export function dispatchJsonRpcMessage({ ws, message, onRequest, onNotification, onResponse, send }: DispatchJsonRpcMessageArgs): void {
+  const sendJsonRpc = send ?? defaultSendJsonRpc;
   const rpc = ws.data.rpc;
   if (!rpc) {
     if (isJsonRpcRequest(message) || isJsonRpcResponse(message)) {

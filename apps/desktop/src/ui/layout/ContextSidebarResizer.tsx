@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { KeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 
 import { useAppStore } from "../../app/store";
 import { cn } from "../../lib/utils";
@@ -12,8 +12,9 @@ export function ContextSidebarResizer() {
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
 
-  const handleMouseDown = useCallback(
-    (event: ReactMouseEvent) => {
+  const handlePointerDown = useCallback(
+    (event: ReactPointerEvent) => {
+      if (event.button !== undefined && event.button !== 0) return;
       event.preventDefault();
       startXRef.current = event.clientX;
       startWidthRef.current = contextSidebarWidth;
@@ -59,7 +60,7 @@ export function ContextSidebarResizer() {
       pendingWidth = null;
     };
 
-    const handleMouseMove = (event: MouseEvent) => {
+    const handlePointerMove = (event: PointerEvent) => {
       // The cursor moving left (negative delta) should increase width
       const delta = startXRef.current - event.clientX;
       pendingWidth = startWidthRef.current + delta;
@@ -68,7 +69,7 @@ export function ContextSidebarResizer() {
       }
     };
 
-    const handleMouseUp = () => {
+    const handlePointerUp = () => {
       if (frameId !== null) {
         window.cancelAnimationFrame(frameId);
         frameId = null;
@@ -81,22 +82,24 @@ export function ContextSidebarResizer() {
       setDragging(false);
     };
 
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
 
     return () => {
       if (frameId !== null) {
         window.cancelAnimationFrame(frameId);
       }
       document.body.classList.remove("app-resizing-sidebars");
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
     };
   }, [dragging, setContextSidebarWidth]);
 
   return (
     <div
-      className={cn("absolute -left-1 top-0 z-20 h-full w-3 cursor-col-resize", dragging && "bg-primary/20")}
+      className={cn("app-native-no-drag absolute -left-1 top-0 z-20 h-full w-3 cursor-col-resize touch-none", dragging && "bg-primary/20")}
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize context sidebar"
@@ -104,7 +107,7 @@ export function ContextSidebarResizer() {
       aria-valuemax={600}
       aria-valuenow={contextSidebarWidth}
       tabIndex={0}
-      onMouseDown={handleMouseDown}
+      onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}
     />
   );

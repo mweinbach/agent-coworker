@@ -186,6 +186,18 @@ export function createSkillActions(
     openSkills: async () => {
       let workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
       if (!workspaceId) {
+        if (get().desktopFeatureFlags.workspaceLifecycle === false) {
+          set((s) => ({
+            notifications: pushNotification(s.notifications, {
+              id: makeId(),
+              ts: nowIso(),
+              kind: "info",
+              title: "Workspace management is disabled",
+              detail: "Enable Workspace lifecycle actions in Settings -> Feature Flags to add a workspace.",
+            }),
+          }));
+          return;
+        }
         await get().addWorkspace();
         workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
         if (!workspaceId) {

@@ -197,6 +197,108 @@ describe("desktop chat view stability", () => {
     }
   });
 
+  test("hides A2UI surfaces and dock when A2UI is disabled", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      desktopFeatureFlags: {
+        remoteAccess: true,
+        workspacePicker: true,
+        workspaceLifecycle: true,
+        a2ui: false,
+      },
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Thread 1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:30.000Z",
+          status: "active",
+          sessionId: "session-1",
+          lastEventSeq: 1,
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          wsUrl: null,
+          connected: true,
+          sessionId: "session-1",
+          config: {
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+          sessionConfig: {
+            enableA2ui: false,
+          },
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: false,
+          busySince: null,
+          feed: [
+            {
+              id: "uiSurface:surface-1",
+              kind: "ui_surface",
+              ts: "2026-03-12T00:00:30.000Z",
+              surfaceId: "surface-1",
+              catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
+              version: "v0.9",
+              revision: 1,
+              deleted: false,
+              root: {
+                id: "root",
+                type: "Text",
+                text: "A2UI content",
+              },
+            },
+          ],
+          pendingSteer: null,
+          transcriptOnly: false,
+        },
+      },
+      composerText: "",
+    } as any);
+
+    const harness = setupChatViewJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      expect(container.textContent).toContain("Send a message to start.");
+      expect(container.textContent).not.toContain("surface-1");
+      expect(container.textContent).not.toContain("A2UI content");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root.unmount();
+        });
+      }
+      harness.restore();
+    }
+  });
+
   test("shows the active session model as a read-only footer indicator even after messages exist", async () => {
     useAppStore.setState({
       ready: true,

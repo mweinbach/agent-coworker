@@ -83,12 +83,14 @@ function createFakeWindow(x = 40, y = 50): FakeWindow {
 }
 
 function createHandlers() {
-  const handlers = new Map<
-    string,
-    (event: { sender: FakeWebContents }, args?: unknown) => unknown
-  >();
+  const handlers = new Map<string, (event: { sender: FakeWebContents }, args?: unknown) => unknown>();
+  const showMainWindow = mock(async () => {});
+  const showQuickChatWindow = mock(async () => {});
   registerWindowIpc({
-    deps: {} as never,
+    deps: {
+      showMainWindow,
+      showQuickChatWindow,
+    } as never,
     workspaceRoots: {} as never,
     handleDesktopInvoke(channel, handler) {
       handlers.set(channel, handler as never);
@@ -97,13 +99,13 @@ function createHandlers() {
       return value as never;
     },
   });
-  return handlers;
+  return { handlers, showMainWindow, showQuickChatWindow };
 }
 
 describe("window IPC", () => {
   test("cleans up drag state when the renderer is destroyed", () => {
     windowsBySenderId.clear();
-    const handlers = createHandlers();
+    const { handlers } = createHandlers();
     const sender = new FakeWebContents(7);
     const win = createFakeWindow();
     windowsBySenderId.set(sender.id, win);
@@ -115,7 +117,10 @@ describe("window IPC", () => {
 
     sender.emit("destroyed");
 
-    handlers.get(DESKTOP_IPC_CHANNELS.windowDragMove)?.({ sender }, { screenX: 140, screenY: 150 });
+    handlers.get(DESKTOP_IPC_CHANNELS.windowDragMove)?.(
+      { sender },
+      { screenX: 140, screenY: 150 },
+    );
 
     expect(win.setPositionCalls).toEqual([]);
   });
@@ -126,18 +131,30 @@ describe("window IPC", () => {
     const win = createFakeWindow();
     windowsBySenderId.set(sender.id, win);
 
-    const firstRegistrationHandlers = createHandlers();
+    const { handlers: firstRegistrationHandlers } = createHandlers();
     firstRegistrationHandlers.get(DESKTOP_IPC_CHANNELS.windowDragStart)?.(
       { sender },
       { screenX: 100, screenY: 100 },
     );
 
-    const secondRegistrationHandlers = createHandlers();
+    const { handlers: secondRegistrationHandlers } = createHandlers();
     secondRegistrationHandlers.get(DESKTOP_IPC_CHANNELS.windowDragMove)?.(
       { sender },
       { screenX: 140, screenY: 150 },
     );
 
     expect(win.setPositionCalls).toEqual([]);
+  });
+
+  test("exposes show window IPC actions", async () => {
+    const { handlers, showMainWindow, showQuickChatWindow } = createHandlers();
+    const sender = new FakeWebContents(21);
+
+    await handlers.get(DESKTOP_IPC_CHANNELS.showMainWindow)?.({ sender });
+    await handlers.get(DESKTOP_IPC_CHANNELS.showQuickChatWindow)?.({ sender }, { threadId: "thread-21" });
+
+    expect(showMainWindow).toHaveBeenCalledTimes(1);
+    expect(showQuickChatWindow).toHaveBeenCalledTimes(1);
+    expect(showQuickChatWindow).toHaveBeenCalledWith({ threadId: "thread-21" });
   });
 });

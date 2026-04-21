@@ -32,6 +32,7 @@ import type {
   RevealPathInput,
   SaveExportedFileInput,
   SetWindowAppearanceInput,
+  ShowQuickChatWindowInput,
   ShowContextMenuInput,
   StartWorkspaceServerInput,
   StopWorkspaceServerInput,
@@ -193,6 +194,10 @@ export const showContextMenuInputSchema: z.ZodType<ShowContextMenuInput> = z.obj
 export const windowDragPointInputSchema: z.ZodType<WindowDragPointInput> = z.object({
   screenX: z.number().finite(),
   screenY: z.number().finite(),
+});
+
+export const showQuickChatWindowInputSchema: z.ZodType<ShowQuickChatWindowInput> = z.object({
+  threadId: safeIdSchema.optional(),
 });
 
 export const listDirectoryInputSchema: z.ZodType<ListDirectoryInput> = z.object({

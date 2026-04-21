@@ -3,10 +3,12 @@ import { BrowserWindow, Menu, type WebContents } from "electron";
 import {
   DESKTOP_IPC_CHANNELS,
   type ShowContextMenuInput,
+  type ShowQuickChatWindowInput,
   type WindowDragPointInput,
 } from "../../src/lib/desktopApi";
 import {
   showContextMenuInputSchema,
+  showQuickChatWindowInputSchema,
   windowDragPointInputSchema,
 } from "../../src/lib/desktopSchemas";
 import type { DesktopIpcModuleContext } from "./types";
@@ -127,7 +129,8 @@ export function registerWindowIpc(context: DesktopIpcModuleContext): void {
     await deps.showMainWindow();
   });
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.showQuickChatWindow, async () => {
-    await deps.showQuickChatWindow();
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.showQuickChatWindow, async (_event, args?: ShowQuickChatWindowInput) => {
+    const input = parseWithSchema(showQuickChatWindowInputSchema, args ?? {}, "showQuickChatWindow options");
+    await deps.showQuickChatWindow(input);
   });
 }

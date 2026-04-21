@@ -79,6 +79,10 @@ export type WindowDragPointInput = {
   screenY: number;
 };
 
+export type ShowQuickChatWindowInput = {
+  threadId?: string;
+};
+
 export type ListDirectoryInput = {
   path: string;
   includeHidden?: boolean;
@@ -288,7 +292,7 @@ export interface DesktopApi {
   windowDragEnd(): Promise<void>;
   getPlatform(): Promise<string>;
   showMainWindow(): Promise<void>;
-  showQuickChatWindow(): Promise<void>;
+  showQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<void>;
   listDirectory(opts: ListDirectoryInput): Promise<ExplorerEntry[]>;
   readFile(opts: ReadFileInput): Promise<ReadFileOutput>;
   readFileForPreview(opts: ReadFileForPreviewInput): Promise<ReadFileForPreviewOutput>;

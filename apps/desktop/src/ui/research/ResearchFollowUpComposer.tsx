@@ -13,6 +13,7 @@ import {
   PromptInputTools,
 } from "../../components/ai-elements/prompt-input";
 import { Button } from "../../components/ui/button";
+import { cn } from "../../lib/utils";
 
 type AttachmentDraft = {
   file: File;
@@ -33,11 +34,20 @@ function toAttachmentDraft(file: File): AttachmentDraft {
 export function ResearchFollowUpComposer({
   parentResearchId,
   disabled,
+  onSubmitted,
+  autoFocus,
+  placeholder,
+  className,
 }: {
   parentResearchId: string;
   disabled?: boolean;
+  onSubmitted?: () => void;
+  autoFocus?: boolean;
+  placeholder?: string;
+  className?: string;
 }) {
   const sendResearchFollowUp = useAppStore((s) => s.sendResearchFollowUp);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -82,19 +92,21 @@ export function ResearchFollowUpComposer({
         }
         setInput("");
         setAttachments([]);
+        onSubmitted?.();
       }
     } finally {
       setSubmitting(false);
     }
   };
 
-  return (
-    <div className="rounded-2xl border border-border/65 bg-card/70 px-4 py-4">
-      <div className="mb-3">
-        <div className="text-sm font-semibold text-foreground">Follow-up</div>
-        <div className="text-xs text-muted-foreground">Spin a nested follow-up that continues from this report's interaction history.</div>
-      </div>
+  useEffect(() => {
+    if (autoFocus) {
+      textareaRef.current?.focus();
+    }
+  }, [autoFocus]);
 
+  return (
+    <div className={cn("rounded-2xl border border-border/65 bg-card/80 px-3 py-3", className)}>
       <PromptInputRoot
         className="max-w-none"
         fileDrop={{
@@ -125,10 +137,11 @@ export function ResearchFollowUpComposer({
           />
           <PromptInputBody>
             <PromptInputTextarea
+              ref={textareaRef}
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              placeholder="Drill deeper, ask for a comparison table, or request a tighter executive summary."
-              rows={3}
+              placeholder={placeholder ?? "Ask a follow-up that continues from this report…"}
+              rows={2}
               disabled={disabled || submitting}
             />
           </PromptInputBody>

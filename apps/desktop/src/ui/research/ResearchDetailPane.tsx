@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { MessageSquareIcon, XIcon } from "lucide-react";
 
 import type { ResearchDetail } from "../../app/types";
 import { useAppStore } from "../../app/store";
@@ -121,7 +122,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const thoughtCount = research.thoughtSummaries.length;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="relative flex h-full min-h-0 flex-col">
       <div
         className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/55 px-4 py-2"
         role="tablist"
@@ -187,16 +188,11 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
           ) : null}
 
           {tab === "report" ? (
-            <>
-              <ResearchReportRenderer
-                markdown={research.outputsMarkdown}
-                status={research.status}
-                sources={research.sources}
-              />
-              {research.status === "completed" ? (
-                <ResearchFollowUpComposer parentResearchId={research.id} />
-              ) : null}
-            </>
+            <ResearchReportRenderer
+              markdown={research.outputsMarkdown}
+              status={research.status}
+              sources={research.sources}
+            />
           ) : null}
 
           {tab === "notes" ? (
@@ -221,6 +217,79 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
             </section>
           ) : null}
         </div>
+      </div>
+
+      {research.status === "completed" ? (
+        <ResearchFollowUpFab parentResearchId={research.id} />
+      ) : null}
+    </div>
+  );
+}
+
+function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    setExpanded(false);
+  }, [parentResearchId]);
+
+  useEffect(() => {
+    if (!expanded) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setExpanded(false);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [expanded]);
+
+  return (
+    <div
+      className={cn(
+        "pointer-events-none absolute bottom-4 left-4 right-4 z-30 flex items-end",
+        expanded ? "justify-stretch" : "justify-start",
+      )}
+    >
+      <div
+        className={cn(
+          "pointer-events-auto transition-all duration-200 ease-out",
+          expanded
+            ? "w-full max-w-2xl opacity-100 translate-y-0"
+            : "w-11 opacity-100",
+        )}
+      >
+        {expanded ? (
+          <div className="relative rounded-2xl border border-border/60 bg-card/95 shadow-lg shadow-black/10 backdrop-blur-sm">
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              aria-label="Close follow-up"
+              className="absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+            >
+              <XIcon className="h-3.5 w-3.5" />
+            </button>
+            <ResearchFollowUpComposer
+              parentResearchId={parentResearchId}
+              autoFocus
+              onSubmitted={() => setExpanded(false)}
+              className="border-0 bg-transparent px-3 pt-6 pb-3 shadow-none"
+            />
+          </div>
+        ) : (
+          <Button
+            type="button"
+            size="icon"
+            onClick={() => setExpanded(true)}
+            aria-label="Ask a follow-up"
+            title="Ask a follow-up"
+            className="size-11 rounded-full shadow-lg shadow-black/20"
+          >
+            <MessageSquareIcon className="h-5 w-5" />
+          </Button>
+        )}
       </div>
     </div>
   );

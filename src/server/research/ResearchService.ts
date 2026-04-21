@@ -101,6 +101,25 @@ function buildResearchTitle(prompt: string): string {
   return fallback.length > 80 ? `${fallback.slice(0, 77)}...` : fallback;
 }
 
+function extractTitleFromMarkdown(markdown: string): string | null {
+  const match = markdown.match(/^[ \t]*#\s+(.+?)\s*$/m);
+  if (!match) {
+    return null;
+  }
+  let heading = match[1]
+    .replace(/^[#]+\s*/, "")
+    .replace(/^(?:chapter\s+)?\d+[.)]\s*[:–-]?\s*/i, "")
+    .replace(/^(?:section\s+)?\d+(?:\.\d+)*\s*[:.–-]?\s*/i, "")
+    .trim();
+  if (heading.length === 0) {
+    return null;
+  }
+  if (heading.length > 80) {
+    heading = `${heading.slice(0, 77)}...`;
+  }
+  return heading;
+}
+
 function normalizeInteractionStatus(
   status: Interactions.Interaction["status"] | Interactions.InteractionStatusUpdate["status"] | undefined,
 ): ResearchStatus {
@@ -676,10 +695,12 @@ export class ResearchService {
     delta: string,
     eventId: string | null,
   ): void {
+    const nextMarkdown = `${state.record.outputsMarkdown}${delta}`;
     this.updateRecord(state, {
-      outputsMarkdown: `${state.record.outputsMarkdown}${delta}`,
+      outputsMarkdown: nextMarkdown,
       updatedAt: new Date().toISOString(),
     });
+    this.maybeUpgradeTitleFromReport(state, eventId);
     this.schedulePersist(state);
     this.broadcast(
       state,
@@ -689,6 +710,30 @@ export class ResearchService {
         delta,
         ...(eventId ? { eventId } : {}),
       },
+      eventId,
+    );
+  }
+
+  private maybeUpgradeTitleFromReport(
+    state: ResearchRuntimeState,
+    eventId: string | null,
+  ): void {
+    const autoTitle = buildResearchTitle(state.record.prompt);
+    if (state.record.title !== autoTitle) {
+      return;
+    }
+    const extracted = extractTitleFromMarkdown(state.record.outputsMarkdown);
+    if (!extracted || extracted === state.record.title) {
+      return;
+    }
+    this.updateRecord(state, {
+      title: extracted,
+      updatedAt: new Date().toISOString(),
+    });
+    this.broadcast(
+      state,
+      "research/updated",
+      { research: state.record },
       eventId,
     );
   }

@@ -27,6 +27,7 @@ type QuickChatControllerOptions = {
   getMainWindow: () => BrowserWindow | null;
   createMainWindow: () => Promise<BrowserWindow>;
   createQuickChatWindow: (opts?: ShowQuickChatWindowInput) => Promise<BrowserWindow>;
+  retargetQuickChatWindow: (win: BrowserWindow, opts?: ShowQuickChatWindowInput) => Promise<void>;
   createUtilityWindow: () => Promise<BrowserWindow>;
 };
 
@@ -44,6 +45,7 @@ export class QuickChatController {
   private readonly getMainWindow: () => BrowserWindow | null;
   private readonly createMainWindow: () => Promise<BrowserWindow>;
   private readonly createQuickChatWindow: (opts?: ShowQuickChatWindowInput) => Promise<BrowserWindow>;
+  private readonly retargetQuickChatWindow: (win: BrowserWindow, opts?: ShowQuickChatWindowInput) => Promise<void>;
   private readonly createUtilityWindow: () => Promise<BrowserWindow>;
 
   private tray: Tray | null = null;
@@ -63,6 +65,7 @@ export class QuickChatController {
     this.getMainWindow = options.getMainWindow;
     this.createMainWindow = options.createMainWindow;
     this.createQuickChatWindow = options.createQuickChatWindow;
+    this.retargetQuickChatWindow = options.retargetQuickChatWindow;
     this.createUtilityWindow = options.createUtilityWindow;
   }
 
@@ -210,7 +213,8 @@ export class QuickChatController {
         this.tray.destroy();
         this.tray = null;
       }
-      this.hideUtilityWindow();
+      this.destroyWindow(this.utilityWindow);
+      this.destroyWindow(this.quickChatWindow);
       return;
     }
     this.ensureTray();
@@ -278,13 +282,11 @@ export class QuickChatController {
   }
 
   private async ensureQuickChatWindow(threadId?: string): Promise<BrowserWindow> {
-    if (threadId && this.quickChatWindow && !this.quickChatWindow.isDestroyed() && this.quickChatThreadId !== threadId) {
-      this.destroyWindow(this.quickChatWindow);
-      this.quickChatWindow = null;
-      this.quickChatThreadId = null;
-    }
-
     if (this.quickChatWindow && !this.quickChatWindow.isDestroyed()) {
+      if (threadId) {
+        await this.retargetQuickChatWindow(this.quickChatWindow, { threadId });
+        this.quickChatThreadId = threadId;
+      }
       return this.quickChatWindow;
     }
 
@@ -292,7 +294,7 @@ export class QuickChatController {
     this.quickChatWindow = win;
     this.quickChatThreadId = threadId ?? null;
     win.on("close", (event) => {
-      if (this.quitting) {
+      if (this.quitting || !this.shouldKeepPopupWindowsAlive()) {
         return;
       }
       event.preventDefault();
@@ -327,7 +329,7 @@ export class QuickChatController {
       }
     });
     win.on("close", (event) => {
-      if (this.quitting) {
+      if (this.quitting || !this.shouldKeepPopupWindowsAlive()) {
         return;
       }
       event.preventDefault();
@@ -352,6 +354,10 @@ export class QuickChatController {
     if (win && !win.isDestroyed()) {
       win.destroy();
     }
+  }
+
+  private shouldKeepPopupWindowsAlive(): boolean {
+    return (this.platform === "darwin" || this.platform === "win32") && this.menuBarEnabled && this.tray !== null;
   }
 
   private positionPopupWindow(win: BrowserWindow, anchorBounds?: Rectangle): void {

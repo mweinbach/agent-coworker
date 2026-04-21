@@ -400,13 +400,14 @@ async function createQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<B
     prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
   });
   const useDarkColors = getSystemAppearanceSnapshot().shouldUseDarkColors;
+  const isDarwin = process.platform === "darwin";
 
   const win = new BrowserWindow({
     title: "Cowork Quick Chat",
-    width: 330,
-    height: 480,
-    minWidth: 270,
-    minHeight: 390,
+    width: 337,
+    height: 552,
+    minWidth: 275,
+    minHeight: 449,
     show: false,
     frame: false,
     resizable: true,
@@ -415,10 +416,11 @@ async function createQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<B
     fullscreenable: false,
     skipTaskbar: true,
     autoHideMenuBar: true,
-    roundedCorners: true,
+    roundedCorners: !isDarwin,
     hasShadow: true,
     backgroundColor: useDarkColors ? "#1f1d1a" : "#f5f0e5",
     ...getInitialWindowAppearanceOptions({ useDarkColors, useMacosNativeGlass }),
+    ...(isDarwin ? { transparent: true, backgroundColor: "#00000000" } : {}),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
@@ -442,6 +444,9 @@ async function createQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<B
     useDarkColors,
     useMacosNativeGlass,
   });
+  if (isDarwin) {
+    win.setBackgroundColor("#00000000");
+  }
   win.setAlwaysOnTop(true, process.platform === "darwin" ? "pop-up-menu" : "normal");
   await loadRendererWindow(
     win,
@@ -460,11 +465,11 @@ async function createUtilityWindow(): Promise<BrowserWindow> {
 
   const win = new BrowserWindow({
     title: "Cowork Menu",
-    width: 210,
+    width: 252,
     height: 520,
-    minWidth: 210,
+    minWidth: 252,
     minHeight: 420,
-    maxWidth: 260,
+    maxWidth: 312,
     maxHeight: 680,
     show: false,
     frame: false,

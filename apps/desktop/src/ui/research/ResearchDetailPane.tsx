@@ -265,34 +265,28 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
           <motion.div
             key="composer"
             layout
-            className="pointer-events-auto w-full max-w-2xl origin-bottom-left"
+            className="pointer-events-auto relative w-full max-w-2xl origin-bottom-left"
             initial={{ opacity: 0, scale: 0.88, y: 6 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.88, y: 6 }}
             transition={springTransition}
           >
-            <motion.div
-              className="relative rounded-2xl border border-border/60 bg-card/95 shadow-lg shadow-black/10 backdrop-blur-sm"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={fadeTransition}
-            >
-              <button
-                type="button"
-                onClick={() => setExpanded(false)}
-                aria-label="Close follow-up"
-                className="absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
-              >
-                <XIcon className="h-3.5 w-3.5" />
-              </button>
-              <ResearchFollowUpComposer
-                parentResearchId={parentResearchId}
-                autoFocus
-                onSubmitted={() => setExpanded(false)}
-                className="border-0 bg-transparent px-3 pt-6 pb-3 shadow-none"
-              />
-            </motion.div>
+            <ResearchFollowUpComposer
+              parentResearchId={parentResearchId}
+              autoFocus
+              onSubmitted={() => setExpanded(false)}
+              className="bg-card/95 shadow-lg shadow-black/10 backdrop-blur-sm"
+              toolbarExtra={(
+                <button
+                  type="button"
+                  onClick={() => setExpanded(false)}
+                  aria-label="Close follow-up"
+                  className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+                >
+                  <XIcon className="h-3.5 w-3.5" />
+                </button>
+              )}
+            />
           </motion.div>
         ) : (
           <motion.div

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { PaperclipIcon } from "lucide-react";
 
 import { useAppStore } from "../../app/store";
@@ -38,6 +38,7 @@ export function ResearchFollowUpComposer({
   autoFocus,
   placeholder,
   className,
+  toolbarExtra,
 }: {
   parentResearchId: string;
   disabled?: boolean;
@@ -45,6 +46,7 @@ export function ResearchFollowUpComposer({
   autoFocus?: boolean;
   placeholder?: string;
   className?: string;
+  toolbarExtra?: ReactNode;
 }) {
   const sendResearchFollowUp = useAppStore((s) => s.sendResearchFollowUp);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -158,6 +160,7 @@ export function ResearchFollowUpComposer({
               >
                 <PaperclipIcon className="h-4 w-4" />
               </Button>
+              {toolbarExtra}
             </PromptInputTools>
             <PromptInputSubmit
               status={submitting ? "pending" : "ready"}

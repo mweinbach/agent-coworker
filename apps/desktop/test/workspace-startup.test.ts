@@ -26,6 +26,21 @@ async function flushAsyncWork(): Promise<void> {
   await Promise.resolve();
 }
 
+async function waitForCondition(
+  predicate: () => boolean,
+  opts: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = opts.timeoutMs ?? 1_000;
+  const intervalMs = opts.intervalMs ?? 0;
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out after ${timeoutMs}ms waiting for test condition`);
+    }
+    await Bun.sleep(intervalMs);
+  }
+}
+
 const startDeferreds: Deferred<{ url: string }>[] = [];
 const startCalls: Array<{ workspaceId: string; workspacePath: string; yolo: boolean }> = [];
 const stopCalls: string[] = [];
@@ -167,6 +182,7 @@ describe("workspace startup flow", () => {
 
     useAppStore.setState({
       ready: true,
+      bootstrapPending: false,
       startupError: null,
       view: "settings",
       settingsPage: "workspaces",
@@ -174,12 +190,16 @@ describe("workspace startup flow", () => {
       workspaces: [],
       threads: [],
       selectedWorkspaceId: null,
+      pluginManagementWorkspaceId: null,
+      pluginManagementMode: "auto",
       selectedThreadId: null,
       workspaceRuntimeById: {},
       threadRuntimeById: {},
       latestTodosByThreadId: {},
       workspaceExplorerById: {},
+      workspaceExplorerRefreshById: {},
       promptModal: null,
+      filePreview: null,
       notifications: [],
       providerStatusByName: {},
       providerStatusLastUpdatedAt: null,
@@ -195,6 +215,18 @@ describe("workspace startup flow", () => {
       injectContext: false,
       developerMode: false,
       showHiddenFiles: false,
+      perWorkspaceSettings: false,
+      desktopFeatureFlags: {
+        remoteAccess: false,
+        workspacePicker: true,
+        workspaceLifecycle: true,
+        a2ui: false,
+      },
+      desktopFeatureFlagOverrides: {},
+      updateState: MOCK_UPDATE_STATE,
+      onboardingVisible: false,
+      onboardingStep: "welcome",
+      onboardingState: { status: "pending", completedAt: null, dismissedAt: null },
       sidebarCollapsed: false,
       contextSidebarCollapsed: false,
       contextSidebarWidth: 300,
@@ -211,7 +243,7 @@ describe("workspace startup flow", () => {
     pickedWorkspaceDirectory = "/tmp/new-workspace";
 
     const addPromise = useAppStore.getState().addWorkspace();
-    await flushAsyncWork();
+    await waitForCondition(() => savedStates.length === 1 && startCalls.length === 1);
 
     expect(savedStates).toHaveLength(1);
     expect(startCalls).toHaveLength(1);
@@ -248,7 +280,7 @@ describe("workspace startup flow", () => {
     expect(startCalls).toHaveLength(1);
 
     const restart = useAppStore.getState().restartWorkspaceServer(workspaceId);
-    await flushAsyncWork();
+    await waitForCondition(() => stopCalls.length === 1 && startCalls.length === 2);
 
     expect(stopCalls).toEqual([workspaceId]);
     expect(startCalls).toHaveLength(2);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { MessageSquareIcon, PanelRightIcon } from "lucide-react";
 
@@ -16,6 +16,7 @@ import { ResearchSourcesList } from "./ResearchSourcesList";
 import { cn } from "../../lib/utils";
 
 type DetailTab = "report" | "notes" | "prompt";
+const RESEARCH_SOURCES_PANEL_WIDTH = "clamp(18rem, 30vw, 26rem)";
 
 function statusClassName(status: ResearchDetail["status"]): string {
   switch (status) {
@@ -105,6 +106,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const running = research ? research.status === "running" || research.status === "pending" : false;
   const elapsedMs = useRunningElapsed(research?.createdAt ?? new Date().toISOString(), running);
   const prefersReducedMotion = usePrefersReducedMotion();
+  const sourcesPanelId = useId();
   const [tab, setTab] = useState<DetailTab>("report");
   const [sourcesOpen, setSourcesOpen] = useState(false);
 
@@ -126,49 +128,60 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const canExport = research.status === "completed" && research.outputsMarkdown.trim().length > 0;
   const sourceCount = research.sources.length;
   const thoughtCount = research.thoughtSummaries.length;
+  const showSourcesPanel = sourcesOpen && sourceCount > 0;
+  const sourcesPanelStyle = {
+    "--research-sources-panel-width": RESEARCH_SOURCES_PANEL_WIDTH,
+    flexBasis: showSourcesPanel ? "var(--research-sources-panel-width)" : "0px",
+    width: showSourcesPanel ? "var(--research-sources-panel-width)" : "0px",
+  } as CSSProperties;
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
-      <div
-        className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/55 px-4 py-2"
-        role="tablist"
-      >
-        <div className="flex shrink-0 items-center gap-1 overflow-x-auto rounded-lg bg-muted/30 p-0.5">
-          <TabButton active={tab === "report"} onClick={() => setTab("report")}>
-            Report
-          </TabButton>
-          <TabButton active={tab === "notes"} count={thoughtCount} onClick={() => setTab("notes")}>
-            Notes
-          </TabButton>
-          <TabButton active={tab === "prompt"} onClick={() => setTab("prompt")}>
-            Prompt
-          </TabButton>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/55 px-4 py-2">
+        <div className="flex min-w-0 flex-1 basis-[26rem] flex-wrap items-center gap-x-4 gap-y-2">
+          <div className="min-w-0 max-w-full overflow-x-auto rounded-lg bg-muted/30 p-0.5">
+            <div
+              className="flex w-max items-center gap-1"
+              role="tablist"
+              aria-label="Research detail sections"
+            >
+              <TabButton active={tab === "report"} onClick={() => setTab("report")}>
+                Report
+              </TabButton>
+              <TabButton active={tab === "notes"} count={thoughtCount} onClick={() => setTab("notes")}>
+                Notes
+              </TabButton>
+              <TabButton active={tab === "prompt"} onClick={() => setTab("prompt")}>
+                Prompt
+              </TabButton>
+            </div>
+          </div>
+
+          <div className="flex min-w-0 flex-1 basis-48 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <Badge className={cn("shrink-0", statusClassName(research.status))}>
+              {statusLabel(research.status)}
+            </Badge>
+            {running ? (
+              <>
+                <span className="whitespace-nowrap tabular-nums text-foreground/80">{formatElapsed(elapsedMs)}</span>
+                <span aria-hidden="true">·</span>
+                <span className="whitespace-nowrap">
+                  <span className="tabular-nums text-foreground/80">{sourceCount}</span>{" "}
+                  {sourceCount === 1 ? "source" : "sources"}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span className="whitespace-nowrap">
+                  <span className="tabular-nums text-foreground/80">{thoughtCount}</span>{" "}
+                  {thoughtCount === 1 ? "note" : "notes"}
+                </span>
+              </>
+            ) : startedAgo ? (
+              <span className="whitespace-nowrap">{startedAgo} ago</span>
+            ) : null}
+          </div>
         </div>
 
-        <div className="flex min-w-0 flex-1 basis-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-          <Badge className={cn("shrink-0", statusClassName(research.status))}>
-            {statusLabel(research.status)}
-          </Badge>
-          {running ? (
-            <>
-              <span className="whitespace-nowrap tabular-nums text-foreground/80">{formatElapsed(elapsedMs)}</span>
-              <span aria-hidden="true">·</span>
-              <span className="whitespace-nowrap">
-                <span className="tabular-nums text-foreground/80">{sourceCount}</span>{" "}
-                {sourceCount === 1 ? "source" : "sources"}
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className="whitespace-nowrap">
-                <span className="tabular-nums text-foreground/80">{thoughtCount}</span>{" "}
-                {thoughtCount === 1 ? "note" : "notes"}
-              </span>
-            </>
-          ) : startedAgo ? (
-            <span className="whitespace-nowrap">{startedAgo} ago</span>
-          ) : null}
-        </div>
-
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
           {sourceCount > 0 ? (
             <Button
               size="sm"
@@ -177,6 +190,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
               onClick={() => setSourcesOpen((open) => !open)}
               aria-pressed={sourcesOpen}
               aria-expanded={sourcesOpen}
+              aria-controls={sourcesPanelId}
               aria-label={sourcesOpen ? "Hide sources panel" : "Show sources panel"}
               className={cn(
                 "h-7 gap-1.5 rounded-full border-border/60 px-3 text-xs",
@@ -203,7 +217,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-row">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-row">
         <div className="min-w-0 flex-1 overflow-y-auto px-8 py-6">
           <div className="mx-auto flex max-w-4xl flex-col gap-6">
             {research.error && tab !== "prompt" ? (
@@ -240,33 +254,36 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
           </div>
         </div>
 
-        <AnimatePresence initial={false}>
-          {sourcesOpen && sourceCount > 0 ? (
-            <motion.aside
-              key="sources-drawer"
-              initial={prefersReducedMotion ? false : { width: 0 }}
-              animate={{ width: "20rem" }}
-              exit={{ width: 0 }}
-              transition={prefersReducedMotion
-                ? { duration: 0 }
-                : { type: "spring", stiffness: 380, damping: 36, mass: 0.85 }}
-              className="min-h-0 shrink-0 overflow-hidden border-l border-border/55 bg-muted/15"
-              aria-label="Sources"
+        {sourceCount > 0 ? (
+          <aside
+            id={sourcesPanelId}
+            className={cn(
+              "min-h-0 shrink-0 overflow-hidden bg-muted/15 transition-[width,opacity,border-color] ease-out",
+              prefersReducedMotion ? "duration-0" : "duration-200",
+              showSourcesPanel
+                ? "border-l border-border/55 opacity-100"
+                : "pointer-events-none border-l border-transparent opacity-0",
+            )}
+            aria-label="Sources"
+            aria-hidden={!showSourcesPanel}
+            style={sourcesPanelStyle}
+          >
+            <div
+              className="flex h-full min-h-0 min-w-0 flex-col"
+              style={{ width: "var(--research-sources-panel-width)" }}
             >
-              <div className="flex h-full w-80 min-h-0 flex-col">
-                <div className="flex h-9 items-center gap-2 border-b border-border/55 px-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                  Sources
-                  <span className="rounded-full bg-muted/80 px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
-                    {sourceCount}
-                  </span>
-                </div>
-                <div className="min-h-0 flex-1 overflow-y-auto p-2">
-                  <ResearchSourcesList sources={research.sources} variant="inline" />
-                </div>
+              <div className="flex h-9 items-center gap-2 border-b border-border/55 px-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                Sources
+                <span className="rounded-full bg-muted/80 px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                  {sourceCount}
+                </span>
               </div>
-            </motion.aside>
-          ) : null}
-        </AnimatePresence>
+              <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                <ResearchSourcesList sources={research.sources} variant="inline" />
+              </div>
+            </div>
+          </aside>
+        ) : null}
       </div>
 
       {research.status === "completed" ? (

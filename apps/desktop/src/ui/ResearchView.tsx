@@ -36,8 +36,8 @@ export function ResearchView() {
   const showComposer = composerOpen || research.length === 0;
 
   return (
-    <div className="flex h-full min-h-0 flex-row">
-      <section className="flex min-h-0 w-[380px] shrink-0 flex-col border-r border-border/55 bg-muted/10">
+    <div className="flex h-full min-h-0 min-w-0 flex-row">
+      <section className="flex min-h-0 min-w-[18rem] w-[clamp(18rem,26vw,23.75rem)] shrink-0 flex-col border-r border-border/55 bg-muted/10">
         <div className="flex items-center justify-between gap-2 border-b border-border/55 px-4 py-2.5">
           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
             Runs
@@ -75,10 +75,9 @@ export function ResearchView() {
         </div>
       </section>
 
-      <section className="min-h-0 flex-1">
+      <section className="min-h-0 min-w-0 flex-1">
         <ResearchDetailPane research={selectedResearch} />
       </section>
     </div>
   );
 }
-

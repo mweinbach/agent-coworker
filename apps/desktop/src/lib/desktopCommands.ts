@@ -31,6 +31,7 @@ function requireDesktopApi(): DesktopApi {
 
 function getDefaultDesktopFeatureFlags(): DesktopFeatureFlags {
   return {
+    menuBar: true,
     remoteAccess: false,
     workspacePicker: false,
     workspaceLifecycle: false,

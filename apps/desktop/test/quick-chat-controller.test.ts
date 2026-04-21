@@ -237,4 +237,32 @@ describe("resolveTrayIconPath", () => {
     expect(createUtilityWindow).toHaveBeenCalledTimes(1);
     expect(createQuickChatWindow).toHaveBeenCalledTimes(0);
   });
+
+  test("removes the tray when the menu bar feature flag is disabled", () => {
+    createdTrays.length = 0;
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "darwin",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow: async () => new FakeWindow() as never,
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+    expect(createdTrays).toHaveLength(1);
+    expect(createdTrays[0]?.destroyed).toBe(false);
+
+    controller.applyPersistedState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      desktopFeatureFlagOverrides: {
+        menuBar: false,
+      },
+    });
+
+    expect(createdTrays[0]?.destroyed).toBe(true);
+  });
 });

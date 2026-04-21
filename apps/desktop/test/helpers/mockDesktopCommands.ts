@@ -45,11 +45,13 @@ export function createDesktopCommandsMock(
   overrides: Partial<DesktopCommandsModule> = {},
 ): DesktopCommandsModule {
   const resolveFlags = (featureOverrides?: {
+    menuBar?: boolean;
     remoteAccess?: boolean;
     workspacePicker?: boolean;
     workspaceLifecycle?: boolean;
     a2ui?: boolean;
   }) => ({
+    menuBar: typeof featureOverrides?.menuBar === "boolean" ? featureOverrides.menuBar : true,
     remoteAccess: typeof featureOverrides?.remoteAccess === "boolean" ? featureOverrides.remoteAccess : true,
     workspacePicker: typeof featureOverrides?.workspacePicker === "boolean" ? featureOverrides.workspacePicker : true,
     workspaceLifecycle: typeof featureOverrides?.workspaceLifecycle === "boolean" ? featureOverrides.workspaceLifecycle : true,

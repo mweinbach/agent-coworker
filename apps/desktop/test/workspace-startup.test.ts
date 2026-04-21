@@ -217,6 +217,7 @@ describe("workspace startup flow", () => {
       showHiddenFiles: false,
       perWorkspaceSettings: false,
       desktopFeatureFlags: {
+        menuBar: true,
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,

@@ -1,4 +1,5 @@
 export const FEATURE_FLAG_IDS = [
+  "menuBar",
   "remoteAccess",
   "workspacePicker",
   "workspaceLifecycle",
@@ -21,6 +22,12 @@ export type FeatureFlagDefinition = {
 };
 
 export const FEATURE_FLAG_DEFINITIONS: Record<FeatureFlagId, FeatureFlagDefinition> = {
+  menuBar: {
+    id: "menuBar",
+    label: "Menu bar / tray",
+    description: "Keep Cowork available from the macOS menu bar or Windows system tray.",
+    defaultEnabled: true,
+  },
   remoteAccess: {
     id: "remoteAccess",
     label: "Remote access",
@@ -79,6 +86,7 @@ export type ResolveFeatureFlagsOptions = {
 
 export function resolveFeatureFlags(options: ResolveFeatureFlagsOptions): FeatureFlags {
   const values: FeatureFlags = {
+    menuBar: FEATURE_FLAG_DEFINITIONS.menuBar.defaultEnabled,
     remoteAccess: FEATURE_FLAG_DEFINITIONS.remoteAccess.defaultEnabled,
     workspacePicker: FEATURE_FLAG_DEFINITIONS.workspacePicker.defaultEnabled,
     workspaceLifecycle: FEATURE_FLAG_DEFINITIONS.workspaceLifecycle.defaultEnabled,

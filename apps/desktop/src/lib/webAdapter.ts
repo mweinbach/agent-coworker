@@ -386,6 +386,7 @@ export function createWebAdapter(): DesktopApi {
       ? overrides.workspaceLifecycle
       : fullDesktopMode;
     return {
+      menuBar: false,
       remoteAccess: false,
       workspacePicker: normalizedPicker,
       workspaceLifecycle: normalizedLifecycle,

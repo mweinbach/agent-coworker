@@ -66,6 +66,7 @@ mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   checkForUpdates: async () => {},
   quitAndInstallUpdate: async () => {},
   getDesktopFeatureFlags: (featureOverrides) => ({
+    menuBar: typeof featureOverrides?.menuBar === "boolean" ? featureOverrides.menuBar : true,
     remoteAccess: typeof featureOverrides?.remoteAccess === "boolean" ? featureOverrides.remoteAccess : remoteAccessEnabled,
     workspacePicker: typeof featureOverrides?.workspacePicker === "boolean" ? featureOverrides.workspacePicker : true,
     workspaceLifecycle: typeof featureOverrides?.workspaceLifecycle === "boolean"
@@ -118,6 +119,7 @@ describe("settings nav (store)", () => {
       settingsPage: "providers",
       updateState: MOCK_UPDATE_STATE,
       desktopFeatureFlags: {
+        menuBar: true,
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,
@@ -203,6 +205,7 @@ describe("settings nav (store)", () => {
     remoteAccessEnabled = false;
     useAppStore.setState({
       desktopFeatureFlags: {
+        menuBar: true,
         remoteAccess: false,
         workspacePicker: true,
         workspaceLifecycle: true,
@@ -230,6 +233,7 @@ describe("settings nav (store)", () => {
     useAppStore.setState({
       settingsPage: "remoteAccess",
       desktopFeatureFlags: {
+        menuBar: true,
         remoteAccess: true,
         workspacePicker: true,
         workspaceLifecycle: true,

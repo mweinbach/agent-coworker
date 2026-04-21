@@ -60,6 +60,7 @@ mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
   getUpdateState: async () => MOCK_UPDATE_STATE,
   getDesktopFeatureFlags: () => ({
+    menuBar: true,
     remoteAccess: true,
     workspacePicker: workspacePickerEnabled,
     workspaceLifecycle: workspaceLifecycleEnabled,
@@ -484,6 +485,7 @@ describe("desktop workspaces page", () => {
         google: "gemini-3-flash-preview",
       },
       desktopFeatureFlags: {
+        menuBar: true,
         remoteAccess: true,
         workspacePicker: false,
         workspaceLifecycle: false,

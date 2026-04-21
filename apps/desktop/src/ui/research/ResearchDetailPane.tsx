@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { MessageSquareIcon, XIcon } from "lucide-react";
+
+import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 
 import type { ResearchDetail } from "../../app/types";
 import { useAppStore } from "../../app/store";
@@ -228,6 +231,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
 
 function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string }) {
   const [expanded, setExpanded] = useState(false);
+  const prefersReducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     setExpanded(false);
@@ -246,51 +250,75 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [expanded]);
 
+  const springTransition = prefersReducedMotion
+    ? { duration: 0 }
+    : { type: "spring" as const, stiffness: 420, damping: 34, mass: 0.9 };
+
+  const fadeTransition = prefersReducedMotion
+    ? { duration: 0 }
+    : { duration: 0.16, ease: [0.2, 0.8, 0.2, 1] as const };
+
   return (
-    <div
-      className={cn(
-        "pointer-events-none absolute bottom-4 left-4 right-4 z-30 flex items-end",
-        expanded ? "justify-stretch" : "justify-start",
-      )}
-    >
-      <div
-        className={cn(
-          "pointer-events-auto transition-all duration-200 ease-out",
-          expanded
-            ? "w-full max-w-2xl opacity-100 translate-y-0"
-            : "w-11 opacity-100",
-        )}
-      >
+    <div className="pointer-events-none absolute bottom-4 left-4 right-4 z-30 flex items-end">
+      <AnimatePresence mode="popLayout" initial={false}>
         {expanded ? (
-          <div className="relative rounded-2xl border border-border/60 bg-card/95 shadow-lg shadow-black/10 backdrop-blur-sm">
-            <button
-              type="button"
-              onClick={() => setExpanded(false)}
-              aria-label="Close follow-up"
-              className="absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
-            >
-              <XIcon className="h-3.5 w-3.5" />
-            </button>
-            <ResearchFollowUpComposer
-              parentResearchId={parentResearchId}
-              autoFocus
-              onSubmitted={() => setExpanded(false)}
-              className="border-0 bg-transparent px-3 pt-6 pb-3 shadow-none"
-            />
-          </div>
-        ) : (
-          <Button
-            type="button"
-            size="icon"
-            onClick={() => setExpanded(true)}
-            aria-label="Ask a follow-up"
-            title="Ask a follow-up"
-            className="size-11 rounded-full shadow-lg shadow-black/20"
+          <motion.div
+            key="composer"
+            layout
+            className="pointer-events-auto w-full max-w-2xl origin-bottom-left"
+            initial={{ opacity: 0, scale: 0.88, y: 6 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.88, y: 6 }}
+            transition={springTransition}
           >
-            <MessageSquareIcon className="h-5 w-5" />
-          </Button>
+            <motion.div
+              className="relative rounded-2xl border border-border/60 bg-card/95 shadow-lg shadow-black/10 backdrop-blur-sm"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={fadeTransition}
+            >
+              <button
+                type="button"
+                onClick={() => setExpanded(false)}
+                aria-label="Close follow-up"
+                className="absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+              >
+                <XIcon className="h-3.5 w-3.5" />
+              </button>
+              <ResearchFollowUpComposer
+                parentResearchId={parentResearchId}
+                autoFocus
+                onSubmitted={() => setExpanded(false)}
+                className="border-0 bg-transparent px-3 pt-6 pb-3 shadow-none"
+              />
+            </motion.div>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="fab"
+            layout
+            className="pointer-events-auto origin-bottom-left"
+            initial={{ opacity: 0, scale: 0.7 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.7 }}
+            transition={springTransition}
+            whileHover={prefersReducedMotion ? undefined : { scale: 1.06 }}
+            whileTap={prefersReducedMotion ? undefined : { scale: 0.94 }}
+          >
+            <Button
+              type="button"
+              size="icon"
+              onClick={() => setExpanded(true)}
+              aria-label="Ask a follow-up"
+              title="Ask a follow-up"
+              className="size-11 rounded-full shadow-lg shadow-black/20"
+            >
+              <MessageSquareIcon className="h-5 w-5" />
+            </Button>
+          </motion.div>
         )}
-      </div>
+      </AnimatePresence>
     </div>
   );
 }

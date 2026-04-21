@@ -25,16 +25,16 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
 
   return (
     <div className="flex h-screen min-h-0 min-w-0 overflow-hidden bg-transparent p-0 text-foreground">
-      <div className="app-surface-overlay flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[18px] border border-border/55 bg-[radial-gradient(circle_at_top,var(--surface-overlay),transparent_56%),linear-gradient(180deg,var(--surface-shell),var(--surface-window))] backdrop-blur-xl">
+      <div className="app-surface-overlay flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[22px] bg-[radial-gradient(circle_at_top,var(--surface-overlay),transparent_56%),linear-gradient(180deg,var(--surface-shell),var(--surface-window))] backdrop-blur-xl ring-1 ring-black/5">
         <div
-          className="flex items-center justify-between gap-3 px-4 py-3"
+          className="flex items-center justify-between gap-2 px-3 py-2.5"
           style={{ WebkitAppRegion: "drag" } as CSSProperties}
         >
-          <div className="min-w-0">
-            <div className="truncate text-[0.95rem] font-semibold tracking-tight text-foreground">
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[0.9rem] font-semibold tracking-tight text-foreground">
               Cowork
             </div>
-            <div className="truncate text-xs text-muted-foreground">
+            <div className="truncate text-[11px] text-muted-foreground">
               Menu bar quick actions
             </div>
           </div>
@@ -42,12 +42,12 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="h-9 w-9 rounded-full border border-border/50 bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
+            className="h-7 w-7 shrink-0 rounded-full border border-border/50 bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground"
             aria-label="Close menu window"
             onClick={() => void windowClose()}
             style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
           >
-            <XIcon className="h-4 w-4" />
+            <XIcon className="h-3.5 w-3.5" />
           </Button>
         </div>
 
@@ -65,7 +65,7 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-1.5">
                 <Button
                   type="button"
                   variant="outline"

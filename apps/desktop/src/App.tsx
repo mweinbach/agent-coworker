@@ -94,7 +94,6 @@ const ChatShell = memo(function ChatShell({
   const threads = useAppStore((s) => s.threads);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
-  const researchTransportWorkspaceId = useAppStore((s) => s.researchTransportWorkspaceId);
   const pluginManagementWorkspaceId = useAppStore((s) => s.pluginManagementWorkspaceId);
   const pluginManagementMode = useAppStore((s) => s.pluginManagementMode);
   const setPluginManagementWorkspace = useAppStore((s) => s.setPluginManagementWorkspace);
@@ -119,14 +118,6 @@ const ChatShell = memo(function ChatShell({
     }
     return workspaces.find((workspace) => workspace.id === activeThread.workspaceId) ?? null;
   }, [activeThread, workspaces]);
-  const selectedWorkspace = useMemo(
-    () => workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null,
-    [selectedWorkspaceId, workspaces],
-  );
-  const researchWorkspace = useMemo(
-    () => workspaces.find((workspace) => workspace.id === researchTransportWorkspaceId) ?? null,
-    [researchTransportWorkspaceId, workspaces],
-  );
   const pluginSelection = useMemo(() => resolvePluginCatalogWorkspaceSelection({
     workspaces,
     selectedWorkspaceId,
@@ -149,10 +140,10 @@ const ChatShell = memo(function ChatShell({
     : view === "research"
       ? "Research"
     : activeThread?.title?.trim() || "New thread";
-  const topBarSubtitle = view === "skills"
+  const topBarSubtitle: string | null = view === "skills"
     ? pluginManagementWorkspace?.name ?? "Global"
     : view === "research"
-      ? researchWorkspace?.name ?? "Global"
+      ? null
     : activeWorkspace?.name ?? "Cowork";
   const canClearHardCap = runtime?.sessionUsage?.budgetStatus.stopTriggered === true
     && runtime?.transcriptOnly !== true

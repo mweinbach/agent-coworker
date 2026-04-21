@@ -410,7 +410,10 @@ export const Sidebar = memo(function Sidebar() {
   const workspaceLifecycleEnabled = desktopFeatures.workspaceLifecycle !== false;
   const activeWorkspaceId = view === "skills"
     ? pluginSelection.displayWorkspaceId
+    : view === "research"
+      ? null
     : selectedWorkspaceId;
+  const sidebarSelectedThreadId = view === "research" ? null : selectedThreadId;
   const visibleWorkspaces = useMemo(() => {
     if (workspacePickerEnabled || workspaces.length <= 1) {
       return workspaces;
@@ -603,7 +606,7 @@ export const Sidebar = memo(function Sidebar() {
     const workspaceThreads = threadsByWorkspaceId.get(workspace.id) ?? [];
     const emphasizeWorkspace = shouldEmphasizeWorkspaceRow(
       active,
-      selectedThreadId,
+      sidebarSelectedThreadId,
       workspaceThreads.map((thread) => thread.id),
     );
     const showAllThreads = expandedThreadLists[workspace.id] === true;
@@ -634,7 +637,7 @@ export const Sidebar = memo(function Sidebar() {
         onWorkspaceContextMenu={handleWorkspaceContextMenu}
         onWorkspaceOpenChange={handleWorkspaceOpenChange}
         reorderEnabled={reorderEnabled}
-        selectedThreadId={selectedThreadId}
+        selectedThreadId={sidebarSelectedThreadId}
         selectThread={handleSelectThread}
         showAllThreads={showAllThreads}
         threadRuntimeById={threadRuntimeById}

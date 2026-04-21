@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { ResearchDetail } from "../../app/types";
 import { useAppStore } from "../../app/store";
@@ -9,8 +9,9 @@ import { ResearchExportMenu } from "./ResearchExportMenu";
 import { ResearchFollowUpComposer } from "./ResearchFollowUpComposer";
 import { ResearchReportRenderer } from "./ResearchReportRenderer";
 import { ResearchSourcesList } from "./ResearchSourcesList";
-import { ResearchThoughtPanel } from "./ResearchThoughtPanel";
 import { cn } from "../../lib/utils";
+
+type DetailTab = "report" | "notes" | "sources" | "prompt";
 
 function statusClassName(status: ResearchDetail["status"]): string {
   switch (status) {
@@ -60,11 +61,50 @@ function useRunningElapsed(startedAtIso: string, running: boolean): number {
   return Math.max(0, nowMs - startedMs);
 }
 
+function TabButton({
+  active,
+  children,
+  count,
+  onClick,
+}: {
+  active: boolean;
+  children: React.ReactNode;
+  count?: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors",
+        active
+          ? "bg-background text-foreground shadow-sm"
+          : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground",
+      )}
+      aria-selected={active}
+      role="tab"
+    >
+      {children}
+      {count !== undefined && count > 0 ? (
+        <span className="min-w-4 rounded-full bg-muted px-1 text-center text-[10px] tabular-nums text-muted-foreground">
+          {count}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
 export function ResearchDetailPane({ research }: { research: ResearchDetail | null }) {
   const cancelResearch = useAppStore((s) => s.cancelResearch);
   const exportPendingIds = useAppStore((s) => s.researchExportPendingIds);
   const running = research ? research.status === "running" || research.status === "pending" : false;
   const elapsedMs = useRunningElapsed(research?.createdAt ?? new Date().toISOString(), running);
+  const [tab, setTab] = useState<DetailTab>("report");
+
+  useEffect(() => {
+    setTab("report");
+  }, [research?.id]);
 
   if (!research) {
     return (
@@ -79,17 +119,6 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const canExport = research.status === "completed" && research.outputsMarkdown.trim().length > 0;
   const sourceCount = research.sources.length;
   const thoughtCount = research.thoughtSummaries.length;
-
-  const reportBlock = (
-    <ResearchReportRenderer markdown={research.outputsMarkdown} status={research.status} />
-  );
-  const thoughtsBlock = (
-    <ResearchThoughtPanel thoughtSummaries={research.thoughtSummaries} status={research.status} />
-  );
-  const sourcesBlock = <ResearchSourcesList sources={research.sources} />;
-  const followUpBlock = research.status === "completed" ? (
-    <ResearchFollowUpComposer parentResearchId={research.id} />
-  ) : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -132,36 +161,118 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto flex max-w-4xl flex-col gap-6">
-          <section className="rounded-2xl border border-border/55 bg-card/40 px-4 py-3">
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-              Prompt
-            </div>
-            <p className="whitespace-pre-wrap text-sm leading-6 text-foreground/90">
-              {research.prompt}
-            </p>
-            {research.error ? (
-              <div className="mt-2 text-xs text-destructive">{research.error}</div>
-            ) : null}
-          </section>
+      <div className="flex items-center gap-1 border-b border-border/55 bg-muted/8 px-4 py-2" role="tablist">
+        <div className="flex items-center gap-1 rounded-lg bg-muted/30 p-0.5">
+          <TabButton active={tab === "report"} onClick={() => setTab("report")}>
+            Report
+          </TabButton>
+          <TabButton active={tab === "notes"} count={thoughtCount} onClick={() => setTab("notes")}>
+            Notes
+          </TabButton>
+          <TabButton active={tab === "sources"} count={sourceCount} onClick={() => setTab("sources")}>
+            Sources
+          </TabButton>
+        </div>
+        <div className="ml-auto">
+          <TabButton active={tab === "prompt"} onClick={() => setTab("prompt")}>
+            Prompt
+          </TabButton>
+        </div>
+      </div>
 
-          {running ? (
+      <div className="min-h-0 flex-1 overflow-y-auto bg-background/40 px-6 py-5">
+        <div className="mx-auto flex max-w-4xl flex-col gap-6">
+          {research.error && tab !== "prompt" ? (
+            <div className="rounded-xl border border-destructive/35 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+              {research.error}
+            </div>
+          ) : null}
+
+          {tab === "report" ? (
             <>
-              {thoughtsBlock}
-              {sourcesBlock}
-              {reportBlock}
+              <ResearchReportRenderer
+                markdown={research.outputsMarkdown}
+                status={research.status}
+                sources={research.sources}
+              />
+              {research.status === "completed" ? (
+                <ResearchFollowUpComposer parentResearchId={research.id} />
+              ) : null}
             </>
-          ) : (
-            <>
-              {reportBlock}
-              {sourcesBlock}
-              {thoughtsBlock}
-              {followUpBlock}
-            </>
-          )}
+          ) : null}
+
+          {tab === "notes" ? (
+            <ResearchNotesTab
+              thoughtSummaries={research.thoughtSummaries}
+              status={research.status}
+            />
+          ) : null}
+
+          {tab === "sources" ? (
+            <ResearchSourcesList sources={research.sources} />
+          ) : null}
+
+          {tab === "prompt" ? (
+            <section className="rounded-2xl border border-border/55 bg-card/60 px-5 py-5">
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                Prompt
+              </div>
+              <p className="whitespace-pre-wrap text-sm leading-6 text-foreground/90">
+                {research.prompt}
+              </p>
+            </section>
+          ) : null}
         </div>
       </div>
     </div>
+  );
+}
+
+function ResearchNotesTab({
+  thoughtSummaries,
+  status,
+}: {
+  thoughtSummaries: ResearchDetail["thoughtSummaries"];
+  status: ResearchDetail["status"];
+}) {
+  const running = status === "running" || status === "pending";
+
+  if (thoughtSummaries.length === 0 && running) {
+    return (
+      <div className="rounded-2xl border border-border/65 bg-card/70 px-5 py-5 text-sm text-muted-foreground">
+        <div className="mb-2 flex items-center gap-2 text-xs font-medium">
+          <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
+          Waiting for the first progress note…
+        </div>
+      </div>
+    );
+  }
+
+  if (thoughtSummaries.length === 0) {
+    return (
+      <div className="rounded-2xl border border-border/65 bg-card/70 px-4 py-5 text-sm text-muted-foreground">
+        No progress notes were captured for this run.
+      </div>
+    );
+  }
+
+  return (
+    <ol className="space-y-3">
+      {thoughtSummaries.map((thought, index) => (
+        <li
+          key={thought.id}
+          className="rounded-2xl border border-border/60 bg-card/70 px-4 py-3"
+        >
+          <div className="mb-1 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+            <span className="tabular-nums">Note {index + 1}</span>
+            <span aria-hidden="true">·</span>
+            <span>{new Date(thought.ts).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" })}</span>
+          </div>
+          <div className="whitespace-pre-wrap text-sm leading-6 text-foreground/90">
+            {thought.text}
+          </div>
+        </li>
+      ))}
+    </ol>
   );
 }

@@ -1,14 +1,80 @@
-import { Streamdown } from "streamdown";
+import { useMemo } from "react";
+
+import type { ResearchDetail } from "../../app/types";
+import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
+import { MessageResponse } from "../../components/ai-elements/message";
+
+type ResearchStatus = ResearchDetail["status"];
+type ResearchSources = ResearchDetail["sources"];
+
+const CITE_MARKER_PATTERN = /\[cite:\s*([\d\s,]+?)\s*\]/g;
+
+function buildCitationSources(sources: ResearchSources): CitationSource[] {
+  return sources.map((source) => (source.title
+    ? { url: source.url, title: source.title }
+    : { url: source.url }));
+}
+
+function rewriteCiteMarkers(markdown: string, sources: readonly CitationSource[]): string {
+  if (sources.length === 0 || !markdown.includes("[cite:")) {
+    return markdown;
+  }
+
+  return markdown.replace(CITE_MARKER_PATTERN, (match, idsStr: string) => {
+    const ids = idsStr
+      .split(/[\s,]+/)
+      .map((entry) => Number.parseInt(entry, 10))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (ids.length === 0) {
+      return match;
+    }
+
+    const rendered: string[] = [];
+    for (const id of ids) {
+      const source = sources[id - 1];
+      if (!source) {
+        continue;
+      }
+      const label = source.title?.trim() || safeHost(source.url) || source.url;
+      rendered.push(`【${id}†${label}】`);
+    }
+    return rendered.length > 0 ? rendered.join("") : match;
+  });
+}
+
+function safeHost(url: string): string | null {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
 
 export function ResearchReportRenderer({
   markdown,
   status,
+  sources,
 }: {
   markdown: string;
-  status: "pending" | "running" | "completed" | "cancelled" | "failed";
+  status: ResearchStatus;
+  sources: ResearchSources;
 }) {
   const hasMarkdown = markdown.trim().length > 0;
   const running = status === "running" || status === "pending";
+
+  const citationSources = useMemo(() => buildCitationSources(sources), [sources]);
+  const citationUrlsByIndex = useMemo(() => {
+    const map = new Map<number, string>();
+    citationSources.forEach((source, index) => {
+      map.set(index + 1, source.url);
+    });
+    return map;
+  }, [citationSources]);
+
+  const prepared = useMemo(
+    () => (hasMarkdown ? rewriteCiteMarkers(markdown, citationSources) : markdown),
+    [citationSources, hasMarkdown, markdown],
+  );
 
   if (!hasMarkdown && running) {
     return (
@@ -41,10 +107,16 @@ export function ResearchReportRenderer({
   }
 
   return (
-    <div className="rounded-2xl border border-border/65 bg-card/80 px-5 py-5">
-      <Streamdown className="max-w-none text-sm leading-7 [&>*:first-child]:mt-0 [&_a]:underline [&_code]:rounded-sm [&_code]:bg-muted/45 [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/35 [&_pre]:p-3">
-        {markdown}
-      </Streamdown>
+    <div className="research-report rounded-2xl border border-border/65 bg-card/80 px-6 py-6">
+      <MessageResponse
+        normalizeDisplayCitations
+        citationSources={citationSources}
+        citationUrlsByIndex={citationUrlsByIndex}
+        fallbackToSourcesFooter={false}
+        className="max-w-none text-[0.925rem] leading-7 [&>*:first-child]:mt-0 [&_h1]:mt-8 [&_h1]:text-2xl [&_h1]:font-semibold [&_h1]:tracking-tight [&_h2]:mt-7 [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:mt-5 [&_h3]:text-lg [&_h3]:font-semibold [&_p]:my-3 [&_ul]:my-3 [&_ol]:my-3 [&_li]:my-1 [&_code]:rounded-sm [&_code]:bg-muted/45 [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:my-4 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/35 [&_pre]:p-3"
+      >
+        {prepared}
+      </MessageResponse>
     </div>
   );
 }

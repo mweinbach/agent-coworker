@@ -203,35 +203,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
         </div>
       </div>
 
-      <div className="relative flex min-h-0 flex-1 flex-row">
-        <AnimatePresence initial={false}>
-          {sourcesOpen && sourceCount > 0 ? (
-            <motion.aside
-              key="sources-drawer"
-              initial={prefersReducedMotion ? false : { x: "100%" }}
-              animate={{ x: "0%" }}
-              exit={prefersReducedMotion ? { x: "100%" } : { x: "100%" }}
-              transition={prefersReducedMotion
-                ? { duration: 0 }
-                : { type: "spring", stiffness: 380, damping: 36, mass: 0.85 }}
-              className="absolute inset-y-0 right-0 z-20 flex w-80 min-h-0 flex-col border-l border-border/55 bg-panel shadow-xl shadow-black/10"
-              aria-label="Sources"
-            >
-              <div className="flex items-center justify-between gap-2 border-b border-border/55 bg-muted/20 px-4 py-2.5">
-                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                  Sources
-                  <span className="rounded-full bg-muted/80 px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
-                    {sourceCount}
-                  </span>
-                </div>
-              </div>
-              <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-                <ResearchSourcesList sources={research.sources} variant="inline" />
-              </div>
-            </motion.aside>
-          ) : null}
-        </AnimatePresence>
-
+      <div className="flex min-h-0 flex-1 flex-row">
         <div className="min-w-0 flex-1 overflow-y-auto px-8 py-6">
           <div className="mx-auto flex max-w-4xl flex-col gap-6">
             {research.error && tab !== "prompt" ? (
@@ -267,6 +239,36 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
             ) : null}
           </div>
         </div>
+
+        <AnimatePresence initial={false}>
+          {sourcesOpen && sourceCount > 0 ? (
+            <motion.aside
+              key="sources-drawer"
+              initial={prefersReducedMotion ? false : { width: 0 }}
+              animate={{ width: "20rem" }}
+              exit={{ width: 0 }}
+              transition={prefersReducedMotion
+                ? { duration: 0 }
+                : { type: "spring", stiffness: 380, damping: 36, mass: 0.85 }}
+              className="min-h-0 shrink-0 overflow-hidden border-l border-border/55 bg-muted/10"
+              aria-label="Sources"
+            >
+              <div className="flex h-full w-80 min-h-0 flex-col">
+                <div className="flex items-center justify-between gap-2 border-b border-border/55 bg-muted/20 px-4 py-2.5">
+                  <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                    Sources
+                    <span className="rounded-full bg-muted/80 px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                      {sourceCount}
+                    </span>
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+                  <ResearchSourcesList sources={research.sources} variant="inline" />
+                </div>
+              </div>
+            </motion.aside>
+          ) : null}
+        </AnimatePresence>
       </div>
 
       {research.status === "completed" ? (

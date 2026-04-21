@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { PersistentAgentSummary } from "../../shared/agents";
 import type {
   PersistedModelStreamChunk,
+  PersistedResearchRecord,
   PersistedSessionMutation,
   PersistedSessionRecord,
   PersistedThreadJournalEvent,
@@ -14,6 +15,7 @@ import { isProviderName } from "../../types";
 import { sessionSnapshotSchema, type SessionSnapshot } from "../../shared/sessionSnapshot";
 import { mapPersistedSessionRecordRow, mapPersistedSessionSubagentSummaryRow, mapPersistedSessionSummaryRow } from "./mappers";
 import { sameWorkspacePath } from "../../utils/workspacePath";
+import { researchInputsSchema, researchRecordSchema, researchSettingsSchema, researchSourceSchema, researchStatusSchema, researchThoughtSummarySchema } from "../research/types";
 import {
   parseBooleanInteger,
   parseJsonStringWithSchema,
@@ -24,6 +26,8 @@ import {
 
 const messagesJsonSchema = z.array(z.unknown());
 const modelStreamRawFormatSchema = z.enum(["openai-responses-v1", "google-interactions-v1"]);
+const researchSourcesJsonSchema = z.array(researchSourceSchema);
+const researchThoughtSummariesJsonSchema = z.array(researchThoughtSummarySchema);
 
 function hasCompatiblePersistedProvider(row: Record<string, unknown>): boolean {
   const provider = row.provider;
@@ -639,6 +643,144 @@ export class SessionDbRepository {
     }));
   }
 
+  listResearch(): PersistedResearchRecord[] {
+    const rows = this.db
+      .query(
+        `SELECT
+           id,
+           parent_research_id,
+           title,
+           prompt,
+           status,
+           interaction_id,
+           last_event_id,
+           inputs_json,
+           settings_json,
+           outputs_markdown,
+           thought_summaries_json,
+           sources_json,
+           created_at,
+           updated_at,
+           error
+         FROM research
+         ORDER BY updated_at DESC`,
+      )
+      .all() as Array<Record<string, unknown>>;
+
+    return rows.map((row) => this.mapResearchRow(row));
+  }
+
+  listRunningResearch(): PersistedResearchRecord[] {
+    const rows = this.db
+      .query(
+        `SELECT
+           id,
+           parent_research_id,
+           title,
+           prompt,
+           status,
+           interaction_id,
+           last_event_id,
+           inputs_json,
+           settings_json,
+           outputs_markdown,
+           thought_summaries_json,
+           sources_json,
+           created_at,
+           updated_at,
+           error
+         FROM research
+         WHERE status IN ('pending', 'running')
+         ORDER BY updated_at DESC`,
+      )
+      .all() as Array<Record<string, unknown>>;
+
+    return rows.map((row) => this.mapResearchRow(row));
+  }
+
+  getResearch(researchId: string): PersistedResearchRecord | null {
+    const row = this.db
+      .query(
+        `SELECT
+           id,
+           parent_research_id,
+           title,
+           prompt,
+           status,
+           interaction_id,
+           last_event_id,
+           inputs_json,
+           settings_json,
+           outputs_markdown,
+           thought_summaries_json,
+           sources_json,
+           created_at,
+           updated_at,
+           error
+         FROM research
+         WHERE id = ?
+         LIMIT 1`,
+      )
+      .get(researchId) as Record<string, unknown> | null;
+
+    return row ? this.mapResearchRow(row) : null;
+  }
+
+  upsertResearch(record: PersistedResearchRecord): void {
+    const parsed = researchRecordSchema.parse(record);
+    this.db
+      .query(
+        `INSERT INTO research (
+           id,
+           parent_research_id,
+           title,
+           prompt,
+           status,
+           interaction_id,
+           last_event_id,
+           inputs_json,
+           settings_json,
+           outputs_markdown,
+           thought_summaries_json,
+           sources_json,
+           created_at,
+           updated_at,
+           error
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           parent_research_id = excluded.parent_research_id,
+           title = excluded.title,
+           prompt = excluded.prompt,
+           status = excluded.status,
+           interaction_id = excluded.interaction_id,
+           last_event_id = excluded.last_event_id,
+           inputs_json = excluded.inputs_json,
+           settings_json = excluded.settings_json,
+           outputs_markdown = excluded.outputs_markdown,
+           thought_summaries_json = excluded.thought_summaries_json,
+           sources_json = excluded.sources_json,
+           updated_at = excluded.updated_at,
+           error = excluded.error`,
+      )
+      .run(
+        parsed.id,
+        parsed.parentResearchId,
+        parsed.title,
+        parsed.prompt,
+        researchStatusSchema.parse(parsed.status),
+        parsed.interactionId,
+        parsed.lastEventId,
+        toJsonString(parsed.inputs),
+        toJsonString(parsed.settings),
+        parsed.outputsMarkdown,
+        toJsonString(parsed.thoughtSummaries),
+        toJsonString(parsed.sources),
+        parseRequiredIsoTimestamp(parsed.createdAt, "research.createdAt"),
+        parseRequiredIsoTimestamp(parsed.updatedAt, "research.updatedAt"),
+        parsed.error,
+      );
+  }
+
   createBaseSchema(): void {
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS sessions (
@@ -740,6 +882,26 @@ export class SessionDbRepository {
        )`,
     );
 
+    this.db.exec(
+      `CREATE TABLE IF NOT EXISTS research (
+         id TEXT PRIMARY KEY,
+         parent_research_id TEXT NULL REFERENCES research(id) ON DELETE SET NULL,
+         title TEXT NOT NULL,
+         prompt TEXT NOT NULL,
+         status TEXT NOT NULL,
+         interaction_id TEXT NULL,
+         last_event_id TEXT NULL,
+         inputs_json TEXT NOT NULL,
+         settings_json TEXT NOT NULL,
+         outputs_markdown TEXT NOT NULL,
+         thought_summaries_json TEXT NOT NULL,
+         sources_json TEXT NOT NULL,
+         created_at TEXT NOT NULL,
+         updated_at TEXT NOT NULL,
+         error TEXT NULL
+       )`,
+    );
+
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_session_events_seq_desc ON session_events(session_id, seq DESC)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_status_updated ON sessions(status, updated_at DESC)");
@@ -748,6 +910,8 @@ export class SessionDbRepository {
       "CREATE INDEX IF NOT EXISTS idx_session_model_stream_chunks_session_turn ON session_model_stream_chunks(session_id, turn_id, chunk_index)",
     );
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_thread_journal_events_thread_seq ON thread_journal_events(thread_id, seq)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_status_updated ON research(status, updated_at DESC)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_parent_updated ON research(parent_research_id, updated_at DESC)");
   }
 
   markMigration(version: number): void {
@@ -913,6 +1077,30 @@ export class SessionDbRepository {
        )`,
     );
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_thread_journal_events_thread_seq ON thread_journal_events(thread_id, seq)");
+  }
+
+  addResearchTable(): void {
+    this.db.exec(
+      `CREATE TABLE IF NOT EXISTS research (
+         id TEXT PRIMARY KEY,
+         parent_research_id TEXT NULL REFERENCES research(id) ON DELETE SET NULL,
+         title TEXT NOT NULL,
+         prompt TEXT NOT NULL,
+         status TEXT NOT NULL,
+         interaction_id TEXT NULL,
+         last_event_id TEXT NULL,
+         inputs_json TEXT NOT NULL,
+         settings_json TEXT NOT NULL,
+         outputs_markdown TEXT NOT NULL,
+         thought_summaries_json TEXT NOT NULL,
+         sources_json TEXT NOT NULL,
+         created_at TEXT NOT NULL,
+         updated_at TEXT NOT NULL,
+         error TEXT NULL
+       )`,
+    );
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_status_updated ON research(status, updated_at DESC)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_parent_updated ON research(parent_research_id, updated_at DESC)");
   }
 
   importLegacySnapshot(snapshot: PersistedSessionSnapshot): void {
@@ -1138,5 +1326,29 @@ export class SessionDbRepository {
     });
 
     run(snapshot);
+  }
+
+  private mapResearchRow(row: Record<string, unknown>): PersistedResearchRecord {
+    return researchRecordSchema.parse({
+      id: String(row.id),
+      parentResearchId: typeof row.parent_research_id === "string" ? row.parent_research_id : null,
+      title: String(row.title),
+      prompt: String(row.prompt),
+      status: researchStatusSchema.parse(row.status),
+      interactionId: typeof row.interaction_id === "string" ? row.interaction_id : null,
+      lastEventId: typeof row.last_event_id === "string" ? row.last_event_id : null,
+      inputs: parseJsonStringWithSchema(row.inputs_json, researchInputsSchema, "research.inputs_json"),
+      settings: parseJsonStringWithSchema(row.settings_json, researchSettingsSchema, "research.settings_json"),
+      outputsMarkdown: String(row.outputs_markdown ?? ""),
+      thoughtSummaries: parseJsonStringWithSchema(
+        row.thought_summaries_json,
+        researchThoughtSummariesJsonSchema,
+        "research.thought_summaries_json",
+      ),
+      sources: parseJsonStringWithSchema(row.sources_json, researchSourcesJsonSchema, "research.sources_json"),
+      createdAt: parseRequiredIsoTimestamp(row.created_at, "research.created_at"),
+      updatedAt: parseRequiredIsoTimestamp(row.updated_at, "research.updated_at"),
+      error: typeof row.error === "string" ? row.error : null,
+    });
   }
 }

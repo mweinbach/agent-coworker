@@ -1,0 +1,133 @@
+import { z } from "zod";
+
+import {
+  researchExportFormatSchema,
+  researchInputFileSchema,
+  researchRecordSchema,
+  researchSettingsSchema,
+  researchSourceSchema,
+  researchThoughtSummarySchema,
+} from "../research/types";
+import { nonEmptyTrimmedStringSchema } from "./schema.shared";
+
+const researchSummarySchema = researchRecordSchema;
+
+export const jsonRpcResearchRequestSchemas = {
+  "research/start": z.object({
+    input: z.string().trim().min(1),
+    title: z.string().optional(),
+    settings: researchSettingsSchema.optional(),
+    attachedFileIds: z.array(nonEmptyTrimmedStringSchema).optional(),
+    attachedFiles: z.array(researchInputFileSchema).optional(),
+  }).strict(),
+  "research/list": z.object({}).strict(),
+  "research/get": z.object({
+    researchId: nonEmptyTrimmedStringSchema,
+  }).strict(),
+  "research/cancel": z.object({
+    researchId: nonEmptyTrimmedStringSchema,
+  }).strict(),
+  "research/followup": z.object({
+    parentResearchId: nonEmptyTrimmedStringSchema,
+    input: z.string().trim().min(1),
+    title: z.string().optional(),
+    settings: researchSettingsSchema.optional(),
+    attachedFileIds: z.array(nonEmptyTrimmedStringSchema).optional(),
+    attachedFiles: z.array(researchInputFileSchema).optional(),
+  }).strict(),
+  "research/uploadFile": z.object({
+    filename: nonEmptyTrimmedStringSchema,
+    mimeType: nonEmptyTrimmedStringSchema,
+    contentBase64: z.string().min(1),
+  }).strict(),
+  "research/attachFile": z.object({
+    researchId: nonEmptyTrimmedStringSchema,
+    fileId: nonEmptyTrimmedStringSchema,
+  }).strict(),
+  "research/subscribe": z.object({
+    researchId: nonEmptyTrimmedStringSchema,
+    afterEventId: nonEmptyTrimmedStringSchema.optional(),
+  }).strict(),
+  "research/unsubscribe": z.object({
+    researchId: nonEmptyTrimmedStringSchema,
+  }).strict(),
+  "research/export": z.object({
+    researchId: nonEmptyTrimmedStringSchema,
+    format: researchExportFormatSchema,
+  }).strict(),
+  "research/listMcpServers": z.object({
+    cwd: nonEmptyTrimmedStringSchema.optional(),
+  }).strict(),
+} as const;
+
+export const jsonRpcResearchResultSchemas = {
+  "research/start": z.object({
+    research: researchSummarySchema,
+  }).strict(),
+  "research/list": z.object({
+    research: z.array(researchSummarySchema),
+  }).strict(),
+  "research/get": z.object({
+    research: researchSummarySchema.nullable(),
+  }).strict(),
+  "research/cancel": z.object({
+    research: researchSummarySchema.nullable(),
+  }).strict(),
+  "research/followup": z.object({
+    research: researchSummarySchema,
+  }).strict(),
+  "research/uploadFile": z.object({
+    file: researchInputFileSchema,
+  }).strict(),
+  "research/attachFile": z.object({
+    research: researchSummarySchema.nullable(),
+  }).strict(),
+  "research/subscribe": z.object({
+    research: researchSummarySchema.nullable(),
+  }).strict(),
+  "research/unsubscribe": z.object({
+    status: z.enum(["unsubscribed", "notSubscribed"]),
+  }).strict(),
+  "research/export": z.object({
+    path: nonEmptyTrimmedStringSchema,
+    sizeBytes: z.number().int().nonnegative(),
+  }).strict(),
+  "research/listMcpServers": z.object({
+    servers: z.array(z.object({
+      name: nonEmptyTrimmedStringSchema,
+      source: z.string(),
+      authMode: z.string(),
+    }).strict()),
+  }).strict(),
+} as const;
+
+export const jsonRpcResearchNotificationSchemas = {
+  "research/updated": z.object({
+    research: researchSummarySchema,
+  }).strict(),
+  "research/textDelta": z.object({
+    researchId: nonEmptyTrimmedStringSchema,
+    delta: z.string(),
+    eventId: nonEmptyTrimmedStringSchema.optional(),
+  }).strict(),
+  "research/thoughtDelta": z.object({
+    researchId: nonEmptyTrimmedStringSchema,
+    thought: researchThoughtSummarySchema,
+    eventId: nonEmptyTrimmedStringSchema.optional(),
+  }).strict(),
+  "research/sourceFound": z.object({
+    researchId: nonEmptyTrimmedStringSchema,
+    source: researchSourceSchema,
+    eventId: nonEmptyTrimmedStringSchema.optional(),
+  }).strict(),
+  "research/completed": z.object({
+    researchId: nonEmptyTrimmedStringSchema,
+    research: researchSummarySchema,
+  }).strict(),
+  "research/failed": z.object({
+    researchId: nonEmptyTrimmedStringSchema,
+    status: z.enum(["failed", "cancelled"]),
+    error: z.string(),
+  }).strict(),
+} as const;
+

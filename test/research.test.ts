@@ -1,0 +1,318 @@
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { SessionDb } from "../src/server/sessionDb";
+import { exportResearch } from "../src/server/research/export";
+import { researchRecordSchema, type ResearchRecord } from "../src/server/research/types";
+
+type RuntimeEvent = Record<string, unknown>;
+
+let createResearchInteractionStreamImpl = async (): Promise<AsyncIterable<RuntimeEvent>> => emptyStream();
+let resumeResearchInteractionStreamImpl = async (): Promise<AsyncIterable<RuntimeEvent>> => emptyStream();
+
+const createResearchInteractionStreamMock = mock(async (opts: unknown) => await createResearchInteractionStreamImpl(opts));
+const resumeResearchInteractionStreamMock = mock(async (opts: unknown) => await resumeResearchInteractionStreamImpl(opts));
+const cancelResearchInteractionMock = mock(async () => {});
+const createResearchFileSearchStoreMock = mock(async () => "file-search-stores/mock-store");
+const uploadFileToResearchFileSearchStoreMock = mock(async () => ({ documentName: "documents/mock-doc" }));
+const deleteResearchFileSearchStoreMock = mock(async () => {});
+
+mock.module("../src/server/research/researchRuntime", () => ({
+  createResearchInteractionStream: createResearchInteractionStreamMock,
+  resumeResearchInteractionStream: resumeResearchInteractionStreamMock,
+  cancelResearchInteraction: cancelResearchInteractionMock,
+  createResearchFileSearchStore: createResearchFileSearchStoreMock,
+  uploadFileToResearchFileSearchStore: uploadFileToResearchFileSearchStoreMock,
+  deleteResearchFileSearchStore: deleteResearchFileSearchStoreMock,
+}));
+
+const { ResearchService } = await import("../src/server/research/ResearchService");
+
+function emptyStream(): AsyncIterable<RuntimeEvent> {
+  return (async function* () {})();
+}
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+async function makeTmpCoworkHome(prefix = "research-test-"): Promise<{
+  home: string;
+  rootDir: string;
+  sessionsDir: string;
+}> {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const rootDir = path.join(home, ".cowork");
+  const sessionsDir = path.join(rootDir, "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  return { home, rootDir, sessionsDir };
+}
+
+function makeResearchRecord(overrides: Partial<ResearchRecord> = {}): ResearchRecord {
+  return researchRecordSchema.parse({
+    id: "research-1",
+    parentResearchId: null,
+    title: "Research title",
+    prompt: "Investigate the new benchmark results",
+    status: "running",
+    interactionId: "interaction-1",
+    lastEventId: "evt-0",
+    inputs: {
+      files: [],
+    },
+    settings: {
+      googleSearch: true,
+      urlContext: true,
+      codeExecution: true,
+      mcpServersEnabled: false,
+      planApproval: false,
+      mcpServerNames: [],
+    },
+    outputsMarkdown: "",
+    thoughtSummaries: [],
+    sources: [],
+    createdAt: "2026-04-21T00:00:00.000Z",
+    updatedAt: "2026-04-21T00:00:00.000Z",
+    error: null,
+    ...overrides,
+  });
+}
+
+async function waitFor<T>(getter: () => T, predicate: (value: T) => boolean, timeoutMs = 5_000): Promise<T> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const value = getter();
+    if (predicate(value)) {
+      return value;
+    }
+    await Bun.sleep(25);
+  }
+  throw new Error("Timed out waiting for condition");
+}
+
+describe("research service", () => {
+  beforeEach(() => {
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY = "test-google-key";
+    createResearchInteractionStreamImpl = async () => emptyStream();
+    resumeResearchInteractionStreamImpl = async () => emptyStream();
+    createResearchInteractionStreamMock.mockClear();
+    resumeResearchInteractionStreamMock.mockClear();
+    cancelResearchInteractionMock.mockClear();
+  });
+
+  afterEach(() => {
+    delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  });
+
+  test("streams research updates to multiple subscribers and persists completion", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const sent: Array<{ connectionId: string; payload: Record<string, unknown> }> = [];
+    const gate = deferred();
+
+    createResearchInteractionStreamImpl = async () => (async function* () {
+      await gate.promise;
+      yield {
+        event_type: "interaction.start",
+        event_id: "evt-1",
+        interaction: { id: "interaction-123", status: "running" },
+      };
+      yield {
+        event_type: "content.delta",
+        event_id: "evt-2",
+        delta: { type: "text", text: "# Summary\n\nFindings in progress." },
+      };
+      yield {
+        event_type: "content.delta",
+        event_id: "evt-3",
+        delta: { type: "thought_summary", content: { text: "Compare the new run against the previous baseline." } },
+      };
+      yield {
+        event_type: "content.start",
+        event_id: "evt-4",
+        content: {
+          type: "text_annotation",
+          annotations: [{
+            type: "url_citation",
+            url: "https://example.com/report",
+            title: "Example report",
+          }],
+        },
+      };
+      yield {
+        event_type: "interaction.complete",
+        event_id: "evt-5",
+        interaction: { id: "interaction-123", status: "completed" },
+      };
+    })();
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] } as any),
+      sendJsonRpc: (ws, payload) => {
+        sent.push({
+          connectionId: String(ws.data.connectionId),
+          payload: payload as Record<string, unknown>,
+        });
+      },
+    });
+
+    try {
+      const research = await service.start({ input: "Summarize the latest benchmark findings." });
+      const firstSubscriber = { data: { connectionId: "socket-a" } } as any;
+      const secondSubscriber = { data: { connectionId: "socket-b" } } as any;
+
+      await service.subscribe(firstSubscriber, research.id);
+      await service.subscribe(secondSubscriber, research.id);
+      gate.resolve();
+
+      const completed = await waitFor(
+        () => sessionDb.getResearch(research.id),
+        (value) => value?.status === "completed",
+      );
+
+      expect(createResearchInteractionStreamMock).toHaveBeenCalledTimes(1);
+      expect(completed?.interactionId).toBe("interaction-123");
+      expect(completed?.outputsMarkdown).toContain("Findings in progress.");
+      expect(completed?.thoughtSummaries).toHaveLength(1);
+      expect(completed?.sources).toEqual([
+        expect.objectContaining({
+          url: "https://example.com/report",
+          title: "Example report",
+        }),
+      ]);
+
+      const textDeltas = sent.filter((entry) => entry.payload.method === "research/textDelta");
+      const completions = sent.filter((entry) => entry.payload.method === "research/completed");
+      expect(textDeltas).toHaveLength(2);
+      expect(completions).toHaveLength(2);
+      expect(new Set(textDeltas.map((entry) => entry.connectionId))).toEqual(new Set(["socket-a", "socket-b"]));
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
+  test("resumes running research from the stored event id on service init", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+
+    resumeResearchInteractionStreamImpl = async () => (async function* () {
+      yield {
+        event_type: "content.delta",
+        event_id: "evt-11",
+        delta: { type: "text", text: "Resumed output." },
+      };
+      yield {
+        event_type: "interaction.complete",
+        event_id: "evt-12",
+        interaction: { id: "interaction-resume", status: "completed" },
+      };
+    })();
+
+    await sessionDb.upsertResearch(makeResearchRecord({
+      id: "research-resume",
+      interactionId: "interaction-resume",
+      lastEventId: "evt-10",
+      status: "running",
+    }));
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] } as any),
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      await service.init();
+
+      const completed = await waitFor(
+        () => sessionDb.getResearch("research-resume"),
+        (value) => value?.status === "completed",
+      );
+
+      expect(resumeResearchInteractionStreamMock).toHaveBeenCalledTimes(1);
+      expect(resumeResearchInteractionStreamMock.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({
+          interactionId: "interaction-resume",
+          lastEventId: "evt-10",
+        }),
+      );
+      expect(completed?.outputsMarkdown).toContain("Resumed output.");
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("research export", () => {
+  test("writes markdown, pdf, and docx reports", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "research-export-"));
+    const research = makeResearchRecord({
+      id: "research-export",
+      status: "completed",
+      outputsMarkdown: [
+        "# Findings",
+        "",
+        "The benchmark improved by **14%** on the latest run.",
+        "",
+        "- GPU utilization stayed stable",
+        "- Thermal throttling did not appear",
+      ].join("\n"),
+      thoughtSummaries: [{
+        id: "thought-1",
+        text: "Check the previous run for regressions before calling this stable.",
+        ts: "2026-04-21T00:05:00.000Z",
+      }],
+      sources: [{
+        url: "https://example.com/source",
+        title: "Primary source",
+        sourceType: "url",
+        host: "example.com",
+      }],
+    });
+
+    try {
+      const markdown = await exportResearch({
+        rootDir: tmpDir,
+        research,
+        format: "markdown",
+      });
+      const pdf = await exportResearch({
+        rootDir: tmpDir,
+        research,
+        format: "pdf",
+      });
+      const docx = await exportResearch({
+        rootDir: tmpDir,
+        research,
+        format: "docx",
+      });
+
+      const markdownText = await fs.readFile(markdown.path, "utf-8");
+      const pdfHeader = await fs.readFile(pdf.path);
+      const docxHeader = await fs.readFile(docx.path);
+
+      expect(markdownText).toContain("# Research title");
+      expect(markdownText).toContain("## Sources");
+      expect(markdownText).toContain("Primary source");
+      expect(Buffer.from(pdfHeader).subarray(0, 4).toString("utf-8")).toBe("%PDF");
+      expect(Buffer.from(docxHeader).subarray(0, 2).toString("utf-8")).toBe("PK");
+      expect(pdf.sizeBytes).toBeGreaterThan(100);
+      expect(docx.sizeBytes).toBeGreaterThan(100);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});

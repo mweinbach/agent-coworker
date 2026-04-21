@@ -29,6 +29,7 @@ import { resolveAuthHomeDir } from "../utils/authHome";
 import type { AgentControl } from "./agents/AgentControl";
 import type { AgentSession } from "./session/AgentSession";
 import { SessionDb, type PersistedSessionRecord } from "./sessionDb";
+import { ResearchService } from "./research/ResearchService";
 import { refreshSessionsForSkillMutation } from "./skillMutationRefresh";
 import type { WorkspaceBackupService } from "./workspaceBackups";
 import {
@@ -427,6 +428,13 @@ export async function startAgentServer(
         // Session DB observability is best-effort only.
       });
     },
+  });
+  const aiCoworkerPaths = getAiCoworkerPathsImpl({ homedir: opts.homedir });
+  const research = new ResearchService({
+    rootDir: aiCoworkerPaths.rootDir,
+    sessionDb,
+    getConfig: () => config,
+    sendJsonRpc: (ws, payload) => sendJsonRpc(ws, payload),
   });
   const sessionBindings = new Map<string, SessionBinding>();
   const sessionIdleSince = new Map<string, number>();
@@ -1364,6 +1372,7 @@ export async function startAgentServer(
 
   const jsonRpcRequestRouter = createJsonRpcRequestRouter({
     getConfig: () => config,
+    research,
     threads: {
       create: ({ cwd, provider, model }) => createJsonRpcThreadSession(cwd, provider, model),
       load: (threadId) => loadThreadBinding(threadId),
@@ -1534,6 +1543,7 @@ export async function startAgentServer(
         },
         close(ws) {
           removeWorkspaceControlSubscriber(ws);
+          research.unsubscribeAll(ws);
           jsonRpcTransport.closeConnection(ws);
           pendingSends.delete(ws.data.connectionId ?? "");
         },

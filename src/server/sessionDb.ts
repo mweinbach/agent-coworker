@@ -18,6 +18,7 @@ import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from ".
 import type { PersistedSessionSummary } from "./sessionStore";
 import type { SessionTitleSource } from "./sessionTitleService";
 import type { SessionSnapshot } from "../shared/sessionSnapshot";
+import type { ResearchRecord } from "./research/types";
 import { ensurePrivateDirectory, hardenPrivateFile, quarantineCorruptedDb } from "./sessionDb/fileHardening";
 import { importLegacySnapshots } from "./sessionDb/legacyImport";
 import { bootstrapSessionDb } from "./sessionDb/migrations";
@@ -141,6 +142,8 @@ export type PersistedThreadJournalEvent = {
   requestId: string | null;
   payload: unknown;
 };
+
+export type PersistedResearchRecord = ResearchRecord;
 
 type SessionDbOptions = {
   paths: Pick<AiCoworkerPaths, "rootDir" | "sessionsDir">;
@@ -309,6 +312,28 @@ export class SessionDb {
 
   listThreadJournalEvents(threadId: string, opts?: { afterSeq?: number; limit?: number }): PersistedThreadJournalEvent[] {
     return this.repository.listThreadJournalEvents(threadId, opts);
+  }
+
+  listResearch(): PersistedResearchRecord[] {
+    return this.repository.listResearch();
+  }
+
+  listRunningResearch(): PersistedResearchRecord[] {
+    return this.repository.listRunningResearch();
+  }
+
+  getResearch(researchId: string): PersistedResearchRecord | null {
+    return this.repository.getResearch(researchId);
+  }
+
+  async upsertResearch(record: PersistedResearchRecord): Promise<void> {
+    await this.writeCoordinator.runExclusive(
+      "upsert_research",
+      async () => {
+        this.repository.upsertResearch(record);
+      },
+      { researchId: record.id, status: record.status },
+    );
   }
 
   async persistSessionSnapshot(sessionId: string, snapshot: SessionSnapshot): Promise<void> {

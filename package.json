@@ -57,7 +57,8 @@
     "harness:run": "bun scripts/run_raw_agent_loops.ts --report-only",
     "test": "bun test",
     "test:stable": "bun scripts/run_tests_stable.ts",
-    "clean": "rm -rf dist/ apps/desktop/out/ apps/desktop/release/ apps/desktop/resources/binaries/ .tsbuildinfo .tsbuildinfo-desktop",    "typecheck": "bunx tsc --noEmit && bunx tsc --noEmit -p apps/desktop/tsconfig.json",
+    "clean": "rm -rf dist/ apps/desktop/out/ apps/desktop/release/ apps/desktop/resources/binaries/ .tsbuildinfo .tsbuildinfo-desktop",
+    "typecheck": "bunx tsc --noEmit && bunx tsc --noEmit -p apps/desktop/tsconfig.json",
     "typecheck:desktop": "bunx tsc --noEmit -p apps/desktop/tsconfig.json"
   },
   "dependencies": {
@@ -69,12 +70,17 @@
     "@mozilla/readability": "^0.6.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/sdk-node": "^0.212.0",
+    "@react-pdf/renderer": "^4.5.1",
+    "docx": "^9.6.1",
     "fast-glob": "^3.3.3",
     "jsdom": "^28.1.0",
     "partial-json": "^0.1.7",
     "react": "^19.2.5",
+    "remark": "^15.0.1",
+    "remark-parse": "^11.0.0",
     "turndown": "^7.2.4",
     "tweetnacl": "^1.0.3",
+    "unified": "^11.0.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {

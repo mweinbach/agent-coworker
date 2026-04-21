@@ -6,6 +6,7 @@ import { createMcpRouteHandlers } from "./mcp";
 import { createMemoryRouteHandlers } from "./memory";
 import { createPluginsRouteHandlers } from "./plugins";
 import { createProviderRouteHandlers } from "./provider";
+import { createResearchRouteHandlers } from "./research";
 import { createSessionRouteHandlers } from "./session";
 import { createSkillsRouteHandlers } from "./skills";
 import { createThreadRouteHandlers } from "./thread";
@@ -23,6 +24,7 @@ export function createJsonRpcRequestRouter(context: JsonRpcRouteContext): JsonRp
     ...createSessionRouteHandlers(context),
     ...createAgentRouteHandlers(context),
     ...createProviderRouteHandlers(context),
+    ...createResearchRouteHandlers(context),
     ...createMcpRouteHandlers(context),
     ...createPluginsRouteHandlers(context),
     ...createSkillsRouteHandlers(context),

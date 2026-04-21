@@ -24,8 +24,8 @@ export function MenuBarUtilityShell({ init, ready, startupError }: MenuBarUtilit
   );
 
   return (
-    <div className="flex h-screen min-h-0 min-w-0 overflow-hidden rounded-[28px] bg-[radial-gradient(circle_at_top,var(--surface-overlay),transparent_56%),linear-gradient(180deg,var(--surface-shell),var(--surface-window))] p-2 text-foreground">
-      <div className="app-surface-overlay flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[26px] border border-border/55 backdrop-blur-xl">
+    <div className="flex h-screen min-h-0 min-w-0 overflow-hidden bg-transparent p-0 text-foreground">
+      <div className="app-surface-overlay flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[18px] border border-border/55 bg-[radial-gradient(circle_at_top,var(--surface-overlay),transparent_56%),linear-gradient(180deg,var(--surface-shell),var(--surface-window))] backdrop-blur-xl">
         <div
           className="flex items-center justify-between gap-3 px-4 py-3"
           style={{ WebkitAppRegion: "drag" } as CSSProperties}

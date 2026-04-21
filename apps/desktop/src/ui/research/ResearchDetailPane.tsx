@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 import type { ResearchDetail } from "../../app/types";
 import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
@@ -30,9 +32,39 @@ function statusLabel(status: ResearchDetail["status"]): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  if (hours > 0) {
+    return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+  }
+  return `${pad(minutes)}:${pad(seconds)}`;
+}
+
+function useRunningElapsed(startedAtIso: string, running: boolean): number {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) {
+      return;
+    }
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [running]);
+  const startedMs = new Date(startedAtIso).getTime();
+  if (Number.isNaN(startedMs)) {
+    return 0;
+  }
+  return Math.max(0, nowMs - startedMs);
+}
+
 export function ResearchDetailPane({ research }: { research: ResearchDetail | null }) {
   const cancelResearch = useAppStore((s) => s.cancelResearch);
   const exportPendingIds = useAppStore((s) => s.researchExportPendingIds);
+  const running = research ? research.status === "running" || research.status === "pending" : false;
+  const elapsedMs = useRunningElapsed(research?.createdAt ?? new Date().toISOString(), running);
 
   if (!research) {
     return (
@@ -43,21 +75,47 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   }
 
   const exportPending = exportPendingIds.includes(research.id);
-  const running = research.status === "running" || research.status === "pending";
   const startedAgo = formatRelativeAge(research.createdAt);
   const canExport = research.status === "completed" && research.outputsMarkdown.trim().length > 0;
+  const sourceCount = research.sources.length;
+  const thoughtCount = research.thoughtSummaries.length;
+
+  const reportBlock = (
+    <ResearchReportRenderer markdown={research.outputsMarkdown} status={research.status} />
+  );
+  const thoughtsBlock = (
+    <ResearchThoughtPanel thoughtSummaries={research.thoughtSummaries} status={research.status} />
+  );
+  const sourcesBlock = <ResearchSourcesList sources={research.sources} />;
+  const followUpBlock = research.status === "completed" ? (
+    <ResearchFollowUpComposer parentResearchId={research.id} />
+  ) : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between gap-4 border-b border-border/55 px-6 py-3">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
           <Badge className={cn(statusClassName(research.status))}>
             {statusLabel(research.status)}
           </Badge>
-          {startedAgo ? (
-            <span className="text-xs text-muted-foreground">
-              started {startedAgo} ago
-            </span>
+          {running ? (
+            <>
+              <span>
+                <span className="tabular-nums text-foreground/80">{formatElapsed(elapsedMs)}</span> elapsed
+              </span>
+              <span aria-hidden="true">·</span>
+              <span>
+                <span className="tabular-nums text-foreground/80">{sourceCount}</span>{" "}
+                {sourceCount === 1 ? "source" : "sources"}
+              </span>
+              <span aria-hidden="true">·</span>
+              <span>
+                <span className="tabular-nums text-foreground/80">{thoughtCount}</span>{" "}
+                {thoughtCount === 1 ? "note" : "notes"}
+              </span>
+            </>
+          ) : startedAgo ? (
+            <span>started {startedAgo} ago</span>
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -88,12 +146,20 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
             ) : null}
           </section>
 
-          <ResearchThoughtPanel thoughtSummaries={research.thoughtSummaries} status={research.status} />
-          <ResearchReportRenderer markdown={research.outputsMarkdown} status={research.status} />
-          <ResearchSourcesList sources={research.sources} />
-          {research.status === "completed" ? (
-            <ResearchFollowUpComposer parentResearchId={research.id} />
-          ) : null}
+          {running ? (
+            <>
+              {thoughtsBlock}
+              {sourcesBlock}
+              {reportBlock}
+            </>
+          ) : (
+            <>
+              {reportBlock}
+              {sourcesBlock}
+              {thoughtsBlock}
+              {followUpBlock}
+            </>
+          )}
         </div>
       </div>
     </div>

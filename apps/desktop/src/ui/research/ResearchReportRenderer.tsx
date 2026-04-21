@@ -108,7 +108,7 @@ export function ResearchReportRenderer({
       citationSources={citationSources}
       citationUrlsByIndex={citationUrlsByIndex}
       fallbackToSourcesFooter={false}
-      className="research-report max-w-none text-[0.925rem] leading-7 [&>*:first-child]:mt-0 [&_h1]:mt-8 [&_h1]:text-2xl [&_h1]:font-semibold [&_h1]:tracking-tight [&_h2]:mt-7 [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:mt-5 [&_h3]:text-lg [&_h3]:font-semibold [&_p]:my-3 [&_ul]:my-3 [&_ol]:my-3 [&_li]:my-1 [&_code]:rounded-sm [&_code]:bg-muted/45 [&_code]:px-1.5 [&_code]:py-0.5 [&_pre]:my-4 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/35 [&_pre]:p-3"
+      className="research-report max-w-none text-[0.925rem] leading-7 [&>*:first-child]:mt-0 [&_h1]:mt-8 [&_h1]:text-2xl [&_h1]:font-semibold [&_h1]:tracking-tight [&_h2]:mt-7 [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:mt-5 [&_h3]:text-lg [&_h3]:font-semibold [&_p]:my-3 [&_ul]:my-3 [&_ol]:my-3 [&_li]:my-1 [&_p_code]:rounded-sm [&_p_code]:bg-muted/45 [&_p_code]:px-1.5 [&_p_code]:py-0.5 [&_li_code]:rounded-sm [&_li_code]:bg-muted/45 [&_li_code]:px-1.5 [&_li_code]:py-0.5 [&_[data-streamdown=code-block-container]]:my-5 [&_[data-streamdown=code-block-body]]:bg-muted/30 [&_[data-streamdown=code-block-body]]:border-border/60 [&_[data-streamdown=code-block-body]]:shadow-none [&_pre]:bg-transparent [&_pre]:border-0 [&_pre]:p-0 [&_pre]:m-0"
     >
       {prepared}
     </MessageResponse>

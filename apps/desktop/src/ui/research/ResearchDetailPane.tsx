@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { MessageSquareIcon, XIcon } from "lucide-react";
+import { MessageSquareIcon } from "lucide-react";
 
 import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 
@@ -232,6 +232,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
 function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string }) {
   const [expanded, setExpanded] = useState(false);
   const prefersReducedMotion = usePrefersReducedMotion();
+  const composerShellRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setExpanded(false);
@@ -241,22 +242,35 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
     if (!expanded) {
       return;
     }
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setExpanded(false);
       }
     };
+
+    const onPointerDown = (event: MouseEvent) => {
+      const shell = composerShellRef.current;
+      if (!shell) {
+        return;
+      }
+      if (event.target instanceof Node && shell.contains(event.target)) {
+        return;
+      }
+      setExpanded(false);
+    };
+
     document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
+    document.addEventListener("mousedown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("mousedown", onPointerDown);
+    };
   }, [expanded]);
 
   const springTransition = prefersReducedMotion
     ? { duration: 0 }
     : { type: "spring" as const, stiffness: 420, damping: 34, mass: 0.9 };
-
-  const fadeTransition = prefersReducedMotion
-    ? { duration: 0 }
-    : { duration: 0.16, ease: [0.2, 0.8, 0.2, 1] as const };
 
   return (
     <div className="pointer-events-none absolute bottom-4 left-4 right-4 z-30 flex items-end">
@@ -264,8 +278,9 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
         {expanded ? (
           <motion.div
             key="composer"
+            ref={composerShellRef}
             layout
-            className="pointer-events-auto relative w-full max-w-2xl origin-bottom-left"
+            className="pointer-events-auto w-full max-w-2xl origin-bottom-left"
             initial={{ opacity: 0, scale: 0.88, y: 6 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.88, y: 6 }}
@@ -275,17 +290,7 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
               parentResearchId={parentResearchId}
               autoFocus
               onSubmitted={() => setExpanded(false)}
-              className="bg-card/95 shadow-lg shadow-black/10 backdrop-blur-sm"
-              toolbarExtra={(
-                <button
-                  type="button"
-                  onClick={() => setExpanded(false)}
-                  aria-label="Close follow-up"
-                  className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
-                >
-                  <XIcon className="h-3.5 w-3.5" />
-                </button>
-              )}
+              className="shadow-lg shadow-black/15"
             />
           </motion.div>
         ) : (

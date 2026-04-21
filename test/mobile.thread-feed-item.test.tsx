@@ -1,10 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createElement } from "react";
 
-mock.module("react-native", () => ({
-  View: ({ children, ...props }: Record<string, unknown>) => createElement("view", props, children),
-  Text: ({ children, ...props }: Record<string, unknown>) => createElement("text", props, children),
-}));
+import "./helpers/mock-react-native";
 
 mock.module("@/theme/use-app-theme", () => ({
   useAppTheme: () => ({

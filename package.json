@@ -4,6 +4,7 @@
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
+  "workspaces": ["apps/*"],
   "bin": {
     "cowork": "./src/index.ts"
   },
@@ -37,7 +38,6 @@
     "README.md"
   ],
   "scripts": {
-    "postinstall": "bun scripts/postinstall.ts",
     "start": "cd apps/desktop && bun run dev",
     "cli": "bun src/index.ts",
     "dev": "bun --watch src/index.ts",

@@ -316,7 +316,30 @@ function DesktopCitationChip({
   const cardRef = useRef<HTMLDivElement | null>(null);
   const citationTitleContainerRef = useRef<HTMLDivElement | null>(null);
   const citationTitleTextRef = useRef<HTMLParagraphElement | null>(null);
+  const hoverCloseTimerRef = useRef<number | null>(null);
   const [popupPosition, setPopupPosition] = useState<CitationPopupPosition | null>(null);
+
+  const cancelScheduledHoverClose = () => {
+    if (hoverCloseTimerRef.current !== null) {
+      window.clearTimeout(hoverCloseTimerRef.current);
+      hoverCloseTimerRef.current = null;
+    }
+  };
+
+  const handleHoverEnter = () => {
+    cancelScheduledHoverClose();
+    setOpen(true);
+  };
+
+  const handleHoverLeave = () => {
+    cancelScheduledHoverClose();
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      setOpen(false);
+      hoverCloseTimerRef.current = null;
+    }, 180);
+  };
+
+  useEffect(() => () => cancelScheduledHoverClose(), []);
 
   const label = useMemo(() => {
     const text = flattenReactText(children).trim();
@@ -479,7 +502,13 @@ function DesktopCitationChip({
   }
 
   return (
-    <cite ref={rootRef} className={cn("relative ml-2 inline-flex not-italic", className)} {...props}>
+    <cite
+      ref={rootRef}
+      className={cn("relative ml-2 inline-flex not-italic", className)}
+      onMouseEnter={handleHoverEnter}
+      onMouseLeave={handleHoverLeave}
+      {...props}
+    >
       <Button
         ref={buttonRef}
         type="button"
@@ -488,7 +517,10 @@ function DesktopCitationChip({
         className="h-auto min-w-0 rounded-full border-border/70 bg-muted/60 px-2.5 py-0.5 text-[0.72rem] font-medium leading-none text-muted-foreground shadow-none transition-colors hover:border-border hover:bg-muted"
         aria-expanded={open}
         aria-haspopup="dialog"
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          cancelScheduledHoverClose();
+          setOpen((value) => !value);
+        }}
       >
         {label}
       </Button>
@@ -500,6 +532,8 @@ function DesktopCitationChip({
             aria-label="Citation sources"
             className="app-surface-card app-shadow-surface-elevated fixed z-[70] w-[min(16rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border/32 text-card-foreground"
             style={popupPosition ? { left: popupPosition.left, top: popupPosition.top } : { left: 0, top: 0, visibility: "hidden" }}
+            onMouseEnter={handleHoverEnter}
+            onMouseLeave={handleHoverLeave}
           >
             <div className="flex items-center gap-0 border-b border-border/32 bg-muted/20 px-1.5 py-0.5">
               <Button

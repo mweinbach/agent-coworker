@@ -5,6 +5,7 @@ import {
   checkForUpdates as runUpdateCheck,
   getUpdateState,
   getDesktopFeatureFlags,
+  isPackagedDesktopApp,
   quitAndInstallUpdate as runQuitAndInstallUpdate,
   deleteTranscript,
   listDirectory,
@@ -843,7 +844,10 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
 
     setDesktopFeatureFlagOverride: async (flagId, enabled) => {
       const definition = FEATURE_FLAG_DEFINITIONS[flagId];
-      if (get().updateState.packaged && definition.packagedAvailability === "forced-off") {
+      if (
+        definition.packagedAvailability === "forced-off"
+        && (isPackagedDesktopApp() || get().updateState.packaged)
+      ) {
         return;
       }
       const currentFeatureFlags = get().desktopFeatureFlags;

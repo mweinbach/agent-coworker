@@ -26,6 +26,7 @@ let startWorkspaceServerCalls = 0;
 let agentSocketConnectCalls = 0;
 let remoteAccessEnabled = true;
 let stopMobileRelayCalls = 0;
+let packagedApp = false;
 
 mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   appendTranscriptBatch: async () => {},
@@ -72,6 +73,7 @@ mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
       : true,
     a2ui: typeof featureOverrides?.a2ui === "boolean" ? featureOverrides.a2ui : false,
   }),
+  isPackagedDesktopApp: () => packagedApp,
   onSystemAppearanceChanged: () => () => {},
   onMenuCommand: () => () => {},
   onUpdateStateChanged: () => () => {},
@@ -109,6 +111,7 @@ describe("settings nav (store)", () => {
     agentSocketConnectCalls = 0;
     remoteAccessEnabled = true;
     stopMobileRelayCalls = 0;
+    packagedApp = false;
     useAppStore.setState({
       view: "chat",
       lastNonSettingsView: "chat",
@@ -260,6 +263,29 @@ describe("settings nav (store)", () => {
       updateState: {
         ...useAppStore.getState().updateState,
         packaged: true,
+      },
+      desktopFeatureFlags: {
+        remoteAccess: false,
+        workspacePicker: true,
+        workspaceLifecycle: true,
+        a2ui: false,
+      },
+      desktopFeatureFlagOverrides: { remoteAccess: false },
+    });
+
+    await useAppStore.getState().setDesktopFeatureFlagOverride("remoteAccess", true);
+
+    expect(useAppStore.getState().desktopFeatureFlagOverrides).toEqual({ remoteAccess: false });
+    expect(savedStates.length).toBe(priorSaved);
+  });
+
+  test("setDesktopFeatureFlagOverride blocks forced-off flags before updater state hydrates", async () => {
+    const priorSaved = savedStates.length;
+    packagedApp = true;
+    useAppStore.setState({
+      updateState: {
+        ...useAppStore.getState().updateState,
+        packaged: false,
       },
       desktopFeatureFlags: {
         remoteAccess: false,

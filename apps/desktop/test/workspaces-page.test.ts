@@ -60,6 +60,7 @@ mock.module("../src/lib/desktopCommands", () =>
     setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
     getUpdateState: async () => MOCK_UPDATE_STATE,
     getDesktopFeatureFlags: () => ({
+      menuBar: true,
       remoteAccess: true,
       workspacePicker: workspacePickerEnabled,
       workspaceLifecycle: workspaceLifecycleEnabled,
@@ -510,6 +511,7 @@ describe("desktop workspaces page", () => {
       },
       desktopFeatureFlags: {
         remoteAccess: true,
+        menuBar: true,
         workspacePicker: false,
         workspaceLifecycle: false,
         a2ui: false,

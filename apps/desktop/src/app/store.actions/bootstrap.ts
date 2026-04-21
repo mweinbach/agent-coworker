@@ -365,6 +365,7 @@ const persistedStateSchema = z
       (value) => normalizeDesktopFeatureFlagOverrides(value),
       z
         .object({
+          menuBar: z.boolean().optional(),
           remoteAccess: z.boolean().optional(),
           workspacePicker: z.boolean().optional(),
           workspaceLifecycle: z.boolean().optional(),

@@ -142,6 +142,10 @@ const workspaceProviderOptionsSchema = z
 
 const desktopFeatureFlagOverridesSchema = z
   .object({
+    menuBar: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : undefined),
+      z.boolean().optional(),
+    ),
     remoteAccess: z.preprocess(
       (value) => (typeof value === "boolean" ? value : undefined),
       z.boolean().optional(),

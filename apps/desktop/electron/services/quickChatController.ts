@@ -10,6 +10,7 @@ import {
   DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR,
   formatQuickChatShortcutLabel,
 } from "../../src/lib/quickChatShortcut";
+import { resolveDesktopFeatureFlags } from "../../../../src/shared/featureFlags";
 import { createTrayMaskBitmap } from "./trayImage";
 
 const QUICK_CHAT_WINDOW_EDGE_PADDING = 12;
@@ -52,6 +53,7 @@ export class QuickChatController {
   private quickChatShortcutEnabled = false;
   private quickChatShortcutAccelerator = DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR;
   private registeredShortcutAccelerator: string | null = null;
+  private menuBarEnabled = true;
   private quitting = false;
 
   constructor(options: QuickChatControllerOptions) {
@@ -65,16 +67,21 @@ export class QuickChatController {
   }
 
   initialize(): void {
-    if (this.platform === "darwin" || this.platform === "win32") {
-      this.ensureTray();
-    }
+    this.syncTrayVisibility();
     this.syncShortcutRegistration();
   }
 
   applyPersistedState(state: PersistedState): void {
     const settings = normalizeDesktopSettings(state.desktopSettings);
+    const featureFlags = resolveDesktopFeatureFlags({
+      isPackaged: electron.app.isPackaged,
+      env: process.env,
+      overrides: state.desktopFeatureFlagOverrides,
+    });
+    this.menuBarEnabled = featureFlags.menuBar;
     this.quickChatShortcutEnabled = settings.quickChat.shortcutEnabled;
     this.quickChatShortcutAccelerator = settings.quickChat.shortcutAccelerator;
+    this.syncTrayVisibility();
     this.syncShortcutRegistration();
     this.refreshTrayMenu();
   }
@@ -190,6 +197,19 @@ export class QuickChatController {
       this.tray?.popUpContextMenu(this.buildTrayMenu());
     });
     this.refreshTrayMenu();
+  }
+
+  private syncTrayVisibility(): void {
+    const supportsTray = this.platform === "darwin" || this.platform === "win32";
+    if (!supportsTray || !this.menuBarEnabled) {
+      if (this.tray) {
+        this.tray.destroy();
+        this.tray = null;
+      }
+      this.hideUtilityWindow();
+      return;
+    }
+    this.ensureTray();
   }
 
   private refreshTrayMenu(): void {

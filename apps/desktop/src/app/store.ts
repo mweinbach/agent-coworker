@@ -56,6 +56,7 @@ const initialState: AppStoreDataState = {
   perWorkspaceSettings: false,
   desktopSettings: normalizeDesktopSettings(),
   desktopFeatureFlags: {
+    menuBar: true,
     remoteAccess: false,
     workspacePicker: true,
     workspaceLifecycle: true,

@@ -9,11 +9,11 @@ import { z } from "zod";
 
 import type { DesktopFeatureFlagOverrides } from "../shared/featureFlags";
 import { normalizeDesktopFeatureFlagOverrides } from "../shared/featureFlags";
-import { writeTextFileAtomic } from "../utils/atomicFile";
 import {
   DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR,
   normalizeQuickChatShortcutAccelerator,
-} from "../../apps/desktop/src/lib/quickChatShortcut";
+} from "../shared/quickChatShortcut";
+import { writeTextFileAtomic } from "../utils/atomicFile";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const PRIVATE_FILE_MODE = 0o600;

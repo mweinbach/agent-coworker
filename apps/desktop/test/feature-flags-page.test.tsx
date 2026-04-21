@@ -16,6 +16,7 @@ const { FeatureFlagsPage } = await import("../src/ui/settings/pages/FeatureFlags
 
 const defaultStoreActions = {
   setDesktopFeatureFlagOverride: useAppStore.getState().setDesktopFeatureFlagOverride,
+  setQuickChatShortcutEnabled: useAppStore.getState().setQuickChatShortcutEnabled,
 };
 
 describe("feature flags settings page", () => {

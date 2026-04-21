@@ -199,6 +199,18 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().settingsPage).toBe("providers");
   });
 
+  test("openSettings falls back from feature flags when running a packaged build", () => {
+    useAppStore.setState({
+      updateState: {
+        ...useAppStore.getState().updateState,
+        packaged: true,
+      },
+    });
+    useAppStore.getState().openSettings("featureFlags");
+    expect(useAppStore.getState().view).toBe("settings");
+    expect(useAppStore.getState().settingsPage).toBe("providers");
+  });
+
   test("disabling remote access tears down an active relay and falls back from the remote access page", async () => {
     useAppStore.setState({
       settingsPage: "remoteAccess",

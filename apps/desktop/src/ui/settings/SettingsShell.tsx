@@ -70,10 +70,14 @@ const SETTINGS_PAGE_META: Record<
   },
 };
 
-export function getSettingsGroups(remoteAccessAvailable: boolean): Array<{
+export function getSettingsGroups(
+  remoteAccessAvailable: boolean,
+  options?: { showFeatureFlags?: boolean },
+): Array<{
   label: string;
   pages: SettingsPageDefinition[];
 }> {
+  const showFeatureFlags = options?.showFeatureFlags !== false;
   return [
     {
       label: "Models & tools",
@@ -102,7 +106,9 @@ export function getSettingsGroups(remoteAccessAvailable: boolean): Array<{
     {
       label: "Advanced",
       pages: [
-        { id: "featureFlags", label: "Feature flags", render: () => <FeatureFlagsPage /> },
+        ...(showFeatureFlags
+          ? [{ id: "featureFlags", label: "Feature flags", render: () => <FeatureFlagsPage /> } satisfies SettingsPageDefinition]
+          : []),
         { id: "developer", label: "Developer", render: () => <DeveloperPage /> },
         { id: "updates", label: "Updates", render: () => <UpdatesPage /> },
       ],
@@ -184,11 +190,14 @@ function SettingsNavigation({
 export function SettingsShell() {
   const desktopFeatureFlags = useAppStore((s) => s.desktopFeatureFlags);
   const remoteAccessAvailable = desktopFeatureFlags.remoteAccess === true;
+  const updatePackaged = useAppStore((s) => s.updateState.packaged);
   const settingsPage = useAppStore((s) => s.settingsPage);
   const setSettingsPage = useAppStore((s) => s.setSettingsPage);
   const closeSettings = useAppStore((s) => s.closeSettings);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
-  const settingsGroups = getSettingsGroups(remoteAccessAvailable);
+  const settingsGroups = getSettingsGroups(remoteAccessAvailable, {
+    showFeatureFlags: !updatePackaged,
+  });
   const settingsPages = settingsGroups.flatMap((group) => group.pages);
   const activePage = settingsPages.find((page) => page.id === settingsPage) ?? settingsPages[0];
   const meta = SETTINGS_PAGE_META[activePage.id];

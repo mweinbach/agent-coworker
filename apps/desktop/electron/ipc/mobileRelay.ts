@@ -12,7 +12,7 @@ import {
 import { resolveDesktopFeatureFlags } from "../../../../src/shared/featureFlags";
 import type { DesktopIpcModuleContext } from "./types";
 
-const REMOTE_ACCESS_DISABLED_MESSAGE = "Remote access is disabled. Enable it in Settings -> Feature Flags.";
+const REMOTE_ACCESS_DISABLED_MESSAGE = "Remote access is disabled.";
 
 function emitStateToAllWindows(windows: BrowserWindow[], payload: unknown) {
   for (const window of windows) {

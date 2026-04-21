@@ -11,6 +11,14 @@ describe("settings shell", () => {
     expect(pageIds).toContain("featureFlags");
   });
 
+  test("hides the feature flags nav entry in packaged (installable) builds", () => {
+    const pageIds = getSettingsGroups(true, { showFeatureFlags: false }).flatMap((group) =>
+      group.pages.map((page) => page.id),
+    );
+    expect(pageIds).not.toContain("featureFlags");
+    expect(pageIds).toContain("developer");
+  });
+
   test("hides remote access when the feature is disabled", () => {
     const pageIds = getSettingsGroups(false).flatMap((group) => group.pages.map((page) => page.id));
     expect(pageIds).not.toContain("remoteAccess");

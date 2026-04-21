@@ -25,7 +25,7 @@ export const FEATURE_FLAG_DEFINITIONS: Record<FeatureFlagId, FeatureFlagDefiniti
     id: "remoteAccess",
     label: "Remote access",
     description: "Enable phone pairing and relay access while the desktop app is open.",
-    defaultEnabled: true,
+    defaultEnabled: false,
     envOverride: "COWORK_ENABLE_REMOTE_ACCESS",
     packagedAvailability: "forced-off",
     restartRequired: true,

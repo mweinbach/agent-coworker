@@ -115,10 +115,15 @@ const normalizedViewSchema = z.preprocess(
 function normalizeSettingsPageId(
   value: unknown,
   desktopFeatures: DesktopFeatureFlags = getDesktopFeatureFlags(),
+  packagedForSettingsNav = false,
 ): SettingsPageId {
   const normalized = normalizeKnownSettingsPageId(value);
 
   if (normalized === "remoteAccess" && desktopFeatures.remoteAccess !== true) {
+    return "providers";
+  }
+
+  if (normalized === "featureFlags" && packagedForSettingsNav) {
     return "providers";
   }
 
@@ -380,6 +385,7 @@ function buildResolvedDesktopUiState(
   threads: ThreadRecord[],
   desktopFeatures: DesktopFeatureFlags,
   ui?: CachedDesktopUiState | null,
+  packagedForSettingsNav = false,
 ) {
   const normalizedUi = persistedUiSchema.parse(ui ?? {});
   const workspaceByRecency = [...workspaces].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
@@ -426,7 +432,7 @@ function buildResolvedDesktopUiState(
     pluginManagementWorkspaceId,
     pluginManagementMode,
     view: normalizedUi.view ?? "chat",
-    settingsPage: normalizeSettingsPageId(normalizedUi.settingsPage, desktopFeatures),
+    settingsPage: normalizeSettingsPageId(normalizedUi.settingsPage, desktopFeatures, packagedForSettingsNav),
     lastNonSettingsView,
     sidebarCollapsed: normalizedUi.sidebarCollapsed ?? false,
     sidebarWidth: normalizedUi.sidebarWidth ?? 248,
@@ -527,6 +533,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       state.threads,
       desktopFeatureFlags,
       cached.ui as CachedDesktopUiState | undefined,
+      false,
     );
     const connectedProviders = deriveConnectedProviders(state.providerState as PersistedProviderState | undefined);
     return {
@@ -580,6 +587,12 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
       try {
         const state = hydratePersistedDesktopState(await loadState());
         const desktopFeatureFlags = getDesktopFeatureFlags(state.desktopFeatureFlagOverrides);
+        let updateState = get().updateState;
+        try {
+          updateState = await getUpdateState();
+        } catch (error) {
+          console.warn("Desktop updater state load failed:", error);
+        }
         const ui = buildResolvedDesktopUiState(state.workspaces, state.threads, desktopFeatureFlags, {
           selectedWorkspaceId: get().selectedWorkspaceId,
           selectedThreadId: get().selectedThreadId,
@@ -593,13 +606,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           contextSidebarCollapsed: get().contextSidebarCollapsed,
           contextSidebarWidth: get().contextSidebarWidth,
           messageBarHeight: get().messageBarHeight,
-        });
-        let updateState = get().updateState;
-        try {
-          updateState = await getUpdateState();
-        } catch (error) {
-          console.warn("Desktop updater state load failed:", error);
-        }
+        }, updateState.packaged);
         const connectedProviders = deriveConnectedProviders(state.providerState as PersistedProviderState | undefined);
         const onboardingOpts = {
           onboarding: state.onboarding,
@@ -757,7 +764,11 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
     openSettings: (page) => {
       set((s) => ({
         view: "settings",
-        settingsPage: normalizeSettingsPageId(page ?? s.settingsPage, s.desktopFeatureFlags),
+        settingsPage: normalizeSettingsPageId(
+          page ?? s.settingsPage,
+          s.desktopFeatureFlags,
+          s.updateState.packaged,
+        ),
         lastNonSettingsView: s.view === "settings" ? s.lastNonSettingsView : s.view,
       }));
       syncDesktopStateCache(get);
@@ -773,7 +784,9 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
   
 
     setSettingsPage: (page) => {
-      set((state) => ({ settingsPage: normalizeSettingsPageId(page, state.desktopFeatureFlags) }));
+      set((state) => ({
+        settingsPage: normalizeSettingsPageId(page, state.desktopFeatureFlags, state.updateState.packaged),
+      }));
       syncDesktopStateCache(get);
     },
   
@@ -849,7 +862,11 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
       set((state) => ({
         desktopFeatureFlagOverrides: nextOverrides,
         desktopFeatureFlags: nextFeatureFlags,
-        settingsPage: normalizeSettingsPageId(state.settingsPage, nextFeatureFlags),
+        settingsPage: normalizeSettingsPageId(
+          state.settingsPage,
+          nextFeatureFlags,
+          state.updateState.packaged,
+        ),
       }));
       void persistNow(get);
       if (flagId === "a2ui") {
@@ -918,7 +935,17 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
       }
     },
 
-    setUpdateState: (updateState) => set({ updateState }),
+    setUpdateState: (updateState) => {
+      set((state) => ({
+        updateState,
+        settingsPage: normalizeSettingsPageId(
+          state.settingsPage,
+          state.desktopFeatureFlags,
+          updateState.packaged,
+        ),
+      }));
+      syncDesktopStateCache(get);
+    },
 
     checkForUpdates: async () => {
       await runUpdateCheck();

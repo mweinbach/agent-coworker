@@ -451,6 +451,14 @@ async function createQuickChatWindow(opts?: ShowQuickChatWindowInput): Promise<B
   return win;
 }
 
+async function retargetQuickChatWindow(win: BrowserWindow, opts?: ShowQuickChatWindowInput): Promise<void> {
+  await loadRendererWindow(
+    win,
+    "quick-chat",
+    opts?.threadId ? { threadId: opts.threadId } : {},
+  );
+}
+
 async function createUtilityWindow(): Promise<BrowserWindow> {
   const useMacosNativeGlass = shouldUseMacosNativeGlass(process.platform, process.env, {
     prefersReducedTransparency: getSystemAppearanceSnapshot().prefersReducedTransparency,
@@ -544,6 +552,7 @@ if (!gotSingleInstanceLock) {
       getMainWindow: () => mainWindow,
       createMainWindow,
       createQuickChatWindow,
+      retargetQuickChatWindow,
       createUtilityWindow,
     });
     const initialState: PersistedState | null = await persistence.loadState().catch(() => null);

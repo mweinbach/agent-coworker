@@ -154,7 +154,7 @@ export class QuickChatController {
 
   private syncShortcutRegistration(): void {
     this.unregisterCurrentShortcut();
-    if (!this.quickChatShortcutEnabled) {
+    if (!this.menuBarEnabled || !this.quickChatShortcutEnabled) {
       return;
     }
 

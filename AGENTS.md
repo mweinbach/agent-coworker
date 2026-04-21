@@ -186,7 +186,7 @@ Durable rules distilled from prior corrections. Apply before editing, not after.
 - **Workspace settings**: any new field must round-trip through `PersistenceService.sanitizeWorkspaces()` — partial sanitizer updates silently drop fields on save/load. Audit every new field, not just the headline one.
 - **Tool prompt guidance**: use actual callable tool IDs (`bash`, `glob`, `grep`); generic names like `shell`/`search` route the model into nonexistent calls.
 - **JSON-RPC projector**: item IDs must be occurrence-stable within a turn. Always forward `itemId` on `item/agentMessage/delta`. Close the current assistant item before reasoning/tool phases. Don't key assistant items only by `turnId`.
-- **New provider**: audit every provider-gated tool factory in `src/tools/*` and add a `createTools(...)` regression — missing branches crash PI tool mapping before the turn starts.
+- **New provider**: audit every provider-gated tool factory in `src/tools/` and add a `createTools(...)` regression — missing branches crash PI tool mapping before the turn starts.
 - **MCP tool schemas**: normalize tuple-style JSON Schema arrays (`items: [{...}, {...}]`) to provider-safe object/boolean nodes before registration; OpenAI-compatible runtimes reject otherwise.
 - **Settings toggles**: shared `Switch` for binary on/off; reserve `Checkbox` for checklist selection.
 - **Optimistic chat sends**: preserve `clientMessageId` through `turn/start`/`turn/steer` and the projected `item/userMessage` notifications, or duplicate user bubbles render.

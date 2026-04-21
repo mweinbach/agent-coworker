@@ -11,6 +11,7 @@ import {
   onSystemAppearanceChanged,
   onUpdateStateChanged,
   setWindowAppearance,
+  showQuickChatWindow,
   showNotification,
 } from "./lib/desktopCommands";
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
@@ -180,6 +181,7 @@ const ChatShell = memo(function ChatShell({
         sidebarWidth={sidebarWidth}
         contextSidebarCollapsed={contextSidebarCollapsed}
         onToggleContextSidebar={toggleContextSidebar}
+        onPopOutQuickChat={selectedThreadId ? () => void showQuickChatWindow({ threadId: selectedThreadId }) : undefined}
         title={topBarTitle}
         subtitle={topBarSubtitle}
         managementMode={view === "skills" ? "plugins" : "thread"}

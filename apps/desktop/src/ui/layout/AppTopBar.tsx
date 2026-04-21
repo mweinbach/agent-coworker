@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 
-import { ChevronDownIcon, LoaderCircleIcon, PanelLeftIcon, PanelRightIcon, SquarePenIcon } from "lucide-react";
+import { ArrowUpRightIcon, ChevronDownIcon, LoaderCircleIcon, PanelLeftIcon, PanelRightIcon, SquarePenIcon } from "lucide-react";
 
 import type { SessionUsageSnapshot, TurnUsageSnapshot } from "../../app/types";
 import { Badge } from "../../components/ui/badge";
@@ -19,6 +19,7 @@ interface AppTopBarProps {
   sidebarWidth: number;
   contextSidebarCollapsed: boolean;
   onToggleContextSidebar: () => void;
+  onPopOutQuickChat?: () => void;
   title: string;
   subtitle: string | null;
   sessionUsage: SessionUsageSnapshot | null;
@@ -46,6 +47,7 @@ export function AppTopBar({
   sidebarWidth,
   contextSidebarCollapsed,
   onToggleContextSidebar,
+  onPopOutQuickChat,
   title,
   subtitle,
   sessionUsage,
@@ -112,8 +114,9 @@ export function AppTopBar({
     return parts.length > 0 ? `Budget ${parts.join(" • ")}` : null;
   }, [sessionUsage]);
   const titleOffset = showWin32CollapsedStrip ? WIN32_COLLAPSED_LEFT_RAIL_WIDTH : sidebarCollapsed ? 0 : sidebarWidth;
-  const defaultRightInset = busy ? 8.75 * 16 : showContextToggle ? 4.75 * 16 : 12;
-  const win32RightInset = busy ? 8.75 * 16 : showContextToggle ? 2.75 * 16 : 12;
+  const showQuickChatPopOut = managementMode === "thread" && onPopOutQuickChat !== undefined;
+  const defaultRightInset = busy ? 8.75 * 16 : (showContextToggle || showQuickChatPopOut) ? 4.75 * 16 : 12;
+  const win32RightInset = busy ? 8.75 * 16 : (showContextToggle || showQuickChatPopOut) ? 2.75 * 16 : 12;
   const titleRightInset = isWin32
     ? WIN32_CAPTION_BUTTON_RESERVE + WIN32_RIGHT_TOOLBAR_GAP + win32RightInset
     : defaultRightInset;
@@ -389,13 +392,25 @@ export function AppTopBar({
         )}
       </div>
 
-      {showContextToggle || busy ? (
+      {showQuickChatPopOut || showContextToggle || busy ? (
         <div className="app-topbar__toolbar-layer app-topbar__toolbar--right app-topbar__controls absolute inset-y-0 right-3 flex items-center gap-1.5">
           {busy ? (
             <Badge variant="secondary" className="gap-1.5 rounded-md border-border/55 bg-muted/20 px-2 py-0 text-[11px] text-muted-foreground shadow-none">
               <LoaderCircleIcon className="h-3 w-3 animate-spin" />
               Busy
             </Badge>
+          ) : null}
+          {showQuickChatPopOut ? (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onPopOutQuickChat}
+              title="Open quick chat"
+              aria-label="Open quick chat"
+              className="app-topbar__toolbar-button app-topbar__plain-icon-button text-muted-foreground hover:text-foreground"
+            >
+              <ArrowUpRightIcon className="h-4 w-4" />
+            </Button>
           ) : null}
           {showContextToggle ? (
             <Button

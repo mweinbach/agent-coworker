@@ -37,14 +37,11 @@ jobs:
             apps/desktop/node_modules
             apps/mobile/node_modules
             ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'apps/desktop/bun.lock', 'apps/mobile/bun.lock') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: |
-          bun install
-          bun install --cwd apps/desktop
-          bun install --cwd apps/mobile
+        run: bun install
 
       - name: Docs consistency check
         run: bun run docs:check
@@ -73,14 +70,11 @@ jobs:
             apps/desktop/node_modules
             apps/mobile/node_modules
             ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'apps/desktop/bun.lock', 'apps/mobile/bun.lock') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: |
-          bun install
-          bun install --cwd apps/desktop
-          bun install --cwd apps/mobile
+        run: bun install
 
       # Serialize async tests: many desktop tests swap global JSDOM document/window and
       # cannot run concurrently without clobbering each other on shared globalThis.
@@ -109,14 +103,11 @@ jobs:
             apps/desktop/node_modules
             apps/mobile/node_modules
             ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'apps/desktop/bun.lock', 'apps/mobile/bun.lock') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: |
-          bun install
-          bun install --cwd apps/desktop
-          bun install --cwd apps/mobile
+        run: bun install
 
       # Re-run each file in isolation to catch order/global-state issues that can hide
       # inside a single aggregate Bun invocation. Run on main/testing pushes only.
@@ -148,14 +139,11 @@ jobs:
             apps/desktop/node_modules
             apps/mobile/node_modules
             ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'apps/desktop/bun.lock', 'apps/mobile/bun.lock') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: |
-          bun install
-          bun install --cwd apps/desktop
-          bun install --cwd apps/mobile
+        run: bun install
 
       - name: Remote MCP smoke tests
         run: bun test test/mcp.remote.grep.test.ts
@@ -181,14 +169,11 @@ jobs:
             apps/desktop/node_modules
             apps/mobile/node_modules
             ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'apps/desktop/bun.lock', 'apps/mobile/bun.lock') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: |
-          bun install
-          bun install --cwd apps/desktop
-          bun install --cwd apps/mobile
+        run: bun install
 
       - name: Build desktop resources
         run: bun run build:desktop-resources

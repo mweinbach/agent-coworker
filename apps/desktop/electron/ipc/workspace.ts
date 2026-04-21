@@ -45,6 +45,7 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.loadState, async () => {
     const state = await deps.persistence.loadState();
     await workspaceRoots.refreshApprovedWorkspaceRootsFromState(state);
+    deps.applyPersistedState?.(state);
     return state;
   });
 
@@ -63,6 +64,7 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
     await deps.persistence.saveState(nextState);
     workspaceRoots.setApprovedWorkspaceRoots(workspaces.map((workspace) => workspace.path));
     deps.mobileRelayBridge.invalidateWorkspaceListCache();
+    deps.applyPersistedState?.(nextState);
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.readTranscript, async (_event, args: ReadTranscriptInput) => {

@@ -5,6 +5,7 @@ import type { DesktopMenuCommand } from "../../src/lib/desktopApi";
 export type InstallDesktopMenuOptions = {
   includeDevTools: boolean;
   openExternal: (url: string) => void;
+  openQuickChat: () => void;
   sendCommand: (command: DesktopMenuCommand) => void;
 };
 
@@ -56,6 +57,12 @@ export function buildDesktopMenuTemplate(
       label: labels.file,
       submenu: [
         commandItem("New Thread", "newThread", options.sendCommand, "CmdOrCtrl+N", sfSymbol("plus.message")),
+        {
+          label: "Open Quick Chat",
+          click: () => {
+            options.openQuickChat();
+          },
+        },
         commandItem("Skills", "openSkills", options.sendCommand, "CmdOrCtrl+Shift+K", sfSymbol("wand.and.stars")),
         { type: "separator" },
         commandItem("Settings", "openSettings", options.sendCommand, "CmdOrCtrl+,", sfSymbol("gearshape")),
@@ -141,6 +148,12 @@ export function buildDesktopMenuTemplate(
         label: "File",
         submenu: [
           commandItem("New Thread", "newThread", options.sendCommand, "CmdOrCtrl+N", sfSymbol("plus.message")),
+          {
+            label: "Open Quick Chat",
+            click: () => {
+              options.openQuickChat();
+            },
+          },
           commandItem("Skills", "openSkills", options.sendCommand, "CmdOrCtrl+Shift+K", sfSymbol("wand.and.stars")),
           { type: "separator" },
           commandItem("Settings", "openSettings", options.sendCommand, "CmdOrCtrl+,", sfSymbol("gearshape")),

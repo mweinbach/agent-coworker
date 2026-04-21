@@ -159,6 +159,11 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().settingsPage).toBe("mcp");
   });
 
+  test("setSettingsPage accepts desktop page", () => {
+    useAppStore.getState().setSettingsPage("desktop");
+    expect(useAppStore.getState().settingsPage).toBe("desktop");
+  });
+
   test("setSettingsPage accepts backup page", () => {
     useAppStore.getState().setSettingsPage("backup");
     expect(useAppStore.getState().settingsPage).toBe("backup");
@@ -180,6 +185,12 @@ describe("settings nav (store)", () => {
     useAppStore.getState().openSettings("updates");
     expect(useAppStore.getState().view).toBe("settings");
     expect(useAppStore.getState().settingsPage).toBe("updates");
+  });
+
+  test("openSettings accepts desktop page", () => {
+    useAppStore.getState().openSettings("desktop");
+    expect(useAppStore.getState().view).toBe("settings");
+    expect(useAppStore.getState().settingsPage).toBe("desktop");
   });
 
   test("openSettings accepts remote access page", () => {
@@ -305,6 +316,38 @@ describe("settings nav (store)", () => {
   test("setDeveloperMode updates developer mode state", () => {
     useAppStore.getState().setDeveloperMode(true);
     expect(useAppStore.getState().developerMode).toBe(true);
+  });
+
+  test("setQuickChatShortcutEnabled updates persisted desktop settings", () => {
+    useAppStore.setState({
+      desktopSettings: {
+        quickChat: {
+          shortcutEnabled: false,
+          shortcutAccelerator: "CommandOrControl+Shift+Space",
+        },
+      },
+    });
+
+    useAppStore.getState().setQuickChatShortcutEnabled(true);
+
+    expect(useAppStore.getState().desktopSettings.quickChat.shortcutEnabled).toBe(true);
+    expect(savedStates.at(-1)?.desktopSettings?.quickChat?.shortcutEnabled).toBe(true);
+  });
+
+  test("setQuickChatShortcutAccelerator normalizes and persists the shortcut", () => {
+    useAppStore.setState({
+      desktopSettings: {
+        quickChat: {
+          shortcutEnabled: true,
+          shortcutAccelerator: "CommandOrControl+Shift+Space",
+        },
+      },
+    });
+
+    useAppStore.getState().setQuickChatShortcutAccelerator(" alt + space ");
+
+    expect(useAppStore.getState().desktopSettings.quickChat.shortcutAccelerator).toBe("Alt+Space");
+    expect(savedStates.at(-1)?.desktopSettings?.quickChat?.shortcutAccelerator).toBe("Alt+Space");
   });
 
   test("openSkills shows guidance when no workspace is available", async () => {

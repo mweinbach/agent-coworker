@@ -12,7 +12,7 @@ type ActiveWindowDrag = {
 };
 
 export function registerWindowIpc(context: DesktopIpcModuleContext): void {
-  const { handleDesktopInvoke, parseWithSchema } = context;
+  const { deps, handleDesktopInvoke, parseWithSchema } = context;
   const activeWindowDrags = new Map<number, ActiveWindowDrag>();
   const trackedWindowDragSenders = new Set<number>();
 
@@ -110,5 +110,13 @@ export function registerWindowIpc(context: DesktopIpcModuleContext): void {
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getPlatform, () => {
     return process.platform;
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.showMainWindow, async () => {
+    await deps.showMainWindow();
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.showQuickChatWindow, async () => {
+    await deps.showQuickChatWindow();
   });
 }

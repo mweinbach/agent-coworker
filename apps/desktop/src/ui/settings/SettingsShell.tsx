@@ -7,6 +7,7 @@ import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
 import type { SettingsPageId } from "../../app/types";
 import { ProvidersPage } from "./pages/ProvidersPage";
+import { DesktopPage } from "./pages/DesktopPage";
 import { UsagePage } from "./pages/UsagePage";
 import { WorkspacesPage } from "./pages/WorkspacesPage";
 import { BackupPage } from "./pages/BackupPage";
@@ -31,6 +32,10 @@ const SETTINGS_PAGE_META: Record<
   providers: {
     title: "Providers",
     description: "Connect models and see whether each provider is ready to use.",
+  },
+  desktop: {
+    title: "Desktop",
+    description: "Quick chat access from the menu bar, tray, and optional shortcut.",
   },
   mcp: {
     title: "MCP servers",
@@ -102,6 +107,7 @@ export function getSettingsGroups(remoteAccessAvailable: boolean): Array<{
     {
       label: "Advanced",
       pages: [
+        { id: "desktop", label: "Desktop", render: () => <DesktopPage /> },
         { id: "featureFlags", label: "Feature flags", render: () => <FeatureFlagsPage /> },
         { id: "developer", label: "Developer", render: () => <DeveloperPage /> },
         { id: "updates", label: "Updates", render: () => <UpdatesPage /> },

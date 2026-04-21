@@ -5,6 +5,7 @@ type QuitEvent = {
 type ShutdownDeps = {
   unregisterAppearanceListener?: () => void;
   stopUpdater?: () => void;
+  stopQuickChat?: () => void;
   stopAllServers: () => Promise<void>;
   stopMobileRelayBridge?: () => Promise<void>;
   quit: () => void;
@@ -50,6 +51,7 @@ export function createBeforeQuitHandler(deps: ShutdownDeps): (event: QuitEvent) 
       // handlers when the app process exits.
       deps.unregisterAppearanceListener?.();
       deps.stopUpdater?.();
+      deps.stopQuickChat?.();
       shutdownFinished = true;
       deps.quit();
     })();

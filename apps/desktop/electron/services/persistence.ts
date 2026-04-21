@@ -5,6 +5,7 @@ import { z } from "zod";
 import { app } from "electron";
 
 import type {
+  PersistedDesktopSettings,
   PersistedOnboardingState,
   PersistedState,
   ThreadRecord,
@@ -12,7 +13,7 @@ import type {
   WorkspaceRecord,
   WorkspaceUserProfile,
 } from "../../src/app/types";
-import { normalizeWorkspaceUserProfile } from "../../src/app/types";
+import { normalizeDesktopSettings, normalizeWorkspaceUserProfile } from "../../src/app/types";
 import { normalizeWorkspaceProviderOptions } from "../../src/app/openaiCompatibleProviderOptions";
 import { normalizePersistedProviderState } from "../../src/app/persistedProviderState";
 import { deriveDefaultLmStudioUiEnabled, normalizePersistedProviderUiState } from "../../src/app/providerUiState";
@@ -54,6 +55,7 @@ function defaultState(): PersistedState {
     developerMode: false,
     showHiddenFiles: false,
     perWorkspaceSettings: false,
+    desktopSettings: normalizeDesktopSettings(),
     desktopFeatureFlagOverrides: {},
     providerUiState: normalizePersistedProviderUiState(undefined),
   };
@@ -117,6 +119,20 @@ function asTimestamp(value: unknown): string | null {
 function asOptionalString(value: unknown): string | undefined {
   const candidate = asNonEmptyString(value);
   return candidate ?? undefined;
+}
+
+function sanitizeDesktopSettings(value: unknown): PersistedDesktopSettings {
+  const normalized = normalizeDesktopSettings(
+    value && typeof value === "object" && !Array.isArray(value)
+      ? value as PersistedDesktopSettings
+      : undefined,
+  );
+  return {
+    quickChat: {
+      shortcutEnabled: normalized.quickChat.shortcutEnabled,
+      shortcutAccelerator: normalized.quickChat.shortcutAccelerator,
+    },
+  };
 }
 
 function asLegacyPreferredChildModel(item: Record<string, unknown>): string | undefined {
@@ -309,6 +325,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
     developerMode: typeof value.developerMode === "boolean" ? value.developerMode : false,
     showHiddenFiles: typeof value.showHiddenFiles === "boolean" ? value.showHiddenFiles : false,
     perWorkspaceSettings: typeof value.perWorkspaceSettings === "boolean" ? value.perWorkspaceSettings : false,
+    desktopSettings: sanitizeDesktopSettings(value.desktopSettings),
     desktopFeatureFlagOverrides: normalizeDesktopFeatureFlagOverrides(value.desktopFeatureFlagOverrides),
     ...(providerState ? { providerState } : {}),
     providerUiState,

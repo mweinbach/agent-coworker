@@ -41,6 +41,7 @@ import type {
   WindowDragPointInput,
 } from "./desktopApi";
 import type { PersistedState } from "../app/types";
+import { normalizeQuickChatShortcutAccelerator } from "./quickChatShortcut";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const invalidPathSegmentPattern = /[/\\\0]/;
@@ -263,12 +264,23 @@ const persistedProviderUiStateSchema = z.object({
   }).optional(),
 }).optional();
 
+const persistedDesktopSettingsSchema = z.object({
+  quickChat: z.object({
+    shortcutEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
+    shortcutAccelerator: z.preprocess(
+      (value) => (typeof value === "string" ? normalizeQuickChatShortcutAccelerator(value) : undefined),
+      z.string().optional(),
+    ).optional(),
+  }).optional(),
+}).optional();
+
 export const persistedStateInputSchema: z.ZodType<PersistedState> = z.object({
   workspaces: z.array(persistedWorkspaceSchema),
   threads: z.array(persistedThreadSchema),
   developerMode: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   showHiddenFiles: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   perWorkspaceSettings: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
+  desktopSettings: persistedDesktopSettingsSchema,
   desktopFeatureFlagOverrides: desktopFeatureFlagOverridesSchema,
   version: z.preprocess(
     (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 2),

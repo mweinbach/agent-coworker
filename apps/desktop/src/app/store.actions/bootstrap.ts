@@ -66,6 +66,7 @@ import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOp
 import { resolvePluginCatalogWorkspaceSelection, resolvePluginManagementWorkspaceId } from "../pluginManagement";
 import {
   type CachedSessionSnapshot,
+  normalizeDesktopSettings,
   normalizeWorkspaceUserProfile,
   type CachedDesktopUiState,
   type PersistedOnboardingState,
@@ -80,6 +81,7 @@ import {
   shouldAutoOpenOnboarding,
   shouldBackfillOnboardingCompleted,
 } from "./onboarding";
+import { normalizeQuickChatShortcutAccelerator } from "../../lib/quickChatShortcut";
 
 const optionalStringWithContentSchema = z.preprocess(
   (value) => (typeof value === "string" && value.trim() ? value : undefined),
@@ -129,6 +131,7 @@ function normalizeSettingsPageId(
 
 function normalizeKnownSettingsPageId(value: unknown): SettingsPageId {
   return value === "providers"
+    || value === "desktop"
     || value === "usage"
     || value === "workspaces"
     || value === "remoteAccess"
@@ -144,7 +147,7 @@ function normalizeKnownSettingsPageId(value: unknown): SettingsPageId {
 
 const normalizedSettingsPageSchema = z.preprocess(
   (value) => normalizeKnownSettingsPageId(value),
-  z.enum(["providers", "usage", "workspaces", "remoteAccess", "backup", "mcp", "memory", "featureFlags", "updates", "developer"])
+  z.enum(["providers", "desktop", "usage", "workspaces", "remoteAccess", "backup", "mcp", "memory", "featureFlags", "updates", "developer"])
 );
 const normalizedNullableSelectionSchema = z.preprocess(
   (value) => (typeof value === "string" && value.trim() ? value : null),
@@ -294,6 +297,15 @@ const persistedStateSchema = z.object({
   developerMode: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   showHiddenFiles: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   perWorkspaceSettings: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+  desktopSettings: z.object({
+    quickChat: z.object({
+      shortcutEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
+      shortcutAccelerator: z.preprocess(
+        (value) => (typeof value === "string" ? normalizeQuickChatShortcutAccelerator(value) : undefined),
+        z.string().optional(),
+      ).optional(),
+    }).optional(),
+  }).optional(),
   desktopFeatureFlagOverrides: z.preprocess(
     (value) => normalizeDesktopFeatureFlagOverrides(value),
     z.object({
@@ -312,15 +324,16 @@ const persistedStateSchema = z.object({
     }),
   });
   const onboarding = (state as { onboarding?: PersistedOnboardingState }).onboarding;
-  return {
-    workspaces: state.workspaces,
-    threads: state.threads,
-    developerMode: state.developerMode,
-    showHiddenFiles: state.showHiddenFiles,
-    perWorkspaceSettings: state.perWorkspaceSettings,
-    desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides,
-    providerState,
-    providerUiState,
+    return {
+      workspaces: state.workspaces,
+      threads: state.threads,
+      developerMode: state.developerMode,
+      showHiddenFiles: state.showHiddenFiles,
+      perWorkspaceSettings: state.perWorkspaceSettings,
+      desktopSettings: state.desktopSettings,
+      desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides,
+      providerState,
+      providerUiState,
     onboarding,
   };
 });
@@ -548,6 +561,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       developerMode: state.developerMode,
       showHiddenFiles: state.showHiddenFiles,
       perWorkspaceSettings: state.perWorkspaceSettings,
+      desktopSettings: normalizeDesktopSettings(state.desktopSettings),
       desktopFeatureFlags,
       desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides ?? {},
       onboardingState: state.onboarding ?? DEFAULT_ONBOARDING_STATE,
@@ -575,7 +589,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
   }
 }
 
-export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "init" | "openSettings" | "closeSettings" | "setSettingsPage" | "setDeveloperMode" | "setShowHiddenFiles" | "setPerWorkspaceSettings" | "setDesktopFeatureFlagOverride" | "setUpdateState" | "checkForUpdates" | "quitAndInstallUpdate" | "toggleSidebar" | "toggleContextSidebar" | "setSidebarWidth" | "setContextSidebarWidth" | "setMessageBarHeight"> {
+export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "init" | "openSettings" | "closeSettings" | "setSettingsPage" | "setDeveloperMode" | "setShowHiddenFiles" | "setPerWorkspaceSettings" | "setQuickChatShortcutEnabled" | "setQuickChatShortcutAccelerator" | "setDesktopFeatureFlagOverride" | "setUpdateState" | "checkForUpdates" | "quitAndInstallUpdate" | "toggleSidebar" | "toggleContextSidebar" | "setSidebarWidth" | "setContextSidebarWidth" | "setMessageBarHeight"> {
   return {
     init: async () => {
       set({ startupError: null, bootstrapPending: true });
@@ -632,6 +646,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           developerMode: state.developerMode,
           showHiddenFiles: state.showHiddenFiles,
           perWorkspaceSettings: state.perWorkspaceSettings,
+          desktopSettings: normalizeDesktopSettings(state.desktopSettings),
           desktopFeatureFlags,
           desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides ?? {},
           updateState,
@@ -839,6 +854,32 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           }
         }
       }
+      void persistNow(get);
+    },
+
+    setQuickChatShortcutEnabled: (enabled) => {
+      set((state) => ({
+        desktopSettings: {
+          ...state.desktopSettings,
+          quickChat: {
+            ...state.desktopSettings.quickChat,
+            shortcutEnabled: enabled,
+          },
+        },
+      }));
+      void persistNow(get);
+    },
+
+    setQuickChatShortcutAccelerator: (accelerator) => {
+      set((state) => ({
+        desktopSettings: {
+          ...state.desktopSettings,
+          quickChat: {
+            ...state.desktopSettings.quickChat,
+            shortcutAccelerator: normalizeQuickChatShortcutAccelerator(accelerator),
+          },
+        },
+      }));
       void persistNow(get);
     },
 

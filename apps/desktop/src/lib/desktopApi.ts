@@ -1,4 +1,5 @@
 import desktopPackage from "../../package.json";
+export { DEFAULT_QUICK_CHAT_SHORTCUT_ACCELERATOR as QUICK_CHAT_SHORTCUT_ACCELERATOR } from "./quickChatShortcut";
 
 import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
 import type { DesktopFeatureFlagOverrides, DesktopFeatureFlags } from "../../../../src/shared/featureFlags";
@@ -244,6 +245,7 @@ export type SetWindowAppearanceInput = {
   backgroundMaterial?: WindowsBackgroundMaterial;
 };
 
+
 export interface DesktopApi {
   readonly features: DesktopFeatureFlags;
   readonly isPackaged?: boolean;
@@ -271,6 +273,8 @@ export interface DesktopApi {
   windowDragMove(opts: WindowDragPointInput): Promise<void>;
   windowDragEnd(): Promise<void>;
   getPlatform(): Promise<string>;
+  showMainWindow(): Promise<void>;
+  showQuickChatWindow(): Promise<void>;
   listDirectory(opts: ListDirectoryInput): Promise<ExplorerEntry[]>;
   readFile(opts: ReadFileInput): Promise<ReadFileOutput>;
   readFileForPreview(opts: ReadFileForPreviewInput): Promise<ReadFileForPreviewOutput>;
@@ -320,6 +324,8 @@ export const DESKTOP_IPC_CHANNELS = {
   windowDragMove: "desktop:windowDragMove",
   windowDragEnd: "desktop:windowDragEnd",
   getPlatform: "desktop:getPlatform",
+  showMainWindow: "desktop:showMainWindow",
+  showQuickChatWindow: "desktop:showQuickChatWindow",
   listDirectory: "desktop:listDirectory",
   readFile: "desktop:readFile",
   readFileForPreview: "desktop:readFileForPreview",

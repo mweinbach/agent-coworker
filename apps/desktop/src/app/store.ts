@@ -4,6 +4,7 @@ import { createAppActions } from "./store.actions";
 import { buildCachedDesktopStateSeed } from "./store.actions/bootstrap";
 import { loadDesktopStateCacheRaw } from "./localStateCache";
 import { DEFAULT_PROVIDER_UI_STATE } from "./providerUiState";
+import { normalizeDesktopSettings } from "./types";
 import { createDefaultUpdaterState, type AppStoreDataState, type AppStoreState } from "./store.helpers";
 
 const initialState: AppStoreDataState = {
@@ -50,6 +51,7 @@ const initialState: AppStoreDataState = {
   developerMode: false,
   showHiddenFiles: false,
   perWorkspaceSettings: false,
+  desktopSettings: normalizeDesktopSettings(),
   desktopFeatureFlags: {
     remoteAccess: false,
     workspacePicker: true,

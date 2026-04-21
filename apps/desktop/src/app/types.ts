@@ -21,6 +21,7 @@ import type {
   DesktopFeatureFlagOverrides,
 } from "../../../../src/shared/featureFlags";
 import type { WorkspaceProviderOptions } from "./openaiCompatibleProviderOptions";
+import { normalizeQuickChatShortcutAccelerator } from "../lib/quickChatShortcut";
 
 export type WorkspaceUserProfile = {
   instructions: string;
@@ -142,11 +143,35 @@ export type PersistedOnboardingState = {
   dismissedAt: string | null;
 };
 
+export type PersistedDesktopSettings = {
+  quickChat?: {
+    shortcutEnabled?: boolean;
+    shortcutAccelerator?: string;
+  };
+};
+
+export type DesktopSettings = {
+  quickChat: {
+    shortcutEnabled: boolean;
+    shortcutAccelerator: string;
+  };
+};
+
+export function normalizeDesktopSettings(value?: PersistedDesktopSettings | null): DesktopSettings {
+  return {
+    quickChat: {
+      shortcutEnabled: value?.quickChat?.shortcutEnabled === true,
+      shortcutAccelerator: normalizeQuickChatShortcutAccelerator(value?.quickChat?.shortcutAccelerator),
+    },
+  };
+}
+
 export type OnboardingStep = "welcome" | "workspace" | "provider" | "defaults" | "firstThread";
 export type ViewId = "chat" | "skills" | "settings";
 export type PluginViewMode = "plugins" | "skills";
 export type SettingsPageId =
   | "providers"
+  | "desktop"
   | "usage"
   | "workspaces"
   | "backup"
@@ -188,6 +213,7 @@ export type PersistedState = {
   developerMode?: boolean;
   showHiddenFiles?: boolean;
   perWorkspaceSettings?: boolean;
+  desktopSettings?: PersistedDesktopSettings;
   desktopFeatureFlagOverrides?: DesktopFeatureFlagOverrides;
   providerState?: PersistedProviderState;
   providerUiState?: PersistedProviderUiState;

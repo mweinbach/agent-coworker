@@ -24,6 +24,8 @@ import { PrimaryContent } from "./ui/layout/PrimaryContent";
 import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
 import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
+import { QuickChatShell } from "./ui/quickChat/QuickChatShell";
+import { getDesktopWindowMode } from "./lib/windowMode";
 
 const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed: boolean }) {
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
@@ -217,6 +219,7 @@ const ChatShell = memo(function ChatShell({
 });
 
 export default function App() {
+  const windowMode = getDesktopWindowMode();
   const ready = useAppStore((s) => s.ready);
   const bootstrapPending = useAppStore((s) => s.bootstrapPending);
   const startupError = useAppStore((s) => s.startupError);
@@ -374,7 +377,9 @@ export default function App() {
 
   return (
     <>
-      {view === "settings" ? (
+      {windowMode === "quick-chat" ? (
+        <QuickChatShell init={init} ready={ready} startupError={startupError} />
+      ) : view === "settings" ? (
         <div className="app-shell app-shell--settings flex h-full min-h-0 flex-col text-foreground">
           <div className="app-window-drag-strip" aria-hidden="true" />
           <div className="min-h-0 flex-1">

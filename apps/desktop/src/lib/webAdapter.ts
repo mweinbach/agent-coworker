@@ -396,6 +396,7 @@ export function createWebAdapter(): DesktopApi {
 
   return {
     features,
+    isPackaged: false,
     resolveDesktopFeatureFlags: (overrides) => resolveWebDesktopFeatureFlags(overrides),
 
     async startWorkspaceServer(opts): Promise<{ url: string }> {

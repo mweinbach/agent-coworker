@@ -26,6 +26,7 @@ let startWorkspaceServerCalls = 0;
 let agentSocketConnectCalls = 0;
 let remoteAccessEnabled = true;
 let stopMobileRelayCalls = 0;
+let packagedApp = false;
 
 mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   appendTranscriptBatch: async () => {},
@@ -72,6 +73,7 @@ mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
       : true,
     a2ui: typeof featureOverrides?.a2ui === "boolean" ? featureOverrides.a2ui : false,
   }),
+  isPackagedDesktopApp: () => packagedApp,
   onSystemAppearanceChanged: () => () => {},
   onMenuCommand: () => () => {},
   onUpdateStateChanged: () => () => {},
@@ -109,10 +111,12 @@ describe("settings nav (store)", () => {
     agentSocketConnectCalls = 0;
     remoteAccessEnabled = true;
     stopMobileRelayCalls = 0;
+    packagedApp = false;
     useAppStore.setState({
       view: "chat",
       lastNonSettingsView: "chat",
       settingsPage: "providers",
+      updateState: MOCK_UPDATE_STATE,
       desktopFeatureFlags: {
         remoteAccess: true,
         workspacePicker: true,
@@ -199,6 +203,18 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().settingsPage).toBe("providers");
   });
 
+  test("openSettings keeps feature flags available in packaged builds", () => {
+    useAppStore.setState({
+      updateState: {
+        ...useAppStore.getState().updateState,
+        packaged: true,
+      },
+    });
+    useAppStore.getState().openSettings("featureFlags");
+    expect(useAppStore.getState().view).toBe("settings");
+    expect(useAppStore.getState().settingsPage).toBe("featureFlags");
+  });
+
   test("disabling remote access tears down an active relay and falls back from the remote access page", async () => {
     useAppStore.setState({
       settingsPage: "remoteAccess",
@@ -217,6 +233,73 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().desktopFeatureFlagOverrides).toEqual({ remoteAccess: false });
     expect(useAppStore.getState().settingsPage).toBe("providers");
     expect(stopMobileRelayCalls).toBe(1);
+  });
+
+  test("setDesktopFeatureFlagOverride preserves supported flags in packaged builds", async () => {
+    useAppStore.setState({
+      updateState: {
+        ...useAppStore.getState().updateState,
+        packaged: true,
+      },
+      desktopFeatureFlags: {
+        remoteAccess: false,
+        workspacePicker: true,
+        workspaceLifecycle: true,
+        a2ui: false,
+      },
+      desktopFeatureFlagOverrides: {},
+    });
+
+    await useAppStore.getState().setDesktopFeatureFlagOverride("a2ui", true);
+
+    expect(useAppStore.getState().desktopFeatureFlagOverrides).toEqual({ a2ui: true });
+    expect(useAppStore.getState().desktopFeatureFlags.a2ui).toBe(true);
+    expect(savedStates.length).toBeGreaterThan(0);
+  });
+
+  test("setDesktopFeatureFlagOverride keeps forced-off flags blocked in packaged builds", async () => {
+    const priorSaved = savedStates.length;
+    useAppStore.setState({
+      updateState: {
+        ...useAppStore.getState().updateState,
+        packaged: true,
+      },
+      desktopFeatureFlags: {
+        remoteAccess: false,
+        workspacePicker: true,
+        workspaceLifecycle: true,
+        a2ui: false,
+      },
+      desktopFeatureFlagOverrides: { remoteAccess: false },
+    });
+
+    await useAppStore.getState().setDesktopFeatureFlagOverride("remoteAccess", true);
+
+    expect(useAppStore.getState().desktopFeatureFlagOverrides).toEqual({ remoteAccess: false });
+    expect(savedStates.length).toBe(priorSaved);
+  });
+
+  test("setDesktopFeatureFlagOverride blocks forced-off flags before updater state hydrates", async () => {
+    const priorSaved = savedStates.length;
+    packagedApp = true;
+    useAppStore.setState({
+      updateState: {
+        ...useAppStore.getState().updateState,
+        packaged: false,
+      },
+      desktopFeatureFlags: {
+        remoteAccess: false,
+        workspacePicker: true,
+        workspaceLifecycle: true,
+        a2ui: false,
+      },
+      desktopFeatureFlagOverrides: { remoteAccess: false },
+    });
+
+    await useAppStore.getState().setDesktopFeatureFlagOverride("remoteAccess", true);
+
+    expect(useAppStore.getState().desktopFeatureFlagOverrides).toEqual({ remoteAccess: false });
+    expect(savedStates.length).toBe(priorSaved);
   });
 
   test("setDeveloperMode updates developer mode state", () => {

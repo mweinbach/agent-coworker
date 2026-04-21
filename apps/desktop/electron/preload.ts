@@ -204,6 +204,7 @@ const desktopFeatures = Object.freeze(resolvePreloadDesktopFeatureFlags());
 
 const desktopApi = Object.freeze<DesktopApi>({
   features: desktopFeatures,
+  isPackaged: process.env.COWORK_IS_PACKAGED === "true",
   resolveDesktopFeatureFlags: (overrides) => resolvePreloadDesktopFeatureFlags(
     normalizeDesktopFeatureFlagOverrides(overrides),
   ),

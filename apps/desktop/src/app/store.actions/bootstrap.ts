@@ -5,6 +5,7 @@ import {
   checkForUpdates as runUpdateCheck,
   getUpdateState,
   getDesktopFeatureFlags,
+  isPackagedDesktopApp,
   quitAndInstallUpdate as runQuitAndInstallUpdate,
   deleteTranscript,
   listDirectory,
@@ -23,6 +24,7 @@ import {
 import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
 import { safeParseServerEvent, type ProviderName } from "../../lib/wsProtocol";
 import {
+  FEATURE_FLAG_DEFINITIONS,
   normalizeDesktopFeatureFlagOverrides,
   type DesktopFeatureFlags,
 } from "../../../../../src/shared/featureFlags";
@@ -580,6 +582,12 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
       try {
         const state = hydratePersistedDesktopState(await loadState());
         const desktopFeatureFlags = getDesktopFeatureFlags(state.desktopFeatureFlagOverrides);
+        let updateState = get().updateState;
+        try {
+          updateState = await getUpdateState();
+        } catch (error) {
+          console.warn("Desktop updater state load failed:", error);
+        }
         const ui = buildResolvedDesktopUiState(state.workspaces, state.threads, desktopFeatureFlags, {
           selectedWorkspaceId: get().selectedWorkspaceId,
           selectedThreadId: get().selectedThreadId,
@@ -594,12 +602,6 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           contextSidebarWidth: get().contextSidebarWidth,
           messageBarHeight: get().messageBarHeight,
         });
-        let updateState = get().updateState;
-        try {
-          updateState = await getUpdateState();
-        } catch (error) {
-          console.warn("Desktop updater state load failed:", error);
-        }
         const connectedProviders = deriveConnectedProviders(state.providerState as PersistedProviderState | undefined);
         const onboardingOpts = {
           onboarding: state.onboarding,
@@ -773,7 +775,9 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
   
 
     setSettingsPage: (page) => {
-      set((state) => ({ settingsPage: normalizeSettingsPageId(page, state.desktopFeatureFlags) }));
+      set((state) => ({
+        settingsPage: normalizeSettingsPageId(page, state.desktopFeatureFlags),
+      }));
       syncDesktopStateCache(get);
     },
   
@@ -839,6 +843,13 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
     },
 
     setDesktopFeatureFlagOverride: async (flagId, enabled) => {
+      const definition = FEATURE_FLAG_DEFINITIONS[flagId];
+      if (
+        definition.packagedAvailability === "forced-off"
+        && (isPackagedDesktopApp() || get().updateState.packaged)
+      ) {
+        return;
+      }
       const currentFeatureFlags = get().desktopFeatureFlags;
       const currentOverrides = get().desktopFeatureFlagOverrides ?? {};
       const nextOverrides = {
@@ -918,7 +929,20 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
       }
     },
 
-    setUpdateState: (updateState) => set({ updateState }),
+    setUpdateState: (updateState) => {
+      let settingsPageChanged = false;
+      set((state) => {
+        const nextSettingsPage = normalizeSettingsPageId(state.settingsPage, state.desktopFeatureFlags);
+        settingsPageChanged = nextSettingsPage !== state.settingsPage;
+        return {
+          updateState,
+          settingsPage: nextSettingsPage,
+        };
+      });
+      if (settingsPageChanged) {
+        syncDesktopStateCache(get);
+      }
+    },
 
     checkForUpdates: async () => {
       await runUpdateCheck();

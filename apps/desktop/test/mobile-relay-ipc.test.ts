@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 
 const getAllWindowsMock = mock(() => []);
@@ -28,6 +28,10 @@ function flushMicrotasks() {
 }
 
 describe("mobile relay IPC", () => {
+  beforeEach(() => {
+    process.env.COWORK_ENABLE_REMOTE_ACCESS = "1";
+  });
+
   afterEach(() => {
     getAllWindowsMock.mockClear();
     delete process.env.COWORK_ENABLE_REMOTE_ACCESS;
@@ -229,7 +233,7 @@ describe("mobile relay IPC", () => {
       status: "idle",
       relaySource: "unavailable",
       relayServiceStatus: "unavailable",
-      lastError: "Remote access is disabled. Enable it in Settings -> Feature Flags.",
+      lastError: "Remote access is disabled.",
     });
     expect(stop).toHaveBeenCalledTimes(1);
     expect(initialize).not.toHaveBeenCalled();
@@ -272,7 +276,7 @@ describe("mobile relay IPC", () => {
       workspaceId: "ws_1",
       workspacePath: "/tmp/workspace",
       yolo: false,
-    })).rejects.toThrow("Remote access is disabled. Enable it in Settings -> Feature Flags.");
+    })).rejects.toThrow("Remote access is disabled.");
     expect(start).not.toHaveBeenCalled();
   });
 

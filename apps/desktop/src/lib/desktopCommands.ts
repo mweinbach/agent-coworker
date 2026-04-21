@@ -61,6 +61,11 @@ export function getDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides):
   return next;
 }
 
+export function isPackagedDesktopApp(): boolean {
+  const api = getDesktopApi();
+  return api?.isPackaged === true;
+}
+
 export async function startWorkspaceServer(opts: {
   workspaceId: string;
   workspacePath: string;

@@ -15,8 +15,12 @@ describe("main CI workflow", () => {
   test("caches dependencies", () => {
     expect(workflow).toContain("uses: actions/cache@v4");
     expect(workflow).toContain("node_modules");
+    expect(workflow).toContain("apps/desktop/node_modules");
+    expect(workflow).toContain("apps/mobile/node_modules");
     expect(workflow).toContain("~/.bun/install/cache");
-    expect(workflow).toContain("${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}");
+    expect(workflow).toContain(
+      "${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'apps/desktop/bun.lock', 'apps/mobile/bun.lock') }}",
+    );
   });
 
   test("keeps the core reliability guardrails", () => {

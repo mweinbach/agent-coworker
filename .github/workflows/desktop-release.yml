@@ -34,12 +34,17 @@ jobs:
         with:
           path: |
             node_modules
+            apps/desktop/node_modules
+            apps/mobile/node_modules
             ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'apps/desktop/bun.lock', 'apps/mobile/bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: bun install
+        run: |
+          bun install
+          bun install --cwd apps/desktop
+          bun install --cwd apps/mobile
 
       - name: Docs consistency check
         run: bun run docs:check
@@ -93,12 +98,17 @@ jobs:
         with:
           path: |
             node_modules
+            apps/desktop/node_modules
+            apps/mobile/node_modules
             ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'apps/desktop/bun.lock', 'apps/mobile/bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: bun install
+        run: |
+          bun install
+          bun install --cwd apps/desktop
+          bun install --cwd apps/mobile
 
       - name: Validate macOS signing and notarization inputs
         if: ${{ runner.os == 'macOS' }}

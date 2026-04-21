@@ -33,12 +33,17 @@ jobs:
         with:
           path: |
             node_modules
+            apps/desktop/node_modules
+            apps/mobile/node_modules
             ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'apps/desktop/bun.lock', 'apps/mobile/bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: bun install
+        run: |
+          bun install
+          bun install --cwd apps/desktop
+          bun install --cwd apps/mobile
 
       # Serialize async tests: many desktop tests swap global JSDOM document/window and
       # cannot run concurrently without clobbering each other on shared globalThis.
@@ -95,12 +100,17 @@ jobs:
         with:
           path: |
             node_modules
+            apps/desktop/node_modules
+            apps/mobile/node_modules
             ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock', 'apps/desktop/bun.lock', 'apps/mobile/bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: bun install
+        run: |
+          bun install
+          bun install --cwd apps/desktop
+          bun install --cwd apps/mobile
 
       - name: Build cowork-server binary
         env:

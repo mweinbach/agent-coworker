@@ -617,7 +617,7 @@ if (!gotSingleInstanceLock) {
   );
 
   app.on("window-all-closed", () => {
-    if (process.platform === "linux") {
+    if (process.platform === "linux" || (process.platform === "win32" && !quickChatController?.hasTray())) {
       app.quit();
     }
   });

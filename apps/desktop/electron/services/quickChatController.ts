@@ -152,6 +152,10 @@ export class QuickChatController {
     this.quickChatThreadId = null;
   }
 
+  hasTray(): boolean {
+    return this.tray !== null;
+  }
+
   private syncShortcutRegistration(): void {
     this.unregisterCurrentShortcut();
     if (!this.menuBarEnabled || !this.quickChatShortcutEnabled) {

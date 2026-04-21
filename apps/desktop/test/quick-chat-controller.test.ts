@@ -264,5 +264,23 @@ describe("resolveTrayIconPath", () => {
     });
 
     expect(createdTrays[0]?.destroyed).toBe(true);
+    expect(controller.hasTray()).toBe(false);
+  });
+
+  test("reports tray availability while the tray surface is active", () => {
+    createdTrays.length = 0;
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "win32",
+      trayIconPath: "/tmp/icon.ico",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow: async () => new FakeWindow() as never,
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+
+    expect(controller.hasTray()).toBe(true);
   });
 });

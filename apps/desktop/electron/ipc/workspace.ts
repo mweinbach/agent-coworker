@@ -22,6 +22,81 @@ import {
 } from "../../src/lib/desktopSchemas";
 import type { DesktopIpcModuleContext } from "./types";
 
+type DesktopWindowMode = "main" | "quick-chat" | "utility";
+
+function resolveDesktopWindowMode(event: { sender?: { getURL?: () => string } }): DesktopWindowMode {
+  const rawUrl = typeof event.sender?.getURL === "function" ? event.sender.getURL() : "";
+  if (!rawUrl) {
+    return "main";
+  }
+
+  try {
+    const parsed = new URL(rawUrl);
+    const mode = parsed.searchParams.get("window");
+    return mode === "quick-chat" || mode === "utility" ? mode : "main";
+  } catch {
+    return "main";
+  }
+}
+
+function compareIsoTimestamp(left: string, right: string): number {
+  return Date.parse(left) - Date.parse(right);
+}
+
+function mergePopupThreads(current: PersistedState["threads"], incoming: PersistedState["threads"]): PersistedState["threads"] {
+  const merged = new Map(current.map((thread) => [thread.id, thread]));
+  const order = current.map((thread) => thread.id);
+
+  for (const thread of incoming) {
+    const existing = merged.get(thread.id);
+    if (!existing) {
+      merged.set(thread.id, thread);
+      order.push(thread.id);
+      continue;
+    }
+
+    const next =
+      thread.lastEventSeq > existing.lastEventSeq
+        ? thread
+        : thread.lastEventSeq < existing.lastEventSeq
+          ? existing
+          : thread.messageCount > existing.messageCount
+            ? thread
+            : thread.messageCount < existing.messageCount
+              ? existing
+              : compareIsoTimestamp(thread.lastMessageAt, existing.lastMessageAt) > 0
+                ? thread
+                : existing;
+
+    merged.set(thread.id, next);
+  }
+
+  return order
+    .map((threadId) => merged.get(threadId))
+    .filter((thread): thread is NonNullable<typeof thread> => Boolean(thread));
+}
+
+function mergePopupPersistedState(current: PersistedState, incoming: PersistedState): PersistedState {
+  const mergedWorkspaces = [...current.workspaces];
+  const currentWorkspaceIds = new Set(current.workspaces.map((workspace) => workspace.id));
+  for (const workspace of incoming.workspaces) {
+    if (!currentWorkspaceIds.has(workspace.id)) {
+      mergedWorkspaces.push(workspace);
+      currentWorkspaceIds.add(workspace.id);
+    }
+  }
+
+  const mergedThreads = mergePopupThreads(current.threads, incoming.threads)
+    .filter((thread) => currentWorkspaceIds.has(thread.workspaceId));
+
+  return {
+    ...current,
+    version: Math.max(current.version ?? 2, incoming.version ?? 2, 2),
+    workspaces: mergedWorkspaces,
+    threads: mergedThreads,
+  };
+}
+
 export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
   const { deps, handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
 
@@ -57,12 +132,18 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
         path: await workspaceRoots.assertApprovedWorkspacePath(workspace.path),
       }))
     );
-    const nextState: PersistedState = {
+    const requestedState: PersistedState = {
       ...input,
       workspaces,
     };
+    const windowMode = resolveDesktopWindowMode(_event);
+    const nextState =
+      windowMode === "main"
+        ? requestedState
+        : mergePopupPersistedState(await deps.persistence.loadState(), requestedState);
+
     await deps.persistence.saveState(nextState);
-    workspaceRoots.setApprovedWorkspaceRoots(workspaces.map((workspace) => workspace.path));
+    workspaceRoots.setApprovedWorkspaceRoots(nextState.workspaces.map((workspace) => workspace.path));
     deps.mobileRelayBridge.invalidateWorkspaceListCache();
     deps.applyPersistedState?.(nextState);
   });

@@ -4,7 +4,11 @@ function readWindowSearchParams(): URLSearchParams | null {
   if (typeof window === "undefined") {
     return null;
   }
-  return new URLSearchParams(window.location.search);
+  const search = window.location?.search;
+  if (typeof search !== "string") {
+    return null;
+  }
+  return new URLSearchParams(search);
 }
 
 export function getDesktopWindowMode(): DesktopWindowMode {

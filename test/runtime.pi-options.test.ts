@@ -398,6 +398,38 @@ describe("pi runtime provider option mapping", () => {
     });
   });
 
+  test("degrades to the fully relaxed schema when the shallow Fireworks fallback still exceeds budget", () => {
+    const propertyEntries = Array.from({ length: 100 }, (_, index) => {
+      const key = `property-${index}-${"x".repeat(48)}`;
+      return [
+        key,
+        {
+          type: "string",
+          enum: Array.from({ length: 24 }, (__unused, enumIndex) => `value-${enumIndex}-${"y".repeat(24)}`),
+        },
+      ] as const;
+    });
+    const giantSchema = {
+      type: "object",
+      properties: Object.fromEntries(propertyEntries),
+      required: propertyEntries.map(([key]) => key),
+      additionalProperties: false,
+    };
+    const tools = {
+      giantTool: {
+        description: "tool with many long property names",
+        inputSchema: giantSchema,
+      },
+    };
+
+    const fireworksTools = piRuntimeInternal.toolMapToPiTools(tools as any, "fireworks") as any[];
+    expect(fireworksTools[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+      additionalProperties: true,
+    });
+  });
+
   test("degrades Fireworks tool schemas once the cumulative schema budget is exhausted", () => {
     const sharedSchema = {
       type: "object",

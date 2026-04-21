@@ -501,6 +501,17 @@ function estimateSchemaBytes(schema: Record<string, unknown>): number | undefine
   }
 }
 
+function fitsFireworksSchemaBudget(
+  schemaBytes: number | undefined,
+  totalBytes: number,
+): schemaBytes is number {
+  return (
+    schemaBytes !== undefined
+    && schemaBytes <= FIREWORKS_TOOL_SCHEMA_MAX_BYTES
+    && totalBytes + schemaBytes <= FIREWORKS_TOTAL_TOOL_SCHEMA_MAX_BYTES
+  );
+}
+
 function shapePreservingShallowObjectSchema(schema: Record<string, unknown>): Record<string, unknown> {
   if (schema.type !== "object") return relaxedToolJsonSchema();
 
@@ -529,23 +540,26 @@ export function applyProviderToolSchemaBudget(
 ): Record<string, unknown> {
   if (provider !== "fireworks") return schema;
 
-  const schemaBytes = estimateSchemaBytes(schema);
   const totalBytes = state?.totalBytes ?? 0;
-  if (
-    schemaBytes !== undefined &&
-    schemaBytes <= FIREWORKS_TOOL_SCHEMA_MAX_BYTES &&
-    totalBytes + schemaBytes <= FIREWORKS_TOTAL_TOOL_SCHEMA_MAX_BYTES
-  ) {
-    if (state) state.totalBytes += schemaBytes;
-    return schema;
+  const candidates = [
+    schema,
+    shapePreservingShallowObjectSchema(schema),
+    relaxedToolJsonSchema(),
+  ];
+
+  for (const candidate of candidates) {
+    const candidateBytes = estimateSchemaBytes(candidate);
+    if (!fitsFireworksSchemaBudget(candidateBytes, totalBytes)) continue;
+    if (state) state.totalBytes += candidateBytes;
+    return candidate;
   }
 
-  const fallback = shapePreservingShallowObjectSchema(schema);
-  const fallbackBytes = estimateSchemaBytes(fallback);
-  if (state && fallbackBytes !== undefined) {
-    state.totalBytes += fallbackBytes;
+  const relaxed = relaxedToolJsonSchema();
+  const relaxedBytes = estimateSchemaBytes(relaxed);
+  if (state && relaxedBytes !== undefined) {
+    state.totalBytes += relaxedBytes;
   }
-  return fallback;
+  return relaxed;
 }
 
 export function toolCallFromPartial(event: any): {

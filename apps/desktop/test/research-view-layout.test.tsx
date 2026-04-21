@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -7,24 +7,12 @@ import { setupJsdom } from "./jsdomHarness";
 
 const noop = () => {};
 
-mock.module("../src/ui/research/NewResearchComposer", () => ({
-  NewResearchComposer: () => createElement("div", { "data-testid": "new-research-composer" }, "composer"),
-}));
-
-mock.module("../src/ui/research/ResearchCardGrid", () => ({
-  ResearchCardGrid: () => createElement("div", { "data-testid": "research-card-grid" }, "grid"),
-}));
-
-mock.module("../src/ui/research/ResearchDetailPane", () => ({
-  ResearchDetailPane: () => createElement("div", { "data-testid": "research-detail-pane" }, "detail"),
-}));
-
 const { useAppStore } = await import("../src/app/store");
 const { DEFAULT_RESEARCH_SETTINGS } = await import("../src/app/types");
 const { ResearchView } = await import("../src/ui/ResearchView");
 
 function resetAppStore(overrides: Record<string, unknown> = {}) {
-  const state = useAppStore.getState();
+  const state = useAppStore.getInitialState();
   useAppStore.setState({
     ...state,
     refreshResearchList: noop,

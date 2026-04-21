@@ -17,6 +17,19 @@ import type { ResearchMcpServer, ResearchSettingsState } from "../types";
 const researchRouterCleanupByWorkspace = new Map<string, () => void>();
 const researchLifecycleCleanupByWorkspace = new Map<string, () => void>();
 
+export const __internalResearchActionBindings = {
+  reset() {
+    for (const cleanup of researchRouterCleanupByWorkspace.values()) {
+      cleanup();
+    }
+    researchRouterCleanupByWorkspace.clear();
+    for (const cleanup of researchLifecycleCleanupByWorkspace.values()) {
+      cleanup();
+    }
+    researchLifecycleCleanupByWorkspace.clear();
+  },
+};
+
 function isResearchRecord(value: unknown): value is ResearchRecord {
   return typeof value === "object" && value !== null && typeof (value as { id?: unknown }).id === "string";
 }

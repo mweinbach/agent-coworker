@@ -5,20 +5,6 @@ import { createRoot } from "react-dom/client";
 
 import { setupJsdom } from "./jsdomHarness";
 
-mock.module("../src/components/ui/button", () => ({
-  Button: ({
-    children,
-    className,
-    disabled,
-    ...props
-  }: {
-    children?: unknown;
-    className?: string;
-    disabled?: boolean;
-    [key: string]: unknown;
-  }) => createElement("button", { ...props, className, disabled }, children),
-}));
-
 mock.module("../src/ui/research/ResearchExportMenu", () => ({
   ResearchExportMenu: () => createElement("div", { "data-testid": "research-export-menu" }, "export"),
 }));
@@ -40,9 +26,10 @@ mock.module("../src/ui/research/ResearchSourcesList", () => ({
 const { useAppStore } = await import("../src/app/store");
 const { DEFAULT_RESEARCH_SETTINGS } = await import("../src/app/types");
 const { ResearchDetailPane } = await import("../src/ui/research/ResearchDetailPane");
+mock.restore();
 
 function resetAppStore(overrides: Record<string, unknown> = {}) {
-  const state = useAppStore.getState();
+  const state = useAppStore.getInitialState();
   useAppStore.setState({
     ...state,
     cancelResearch: async () => {},

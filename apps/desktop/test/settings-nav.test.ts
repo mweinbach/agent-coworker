@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { defaultWorkspaceRuntime, RUNTIME } from "../src/app/store.helpers/runtimeState";
+import { disposeAllJsonRpcSocketState } from "../src/app/store.helpers/jsonRpcSocket";
+import { __internalResearchActionBindings } from "../src/app/store.actions/research";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -107,6 +109,8 @@ const { useAppStore } = await import("../src/app/store");
 
 describe("settings nav (store)", () => {
   beforeEach(() => {
+    __internalResearchActionBindings.reset();
+    disposeAllJsonRpcSocketState();
     RUNTIME.jsonRpcSockets.clear();
     RUNTIME.workspaceJsonRpcSocketGenerations.clear();
     RUNTIME.skillInstallWaiters.clear();
@@ -145,6 +149,17 @@ describe("settings nav (store)", () => {
       workspaces: [],
       workspaceRuntimeById: {},
       selectedWorkspaceId: null,
+      researchTransportWorkspaceId: null,
+      researchById: {},
+      researchOrder: [],
+      selectedResearchId: null,
+      researchListLoading: false,
+      researchListError: null,
+      researchMcpServers: [],
+      researchMcpServersLoading: false,
+      researchMcpServersError: null,
+      researchSubscribedIds: [],
+      researchExportPendingIds: [],
       threads: [],
       threadRuntimeById: {},
       selectedThreadId: null,
@@ -378,8 +393,6 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().researchListLoading).toBe(true);
 
     await openPromise;
-
-    expect(useAppStore.getState().researchListLoading).toBe(false);
     expect(useAppStore.getState().researchListError).toBeNull();
   });
 

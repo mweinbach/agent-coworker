@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PaperclipIcon, Settings2Icon } from "lucide-react";
+import { PaperclipIcon, Settings2Icon, XIcon } from "lucide-react";
 
 import { useAppStore } from "../../app/store";
 import {
@@ -33,7 +33,13 @@ function toAttachmentDraft(file: File): AttachmentDraft {
   };
 }
 
-export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void }) {
+export function NewResearchComposer({
+  onSubmitted,
+  onDismiss,
+}: {
+  onSubmitted?: () => void;
+  onDismiss?: () => void;
+}) {
   const startResearch = useAppStore((s) => s.startResearch);
   const researchDraftSettings = useAppStore((s) => s.researchDraftSettings);
   const [input, setInput] = useState("");
@@ -90,7 +96,19 @@ export function NewResearchComposer({ onSubmitted }: { onSubmitted?: () => void 
   };
 
   return (
-    <div className="border-b border-border/55 px-4 py-4">
+    <div className="relative border-b border-border/55 px-4 py-4">
+      {onDismiss ? (
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className="absolute right-2 top-2 h-6 w-6 rounded-full text-muted-foreground hover:text-foreground"
+          onClick={onDismiss}
+          aria-label="Close new research composer"
+        >
+          <XIcon className="h-3.5 w-3.5" />
+        </Button>
+      ) : null}
       <PromptInputRoot
         className="max-w-none"
         fileDrop={{

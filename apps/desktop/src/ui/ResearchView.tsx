@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { PlusIcon, RefreshCwIcon } from "lucide-react";
+import { PlusIcon } from "lucide-react";
 
 import { useAppStore } from "../app/store";
 import { Button } from "../components/ui/button";
@@ -33,67 +33,51 @@ export function ResearchView() {
     void refreshResearchList();
   }, [refreshResearchList, researchListLoading, researchOrder.length]);
 
+  const showComposer = composerOpen || research.length === 0;
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center justify-between gap-4 border-b border-border/55 px-6 py-4">
-        <div className="min-w-0">
-          <h2 className="text-[1.1rem] font-semibold tracking-tight text-foreground">Research</h2>
-          <p className="text-sm text-muted-foreground">
-            Long-running cited reports, streamed separately from chat threads.
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button
-            size="sm"
-            type="button"
-            variant="outline"
-            className="gap-2"
-            onClick={() => void refreshResearchList()}
-          >
-            <RefreshCwIcon className="h-4 w-4" />
-            Refresh
-          </Button>
-          <Button
-            size="sm"
-            type="button"
-            className="gap-2"
-            onClick={() => setComposerOpen((open) => !open)}
-          >
-            <PlusIcon className="h-4 w-4" />
-            New Research
-          </Button>
-        </div>
-      </div>
-
-      <div className="flex min-h-0 flex-1">
-        <section className="flex min-h-0 w-[380px] shrink-0 flex-col border-r border-border/55 bg-muted/10">
-          {composerOpen || research.length === 0 ? (
-            <NewResearchComposer onSubmitted={() => setComposerOpen(false)} />
-          ) : null}
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-            {researchListError ? (
-              <div className="rounded-xl border border-destructive/35 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                {researchListError}
-              </div>
-            ) : null}
-            {research.length === 0 && !researchListLoading && !researchListError ? (
-              <div className="rounded-2xl border border-border/60 bg-card/70 px-4 py-5 text-center text-sm text-muted-foreground">
-                Start a research run to build a cited report here.
-              </div>
-            ) : (
-              <ResearchCardGrid
-                research={research}
-                selectedResearchId={selectedResearchId}
-                onSelectResearch={(researchId) => void selectResearch(researchId)}
-              />
-            )}
+    <div className="flex h-full min-h-0 flex-row">
+      <section className="flex min-h-0 w-[380px] shrink-0 flex-col border-r border-border/55 bg-muted/10">
+        <div className="flex items-center justify-between gap-2 border-b border-border/55 px-4 py-2.5">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+            Runs
           </div>
-        </section>
+          <Button
+            size="sm"
+            type="button"
+            className="h-7 gap-1.5 px-2.5 text-xs"
+            onClick={() => setComposerOpen(true)}
+            disabled={showComposer}
+          >
+            <PlusIcon className="h-3.5 w-3.5" />
+            New
+          </Button>
+        </div>
+        {showComposer ? (
+          <NewResearchComposer
+            onSubmitted={() => setComposerOpen(false)}
+            onDismiss={research.length > 0 ? () => setComposerOpen(false) : undefined}
+          />
+        ) : null}
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          {researchListError ? (
+            <div className="rounded-xl border border-destructive/35 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+              {researchListError}
+            </div>
+          ) : null}
+          {research.length > 0 ? (
+            <ResearchCardGrid
+              research={research}
+              selectedResearchId={selectedResearchId}
+              onSelectResearch={(researchId) => void selectResearch(researchId)}
+            />
+          ) : null}
+        </div>
+      </section>
 
-        <section className="min-h-0 flex-1">
-          <ResearchDetailPane research={selectedResearch} />
-        </section>
-      </div>
+      <section className="min-h-0 flex-1">
+        <ResearchDetailPane research={selectedResearch} />
+      </section>
     </div>
   );
 }

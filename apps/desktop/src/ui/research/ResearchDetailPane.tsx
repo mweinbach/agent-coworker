@@ -2,6 +2,7 @@ import type { ResearchDetail } from "../../app/types";
 import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { formatRelativeAge } from "../../lib/time";
 import { ResearchExportMenu } from "./ResearchExportMenu";
 import { ResearchFollowUpComposer } from "./ResearchFollowUpComposer";
 import { ResearchReportRenderer } from "./ResearchReportRenderer";
@@ -25,6 +26,10 @@ function statusClassName(status: ResearchDetail["status"]): string {
   }
 }
 
+function statusLabel(status: ResearchDetail["status"]): string {
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
 export function ResearchDetailPane({ research }: { research: ResearchDetail | null }) {
   const cancelResearch = useAppStore((s) => s.cancelResearch);
   const exportPendingIds = useAppStore((s) => s.researchExportPendingIds);
@@ -39,40 +44,56 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
 
   const exportPending = exportPendingIds.includes(research.id);
   const running = research.status === "running" || research.status === "pending";
+  const startedAgo = formatRelativeAge(research.createdAt);
+  const canExport = research.status === "completed" && research.outputsMarkdown.trim().length > 0;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b border-border/55 px-6 py-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="truncate text-[1.15rem] font-semibold tracking-tight text-foreground">{research.title}</h3>
-              <Badge className={cn(statusClassName(research.status))}>
-                {research.status}
-              </Badge>
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">{research.prompt}</p>
-            {research.error ? (
-              <div className="mt-2 text-xs text-destructive">{research.error}</div>
-            ) : null}
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <ResearchExportMenu researchId={research.id} pending={exportPending} />
-            {running ? (
-              <Button size="sm" variant="outline" type="button" onClick={() => void cancelResearch(research.id)}>
-                Cancel
-              </Button>
-            ) : null}
-          </div>
+      <div className="flex items-center justify-between gap-4 border-b border-border/55 px-6 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Badge className={cn(statusClassName(research.status))}>
+            {statusLabel(research.status)}
+          </Badge>
+          {startedAgo ? (
+            <span className="text-xs text-muted-foreground">
+              started {startedAgo} ago
+            </span>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <ResearchExportMenu
+            researchId={research.id}
+            pending={exportPending}
+            disabled={!canExport}
+          />
+          {running ? (
+            <Button size="sm" variant="outline" type="button" onClick={() => void cancelResearch(research.id)}>
+              Cancel
+            </Button>
+          ) : null}
         </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto flex max-w-4xl flex-col gap-6">
-          <ResearchThoughtPanel thoughtSummaries={research.thoughtSummaries} />
+          <section className="rounded-2xl border border-border/55 bg-card/40 px-4 py-3">
+            <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              Prompt
+            </div>
+            <p className="whitespace-pre-wrap text-sm leading-6 text-foreground/90">
+              {research.prompt}
+            </p>
+            {research.error ? (
+              <div className="mt-2 text-xs text-destructive">{research.error}</div>
+            ) : null}
+          </section>
+
+          <ResearchThoughtPanel thoughtSummaries={research.thoughtSummaries} status={research.status} />
           <ResearchReportRenderer markdown={research.outputsMarkdown} status={research.status} />
           <ResearchSourcesList sources={research.sources} />
-          <ResearchFollowUpComposer parentResearchId={research.id} disabled={running} />
+          {research.status === "completed" ? (
+            <ResearchFollowUpComposer parentResearchId={research.id} />
+          ) : null}
         </div>
       </div>
     </div>

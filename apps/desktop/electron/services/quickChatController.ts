@@ -1,15 +1,7 @@
 import path from "node:path";
 
-import {
-  BrowserWindow,
-  Menu,
-  Tray,
-  app,
-  globalShortcut,
-  nativeImage,
-  screen,
-  type Rectangle,
-} from "electron";
+import * as electron from "electron";
+import type { BrowserWindow, Rectangle, Tray } from "electron";
 
 import type { PersistedState } from "../../src/app/types";
 import { normalizeDesktopSettings } from "../../src/app/types";
@@ -36,6 +28,13 @@ type QuickChatControllerOptions = {
   createQuickChatWindow: (opts?: ShowQuickChatWindowInput) => Promise<BrowserWindow>;
   createUtilityWindow: () => Promise<BrowserWindow>;
 };
+
+const shortcutBridge = "globalShortcut" in electron
+  ? electron.globalShortcut
+  : {
+      register: () => false,
+      unregister: () => {},
+    };
 
 export class QuickChatController {
   private readonly appName: string;
@@ -153,7 +152,7 @@ export class QuickChatController {
     }
 
     try {
-      const registered = globalShortcut.register(this.quickChatShortcutAccelerator, () => {
+      const registered = shortcutBridge.register(this.quickChatShortcutAccelerator, () => {
         void this.toggleQuickChatWindow();
       });
       if (!registered) {
@@ -170,7 +169,7 @@ export class QuickChatController {
     if (!this.registeredShortcutAccelerator) {
       return;
     }
-    globalShortcut.unregister(this.registeredShortcutAccelerator);
+    shortcutBridge.unregister(this.registeredShortcutAccelerator);
     this.registeredShortcutAccelerator = null;
   }
 
@@ -179,7 +178,7 @@ export class QuickChatController {
       return;
     }
     const icon = this.buildTrayIcon();
-    this.tray = new Tray(icon);
+    this.tray = new electron.Tray(icon);
     this.tray.setToolTip(`${this.appName} quick chat`);
     this.tray.on("click", () => {
       void this.toggleUtilityWindow(this.tray?.getBounds());
@@ -204,7 +203,7 @@ export class QuickChatController {
     const shortcutSuffix = this.quickChatShortcutEnabled
       ? ` (${formatQuickChatShortcutLabel(this.quickChatShortcutAccelerator)})`
       : "";
-    return Menu.buildFromTemplate([
+    return electron.Menu.buildFromTemplate([
       {
         label: `Open Quick Chat${shortcutSuffix}`,
         click: () => {
@@ -222,7 +221,7 @@ export class QuickChatController {
         label: `Quit ${this.appName}`,
         click: () => {
           this.quitting = true;
-          app.quit();
+          electron.app.quit();
         },
       },
     ]);
@@ -233,8 +232,8 @@ export class QuickChatController {
       ? [this.trayIconPath, this.trayIconPath.slice(0, -4) + ".png"]
       : [this.trayIconPath];
     const image = iconPathCandidates
-      .map((candidatePath) => nativeImage.createFromPath(candidatePath))
-      .find((candidateImage) => !candidateImage.isEmpty()) ?? nativeImage.createEmpty();
+      .map((candidatePath) => electron.nativeImage.createFromPath(candidatePath))
+      .find((candidateImage) => !candidateImage.isEmpty()) ?? electron.nativeImage.createEmpty();
     if (image.isEmpty()) {
       console.warn(`[desktop] Tray icon asset was not found: ${this.trayIconPath}`);
     }
@@ -242,7 +241,7 @@ export class QuickChatController {
     if (this.platform === "darwin" && !resized.isEmpty()) {
       const { width, height } = resized.getSize();
       if (width > 0 && height > 0) {
-        const templated = nativeImage.createFromBitmap(createTrayMaskBitmap(resized.toBitmap()), {
+        const templated = electron.nativeImage.createFromBitmap(createTrayMaskBitmap(resized.toBitmap()), {
           width,
           height,
           scaleFactor: 1,
@@ -334,8 +333,8 @@ export class QuickChatController {
   private positionPopupWindow(win: BrowserWindow, anchorBounds?: Rectangle): void {
     const currentBounds = win.getBounds();
     const display = anchorBounds
-      ? screen.getDisplayMatching(anchorBounds)
-      : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+      ? electron.screen.getDisplayMatching(anchorBounds)
+      : electron.screen.getDisplayNearestPoint(electron.screen.getCursorScreenPoint());
     const workArea = display.workArea;
 
     let x = workArea.x + Math.round((workArea.width - currentBounds.width) / 2);

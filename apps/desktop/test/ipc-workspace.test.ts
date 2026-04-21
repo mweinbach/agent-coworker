@@ -1,8 +1,9 @@
-import { describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
+import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
-mock.module("electron", () => ({
+const electronMockOverrides = {
   BrowserWindow: {
     fromWebContents() {
       return null;
@@ -16,11 +17,19 @@ mock.module("electron", () => ({
       return { canceled: true, filePaths: [] };
     },
   },
-}));
+};
+
+setElectronMockOverrides(electronMockOverrides);
+
+mock.module("electron", () => createElectronMock());
 
 const { registerWorkspaceIpc } = await import("../electron/ipc/workspace");
 
 describe("workspace IPC", () => {
+  beforeEach(() => {
+    setElectronMockOverrides(electronMockOverrides);
+  });
+
   test("updates approved roots before invalidating workspace cache", async () => {
     const handlers = new Map<
       string,

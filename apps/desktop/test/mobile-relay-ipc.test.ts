@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
+import { createElectronMock, setElectronMockOverrides } from "./helpers/mockElectron";
 
 const getAllWindowsMock = mock(() => []);
-mock.module("electron", () => ({
+const electronMockOverrides = {
   app: {
     getPath: () => process.cwd(),
     getAppPath: () => process.cwd(),
@@ -19,7 +20,11 @@ mock.module("electron", () => ({
       };
     },
   },
-}));
+};
+
+setElectronMockOverrides(electronMockOverrides);
+
+mock.module("electron", () => createElectronMock());
 
 const { registerMobileRelayIpc } = await import("../electron/ipc/mobileRelay");
 
@@ -30,6 +35,7 @@ function flushMicrotasks() {
 describe("mobile relay IPC", () => {
   beforeEach(() => {
     process.env.COWORK_ENABLE_REMOTE_ACCESS = "1";
+    setElectronMockOverrides(electronMockOverrides);
   });
 
   afterEach(() => {

@@ -779,11 +779,9 @@ function ThreadModelIndicator({
   return (
     <Badge
       variant="outline"
-      title={title}
-      aria-label={`Session model ${title}`}
       className="h-8 max-w-[220px] rounded-none border-0 bg-transparent px-1.5 text-[13px] font-medium text-foreground/80 shadow-none"
     >
-      <span className="truncate">{friendly}</span>
+      <span className="truncate" title={title} aria-label={`Session model ${title}`}>{friendly}</span>
     </Badge>
   );
 }

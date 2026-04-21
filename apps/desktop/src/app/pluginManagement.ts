@@ -35,9 +35,9 @@ export function resolvePluginCatalogWorkspaceSelection(opts: {
     ? opts.pluginManagementMode
     : "auto";
   const catalogWorkspaceId = pluginManagementWorkspaceId ?? selectedWorkspaceId;
-  const managementScope = pluginManagementMode === "global"
-    ? "global"
-    : catalogWorkspaceId ? "workspace" : "global";
+  const managementScope = pluginManagementMode === "workspace"
+    ? "workspace"
+    : "global";
   const displayWorkspaceId = managementScope === "workspace"
     ? (pluginManagementWorkspaceId ?? selectedWorkspaceId)
     : null;

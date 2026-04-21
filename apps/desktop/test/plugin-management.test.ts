@@ -17,7 +17,7 @@ function workspace(id: string, name: string): WorkspaceRecord {
 }
 
 describe("plugin management selection", () => {
-  test("auto mode defaults the catalog to the selected workspace", () => {
+  test("auto mode defaults the catalog to global scope", () => {
     const selection = resolvePluginCatalogWorkspaceSelection({
       workspaces: [workspace("ws-1", "Workspace One")],
       selectedWorkspaceId: "ws-1",
@@ -27,9 +27,9 @@ describe("plugin management selection", () => {
 
     expect(selection.pluginManagementWorkspaceId).toBeNull();
     expect(selection.pluginManagementMode).toBe("auto");
-    expect(selection.displayWorkspaceId).toBe("ws-1");
+    expect(selection.displayWorkspaceId).toBeNull();
     expect(selection.catalogWorkspaceId).toBe("ws-1");
-    expect(selection.managementScope).toBe("workspace");
+    expect(selection.managementScope).toBe("global");
   });
 
   test("global mode preserves the global filter while keeping the selected workspace runtime", () => {

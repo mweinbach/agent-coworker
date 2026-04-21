@@ -180,7 +180,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-background/40 px-6 py-5">
+      <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
         <div className="mx-auto flex max-w-4xl flex-col gap-6">
           {research.error && tab !== "prompt" ? (
             <div className="rounded-xl border border-destructive/35 bg-destructive/5 px-3 py-2 text-xs text-destructive">

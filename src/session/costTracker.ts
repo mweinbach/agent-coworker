@@ -107,6 +107,7 @@ export class SessionCostTracker {
     private readonly modelSummaries = new Map<string, ModelUsageSummary>();
     private readonly listeners = new Set<CostTrackerListener>();
 
+    private lifetimeTurnCount = 0;
     private totalPromptTokens = 0;
     private totalCompletionTokens = 0;
     private totalTokens = 0;
@@ -148,6 +149,7 @@ export class SessionCostTracker {
             );
         }
 
+        tracker.lifetimeTurnCount = Math.max(snapshot.totalTurns, snapshot.turns.length);
         tracker.totalPromptTokens = snapshot.totalPromptTokens;
         tracker.totalCompletionTokens = snapshot.totalCompletionTokens;
         tracker.totalTokens = snapshot.totalTokens;
@@ -194,7 +196,7 @@ export class SessionCostTracker {
 
         const entry: TurnCostEntry = {
             turnId,
-            turnIndex: this.turns.length,
+            turnIndex: this.lifetimeTurnCount,
             timestamp: new Date().toISOString(),
             provider,
             model,
@@ -204,16 +206,16 @@ export class SessionCostTracker {
         };
 
         this.turns.push(entry);
+        this.lifetimeTurnCount += 1;
+
+        this.totalPromptTokens += usage.promptTokens;
+        this.totalCompletionTokens += usage.completionTokens;
+        this.totalTokens += usage.totalTokens;
+        this.recordSessionCost(costUsd);
+        this.updateModelSummary(provider, model, usage, costUsd);
 
         if (this.turns.length > MAX_TURNS) {
             this.turns.splice(0, this.turns.length - MAX_TURNS);
-            this.recalculateTotals();
-        } else {
-            this.totalPromptTokens += usage.promptTokens;
-            this.totalCompletionTokens += usage.completionTokens;
-            this.totalTokens += usage.totalTokens;
-            this.recordSessionCost(costUsd);
-            this.updateModelSummary(provider, model, usage, costUsd);
         }
 
         this.updatedAt = entry.timestamp;
@@ -278,7 +280,7 @@ export class SessionCostTracker {
             : this.turns;
         return {
             sessionId: this.sessionId,
-            totalTurns: this.turns.length,
+            totalTurns: this.lifetimeTurnCount,
             totalPromptTokens: this.totalPromptTokens,
             totalCompletionTokens: this.totalCompletionTokens,
             totalTokens: this.totalTokens,
@@ -478,25 +480,7 @@ export class SessionCostTracker {
         return `${date.toISOString().slice(11, 19)}Z`;
     }
 
-    private recalculateTotals(): void {
-        this.totalPromptTokens = 0;
-        this.totalCompletionTokens = 0;
-        this.totalTokens = 0;
-        this.estimatedTotalCostUsd = null;
-        this.hasUnknownCostTurns = false;
-        this.costTrackingAvailable = false;
-        this.modelSummaries.clear();
-
-        for (const turn of this.turns) {
-            this.totalPromptTokens += turn.usage.promptTokens;
-            this.totalCompletionTokens += turn.usage.completionTokens;
-            this.totalTokens += turn.usage.totalTokens;
-            this.recordSessionCost(turn.estimatedCostUsd);
-            this.updateModelSummary(turn.provider, turn.model, turn.usage, turn.estimatedCostUsd);
-        }
-    }
-
-    private emit(event: CostTrackerEvent): void {
+private emit(event: CostTrackerEvent): void {
         for (const listener of this.listeners) {
             try {
                 listener(event);

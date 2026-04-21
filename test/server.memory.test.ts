@@ -17,28 +17,30 @@ function createFakeSessionContext(allMessages: ModelMessage[] = [], messages: Mo
 
 describe("Memory caps", () => {
   describe("HistoryManager", () => {
-    test("caps allMessages at 1000 while preserving system message", () => {
+    test("preserves full allMessages history for fork seeding", () => {
       const ctx = createFakeSessionContext();
       const hm = new HistoryManager(ctx as any);
 
-      // Seed a system message
       ctx.state.allMessages.push({ role: "system", content: "You are helpful" });
 
-      // Append 1500 user messages
       const batch: ModelMessage[] = [];
       for (let i = 0; i < 1500; i++) {
         batch.push({ role: "user", content: `msg ${i}` });
       }
       hm.appendMessagesToHistory(batch);
 
-      expect(ctx.state.allMessages.length).toBeLessThanOrEqual(1000);
+      expect(ctx.state.allMessages.length).toBe(1501);
       expect(ctx.state.allMessages[0].role).toBe("system");
+      expect(ctx.state.allMessages[1].content).toBe("msg 0");
       expect(ctx.state.allMessages.at(-1)?.content).toBe("msg 1499");
     });
 
-    test("caps allMessages without system message", () => {
+    test("caps runtime messages window while keeping system message", () => {
       const ctx = createFakeSessionContext();
       const hm = new HistoryManager(ctx as any);
+
+      ctx.state.allMessages.push({ role: "system", content: "You are helpful" });
+      ctx.state.messages.push({ role: "system", content: "You are helpful" });
 
       const batch: ModelMessage[] = [];
       for (let i = 0; i < 1500; i++) {
@@ -46,13 +48,14 @@ describe("Memory caps", () => {
       }
       hm.appendMessagesToHistory(batch);
 
-      expect(ctx.state.allMessages.length).toBeLessThanOrEqual(1000);
-      expect(ctx.state.allMessages.at(-1)?.content).toBe("msg 1499");
+      expect(ctx.state.messages.length).toBeLessThanOrEqual(200);
+      expect(ctx.state.messages[0].role).toBe("system");
+      expect(ctx.state.messages.at(-1)?.content).toBe("msg 1499");
     });
   });
 
   describe("SessionCostTracker", () => {
-    test("caps turns at 512 and recalculates totals", () => {
+    test("caps per-turn window at 512 but preserves lifetime totals", () => {
       const tracker = new SessionCostTracker("test-session");
 
       for (let i = 0; i < 600; i++) {
@@ -70,8 +73,13 @@ describe("Memory caps", () => {
 
       const snapshot = tracker.getSnapshot();
       expect(snapshot.turns.length).toBeLessThanOrEqual(512);
-      expect(snapshot.totalTurns).toBeLessThanOrEqual(512);
-      expect(snapshot.totalTokens).toBe(512 * 15);
+      expect(snapshot.totalTurns).toBe(600);
+      expect(snapshot.totalTokens).toBe(600 * 15);
+      expect(snapshot.totalPromptTokens).toBe(600 * 10);
+      expect(snapshot.totalCompletionTokens).toBe(600 * 5);
+      expect(snapshot.byModel).toHaveLength(1);
+      expect(snapshot.byModel[0].turns).toBe(600);
+      expect(snapshot.byModel[0].totalTokens).toBe(600 * 15);
     });
 
     test("preserves latest turns after cap", () => {

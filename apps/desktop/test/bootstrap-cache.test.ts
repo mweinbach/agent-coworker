@@ -474,6 +474,62 @@ describe("desktop bootstrap cache", () => {
     expect(seed?.workspaces?.[0]?.wsProtocol).toBe("jsonrpc");
   });
 
+  test("buildCachedDesktopStateSeed migrates legacy flat defaultFeatureFlags.a2ui=true to override", () => {
+    const legacyFlatA2uiState = {
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        workspaces: [
+          {
+            ...cachedState.persistedState.workspaces[0],
+            defaultFeatureFlags: { a2ui: true },
+          },
+        ],
+      },
+    };
+    const seed = buildCachedDesktopStateSeed(legacyFlatA2uiState);
+    expect(seed?.desktopFeatureFlagOverrides?.a2ui).toBe(true);
+  });
+
+  test("buildCachedDesktopStateSeed migrates legacy defaultEnableA2ui=true to override", () => {
+    const legacyEnableState = {
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        workspaces: [
+          {
+            ...cachedState.persistedState.workspaces[0],
+            defaultEnableA2ui: true,
+          },
+        ],
+      },
+    };
+    const seed = buildCachedDesktopStateSeed(legacyEnableState);
+    expect(seed?.desktopFeatureFlagOverrides?.a2ui).toBe(true);
+  });
+
+  test("buildCachedDesktopStateSeed migrates nested defaultFeatureFlags.workspace.a2ui=true to override", () => {
+    const nestedState = {
+      ...cachedState,
+      persistedState: {
+        ...cachedState.persistedState,
+        workspaces: [
+          {
+            ...cachedState.persistedState.workspaces[0],
+            defaultFeatureFlags: { workspace: { a2ui: true } },
+          },
+        ],
+      },
+    };
+    const seed = buildCachedDesktopStateSeed(nestedState);
+    expect(seed?.desktopFeatureFlagOverrides?.a2ui).toBe(true);
+  });
+
+  test("buildCachedDesktopStateSeed does not set a2ui override when no legacy flag is present", () => {
+    const seed = buildCachedDesktopStateSeed(cachedState);
+    expect(seed?.desktopFeatureFlagOverrides?.a2ui).toBeUndefined();
+  });
+
   test("buildCachedDesktopStateSeed restores plugin management workspace selection", () => {
     const seed = buildCachedDesktopStateSeed({
       ...cachedState,

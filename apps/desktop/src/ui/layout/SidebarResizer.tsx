@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { KeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 
 import { useAppStore } from "../../app/store";
 import { cn } from "../../lib/utils";
@@ -12,8 +12,9 @@ export function SidebarResizer() {
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
 
-  const handleMouseDown = useCallback(
-    (event: ReactMouseEvent) => {
+  const handlePointerDown = useCallback(
+    (event: ReactPointerEvent) => {
+      if (event.button !== undefined && event.button !== 0) return;
       event.preventDefault();
       startXRef.current = event.clientX;
       startWidthRef.current = sidebarWidth;
@@ -59,7 +60,7 @@ export function SidebarResizer() {
       pendingWidth = null;
     };
 
-    const handleMouseMove = (event: MouseEvent) => {
+    const handlePointerMove = (event: PointerEvent) => {
       const delta = event.clientX - startXRef.current;
       pendingWidth = startWidthRef.current + delta;
       if (frameId === null) {
@@ -67,7 +68,7 @@ export function SidebarResizer() {
       }
     };
 
-    const handleMouseUp = () => {
+    const handlePointerUp = () => {
       if (frameId !== null) {
         window.cancelAnimationFrame(frameId);
         frameId = null;
@@ -80,22 +81,24 @@ export function SidebarResizer() {
       setDragging(false);
     };
 
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
 
     return () => {
       if (frameId !== null) {
         window.cancelAnimationFrame(frameId);
       }
       document.body.classList.remove("app-resizing-sidebars");
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
     };
   }, [dragging, setSidebarWidth]);
 
   return (
     <div
-      className={cn("app-native-no-drag absolute right-0 top-0 z-20 h-full w-2 cursor-col-resize", dragging && "bg-primary/20")}
+      className={cn("app-native-no-drag absolute right-0 top-0 z-20 h-full w-2 cursor-col-resize touch-none", dragging && "bg-primary/20")}
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize sidebar"
@@ -103,7 +106,7 @@ export function SidebarResizer() {
       aria-valuemax={440}
       aria-valuenow={sidebarWidth}
       tabIndex={0}
-      onMouseDown={handleMouseDown}
+      onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}
     />
   );

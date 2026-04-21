@@ -153,7 +153,7 @@ function SettingsNavigation({
         <div className="flex flex-col gap-3 max-[860px]:flex-row max-[860px]:flex-wrap max-[860px]:gap-x-4 max-[860px]:gap-y-3">
           {settingsGroups.map((group) => (
             <div key={group.label} className="flex min-w-0 flex-col">
-              <div className="mb-0.5 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-foreground/52">
+              <div className="mb-0.5 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-foreground/72">
                 {group.label}
               </div>
               <div className="flex flex-col gap-0.5">

@@ -24,7 +24,7 @@ describe("settings shell", () => {
 
   test("keeps settings navigation copy on readable foreground-derived colors", () => {
     const markup = renderToStaticMarkup(createElement(SettingsShell));
-    expect(markup).toContain("text-foreground/52");
+    expect(markup).toContain("text-foreground/72");
     expect(markup).toContain("font-normal text-foreground/78 hover:bg-foreground/[0.05] hover:text-foreground");
   });
 });

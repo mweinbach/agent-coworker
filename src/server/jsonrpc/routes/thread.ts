@@ -4,6 +4,7 @@ import {
   primeSessionSnapshotCitationCache,
 } from "../../citationMetadata";
 import { JSONRPC_ERROR_CODES } from "../protocol";
+import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
 import { createThreadTurnProjector } from "../threadReadProjector";
 
 import { toJsonRpcParams } from "./shared";
@@ -179,66 +180,35 @@ export function createThreadRouteHandlers(
     },
 
     "thread/hydrate": async (ws, message) => {
-      const params = toJsonRpcParams(message.params);
-      const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      const afterSeq = typeof params.afterSeq === "number" && Number.isFinite(params.afterSeq)
-        ? Math.max(0, Math.floor(params.afterSeq))
-        : 0;
-      if (!threadId) {
+      const parsed = jsonRpcThreadTurnRequestSchemas["thread/hydrate"].safeParse(message.params);
+      if (!parsed.success) {
+        const detail = parsed.error.issues[0]?.message;
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
-          message: "thread/hydrate requires threadId",
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
         });
         return;
       }
-      const binding = context.threads.load(threadId);
-      if (!binding?.session) {
+      const { threadId, afterSeq = 0, includeTurns = false } = parsed.data;
+      const snapshot = context.threads.readSnapshot(threadId);
+      if (!snapshot) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
           message: `Unknown thread: ${threadId}`,
         });
         return;
       }
-      const thread = context.utils.buildThreadFromSession(binding.session);
-      let replayedRequestIds: ReadonlySet<string> | undefined;
-      if (afterSeq > 0) {
-        await context.journal.waitForIdle(threadId);
-        binding.session.beginDisconnectedReplayBuffer();
-        replayedRequestIds = context.journal.replay(ws, threadId, afterSeq);
-      }
-      const pendingPromptEvents = binding.session.getPendingPromptEventsForReplay();
-      context.threads.subscribe(
-        ws,
-        threadId,
-        {
-          ...(binding.session.activeTurnId
-            ? {
-                initialActiveTurnId: binding.session.activeTurnId,
-                initialAgentText: binding.session.getLatestAssistantText() ?? "",
-              }
-            : {}),
-          ...(afterSeq > 0 ? { drainDisconnectedReplayBuffer: true } : {}),
-          pendingPromptEvents,
-          ...(replayedRequestIds?.size ? { skipPendingPromptRequestIds: replayedRequestIds } : {}),
-        },
-      );
-
-      // Read snapshot (same as thread/read)
-      const snapshot = context.threads.readSnapshot(threadId);
-      if (!snapshot) {
-        context.jsonrpc.sendError(ws, message.id, {
-          code: JSONRPC_ERROR_CODES.internalError,
-          message: `Failed to read snapshot for thread: ${threadId}`,
-        });
-        return;
-      }
+      const liveBinding = context.threads.getLive(threadId);
+      const thread = liveBinding?.session
+        ? context.utils.buildThreadFromSession(liveBinding.session)
+        : context.utils.buildThreadFromRecord(context.threads.getPersisted(threadId)!);
       await context.journal.waitForIdle(threadId);
       const enrichedSnapshot = enrichSessionSnapshotCitationsFromCache(snapshot);
-      let journalTailSeq = 0;
+      let journalTailSeq = afterSeq;
       let turns: ReturnType<ReturnType<typeof createThreadTurnProjector>["build"]> | undefined;
-      if (params.includeTurns === true) {
+      if (includeTurns) {
         const projector = createThreadTurnProjector();
-        let seq = 0;
+        let seq = afterSeq;
         while (true) {
           const batch = context.journal.list(threadId, {
             afterSeq: seq,
@@ -264,9 +234,7 @@ export function createThreadRouteHandlers(
           ...(turns ? { turns } : {}),
         },
         coworkSnapshot: enrichedSnapshot,
-        ...(params.includeTurns === true
-          ? { journalTailSeq }
-          : {}),
+        ...(includeTurns ? { journalTailSeq } : {}),
       });
       queueMicrotask(() => {
         primeSessionSnapshotCitationCache(enrichedSnapshot);

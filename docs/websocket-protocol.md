@@ -314,7 +314,7 @@ The synthesized text is deterministic and human-readable (starts with `[a2ui.act
 - `thread/list` now returns `messageCount` and `lastEventSeq` on every thread summary
 - `thread/read.coworkSnapshot` is the authoritative projected-feed hydration payload for UI clients and matches live `turn/*` + `item/*` ordering
 - `thread/read` can return a journal-projected `turns` array when `includeTurns: true`
-- `thread/hydrate` returns the same payload as `thread/read` (thread summary, turns, and snapshot) without subscribing the client to live thread events; ideal for lightweight previews
+- `thread/hydrate` returns the same payload as `thread/read` (thread summary, turns, and snapshot) without subscribing the client to live thread events. Optional `afterSeq` skips journal events up to and including that cursor when building the `turns` array (useful for pull-based catchup); `journalTailSeq` is returned when `includeTurns: true` so callers can advance the cursor. Ideal for lightweight previews.
 - `thread/resume` accepts `afterSeq` to replay journaled notifications after a known cursor, then reattaches the live thread sink so reconnecting clients do not receive the same journaled events twice
 - `cowork/workspace/bootstrap` returns persisted and live threads for a workspace plus workspace control state; used by desktop/mobile clients on initial load
 - Cowork persists canonical thread journal events in sqlite so reconnect / restart replay is no longer limited to an in-memory socket buffer

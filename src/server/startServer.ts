@@ -1588,7 +1588,7 @@ export async function startAgentServer(
   const evictIdleSessionBindings = () => {
     const now = Date.now();
     for (const [sessionId, binding] of sessionBindings) {
-      if (binding.session && binding.sinks.size === 0) {
+      if (binding.session && binding.sinks.size === 0 && !binding.session.isBusy) {
         const idleSince = sessionIdleSince.get(sessionId) ?? 0;
         if (idleSince > 0 && now - idleSince > IDLE_TIMEOUT_MS) {
           binding.session.dispose("idle eviction");

@@ -343,7 +343,11 @@ function hasLegacyA2uiEnabled(value: unknown): boolean {
       && typeof featureFlags === "object"
       && !Array.isArray(featureFlags)
     ) {
-      const workspaceFlags = (featureFlags as Record<string, unknown>).workspace;
+      const flagsRecord = featureFlags as Record<string, unknown>;
+      if (flagsRecord.a2ui === true) {
+        return true;
+      }
+      const workspaceFlags = flagsRecord.workspace;
       if (
         workspaceFlags
         && typeof workspaceFlags === "object"
@@ -854,20 +858,52 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           Boolean(state.workspaceRuntimeById[workspace.id]?.controlSessionId)
         );
 
-        await Promise.all(activeControlWorkspaces.map(async (workspace) => {
-          await requestJsonRpcControlEvent(get, set, workspace.id, "cowork/session/defaults/apply", {
-            cwd: workspace.path,
-            config: {
-              featureFlags: {
-                workspace: {
-                  a2ui: enabled,
+        const fanoutResults = await Promise.all(activeControlWorkspaces.map(async (workspace) => {
+          try {
+            await requestJsonRpcControlEvent(get, set, workspace.id, "cowork/session/defaults/apply", {
+              cwd: workspace.path,
+              config: {
+                featureFlags: {
+                  workspace: {
+                    a2ui: enabled,
+                  },
                 },
               },
-            },
-          }).catch(() => false);
+            });
+            return { workspaceId: workspace.id, ok: true as const };
+          } catch (error) {
+            return {
+              workspaceId: workspace.id,
+              ok: false as const,
+              detail: error instanceof Error ? error.message : String(error),
+            };
+          }
         }));
 
-        const activeWorkspaceIds = new Set(activeControlWorkspaces.map((workspace) => workspace.id));
+        const failedWorkspaceIds = new Set(
+          fanoutResults.filter((r) => !r.ok).map((r) => r.workspaceId),
+        );
+        if (failedWorkspaceIds.size > 0) {
+          const failedNames = activeControlWorkspaces
+            .filter((w) => failedWorkspaceIds.has(w.id))
+            .map((w) => w.name || w.path)
+            .join(", ");
+          set((s) => ({
+            notifications: pushNotification(s.notifications, {
+              id: makeId(),
+              ts: nowIso(),
+              kind: "error",
+              title: `Could not sync A2UI flag to ${failedWorkspaceIds.size} workspace${failedWorkspaceIds.size === 1 ? "" : "s"}`,
+              detail: `Reopen or restart: ${failedNames}`,
+            }),
+          }));
+        }
+
+        const activeWorkspaceIds = new Set(
+          activeControlWorkspaces
+            .filter((w) => !failedWorkspaceIds.has(w.id))
+            .map((workspace) => workspace.id),
+        );
         const activeThreadIds = get().threads
           .filter((thread) => activeWorkspaceIds.has(thread.workspaceId))
           .map((thread) => thread.id);

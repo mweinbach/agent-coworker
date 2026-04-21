@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { createElement } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -40,18 +40,28 @@ mock.module("dompurify", () => ({
   },
 }));
 
-mock.module("../src/lib/docxPreview", () => ({
-  decorateDocxPreviewHtml: (value: string) => `<div class="docx-title">${value}</div>`,
-  loadDocxPreviewLayout: loadDocxPreviewLayoutMock,
-}));
-
 mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
   getPreferredFileApp: getPreferredFileAppMock,
   readFileForPreview: readFileForPreviewMock,
 }));
 
+const docxPreviewModule = await import("../src/lib/docxPreview");
+spyOn(docxPreviewModule, "loadDocxPreviewLayout").mockImplementation(loadDocxPreviewLayoutMock);
+
 const { useAppStore } = await import("../src/app/store");
 const { FilePreviewModal } = await import("../src/ui/FilePreviewModal");
+
+function setupPreviewJsdom() {
+  return setupJsdom({
+    includeAnimationFrame: true,
+    extraGlobals: {
+      DOMParser: undefined,
+    },
+    setupWindow: (dom) => {
+      (globalThis as Record<string, unknown>).DOMParser = dom.window.DOMParser;
+    },
+  });
+}
 
 function resetAppStore() {
   const state = useAppStore.getState();
@@ -67,6 +77,10 @@ async function flushUi() {
   await Promise.resolve();
 }
 
+afterAll(() => {
+  mock.restore();
+});
+
 describe("file preview modal", () => {
   beforeEach(() => {
     previewResult = {
@@ -81,7 +95,7 @@ describe("file preview modal", () => {
   });
 
   test.serial("shows the simplified header controls and a constrained markdown shell", async () => {
-    const harness = setupJsdom({ includeAnimationFrame: true });
+    const harness = setupPreviewJsdom();
 
     try {
       const path = "/Users/mweinbach/Library/Mobile Documents/com~apple~CloudDocs/Claude/tmp/preview_latency_review.md";
@@ -120,7 +134,7 @@ describe("file preview modal", () => {
   });
 
   test.serial("uses the preferred app label and renders the richer docx shell", async () => {
-    const harness = setupJsdom({ includeAnimationFrame: true });
+    const harness = setupPreviewJsdom();
 
     try {
       const path = "/Users/mweinbach/Library/Mobile Documents/com~apple~CloudDocs/Claude/tmp/preview_latency_review.docx";
@@ -163,7 +177,7 @@ describe("file preview modal", () => {
   });
 
   test.serial("keeps clicks inside the popup open and closes on overlay clicks", async () => {
-    const harness = setupJsdom({ includeAnimationFrame: true });
+    const harness = setupPreviewJsdom();
 
     try {
       const path = "/Users/mweinbach/Library/Mobile Documents/com~apple~CloudDocs/Claude/tmp/preview_latency_review.docx";

@@ -5,6 +5,7 @@ import {
   checkForUpdates as runUpdateCheck,
   getUpdateState,
   getDesktopFeatureFlags,
+  isPackagedDesktopApp,
   quitAndInstallUpdate as runQuitAndInstallUpdate,
   deleteTranscript,
   listDirectory,
@@ -533,7 +534,7 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       state.threads,
       desktopFeatureFlags,
       cached.ui as CachedDesktopUiState | undefined,
-      false,
+      isPackagedDesktopApp(),
     );
     const connectedProviders = deriveConnectedProviders(state.providerState as PersistedProviderState | undefined);
     return {

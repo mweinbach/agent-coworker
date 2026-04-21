@@ -246,6 +246,7 @@ export type SetWindowAppearanceInput = {
 
 export interface DesktopApi {
   readonly features: DesktopFeatureFlags;
+  readonly isPackaged?: boolean;
   resolveDesktopFeatureFlags(overrides?: DesktopFeatureFlagOverrides): DesktopFeatureFlags;
   startWorkspaceServer(opts: StartWorkspaceServerInput): Promise<{ url: string }>;
   stopWorkspaceServer(opts: StopWorkspaceServerInput): Promise<void>;

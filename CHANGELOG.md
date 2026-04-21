@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.1.47 - 2026-04-21
+
+### Fixed
+
+- **Version bump** — Incremented package versions to 0.1.47.
+
 ## 0.1.46 - 2026-04-21
 
 ### Fixed

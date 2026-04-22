@@ -43,13 +43,21 @@ function compareIsoTimestamp(left: string, right: string): number {
   return Date.parse(left) - Date.parse(right);
 }
 
-function mergePopupThreads(current: PersistedState["threads"], incoming: PersistedState["threads"]): PersistedState["threads"] {
+async function mergePopupThreads(
+  current: PersistedState["threads"],
+  incoming: PersistedState["threads"],
+  readTranscript: (threadId: string) => Promise<unknown[]>,
+): Promise<PersistedState["threads"]> {
   const merged = new Map(current.map((thread) => [thread.id, thread]));
   const order = current.map((thread) => thread.id);
 
   for (const thread of incoming) {
     const existing = merged.get(thread.id);
     if (!existing) {
+      const transcript = await readTranscript(thread.id).catch(() => []);
+      if (transcript.length === 0) {
+        continue;
+      }
       merged.set(thread.id, thread);
       order.push(thread.id);
       continue;
@@ -76,10 +84,14 @@ function mergePopupThreads(current: PersistedState["threads"], incoming: Persist
     .filter((thread): thread is NonNullable<typeof thread> => Boolean(thread));
 }
 
-function mergePopupPersistedState(current: PersistedState, incoming: PersistedState): PersistedState {
+async function mergePopupPersistedState(
+  current: PersistedState,
+  incoming: PersistedState,
+  readTranscript: (threadId: string) => Promise<unknown[]>,
+): Promise<PersistedState> {
   const currentWorkspaceIds = new Set(current.workspaces.map((workspace) => workspace.id));
-  const mergedThreads = mergePopupThreads(current.threads, incoming.threads)
-    .filter((thread) => currentWorkspaceIds.has(thread.workspaceId));
+  const incomingThreads = incoming.threads.filter((thread) => currentWorkspaceIds.has(thread.workspaceId));
+  const mergedThreads = await mergePopupThreads(current.threads, incomingThreads, readTranscript);
 
   return {
     ...current,
@@ -118,21 +130,27 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.saveState, async (_event, state: PersistedState) => {
     const input = parseWithSchema(persistedStateInputSchema, state, "state");
-    const workspaces = await Promise.all(
-      input.workspaces.map(async (workspace) => ({
-        ...workspace,
-        path: await workspaceRoots.assertApprovedWorkspacePath(workspace.path),
-      }))
-    );
-    const requestedState: PersistedState = {
-      ...input,
-      workspaces,
-    };
     const windowMode = resolveDesktopWindowMode(_event);
-    const nextState =
-      windowMode === "main"
-        ? requestedState
-        : mergePopupPersistedState(await deps.persistence.loadState(), requestedState);
+    const nextState = await (async () => {
+      if (windowMode !== "main") {
+        return await mergePopupPersistedState(
+          await deps.persistence.loadState(),
+          input,
+          (threadId) => deps.persistence.readTranscript(threadId),
+        );
+      }
+
+      const workspaces = await Promise.all(
+        input.workspaces.map(async (workspace) => ({
+          ...workspace,
+          path: await workspaceRoots.assertApprovedWorkspacePath(workspace.path),
+        }))
+      );
+      return {
+        ...input,
+        workspaces,
+      } satisfies PersistedState;
+    })();
 
     await deps.persistence.saveState(nextState);
     workspaceRoots.setApprovedWorkspaceRoots(nextState.workspaces.map((workspace) => workspace.path));

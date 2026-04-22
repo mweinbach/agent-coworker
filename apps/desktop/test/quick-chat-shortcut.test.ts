@@ -42,6 +42,15 @@ describe("quick chat shortcut helpers", () => {
       altKey: false,
       shiftKey: true,
     })).toEqual({ status: "complete", accelerator: "CommandOrControl+Shift+K" });
+
+    expect(captureQuickChatShortcut({
+      key: " ",
+      code: "Space",
+      metaKey: true,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: true,
+    })).toEqual({ status: "complete", accelerator: "CommandOrControl+Shift+Space" });
   });
 
   test("rejects shortcut capture without modifiers", () => {

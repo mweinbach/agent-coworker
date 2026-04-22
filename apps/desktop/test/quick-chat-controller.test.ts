@@ -322,6 +322,34 @@ describe("resolveTrayIconPath", () => {
     expect(controller.hasTray()).toBe(false);
   });
 
+  test("keeps quick chat windows alive on trayless platforms during state sync", async () => {
+    createdTrays.length = 0;
+    const quickChatWindow = new FakeWindow();
+    const controller = new QuickChatController({
+      appName: "Cowork",
+      platform: "linux",
+      trayIconPath: "/tmp/icon.png",
+      getMainWindow: () => null,
+      createMainWindow: async () => new FakeWindow() as never,
+      createQuickChatWindow: async () => quickChatWindow as never,
+      retargetQuickChatWindow: async () => {},
+      createUtilityWindow: async () => new FakeWindow() as never,
+    });
+
+    controller.initialize();
+    await controller.showQuickChatWindow();
+
+    controller.applyPersistedState({
+      version: 2,
+      workspaces: [],
+      threads: [],
+    });
+
+    expect(quickChatWindow.destroyed).toBe(false);
+    expect(createdTrays).toHaveLength(0);
+    expect(controller.hasTray()).toBe(false);
+  });
+
   test("retargets existing quick chat windows for explicit thread requests", async () => {
     createdTrays.length = 0;
     const quickChatWindow = new FakeWindow();

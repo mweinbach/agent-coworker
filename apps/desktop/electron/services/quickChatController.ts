@@ -221,7 +221,6 @@ export class QuickChatController {
         this.tray = null;
       }
       this.destroyWindow(this.utilityWindow);
-      this.destroyWindow(this.quickChatWindow);
       return;
     }
     this.ensureTray();

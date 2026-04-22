@@ -289,7 +289,7 @@ describe("resolveTrayIconPath", () => {
     expect(controller.hasTray()).toBe(true);
   });
 
-  test("destroys popup windows when tray support is disabled", async () => {
+  test("destroys utility windows but keeps quick chat usable when the menu bar feature is disabled", async () => {
     createdTrays.length = 0;
     const quickChatWindow = new FakeWindow();
     const utilityWindow = new FakeWindow();
@@ -317,7 +317,7 @@ describe("resolveTrayIconPath", () => {
       },
     });
 
-    expect(quickChatWindow.destroyed).toBe(true);
+    expect(quickChatWindow.destroyed).toBe(false);
     expect(utilityWindow.destroyed).toBe(true);
     expect(controller.hasTray()).toBe(false);
   });

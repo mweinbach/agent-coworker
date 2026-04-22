@@ -82,6 +82,9 @@ function canonicalModifierToken(token: string): typeof MODIFIER_TOKENS[number] |
 }
 
 function canonicalMainKeyToken(token: string): string | null {
+  if (token === " ") {
+    return "Space";
+  }
   const trimmed = token.trim();
   if (!trimmed) {
     return null;
@@ -137,6 +140,9 @@ function acceleratorFromParts(parts: { modifiers: string[]; key: string }): stri
 function canonicalKeyFromKeyboardEvent(event: ShortcutEventLike): string | null {
   if (MODIFIER_ONLY_KEYS.has(event.key)) {
     return null;
+  }
+  if (event.code === "Space") {
+    return "Space";
   }
 
   if (event.code?.startsWith("Key") && event.code.length === 4) {

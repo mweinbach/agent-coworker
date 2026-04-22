@@ -43,19 +43,36 @@ function compareIsoTimestamp(left: string, right: string): number {
   return Date.parse(left) - Date.parse(right);
 }
 
-async function mergePopupThreads(
+function trackRemovedThreadIds(
+  removedThreadIds: Set<string>,
+  current: PersistedState["threads"],
+  next: PersistedState["threads"],
+): void {
+  const currentThreads = Array.isArray(current) ? current : [];
+  const nextThreads = Array.isArray(next) ? next : [];
+  const nextIds = new Set(nextThreads.map((thread) => thread.id));
+  for (const thread of currentThreads) {
+    if (!nextIds.has(thread.id)) {
+      removedThreadIds.add(thread.id);
+    }
+  }
+  for (const thread of nextThreads) {
+    removedThreadIds.delete(thread.id);
+  }
+}
+
+function mergePopupThreads(
   current: PersistedState["threads"],
   incoming: PersistedState["threads"],
-  readTranscript: (threadId: string) => Promise<unknown[]>,
-): Promise<PersistedState["threads"]> {
+  removedThreadIds: ReadonlySet<string>,
+): PersistedState["threads"] {
   const merged = new Map(current.map((thread) => [thread.id, thread]));
   const order = current.map((thread) => thread.id);
 
   for (const thread of incoming) {
     const existing = merged.get(thread.id);
     if (!existing) {
-      const transcript = await readTranscript(thread.id).catch(() => []);
-      if (transcript.length === 0) {
+      if (removedThreadIds.has(thread.id)) {
         continue;
       }
       merged.set(thread.id, thread);
@@ -87,11 +104,11 @@ async function mergePopupThreads(
 async function mergePopupPersistedState(
   current: PersistedState,
   incoming: PersistedState,
-  readTranscript: (threadId: string) => Promise<unknown[]>,
+  removedThreadIds: ReadonlySet<string>,
 ): Promise<PersistedState> {
   const currentWorkspaceIds = new Set(current.workspaces.map((workspace) => workspace.id));
   const incomingThreads = incoming.threads.filter((thread) => currentWorkspaceIds.has(thread.workspaceId));
-  const mergedThreads = await mergePopupThreads(current.threads, incomingThreads, readTranscript);
+  const mergedThreads = mergePopupThreads(current.threads, incomingThreads, removedThreadIds);
 
   return {
     ...current,
@@ -103,6 +120,7 @@ async function mergePopupPersistedState(
 
 export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
   const { deps, handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
+  const removedThreadIds = new Set<string>();
 
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.startWorkspaceServer,
@@ -136,20 +154,23 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
         return await mergePopupPersistedState(
           await deps.persistence.loadState(),
           input,
-          (threadId) => deps.persistence.readTranscript(threadId),
+          removedThreadIds,
         );
       }
 
+      const currentState = await deps.persistence.loadState();
       const workspaces = await Promise.all(
         input.workspaces.map(async (workspace) => ({
           ...workspace,
           path: await workspaceRoots.assertApprovedWorkspacePath(workspace.path),
         }))
       );
-      return {
+      const nextState = {
         ...input,
         workspaces,
       } satisfies PersistedState;
+      trackRemovedThreadIds(removedThreadIds, currentState.threads, nextState.threads);
+      return nextState;
     })();
 
     await deps.persistence.saveState(nextState);

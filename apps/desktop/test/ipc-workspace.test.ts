@@ -189,17 +189,7 @@ describe("workspace IPC", () => {
               showHiddenFiles: true,
             };
           },
-          async readTranscript(threadId: string) {
-            if (threadId === "thread-popup") {
-              return [
-                {
-                  ts: "2026-04-21T11:45:00.000Z",
-                  threadId,
-                  direction: "client",
-                  payload: { type: "user_message", text: "hello" },
-                },
-              ];
-            }
+          async readTranscript() {
             return [];
           },
           async appendTranscriptEvent() {},
@@ -297,9 +287,50 @@ describe("workspace IPC", () => {
     expect(savedState.showHiddenFiles).toBe(true);
   });
 
-  test("popup saveState does not resurrect deleted threads without transcripts", async () => {
+  test("popup saveState does not resurrect thread ids removed by the main window", async () => {
     const handlers = new Map<string, (event: unknown, args?: unknown) => Promise<unknown> | unknown>();
     let savedState: any = null;
+    let persistedState: any = {
+      version: 2,
+      workspaces: [
+        {
+          id: "ws-main",
+          name: "Main workspace",
+          path: "/tmp/ws-main",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          lastOpenedAt: "2026-04-21T10:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-main",
+          workspaceId: "ws-main",
+          title: "Latest main thread",
+          titleSource: "manual",
+          createdAt: "2026-04-21T09:00:00.000Z",
+          lastMessageAt: "2026-04-21T11:00:00.000Z",
+          status: "active",
+          sessionId: "session-main",
+          messageCount: 4,
+          lastEventSeq: 4,
+        },
+        {
+          id: "thread-deleted",
+          workspaceId: "ws-main",
+          title: "Deleted thread",
+          titleSource: "manual",
+          createdAt: "2026-04-21T08:45:00.000Z",
+          lastMessageAt: "2026-04-21T09:15:00.000Z",
+          status: "active",
+          sessionId: "session-deleted",
+          messageCount: 1,
+          lastEventSeq: 1,
+        },
+      ],
+    };
 
     registerWorkspaceIpc({
       deps: {
@@ -309,37 +340,10 @@ describe("workspace IPC", () => {
         persistence: {
           async saveState(state: unknown) {
             savedState = state;
+            persistedState = state;
           },
           async loadState() {
-            return {
-              version: 2,
-              workspaces: [
-                {
-                  id: "ws-main",
-                  name: "Main workspace",
-                  path: "/tmp/ws-main",
-                  createdAt: "2026-01-01T00:00:00.000Z",
-                  lastOpenedAt: "2026-04-21T10:00:00.000Z",
-                  defaultEnableMcp: true,
-                  defaultBackupsEnabled: true,
-                  yolo: false,
-                },
-              ],
-              threads: [
-                {
-                  id: "thread-main",
-                  workspaceId: "ws-main",
-                  title: "Latest main thread",
-                  titleSource: "manual",
-                  createdAt: "2026-04-21T09:00:00.000Z",
-                  lastMessageAt: "2026-04-21T11:00:00.000Z",
-                  status: "active",
-                  sessionId: "session-main",
-                  messageCount: 4,
-                  lastEventSeq: 4,
-                },
-              ],
-            };
+            return persistedState;
           },
           async readTranscript() {
             return [];
@@ -380,6 +384,14 @@ describe("workspace IPC", () => {
 
     const saveStateHandler = handlers.get(DESKTOP_IPC_CHANNELS.saveState);
     expect(saveStateHandler).toBeDefined();
+
+    await saveStateHandler?.(
+      {},
+      {
+        ...persistedState,
+        threads: [persistedState.threads[0]],
+      },
+    );
 
     await saveStateHandler?.(
       {

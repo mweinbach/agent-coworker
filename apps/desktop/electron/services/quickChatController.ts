@@ -208,7 +208,14 @@ export class QuickChatController {
 
   private syncTrayVisibility(): void {
     const supportsTray = this.platform === "darwin" || this.platform === "win32";
-    if (!supportsTray || !this.menuBarEnabled) {
+    if (!supportsTray) {
+      if (this.tray) {
+        this.tray.destroy();
+        this.tray = null;
+      }
+      return;
+    }
+    if (!this.menuBarEnabled) {
       if (this.tray) {
         this.tray.destroy();
         this.tray = null;

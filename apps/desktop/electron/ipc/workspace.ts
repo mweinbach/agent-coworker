@@ -77,22 +77,14 @@ function mergePopupThreads(current: PersistedState["threads"], incoming: Persist
 }
 
 function mergePopupPersistedState(current: PersistedState, incoming: PersistedState): PersistedState {
-  const mergedWorkspaces = [...current.workspaces];
   const currentWorkspaceIds = new Set(current.workspaces.map((workspace) => workspace.id));
-  for (const workspace of incoming.workspaces) {
-    if (!currentWorkspaceIds.has(workspace.id)) {
-      mergedWorkspaces.push(workspace);
-      currentWorkspaceIds.add(workspace.id);
-    }
-  }
-
   const mergedThreads = mergePopupThreads(current.threads, incoming.threads)
     .filter((thread) => currentWorkspaceIds.has(thread.workspaceId));
 
   return {
     ...current,
     version: Math.max(current.version ?? 2, incoming.version ?? 2, 2),
-    workspaces: mergedWorkspaces,
+    workspaces: current.workspaces,
     threads: mergedThreads,
   };
 }

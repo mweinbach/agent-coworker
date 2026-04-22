@@ -90,10 +90,12 @@ function createFakeWindow(x = 40, y = 50): FakeWindow {
 function createHandlers() {
   const handlers = new Map<string, (event: { sender: FakeWebContents }, args?: unknown) => unknown>();
   const showMainWindow = mock(async () => {});
+  const consumePendingMenuCommands = mock(() => ["openSettings"] as const);
   const showQuickChatWindow = mock(async () => {});
   registerWindowIpc({
     deps: {
       showMainWindow,
+      consumePendingMenuCommands,
       showQuickChatWindow,
     } as never,
     workspaceRoots: {} as never,
@@ -104,7 +106,7 @@ function createHandlers() {
       return value as never;
     },
   });
-  return { handlers, showMainWindow, showQuickChatWindow };
+  return { handlers, consumePendingMenuCommands, showMainWindow, showQuickChatWindow };
 }
 
 describe("window IPC", () => {
@@ -156,13 +158,15 @@ describe("window IPC", () => {
   });
 
   test("exposes show window IPC actions", async () => {
-    const { handlers, showMainWindow, showQuickChatWindow } = createHandlers();
+    const { handlers, consumePendingMenuCommands, showMainWindow, showQuickChatWindow } = createHandlers();
     const sender = new FakeWebContents(21);
 
     await handlers.get(DESKTOP_IPC_CHANNELS.showMainWindow)?.({ sender });
+    expect(await handlers.get(DESKTOP_IPC_CHANNELS.consumePendingMenuCommands)?.({ sender })).toEqual(["openSettings"]);
     await handlers.get(DESKTOP_IPC_CHANNELS.showQuickChatWindow)?.({ sender }, { threadId: "thread-21" });
 
     expect(showMainWindow).toHaveBeenCalledTimes(1);
+    expect(consumePendingMenuCommands).toHaveBeenCalledTimes(1);
     expect(showQuickChatWindow).toHaveBeenCalledTimes(1);
     expect(showQuickChatWindow).toHaveBeenCalledWith({ threadId: "thread-21" });
   });

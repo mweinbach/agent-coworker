@@ -453,12 +453,25 @@ const desktopApi = Object.freeze<DesktopApi>({
     if (typeof listener !== "function") {
       throw new Error("onMenuCommand listener must be a function");
     }
+    let active = true;
     const wrapped = (_event: unknown, payload: unknown) => {
       assertDesktopMenuCommand(payload);
       listener(payload);
     };
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.menuCommand, wrapped);
+    void ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.consumePendingMenuCommands).then((payload: unknown) => {
+      if (!active || !Array.isArray(payload)) {
+        return;
+      }
+      for (const command of payload) {
+        assertDesktopMenuCommand(command);
+        listener(command);
+      }
+    }).catch(() => {
+      // Keep live menu-command delivery even if pending startup commands are unavailable.
+    });
     return () => {
+      active = false;
       ipcRenderer.off(DESKTOP_EVENT_CHANNELS.menuCommand, wrapped);
     };
   },

@@ -14,6 +14,7 @@ import {
   showQuickChatWindow,
   showNotification,
 } from "./lib/desktopCommands";
+import { canPopOutQuickChatThread } from "./lib/quickChatPopout";
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { ContextSidebar } from "./ui/ContextSidebar";
 import { FilePreviewModal } from "./ui/FilePreviewModal";
@@ -154,6 +155,7 @@ const ChatShell = memo(function ChatShell({
     && runtime?.connected === true
     && Boolean(runtime?.sessionId)
     && activeThread?.status === "active";
+  const quickChatPopOutThreadId = activeThread && canPopOutQuickChatThread(activeThread) ? activeThread.id : null;
 
   useEffect(() => {
     if (!hasAnimatedSidebarsRef.current) {
@@ -181,7 +183,7 @@ const ChatShell = memo(function ChatShell({
         sidebarWidth={sidebarWidth}
         contextSidebarCollapsed={contextSidebarCollapsed}
         onToggleContextSidebar={toggleContextSidebar}
-        onPopOutQuickChat={selectedThreadId ? () => void showQuickChatWindow({ threadId: selectedThreadId }) : undefined}
+        onPopOutQuickChat={quickChatPopOutThreadId ? () => void showQuickChatWindow({ threadId: quickChatPopOutThreadId }) : undefined}
         title={topBarTitle}
         subtitle={topBarSubtitle}
         managementMode={view === "skills" ? "plugins" : "thread"}

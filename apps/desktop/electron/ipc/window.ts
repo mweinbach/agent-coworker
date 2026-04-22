@@ -125,6 +125,10 @@ export function registerWindowIpc(context: DesktopIpcModuleContext): void {
     await deps.showMainWindow();
   });
 
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.consumePendingMenuCommands, () => {
+    return deps.consumePendingMenuCommands();
+  });
+
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.showQuickChatWindow, async (_event, args?: ShowQuickChatWindowInput) => {
     const input = parseWithSchema(showQuickChatWindowInputSchema, args ?? {}, "showQuickChatWindow options");
     await deps.showQuickChatWindow(input);

@@ -2,7 +2,7 @@ import type { IpcMainInvokeEvent } from "electron";
 import type { z } from "zod";
 
 import type { PersistedState } from "../../src/app/types";
-import type { ShowQuickChatWindowInput } from "../../src/lib/desktopApi";
+import type { DesktopMenuCommand, ShowQuickChatWindowInput } from "../../src/lib/desktopApi";
 import type { MobileRelayBridge } from "../services/mobileRelayBridge";
 import type { PersistenceService } from "../services/persistence";
 import type { ServerManager } from "../services/serverManager";
@@ -14,6 +14,7 @@ export type DesktopIpcDeps = {
   serverManager: ServerManager;
   updater: DesktopUpdaterService;
   showMainWindow: () => Promise<void> | void;
+  consumePendingMenuCommands: () => DesktopMenuCommand[];
   showQuickChatWindow: (opts?: ShowQuickChatWindowInput) => Promise<void> | void;
   applyPersistedState?: (state: PersistedState) => void;
 };

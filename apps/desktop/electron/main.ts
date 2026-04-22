@@ -21,6 +21,7 @@ import {
 } from "./services/appearance";
 import { runDesktopSmokePromptLoadCheck } from "./services/desktopSmoke";
 import { installDesktopApplicationMenu } from "./services/menu";
+import { createMenuCommandDispatcher } from "./services/menuCommandDispatcher";
 import { MobileRelayBridge } from "./services/mobileRelayBridge";
 import { PersistenceService } from "./services/persistence";
 import { QuickChatController } from "./services/quickChatController";
@@ -69,6 +70,7 @@ const updater = new DesktopUpdaterService({
 let unregisterAppearanceListener = () => {};
 let mainWindow: BrowserWindow | null = null;
 let quickChatController: QuickChatController | null = null;
+const menuCommandDispatcher = createMenuCommandDispatcher();
 const WINDOW_SHOW_FALLBACK_TIMEOUT_MS = 2_000;
 
 if (!app.isPackaged && process.env.COWORK_ELECTRON_REMOTE_DEBUG === "1") {
@@ -131,8 +133,13 @@ function showUpdateReadyNotification(state: UpdaterState): void {
 }
 
 async function sendMenuCommand(command: DesktopMenuCommand): Promise<void> {
+  const existingMainWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
   const target = await ensureMainWindow();
-  target.webContents.send(DESKTOP_EVENT_CHANNELS.menuCommand, command);
+  menuCommandDispatcher.dispatch(command, existingMainWindow ? {
+    send(nextCommand) {
+      target.webContents.send(DESKTOP_EVENT_CHANNELS.menuCommand, nextCommand);
+    },
+  } : null);
 }
 
 function isExternalUrl(rawUrl: string): boolean {
@@ -567,6 +574,7 @@ if (!gotSingleInstanceLock) {
       serverManager,
       updater,
       showMainWindow: () => quickChatController?.showMainWindow(),
+      consumePendingMenuCommands: () => menuCommandDispatcher.drainPending(),
       showQuickChatWindow: (opts) => quickChatController?.showQuickChatWindow(opts),
       applyPersistedState: (state) => {
         quickChatController?.applyPersistedState(state);

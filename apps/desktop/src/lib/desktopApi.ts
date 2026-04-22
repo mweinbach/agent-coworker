@@ -329,6 +329,7 @@ export const DESKTOP_IPC_CHANNELS = {
   windowDragEnd: "desktop:windowDragEnd",
   getPlatform: "desktop:getPlatform",
   showMainWindow: "desktop:showMainWindow",
+  consumePendingMenuCommands: "desktop:consumePendingMenuCommands",
   showQuickChatWindow: "desktop:showQuickChatWindow",
   listDirectory: "desktop:listDirectory",
   readFile: "desktop:readFile",

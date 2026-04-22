@@ -1,8 +1,9 @@
-import * as electron from "electron";
 import { BrowserWindow } from "electron";
+import * as electron from "electron";
 import { z } from "zod";
-import { hydrateTranscriptSnapshot } from "../../src/app/transcriptHydration";
+
 import type { PersistedState } from "../../src/app/types";
+import { hydrateTranscriptSnapshot } from "../../src/app/transcriptHydration";
 import {
   DESKTOP_IPC_CHANNELS,
   type DeleteTranscriptInput,
@@ -42,13 +43,21 @@ function compareIsoTimestamp(left: string, right: string): number {
   return Date.parse(left) - Date.parse(right);
 }
 
-function mergePopupThreads(current: PersistedState["threads"], incoming: PersistedState["threads"]): PersistedState["threads"] {
+async function mergePopupThreads(
+  current: PersistedState["threads"],
+  incoming: PersistedState["threads"],
+  readTranscript: (threadId: string) => Promise<unknown[]>,
+): Promise<PersistedState["threads"]> {
   const merged = new Map(current.map((thread) => [thread.id, thread]));
   const order = current.map((thread) => thread.id);
 
   for (const thread of incoming) {
     const existing = merged.get(thread.id);
     if (!existing) {
+      const transcript = await readTranscript(thread.id).catch(() => []);
+      if (transcript.length === 0) {
+        continue;
+      }
       merged.set(thread.id, thread);
       order.push(thread.id);
       continue;
@@ -75,10 +84,14 @@ function mergePopupThreads(current: PersistedState["threads"], incoming: Persist
     .filter((thread): thread is NonNullable<typeof thread> => Boolean(thread));
 }
 
-function mergePopupPersistedState(current: PersistedState, incoming: PersistedState): PersistedState {
+async function mergePopupPersistedState(
+  current: PersistedState,
+  incoming: PersistedState,
+  readTranscript: (threadId: string) => Promise<unknown[]>,
+): Promise<PersistedState> {
   const currentWorkspaceIds = new Set(current.workspaces.map((workspace) => workspace.id));
-  const mergedThreads = mergePopupThreads(current.threads, incoming.threads)
-    .filter((thread) => currentWorkspaceIds.has(thread.workspaceId));
+  const incomingThreads = incoming.threads.filter((thread) => currentWorkspaceIds.has(thread.workspaceId));
+  const mergedThreads = await mergePopupThreads(current.threads, incomingThreads, readTranscript);
 
   return {
     ...current,
@@ -94,30 +107,19 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.startWorkspaceServer,
     async (_event, args: StartWorkspaceServerInput) => {
-      const input = parseWithSchema(
-        startWorkspaceServerInputSchema,
-        args,
-        "startWorkspaceServer options",
-      );
+      const input = parseWithSchema(startWorkspaceServerInputSchema, args, "startWorkspaceServer options");
       const workspacePath = await workspaceRoots.assertApprovedWorkspacePath(input.workspacePath);
       return await deps.serverManager.startWorkspaceServer({
         ...input,
         workspacePath,
       });
-    },
+    }
   );
 
-  handleDesktopInvoke(
-    DESKTOP_IPC_CHANNELS.stopWorkspaceServer,
-    async (_event, args: StopWorkspaceServerInput) => {
-      const input = parseWithSchema(
-        stopWorkspaceServerInputSchema,
-        args,
-        "stopWorkspaceServer options",
-      );
-      await deps.serverManager.stopWorkspaceServer(input.workspaceId);
-    },
-  );
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.stopWorkspaceServer, async (_event, args: StopWorkspaceServerInput) => {
+    const input = parseWithSchema(stopWorkspaceServerInputSchema, args, "stopWorkspaceServer options");
+    await deps.serverManager.stopWorkspaceServer(input.workspaceId);
+  });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.loadState, async () => {
     const state = await deps.persistence.loadState();
@@ -128,21 +130,27 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.saveState, async (_event, state: PersistedState) => {
     const input = parseWithSchema(persistedStateInputSchema, state, "state");
-    const workspaces = await Promise.all(
-      input.workspaces.map(async (workspace) => ({
-        ...workspace,
-        path: await workspaceRoots.assertApprovedWorkspacePath(workspace.path),
-      })),
-    );
-    const requestedState: PersistedState = {
-      ...input,
-      workspaces,
-    };
     const windowMode = resolveDesktopWindowMode(_event);
-    const nextState =
-      windowMode === "main"
-        ? requestedState
-        : mergePopupPersistedState(await deps.persistence.loadState(), requestedState);
+    const nextState = await (async () => {
+      if (windowMode !== "main") {
+        return await mergePopupPersistedState(
+          await deps.persistence.loadState(),
+          input,
+          (threadId) => deps.persistence.readTranscript(threadId),
+        );
+      }
+
+      const workspaces = await Promise.all(
+        input.workspaces.map(async (workspace) => ({
+          ...workspace,
+          path: await workspaceRoots.assertApprovedWorkspacePath(workspace.path),
+        }))
+      );
+      return {
+        ...input,
+        workspaces,
+      } satisfies PersistedState;
+    })();
 
     await deps.persistence.saveState(nextState);
     workspaceRoots.setApprovedWorkspaceRoots(nextState.workspaces.map((workspace) => workspace.path));
@@ -150,54 +158,38 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
     deps.applyPersistedState?.(nextState);
   });
 
-  handleDesktopInvoke(
-    DESKTOP_IPC_CHANNELS.readTranscript,
-    async (_event, args: ReadTranscriptInput) => {
-      const input = parseWithSchema(readTranscriptInputSchema, args, "readTranscript options");
-      return await deps.persistence.readTranscript(input.threadId);
-    },
-  );
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.readTranscript, async (_event, args: ReadTranscriptInput) => {
+    const input = parseWithSchema(readTranscriptInputSchema, args, "readTranscript options");
+    return await deps.persistence.readTranscript(input.threadId);
+  });
 
-  handleDesktopInvoke(
-    DESKTOP_IPC_CHANNELS.hydrateTranscript,
-    async (_event, args: ReadTranscriptInput) => {
-      const input = parseWithSchema(readTranscriptInputSchema, args, "hydrateTranscript options");
-      const transcript = await deps.persistence.readTranscript(input.threadId);
-      return hydrateTranscriptSnapshot(transcript);
-    },
-  );
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.hydrateTranscript, async (_event, args: ReadTranscriptInput) => {
+    const input = parseWithSchema(readTranscriptInputSchema, args, "hydrateTranscript options");
+    const transcript = await deps.persistence.readTranscript(input.threadId);
+    return hydrateTranscriptSnapshot(transcript);
+  });
 
-  handleDesktopInvoke(
-    DESKTOP_IPC_CHANNELS.appendTranscriptEvent,
-    async (_event, args: TranscriptBatchInput) => {
-      const input = parseWithSchema(transcriptBatchInputSchema, args, "transcript event");
-      await deps.persistence.appendTranscriptEvent(input);
-    },
-  );
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.appendTranscriptEvent, async (_event, args: TranscriptBatchInput) => {
+    const input = parseWithSchema(transcriptBatchInputSchema, args, "transcript event");
+    await deps.persistence.appendTranscriptEvent(input);
+  });
 
-  handleDesktopInvoke(
-    DESKTOP_IPC_CHANNELS.appendTranscriptBatch,
-    async (_event, args: TranscriptBatchInput[]) => {
-      const input = parseWithSchema(z.array(transcriptBatchInputSchema), args, "transcript batch");
-      await deps.persistence.appendTranscriptBatch(input);
-    },
-  );
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.appendTranscriptBatch, async (_event, args: TranscriptBatchInput[]) => {
+    const input = parseWithSchema(z.array(transcriptBatchInputSchema), args, "transcript batch");
+    await deps.persistence.appendTranscriptBatch(input);
+  });
 
-  handleDesktopInvoke(
-    DESKTOP_IPC_CHANNELS.deleteTranscript,
-    async (_event, args: DeleteTranscriptInput) => {
-      const input = parseWithSchema(deleteTranscriptInputSchema, args, "deleteTranscript options");
-      await deps.persistence.deleteTranscript(input.threadId);
-    },
-  );
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.deleteTranscript, async (_event, args: DeleteTranscriptInput) => {
+    const input = parseWithSchema(deleteTranscriptInputSchema, args, "deleteTranscript options");
+    await deps.persistence.deleteTranscript(input.threadId);
+  });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.pickWorkspaceDirectory, async (event) => {
     const dialogApi = electron.dialog;
     if (!dialogApi) {
       throw new Error("Electron dialog API is unavailable.");
     }
-    const ownerWindow =
-      BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? undefined;
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? undefined;
     const dialogOptions = {
       title: "Select a workspace directory",
       properties: ["openDirectory"] as Array<"openDirectory">,

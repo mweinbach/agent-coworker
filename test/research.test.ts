@@ -366,6 +366,72 @@ describe("research service", () => {
     }
   });
 
+  test("resolves stored opaque Google grounding source URLs when listing research", async () => {
+    const paths = await makeTmpCoworkHome();
+    const sessionDb = await SessionDb.create({ paths });
+    const redirectUrl = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/source-list";
+    const resolvedUrl = "https://example.com/resolved-list";
+    const resolvedTitle = "Resolved listed source";
+
+    installFetchStub(async (input: RequestInfo | URL) => {
+      const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      if (url.includes("/grounding-api-redirect/source-list")) {
+        return new Response(null, {
+          status: 302,
+          headers: {
+            location: resolvedUrl,
+          },
+        });
+      }
+
+      const response = new Response(`<html><head><title>${resolvedTitle}</title></head><body>ok</body></html>`, {
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+        },
+      });
+      Object.defineProperty(response, "url", {
+        configurable: true,
+        value: resolvedUrl,
+      });
+      return response;
+    });
+
+    await sessionDb.upsertResearch(makeResearchRecord({
+      id: "research-listed",
+      status: "completed",
+      sources: [{
+        url: redirectUrl,
+        title: "vertexaisearch.cloud.google.com",
+        sourceType: "url",
+        host: "vertexaisearch.cloud.google.com",
+      }],
+    }));
+
+    const service = new ResearchService({
+      rootDir: paths.rootDir,
+      sessionDb,
+      getConfig: () => ({ skillsDirs: [] } as any),
+      sendJsonRpc: () => {},
+    });
+
+    try {
+      const research = await service.list();
+      expect(research.find((record) => record.id === "research-listed")?.sources).toEqual([
+        expect.objectContaining({
+          url: resolvedUrl,
+          title: resolvedTitle,
+          host: "example.com",
+        }),
+      ]);
+      expect(sessionDb.getResearch("research-listed")?.sources).toEqual(
+        research.find((record) => record.id === "research-listed")?.sources,
+      );
+    } finally {
+      sessionDb.close();
+      await fs.rm(paths.home, { recursive: true, force: true });
+    }
+  });
+
   test("resumes running research from the stored event id on service init", async () => {
     const paths = await makeTmpCoworkHome();
     const sessionDb = await SessionDb.create({ paths });

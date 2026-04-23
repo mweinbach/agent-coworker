@@ -207,7 +207,15 @@ export class ResearchService {
     for (const [id, state] of this.states) {
       byId.set(id, state.record);
     }
-    return [...byId.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const resolved = await Promise.all([...byId.values()].map(async (record) => {
+      const nextRecord = await this.resolveStoredSourceDestinations(record);
+      const activeState = this.states.get(record.id);
+      if (activeState) {
+        activeState.record = nextRecord;
+      }
+      return nextRecord;
+    }));
+    return resolved.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
   async get(id: string): Promise<ResearchRecord | null> {

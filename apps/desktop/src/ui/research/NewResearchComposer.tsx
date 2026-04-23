@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PaperclipIcon, Settings2Icon, XIcon } from "lucide-react";
+import { PaperclipIcon, Settings2Icon } from "lucide-react";
 
 import { useAppStore } from "../../app/store";
 import {
@@ -15,7 +15,7 @@ import {
 } from "../../components/ai-elements/prompt-input";
 import { Button } from "../../components/ui/button";
 import { ResearchMcpPickerDialog } from "./ResearchMcpPickerDialog";
-import { ResearchSettingsPopover } from "./ResearchSettingsPopover";
+import { ResearchSettingsDialog } from "./ResearchSettingsPopover";
 
 type AttachmentDraft = {
   file: File;
@@ -35,17 +35,15 @@ function toAttachmentDraft(file: File): AttachmentDraft {
 
 export function NewResearchComposer({
   onSubmitted,
-  onDismiss,
 }: {
   onSubmitted?: () => void;
-  onDismiss?: () => void;
 }) {
   const startResearch = useAppStore((s) => s.startResearch);
   const researchDraftSettings = useAppStore((s) => s.researchDraftSettings);
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
   const [submitting, setSubmitting] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -87,7 +85,7 @@ export function NewResearchComposer({
         }
         setInput("");
         setAttachments([]);
-        setShowSettings(false);
+        setSettingsOpen(false);
         onSubmitted?.();
       }
     } finally {
@@ -96,21 +94,8 @@ export function NewResearchComposer({
   };
 
   return (
-    <div className="relative border-b border-border/55 px-4 py-4">
-      {onDismiss ? (
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          className="absolute right-2 top-2 h-6 w-6 rounded-full text-muted-foreground hover:text-foreground"
-          onClick={onDismiss}
-          aria-label="Close new research composer"
-        >
-          <XIcon className="h-3.5 w-3.5" />
-        </Button>
-      ) : null}
+    <div className="w-full max-w-3xl px-4 py-4">
       <PromptInputRoot
-        className="max-w-none"
         fileDrop={{
           disabled: submitting,
           onFiles: async (files) => {
@@ -157,9 +142,9 @@ export function NewResearchComposer({
               <Button
                 type="button"
                 size="icon-sm"
-                variant={showSettings ? "secondary" : "ghost"}
+                variant="ghost"
                 className="rounded-full"
-                onClick={() => setShowSettings((open) => !open)}
+                onClick={() => setSettingsOpen(true)}
                 aria-label="Research settings"
               >
                 <Settings2Icon className="h-4 w-4" />
@@ -188,11 +173,11 @@ export function NewResearchComposer({
         </PromptInputForm>
       </PromptInputRoot>
 
-      {showSettings ? (
-        <div className="pt-3">
-          <ResearchSettingsPopover onOpenMcpPicker={() => setMcpDialogOpen(true)} />
-        </div>
-      ) : null}
+      <ResearchSettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        onOpenMcpPicker={() => setMcpDialogOpen(true)}
+      />
 
       <input
         ref={fileInputRef}

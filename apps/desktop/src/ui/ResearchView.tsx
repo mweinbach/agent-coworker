@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { PlusIcon } from "lucide-react";
 
 import { useAppStore } from "../app/store";
@@ -16,7 +16,6 @@ export function ResearchView() {
   const researchListError = useAppStore((s) => s.researchListError);
   const refreshResearchList = useAppStore((s) => s.refreshResearchList);
   const selectResearch = useAppStore((s) => s.selectResearch);
-  const [composerOpen, setComposerOpen] = useState(false);
 
   const research = useMemo(
     () => researchOrder
@@ -33,32 +32,24 @@ export function ResearchView() {
     void refreshResearchList();
   }, [refreshResearchList, researchListLoading, researchOrder.length]);
 
-  const showComposer = composerOpen || research.length === 0;
-
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-row">
       <section className="flex min-h-0 min-w-[18rem] w-[clamp(18rem,26vw,23.75rem)] shrink-0 flex-col border-r border-border/55 bg-muted/10">
         <div className="flex items-center justify-between gap-2 border-b border-border/55 px-4 py-2.5">
           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-            Runs
+            History
           </div>
           <Button
             size="sm"
             type="button"
             className="h-7 gap-1.5 px-2.5 text-xs"
-            onClick={() => setComposerOpen(true)}
-            disabled={showComposer}
+            onClick={() => selectResearch(null)}
+            disabled={selectedResearchId === null}
           >
             <PlusIcon className="h-3.5 w-3.5" />
             New
           </Button>
         </div>
-        {showComposer ? (
-          <NewResearchComposer
-            onSubmitted={() => setComposerOpen(false)}
-            onDismiss={research.length > 0 ? () => setComposerOpen(false) : undefined}
-          />
-        ) : null}
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
           {researchListError ? (
             <div className="rounded-xl border border-destructive/35 bg-destructive/5 px-4 py-3 text-sm text-destructive">
@@ -76,7 +67,13 @@ export function ResearchView() {
       </section>
 
       <section className="min-h-0 min-w-0 flex-1">
-        <ResearchDetailPane research={selectedResearch} />
+        {selectedResearch ? (
+          <ResearchDetailPane research={selectedResearch} />
+        ) : (
+          <div className="flex h-full items-center justify-center px-6">
+            <NewResearchComposer />
+          </div>
+        )}
       </section>
     </div>
   );

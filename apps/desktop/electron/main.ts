@@ -17,6 +17,7 @@ import { runDesktopSmokePromptLoadCheck } from "./services/desktopSmoke";
 import { installDesktopApplicationMenu } from "./services/menu";
 import { MobileRelayBridge } from "./services/mobileRelayBridge";
 import { PersistenceService } from "./services/persistence";
+import { resolveElectronRemoteDebugConfig } from "./services/remoteDebug";
 import { resolveDesktopRendererUrl } from "./services/rendererUrl";
 import { ServerManager } from "./services/serverManager";
 import { createBeforeQuitHandler } from "./services/shutdown";
@@ -62,9 +63,13 @@ let unregisterAppearanceListener = () => {};
 let mainWindow: BrowserWindow | null = null;
 const WINDOW_SHOW_FALLBACK_TIMEOUT_MS = 2_000;
 
-if (!app.isPackaged && process.env.COWORK_ELECTRON_REMOTE_DEBUG === "1") {
-  const port = process.env.COWORK_ELECTRON_REMOTE_DEBUG_PORT?.trim() || "9222";
-  app.commandLine.appendSwitch("remote-debugging-port", port);
+const electronRemoteDebug = resolveElectronRemoteDebugConfig({
+  isPackaged: app.isPackaged,
+  env: process.env,
+});
+
+if (electronRemoteDebug.enabled) {
+  app.commandLine.appendSwitch("remote-debugging-port", electronRemoteDebug.port);
   app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
 }
 

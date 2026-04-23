@@ -6,7 +6,7 @@
         "-y",
         "chrome-devtools-mcp@latest",
         "--browserUrl",
-        "http://localhost:9222"
+        "http://127.0.0.1:9222"
       ]
     }
   }

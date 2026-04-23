@@ -75,7 +75,7 @@ function resetAppStore(overrides: Record<string, unknown> = {}) {
 }
 
 describe("research detail pane layout", () => {
-  test("renders one report surface with a prompt brief and expands the sources drawer with a responsive width", async () => {
+  test("renders one report surface without prompt chrome and expands the sources drawer with a responsive width", async () => {
     const harness = setupJsdom();
 
     try {
@@ -143,8 +143,8 @@ describe("research detail pane layout", () => {
       }
 
       expect(container.querySelector('[role="tablist"][aria-label="Research detail sections"]')).toBeNull();
-      expect(container.textContent).toContain("Brief");
-      expect(container.textContent).toContain("Research prompt");
+      expect(container.textContent).not.toContain("Brief");
+      expect(container.textContent).not.toContain("Research prompt");
       expect(container.querySelector('[aria-label="Reasoning stream"]')).toBeNull();
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
       expect(toggle.getAttribute("aria-controls")).toBe(drawer.id);

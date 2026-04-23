@@ -222,8 +222,6 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
               </div>
             ) : null}
 
-            <ResearchPromptBrief prompt={research.prompt} />
-
             {research.planPending ? (
               <div className="rounded-2xl border border-info/25 bg-info/5 px-5 py-4">
                 <div className="mb-3 text-sm font-medium text-info">Research Plan</div>
@@ -447,32 +445,6 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
         )}
       </AnimatePresence>
     </div>
-  );
-}
-
-function ResearchPromptBrief({ prompt }: { prompt: string }) {
-  const trimmed = prompt.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const firstLine = trimmed.split(/\r?\n/)[0] ?? trimmed;
-
-  return (
-    <details className="group rounded-xl border border-border/50 bg-muted/20 px-4 py-3 open:bg-card/65">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm">
-        <span className="min-w-0">
-          <span className="mr-2 text-xs font-medium text-muted-foreground">Brief</span>
-          <span className="text-foreground/85 line-clamp-1">{firstLine}</span>
-        </span>
-        <span className="shrink-0 text-[11px] font-medium text-muted-foreground transition-colors group-open:text-foreground/70">
-          View
-        </span>
-      </summary>
-      <p className="mt-3 whitespace-pre-wrap border-t border-border/45 pt-3 text-sm leading-6 text-foreground/85">
-        {trimmed}
-      </p>
-    </details>
   );
 }
 

@@ -59,6 +59,13 @@ export const jsonRpcResearchRequestSchemas = {
     researchId: nonEmptyTrimmedStringSchema,
     format: researchExportFormatSchema,
   }).strict(),
+  "research/approvePlan": z.object({
+    researchId: nonEmptyTrimmedStringSchema,
+  }).strict(),
+  "research/refinePlan": z.object({
+    researchId: nonEmptyTrimmedStringSchema,
+    input: z.string().trim().min(1),
+  }).strict(),
   "research/listMcpServers": z.object({
     cwd: nonEmptyTrimmedStringSchema.optional(),
   }).strict(),
@@ -98,6 +105,12 @@ export const jsonRpcResearchResultSchemas = {
   "research/export": z.object({
     path: nonEmptyTrimmedStringSchema,
     sizeBytes: z.number().int().nonnegative(),
+  }).strict(),
+  "research/approvePlan": z.object({
+    research: researchSummarySchema.nullable(),
+  }).strict(),
+  "research/refinePlan": z.object({
+    research: researchSummarySchema.nullable(),
   }).strict(),
   "research/listMcpServers": z.object({
     servers: z.array(z.object({

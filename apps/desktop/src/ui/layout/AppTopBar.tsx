@@ -239,7 +239,7 @@ export function AppTopBar({
         className="app-topbar__thread-shell absolute inset-y-0 flex min-w-0 items-center"
         style={{ left: titleOffset, right: titleRightInset }}
       >
-        {managementMode === "plugins" ? (
+        {title === "Research" ? null : managementMode === "plugins" ? (
           <div
             className={cn(
               "app-topbar__thread-anchor relative flex min-w-0 items-center",
@@ -289,32 +289,36 @@ export function AppTopBar({
             )}
             style={collapsedThreadAnchorStyle}
           >
-            <button
-              type="button"
-              aria-label="Open thread details"
-              aria-haspopup="dialog"
-              aria-expanded={detailsOpen}
-              aria-controls={detailsId}
-              className="app-topbar__thread-button app-topbar__controls flex min-w-0 items-center gap-2"
-              data-open={detailsOpen ? "true" : "false"}
-              onClick={() => setDetailsOpen((open) => !open)}
-            >
-              <span className="app-topbar__thread-title truncate">{title}</span>
-              {subtitle ? (
-                <>
-                  <span className="app-topbar__thread-separator text-muted-foreground/52" aria-hidden="true">|</span>
-                  <span className="app-topbar__thread-subtitle truncate">{subtitle}</span>
-                </>
-              ) : null}
-              <ChevronDownIcon
-                className={cn(
-                  "app-topbar__thread-chevron h-3.5 w-3.5 shrink-0 text-muted-foreground/68 transition-transform duration-150 ease-out",
-                  detailsOpen && "rotate-180",
-                )}
-              />
-            </button>
+            {title === "Research" ? (
+              <span className="app-topbar__thread-title truncate text-sm font-medium">{title}</span>
+            ) : (
+              <button
+                type="button"
+                aria-label="Open thread details"
+                aria-haspopup="dialog"
+                aria-expanded={detailsOpen}
+                aria-controls={detailsId}
+                className="app-topbar__thread-button app-topbar__controls flex min-w-0 items-center gap-2"
+                data-open={detailsOpen ? "true" : "false"}
+                onClick={() => setDetailsOpen((open) => !open)}
+              >
+                <span className="app-topbar__thread-title truncate">{title}</span>
+                {subtitle ? (
+                  <>
+                    <span className="app-topbar__thread-separator text-muted-foreground/52" aria-hidden="true">|</span>
+                    <span className="app-topbar__thread-subtitle truncate">{subtitle}</span>
+                  </>
+                ) : null}
+                <ChevronDownIcon
+                  className={cn(
+                    "app-topbar__thread-chevron h-3.5 w-3.5 shrink-0 text-muted-foreground/68 transition-transform duration-150 ease-out",
+                    detailsOpen && "rotate-180",
+                  )}
+                />
+              </button>
+            )}
 
-            {detailsOpen ? (
+            {detailsOpen && title !== "Research" ? (
               <div
                 id={detailsId}
                 role="dialog"

@@ -34,15 +34,15 @@ export function ResearchView() {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-row">
-      <section className="flex min-h-0 min-w-[18rem] w-[clamp(18rem,26vw,23.75rem)] shrink-0 flex-col border-r border-border/55 bg-muted/10">
-        <div className="flex items-center justify-between gap-2 border-b border-border/55 px-4 py-2.5">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-            History
+      <section className="flex min-h-0 min-w-[18rem] w-[clamp(18rem,26vw,23.75rem)] shrink-0 flex-col border-r border-border/40 bg-muted/[0.06]">
+        <div className="flex items-center justify-between gap-2 px-4 pt-2 pb-3">
+          <div className="text-[15px] font-semibold tracking-tight text-foreground">
+            Research
           </div>
           <Button
             size="sm"
             type="button"
-            className="h-7 gap-1.5 px-2.5 text-xs"
+            className="h-7 gap-1.5 rounded-full px-3 text-xs"
             onClick={() => selectResearch(null)}
             disabled={selectedResearchId === null}
           >
@@ -50,7 +50,13 @@ export function ResearchView() {
             New
           </Button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        <div className="border-b border-border/30" />
+        <div className="px-4 pt-3 pb-1">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
+            History
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
           {researchListError ? (
             <div className="rounded-xl border border-destructive/35 bg-destructive/5 px-4 py-3 text-sm text-destructive">
               {researchListError}

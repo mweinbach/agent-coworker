@@ -93,6 +93,8 @@ export function createResearchActions(
   | "setResearchDraftSettings"
   | "loadResearchMcpServers"
   | "exportResearch"
+  | "approveResearchPlan"
+  | "refineResearchPlan"
 > {
   const notify = (kind: "error" | "info", title: string, detail: string) => {
     set((s) => ({
@@ -428,6 +430,44 @@ export function createResearchActions(
   };
 
   return {
+    approveResearchPlan: async (researchId: string) => {
+      try {
+        const workspaceId = await ensureResearchTransportWorkspace();
+        if (!workspaceId) {
+          return null;
+        }
+        const result = await requestJsonRpc(get, set, workspaceId, "research/approvePlan", { researchId });
+        if (!isResearchRecord(result?.research)) {
+          return null;
+        }
+        applyResearchRecord(result.research);
+        await ensureResearchSubscription(workspaceId, result.research);
+        return result.research;
+      } catch (error) {
+        notify("error", "Unable to approve plan", error instanceof Error ? error.message : String(error));
+        return null;
+      }
+    },
+
+    refineResearchPlan: async (researchId: string, input: string) => {
+      try {
+        const workspaceId = await ensureResearchTransportWorkspace();
+        if (!workspaceId) {
+          return null;
+        }
+        const result = await requestJsonRpc(get, set, workspaceId, "research/refinePlan", { researchId, input });
+        if (!isResearchRecord(result?.research)) {
+          return null;
+        }
+        applyResearchRecord(result.research);
+        await ensureResearchSubscription(workspaceId, result.research);
+        return result.research;
+      } catch (error) {
+        notify("error", "Unable to refine plan", error instanceof Error ? error.message : String(error));
+        return null;
+      }
+    },
+
     openResearch: async () => {
       set({
         view: "research",

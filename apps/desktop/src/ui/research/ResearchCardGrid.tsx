@@ -112,6 +112,7 @@ function ResearchListCard({
     [displayTitle, research.outputsMarkdown],
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const statusLabel = research.planPending ? "plan ready" : research.status;
 
   useEffect(() => {
     if (!editing) {
@@ -188,13 +189,15 @@ function ResearchListCard({
           <span
             className={cn(
               "inline-block h-1.5 w-1.5 rounded-full",
-              statusDotClassName(research.status),
+              research.planPending ? "bg-info" : statusDotClassName(research.status),
               running && "animate-pulse",
             )}
-            aria-label={`Status: ${research.status}`}
+            aria-label={`Status: ${statusLabel}`}
           />
           {running ? (
             <span className="capitalize">{research.status}</span>
+          ) : research.planPending ? (
+            <span className="capitalize text-info">Plan ready</span>
           ) : timeLabel ? (
             <span>{timeLabel}</span>
           ) : null}

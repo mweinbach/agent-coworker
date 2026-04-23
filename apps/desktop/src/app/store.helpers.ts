@@ -295,6 +295,8 @@ export type AppStoreState = {
   setResearchDraftSettings: (patch: Partial<ResearchSettingsState>) => void;
   loadResearchMcpServers: () => Promise<void>;
   exportResearch: (researchId: string, format: import("../../../../src/server/research/types").ResearchExportFormat) => Promise<string | null>;
+  approveResearchPlan: (researchId: string) => Promise<ResearchCard | null>;
+  refineResearchPlan: (researchId: string, input: string) => Promise<ResearchCard | null>;
 
   applyWorkspaceDefaultsToThread: (
     threadId: string,

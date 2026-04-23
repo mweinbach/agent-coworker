@@ -39,6 +39,7 @@ type ResearchRuntimeState = {
   persistTimer: ReturnType<typeof setTimeout> | null;
   streamPromise: Promise<void> | null;
   cancelRequested: boolean;
+  planExecutionMode: boolean;
 };
 
 type ResearchServiceOptions = {
@@ -257,6 +258,7 @@ export class ResearchService {
       prompt: record.prompt,
       previousInteractionId: undefined,
       attachedFiles,
+      collaborativePlanning: record.settings.planApproval,
     });
 
     return state.record;
@@ -382,6 +384,74 @@ export class ResearchService {
     return state.record;
   }
 
+  async approvePlan(researchId: string): Promise<ResearchRecord | null> {
+    await this.init();
+    const existing = await this.get(researchId);
+    if (!existing) {
+      return null;
+    }
+    if (!existing.planPending || !existing.interactionId) {
+      return null;
+    }
+
+    const state = this.getOrCreateState(existing);
+    this.updateRecord(state, {
+      planPending: false,
+      status: "pending",
+      outputsMarkdown: "",
+      thoughtSummaries: [],
+      sources: [],
+      updatedAt: new Date().toISOString(),
+    });
+    await this.flushPersistNow(state);
+    this.broadcast(state, "research/updated", { research: state.record }, state.record.lastEventId);
+
+    state.streamPromise = this.executeResearch(state, {
+      prompt: "Plan looks good!",
+      previousInteractionId: state.record.interactionId ?? undefined,
+      attachedFiles: [],
+      collaborativePlanning: false,
+    });
+
+    return state.record;
+  }
+
+  async refinePlan(researchId: string, input: string): Promise<ResearchRecord | null> {
+    await this.init();
+    const existing = await this.get(researchId);
+    if (!existing) {
+      return null;
+    }
+    if (!existing.planPending || !existing.interactionId) {
+      return null;
+    }
+    const trimmed = input.trim();
+    if (!trimmed) {
+      throw new Error("Refinement input is required.");
+    }
+
+    const state = this.getOrCreateState(existing);
+    this.updateRecord(state, {
+      planPending: false,
+      status: "pending",
+      outputsMarkdown: "",
+      thoughtSummaries: [],
+      sources: [],
+      updatedAt: new Date().toISOString(),
+    });
+    await this.flushPersistNow(state);
+    this.broadcast(state, "research/updated", { research: state.record }, state.record.lastEventId);
+
+    state.streamPromise = this.executeResearch(state, {
+      prompt: trimmed,
+      previousInteractionId: state.record.interactionId ?? undefined,
+      attachedFiles: [],
+      collaborativePlanning: true,
+    });
+
+    return state.record;
+  }
+
   async attachUploadedFile(researchId: string, fileId: string): Promise<ResearchRecord | null> {
     await this.init();
     const existing = await this.get(researchId);
@@ -462,9 +532,11 @@ export class ResearchService {
       prompt: string;
       previousInteractionId?: string;
       attachedFiles: ResearchInputFile[];
+      collaborativePlanning?: boolean;
     },
   ): Promise<void> {
     try {
+      state.planExecutionMode = opts.collaborativePlanning ?? false;
       const apiKey = this.resolveGoogleApiKey();
       if (opts.attachedFiles.length > 0) {
         const prepared = await this.fileStore.prepareResearchFiles({
@@ -501,6 +573,7 @@ export class ResearchService {
         input: opts.prompt,
         ...(opts.previousInteractionId ? { previousInteractionId: opts.previousInteractionId } : {}),
         tools,
+        collaborativePlanning: opts.collaborativePlanning,
       });
       await this.consumeInteractionStream(state, stream);
     } catch (error) {
@@ -588,11 +661,18 @@ export class ResearchService {
     }
 
     if (isInteractionCompleteEvent(event)) {
+      const wasPlanExecution = state.planExecutionMode;
+      state.planExecutionMode = false;
       this.updateRecord(state, {
         interactionId: event.interaction.id ?? state.record.interactionId,
         status: normalizeInteractionStatus(event.interaction.status),
         updatedAt: new Date().toISOString(),
       });
+      if (wasPlanExecution && state.record.status === "completed") {
+        this.updateRecord(state, {
+          planPending: true,
+        });
+      }
       await this.flushPersistNow(state);
       this.broadcast(state, "research/updated", { research: state.record }, eventId);
       if (state.record.status === "completed") {
@@ -909,6 +989,7 @@ export class ResearchService {
       persistTimer: null,
       streamPromise: null,
       cancelRequested: false,
+      planExecutionMode: false,
     };
     this.states.set(record.id, created);
     return created;

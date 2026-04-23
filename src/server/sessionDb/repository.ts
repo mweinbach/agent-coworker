@@ -659,6 +659,7 @@ export class SessionDbRepository {
            outputs_markdown,
            thought_summaries_json,
            sources_json,
+           plan_pending,
            created_at,
            updated_at,
            error
@@ -686,6 +687,7 @@ export class SessionDbRepository {
            outputs_markdown,
            thought_summaries_json,
            sources_json,
+           plan_pending,
            created_at,
            updated_at,
            error
@@ -714,6 +716,7 @@ export class SessionDbRepository {
            outputs_markdown,
            thought_summaries_json,
            sources_json,
+           plan_pending,
            created_at,
            updated_at,
            error
@@ -743,10 +746,11 @@ export class SessionDbRepository {
            outputs_markdown,
            thought_summaries_json,
            sources_json,
+           plan_pending,
            created_at,
            updated_at,
            error
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            parent_research_id = excluded.parent_research_id,
            title = excluded.title,
@@ -759,6 +763,7 @@ export class SessionDbRepository {
            outputs_markdown = excluded.outputs_markdown,
            thought_summaries_json = excluded.thought_summaries_json,
            sources_json = excluded.sources_json,
+           plan_pending = excluded.plan_pending,
            updated_at = excluded.updated_at,
            error = excluded.error`,
       )
@@ -775,6 +780,7 @@ export class SessionDbRepository {
         parsed.outputsMarkdown,
         toJsonString(parsed.thoughtSummaries),
         toJsonString(parsed.sources),
+        parsed.planPending ? 1 : 0,
         parseRequiredIsoTimestamp(parsed.createdAt, "research.createdAt"),
         parseRequiredIsoTimestamp(parsed.updatedAt, "research.updatedAt"),
         parsed.error,
@@ -896,6 +902,7 @@ export class SessionDbRepository {
          outputs_markdown TEXT NOT NULL,
          thought_summaries_json TEXT NOT NULL,
          sources_json TEXT NOT NULL,
+         plan_pending INTEGER NOT NULL DEFAULT 0,
          created_at TEXT NOT NULL,
          updated_at TEXT NOT NULL,
          error TEXT NULL
@@ -1094,6 +1101,7 @@ export class SessionDbRepository {
          outputs_markdown TEXT NOT NULL,
          thought_summaries_json TEXT NOT NULL,
          sources_json TEXT NOT NULL,
+         plan_pending INTEGER NOT NULL DEFAULT 0,
          created_at TEXT NOT NULL,
          updated_at TEXT NOT NULL,
          error TEXT NULL
@@ -1101,6 +1109,14 @@ export class SessionDbRepository {
     );
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_status_updated ON research(status, updated_at DESC)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_research_parent_updated ON research(parent_research_id, updated_at DESC)");
+  }
+
+  addResearchPlanColumns(): void {
+    const rows = this.db.query("PRAGMA table_info(research)").all() as Array<Record<string, unknown>>;
+    const hasPlanPending = rows.some((row) => row.name === "plan_pending");
+    if (!hasPlanPending) {
+      this.db.exec("ALTER TABLE research ADD COLUMN plan_pending INTEGER NOT NULL DEFAULT 0");
+    }
   }
 
   importLegacySnapshot(snapshot: PersistedSessionSnapshot): void {
@@ -1346,6 +1362,7 @@ export class SessionDbRepository {
         "research.thought_summaries_json",
       ),
       sources: parseJsonStringWithSchema(row.sources_json, researchSourcesJsonSchema, "research.sources_json"),
+      planPending: row.plan_pending === 1 || row.plan_pending === true,
       createdAt: parseRequiredIsoTimestamp(row.created_at, "research.created_at"),
       updatedAt: parseRequiredIsoTimestamp(row.updated_at, "research.updated_at"),
       error: typeof row.error === "string" ? row.error : null,

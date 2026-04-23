@@ -6,6 +6,7 @@ type CreateResearchInteractionStreamOptions = {
   previousInteractionId?: string;
   tools?: Interactions.Tool[];
   thinkingSummaries?: "auto" | "none";
+  collaborativePlanning?: boolean;
   signal?: AbortSignal;
 };
 
@@ -108,6 +109,7 @@ export async function createResearchInteractionStream(
     agent_config: {
       type: "deep-research",
       thinking_summaries: opts.thinkingSummaries ?? "auto",
+      ...(opts.collaborativePlanning ? { collaborative_planning: true } : {}),
     },
   }, opts.signal ? { signal: opts.signal } as any : undefined);
 

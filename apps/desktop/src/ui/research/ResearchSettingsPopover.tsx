@@ -88,7 +88,7 @@ export function ResearchSettingsDialog({
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="text-sm font-medium">Plan Approval</div>
-              <div className="text-xs text-muted-foreground">UI-only for now; preserved so nothing is lost later.</div>
+              <div className="text-xs text-muted-foreground">Request a research plan first, then approve or refine before execution.</div>
             </div>
             <Switch
               checked={settings.planApproval}

@@ -192,6 +192,40 @@ export function createResearchRouteHandlers(
       context.jsonrpc.sendResult(ws, message.id, { status: "unsubscribed" });
     },
 
+    "research/approvePlan": async (ws, message) => {
+      const parsed = jsonRpcResearchRequestSchemas["research/approvePlan"].safeParse(message.params ?? {});
+      if (!parsed.success) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: parsed.error.issues[0]?.message ?? "Invalid research/approvePlan params",
+        });
+        return;
+      }
+      try {
+        const research = await context.research.approvePlan(parsed.data.researchId);
+        context.jsonrpc.sendResult(ws, message.id, { research });
+      } catch (error) {
+        sendExecutionError(context, ws, message.id, error instanceof Error ? error.message : String(error));
+      }
+    },
+
+    "research/refinePlan": async (ws, message) => {
+      const parsed = jsonRpcResearchRequestSchemas["research/refinePlan"].safeParse(message.params ?? {});
+      if (!parsed.success) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: parsed.error.issues[0]?.message ?? "Invalid research/refinePlan params",
+        });
+        return;
+      }
+      try {
+        const research = await context.research.refinePlan(parsed.data.researchId, parsed.data.input);
+        context.jsonrpc.sendResult(ws, message.id, { research });
+      } catch (error) {
+        sendExecutionError(context, ws, message.id, error instanceof Error ? error.message : String(error));
+      }
+    },
+
     "research/export": async (ws, message) => {
       const parsed = jsonRpcResearchRequestSchemas["research/export"].safeParse(message.params ?? {});
       if (!parsed.success) {

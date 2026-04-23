@@ -60,6 +60,7 @@ export const researchRecordSchema = z.object({
   outputsMarkdown: z.string(),
   thoughtSummaries: z.array(researchThoughtSummarySchema),
   sources: z.array(researchSourceSchema),
+  planPending: z.boolean().default(false),
   createdAt: isoTimestampSchema,
   updatedAt: isoTimestampSchema,
   error: z.string().nullable(),

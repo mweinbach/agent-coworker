@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { MessageSquareIcon, PanelRightIcon } from "lucide-react";
+import { CheckIcon, MessageSquareIcon, PanelRightIcon, PencilIcon } from "lucide-react";
 
 import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 
@@ -132,6 +132,8 @@ function TabButton({
 
 export function ResearchDetailPane({ research }: { research: ResearchDetail | null }) {
   const cancelResearch = useAppStore((s) => s.cancelResearch);
+  const approveResearchPlan = useAppStore((s) => s.approveResearchPlan);
+  const refineResearchPlan = useAppStore((s) => s.refineResearchPlan);
   const exportPendingIds = useAppStore((s) => s.researchExportPendingIds);
   const running = research ? research.status === "running" || research.status === "pending" : false;
   const elapsedMs = useRunningElapsed(research?.createdAt ?? new Date().toISOString(), running);
@@ -140,11 +142,17 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const detailBodyRef = useRef<HTMLDivElement | null>(null);
   const [tab, setTab] = useState<DetailTab>("report");
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [refineOpen, setRefineOpen] = useState(false);
+  const [refineInput, setRefineInput] = useState("");
+  const [planActionLoading, setPlanActionLoading] = useState(false);
   const detailBodyWidth = useElementWidth(detailBodyRef, research?.id ?? null);
 
   useEffect(() => {
     setTab("report");
     setSourcesOpen(false);
+    setRefineOpen(false);
+    setRefineInput("");
+    setPlanActionLoading(false);
   }, [research?.id]);
 
   if (!research) {
@@ -195,8 +203,8 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
           </div>
 
           <div className="flex min-w-0 flex-1 basis-48 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-            <Badge className={cn("shrink-0", statusClassName(research.status))}>
-              {statusLabel(research.status)}
+            <Badge className={cn("shrink-0", research.planPending ? "border-info/25 bg-info/10 text-info" : statusClassName(research.status))}>
+              {research.planPending ? "Plan Ready" : statusLabel(research.status)}
             </Badge>
             {running ? (
               <>
@@ -212,6 +220,8 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                   {thoughtCount === 1 ? "note" : "notes"}
                 </span>
               </>
+            ) : research.planPending ? (
+              <span className="whitespace-nowrap">Awaiting your approval</span>
             ) : startedAgo ? (
               <span className="whitespace-nowrap">{startedAgo} ago</span>
             ) : null}
@@ -260,6 +270,80 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
             {research.error && tab !== "prompt" ? (
               <div className="rounded-xl border border-destructive/35 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                 {research.error}
+              </div>
+            ) : null}
+
+            {tab === "report" && research.planPending ? (
+              <div className="rounded-2xl border border-info/25 bg-info/5 px-5 py-4">
+                <div className="mb-3 text-sm font-medium text-info">Research Plan</div>
+                <div className="mb-4 text-xs text-muted-foreground">
+                  Review the proposed plan below. Approve it to start the full research, or request changes.
+                </div>
+                {!refineOpen ? (
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      className="gap-1.5 rounded-full"
+                      disabled={planActionLoading}
+                      onClick={() => {
+                        setPlanActionLoading(true);
+                        void approveResearchPlan(research.id).finally(() => setPlanActionLoading(false));
+                      }}
+                    >
+                      <CheckIcon className="h-3.5 w-3.5" />
+                      Approve Plan
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1.5 rounded-full"
+                      disabled={planActionLoading}
+                      onClick={() => setRefineOpen(true)}
+                    >
+                      <PencilIcon className="h-3.5 w-3.5" />
+                      Refine Plan
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <textarea
+                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-info focus:ring-1 focus:ring-info/20"
+                      rows={3}
+                      placeholder="What would you like to change about the plan?"
+                      value={refineInput}
+                      onChange={(e) => setRefineInput(e.target.value)}
+                      autoFocus
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        className="gap-1.5 rounded-full"
+                        disabled={planActionLoading || !refineInput.trim()}
+                        onClick={() => {
+                          setPlanActionLoading(true);
+                          void refineResearchPlan(research.id, refineInput.trim()).finally(() => {
+                            setPlanActionLoading(false);
+                            setRefineOpen(false);
+                            setRefineInput("");
+                          });
+                        }}
+                      >
+                        Submit Refinement
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={planActionLoading}
+                        onClick={() => {
+                          setRefineOpen(false);
+                          setRefineInput("");
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : null}
 
@@ -328,7 +412,7 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
         ) : null}
       </div>
 
-      {research.status === "completed" ? (
+      {research.status === "completed" && !research.planPending ? (
         <ResearchFollowUpFab parentResearchId={research.id} />
       ) : null}
     </div>

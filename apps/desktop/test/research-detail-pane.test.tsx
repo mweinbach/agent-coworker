@@ -75,7 +75,7 @@ function resetAppStore(overrides: Record<string, unknown> = {}) {
 }
 
 describe("research detail pane layout", () => {
-  test("uses the segmented tab strip as the tablist and expands the sources drawer with a responsive width", async () => {
+  test("renders one report surface with a prompt brief and expands the sources drawer with a responsive width", async () => {
     const harness = setupJsdom();
 
     try {
@@ -132,7 +132,6 @@ describe("research detail pane layout", () => {
         );
       });
 
-      const tablist = container.querySelector('[role="tablist"][aria-label="Research detail sections"]');
       const toggle = container.querySelector('button[aria-label="Show sources panel"]');
       const drawer = container.querySelector('aside[aria-label="Sources"]');
 
@@ -143,7 +142,10 @@ describe("research detail pane layout", () => {
         throw new Error("missing sources drawer");
       }
 
-      expect(tablist).not.toBeNull();
+      expect(container.querySelector('[role="tablist"][aria-label="Research detail sections"]')).toBeNull();
+      expect(container.textContent).toContain("Brief");
+      expect(container.textContent).toContain("Research prompt");
+      expect(container.querySelector('[aria-label="Reasoning stream"]')).toBeNull();
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
       expect(toggle.getAttribute("aria-controls")).toBe(drawer.id);
       expect(drawer.getAttribute("aria-hidden")).toBe("true");
@@ -172,6 +174,68 @@ describe("research detail pane layout", () => {
       expect(openDrawer.getAttribute("style")).toContain("--research-sources-panel-width: clamp(18rem, 30vw, 26rem)");
       expect(openDrawer.getAttribute("style")).toContain("width: var(--research-sources-panel-width)");
       expect(openDrawer.getAttribute("style")).toContain("flex-basis: var(--research-sources-panel-width)");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      resetAppStore();
+      harness.restore();
+    }
+  });
+
+  test("shows reasoning updates inside the report while research is running", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+
+      resetAppStore();
+
+      await act(async () => {
+        root.render(
+          createElement(ResearchDetailPane, {
+            research: {
+              id: "research-running",
+              parentResearchId: null,
+              title: "Research title",
+              prompt: "Research prompt",
+              status: "running",
+              interactionId: null,
+              lastEventId: null,
+              inputs: {
+                fileSearchStoreName: undefined,
+                files: [],
+              },
+              settings: DEFAULT_RESEARCH_SETTINGS,
+              outputsMarkdown: "",
+              thoughtSummaries: [
+                {
+                  id: "thought-1",
+                  text: "Checking the most relevant source set",
+                  ts: "2026-04-21T21:05:00.000Z",
+                },
+              ],
+              sources: [],
+              createdAt: "2026-04-21T21:00:00.000Z",
+              updatedAt: "2026-04-21T21:05:00.000Z",
+              error: null,
+            },
+          }),
+        );
+      });
+
+      const stream = container.querySelector('[aria-label="Reasoning stream"]');
+      expect(stream).not.toBeNull();
+      expect(stream?.textContent).toContain("Reasoning stream");
+      expect(stream?.textContent).toContain("Step 1");
+      expect(stream?.textContent).toContain("Checking the most relevant source set");
+      expect(container.querySelector('[role="tablist"][aria-label="Research detail sections"]')).toBeNull();
 
       await act(async () => {
         root.unmount();

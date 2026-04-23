@@ -1,6 +1,6 @@
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckIcon, MessageSquareIcon, PanelRightIcon, PencilIcon } from "lucide-react";
+import { ActivityIcon, CheckIcon, MessageSquareIcon, PanelRightIcon, PencilIcon } from "lucide-react";
 
 import { usePrefersReducedMotion } from "../../lib/usePrefersReducedMotion";
 
@@ -15,7 +15,6 @@ import { ResearchReportRenderer } from "./ResearchReportRenderer";
 import { ResearchSourcesList } from "./ResearchSourcesList";
 import { cn } from "../../lib/utils";
 
-type DetailTab = "report" | "notes" | "prompt";
 const RESEARCH_SOURCES_PANEL_WIDTH = "clamp(18rem, 30vw, 26rem)";
 const RESEARCH_INLINE_SOURCES_MIN_DETAIL_WIDTH = 36 * 16;
 
@@ -96,40 +95,6 @@ function useElementWidth<T extends HTMLElement>(ref: React.RefObject<T | null>, 
   return width;
 }
 
-function TabButton({
-  active,
-  children,
-  count,
-  onClick,
-}: {
-  active: boolean;
-  children: React.ReactNode;
-  count?: number;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors",
-        active
-          ? "bg-background text-foreground shadow-sm"
-          : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground",
-      )}
-      aria-selected={active}
-      role="tab"
-    >
-      {children}
-      {count !== undefined && count > 0 ? (
-        <span className="min-w-4 rounded-full bg-muted px-1 text-center text-[10px] tabular-nums text-muted-foreground">
-          {count}
-        </span>
-      ) : null}
-    </button>
-  );
-}
-
 export function ResearchDetailPane({ research }: { research: ResearchDetail | null }) {
   const cancelResearch = useAppStore((s) => s.cancelResearch);
   const approveResearchPlan = useAppStore((s) => s.approveResearchPlan);
@@ -140,7 +105,6 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const prefersReducedMotion = usePrefersReducedMotion();
   const sourcesPanelId = useId();
   const detailBodyRef = useRef<HTMLDivElement | null>(null);
-  const [tab, setTab] = useState<DetailTab>("report");
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
   const [refineInput, setRefineInput] = useState("");
@@ -148,7 +112,6 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
   const detailBodyWidth = useElementWidth(detailBodyRef, research?.id ?? null);
 
   useEffect(() => {
-    setTab("report");
     setSourcesOpen(false);
     setRefineOpen(false);
     setRefineInput("");
@@ -184,24 +147,6 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
     <div className="relative flex h-full min-h-0 flex-col">
       <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/55 px-4 py-2">
         <div className="flex min-w-0 flex-1 basis-[26rem] flex-wrap items-center gap-x-4 gap-y-2">
-          <div className="min-w-0 max-w-full overflow-x-auto rounded-lg bg-muted/30 p-0.5">
-            <div
-              className="flex w-max items-center gap-1"
-              role="tablist"
-              aria-label="Research detail sections"
-            >
-              <TabButton active={tab === "report"} onClick={() => setTab("report")}>
-                Report
-              </TabButton>
-              <TabButton active={tab === "notes"} count={thoughtCount} onClick={() => setTab("notes")}>
-                Notes
-              </TabButton>
-              <TabButton active={tab === "prompt"} onClick={() => setTab("prompt")}>
-                Prompt
-              </TabButton>
-            </div>
-          </div>
-
           <div className="flex min-w-0 flex-1 basis-48 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
             <Badge className={cn("shrink-0", research.planPending ? "border-info/25 bg-info/10 text-info" : statusClassName(research.status))}>
               {research.planPending ? "Plan Ready" : statusLabel(research.status)}
@@ -214,11 +159,15 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
                   <span className="tabular-nums text-foreground/80">{sourceCount}</span>{" "}
                   {sourceCount === 1 ? "source" : "sources"}
                 </span>
-                <span aria-hidden="true">·</span>
-                <span className="whitespace-nowrap">
-                  <span className="tabular-nums text-foreground/80">{thoughtCount}</span>{" "}
-                  {thoughtCount === 1 ? "note" : "notes"}
-                </span>
+                {thoughtCount > 0 ? (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="whitespace-nowrap">
+                      <span className="tabular-nums text-foreground/80">{thoughtCount}</span>{" "}
+                      {thoughtCount === 1 ? "reasoning update" : "reasoning updates"}
+                    </span>
+                  </>
+                ) : null}
               </>
             ) : research.planPending ? (
               <span className="whitespace-nowrap">Awaiting your approval</span>
@@ -267,13 +216,15 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
       <div ref={detailBodyRef} className="relative flex min-h-0 min-w-0 flex-1 flex-row">
         <div className="min-w-0 flex-1 overflow-y-auto px-8 py-6">
           <div className="mx-auto flex max-w-4xl flex-col gap-6">
-            {research.error && tab !== "prompt" ? (
+            {research.error ? (
               <div className="rounded-xl border border-destructive/35 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                 {research.error}
               </div>
             ) : null}
 
-            {tab === "report" && research.planPending ? (
+            <ResearchPromptBrief prompt={research.prompt} />
+
+            {research.planPending ? (
               <div className="rounded-2xl border border-info/25 bg-info/5 px-5 py-4">
                 <div className="mb-3 text-sm font-medium text-info">Research Plan</div>
                 <div className="mb-4 text-xs text-muted-foreground">
@@ -347,31 +298,18 @@ export function ResearchDetailPane({ research }: { research: ResearchDetail | nu
               </div>
             ) : null}
 
-            {tab === "report" ? (
-              <ResearchReportRenderer
-                markdown={research.outputsMarkdown}
-                status={research.status}
-                sources={research.sources}
-              />
-            ) : null}
-
-            {tab === "notes" ? (
-              <ResearchNotesTab
+            {running ? (
+              <ResearchReasoningStream
                 thoughtSummaries={research.thoughtSummaries}
                 status={research.status}
               />
             ) : null}
 
-            {tab === "prompt" ? (
-              <section className="rounded-2xl border border-border/55 bg-card/60 px-5 py-5">
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                  Prompt
-                </div>
-                <p className="whitespace-pre-wrap text-sm leading-6 text-foreground/90">
-                  {research.prompt}
-                </p>
-              </section>
-            ) : null}
+            <ResearchReportRenderer
+              markdown={research.outputsMarkdown}
+              status={research.status}
+              sources={research.sources}
+            />
           </div>
         </div>
 
@@ -512,7 +450,33 @@ function ResearchFollowUpFab({ parentResearchId }: { parentResearchId: string })
   );
 }
 
-function ResearchNotesTab({
+function ResearchPromptBrief({ prompt }: { prompt: string }) {
+  const trimmed = prompt.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const firstLine = trimmed.split(/\r?\n/)[0] ?? trimmed;
+
+  return (
+    <details className="group rounded-xl border border-border/50 bg-muted/20 px-4 py-3 open:bg-card/65">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm">
+        <span className="min-w-0">
+          <span className="mr-2 text-xs font-medium text-muted-foreground">Brief</span>
+          <span className="text-foreground/85 line-clamp-1">{firstLine}</span>
+        </span>
+        <span className="shrink-0 text-[11px] font-medium text-muted-foreground transition-colors group-open:text-foreground/70">
+          View
+        </span>
+      </summary>
+      <p className="mt-3 whitespace-pre-wrap border-t border-border/45 pt-3 text-sm leading-6 text-foreground/85">
+        {trimmed}
+      </p>
+    </details>
+  );
+}
+
+function ResearchReasoningStream({
   thoughtSummaries,
   status,
 }: {
@@ -523,40 +487,78 @@ function ResearchNotesTab({
 
   if (thoughtSummaries.length === 0 && running) {
     return (
-      <div className="rounded-2xl border border-border/65 bg-card/70 px-5 py-5 text-sm text-muted-foreground">
-        <div className="mb-2 flex items-center gap-2 text-xs font-medium">
-          <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
-          Waiting for the first progress note…
+      <section
+        aria-label="Reasoning stream"
+        className="relative overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/10 via-card/80 to-muted/25 px-5 py-5"
+      >
+        <div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-primary/35 to-transparent" />
+        <div className="flex items-center gap-2 text-xs font-medium text-primary">
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/12">
+            <ActivityIcon className="h-3.5 w-3.5 animate-pulse" aria-hidden="true" />
+          </span>
+          Reasoning stream
         </div>
-      </div>
+        <div className="mt-3 text-sm text-muted-foreground">
+          Waiting for the first reasoning update...
+        </div>
+      </section>
     );
   }
 
   if (thoughtSummaries.length === 0) {
-    return (
-      <div className="rounded-2xl border border-border/65 bg-card/70 px-4 py-5 text-sm text-muted-foreground">
-        No progress notes were captured for this run.
-      </div>
-    );
+    return null;
   }
 
   return (
-    <ol className="space-y-3">
-      {thoughtSummaries.map((thought, index) => (
-        <li
-          key={thought.id}
-          className="rounded-2xl border border-border/60 bg-card/70 px-4 py-3"
-        >
-          <div className="mb-1 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-            <span className="tabular-nums">Note {index + 1}</span>
-            <span aria-hidden="true">·</span>
-            <span>{new Date(thought.ts).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" })}</span>
-          </div>
-          <div className="whitespace-pre-wrap text-sm leading-6 text-foreground/90">
-            {thought.text}
-          </div>
-        </li>
-      ))}
-    </ol>
+    <section
+      aria-label="Reasoning stream"
+      className="relative overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/10 via-card/80 to-muted/25 px-5 py-5 shadow-sm shadow-primary/5"
+    >
+      <div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-primary/35 to-transparent" />
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-xs font-medium text-primary">
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/12">
+            <ActivityIcon className="h-3.5 w-3.5 animate-pulse" aria-hidden="true" />
+          </span>
+          Reasoning stream
+        </div>
+        <div className="text-[11px] font-medium tabular-nums text-muted-foreground">
+          {thoughtSummaries.length} {thoughtSummaries.length === 1 ? "update" : "updates"}
+        </div>
+      </div>
+      <ol className="relative space-y-3 before:absolute before:bottom-2 before:left-[0.5625rem] before:top-2 before:w-px before:bg-primary/20">
+        {thoughtSummaries.map((thought, index) => {
+          const isLatest = index === thoughtSummaries.length - 1;
+          return (
+            <li key={thought.id} className="relative grid grid-cols-[1.25rem_1fr] gap-3">
+              <span
+                className={cn(
+                  "relative z-10 mt-1 h-4 w-4 rounded-full border bg-background",
+                  isLatest ? "border-primary shadow-[0_0_0_5px_hsl(var(--primary)/0.12)]" : "border-primary/35",
+                )}
+                aria-hidden="true"
+              />
+              <div
+                className={cn(
+                  "rounded-xl border px-3.5 py-3",
+                  isLatest ? "border-primary/25 bg-background/80" : "border-border/45 bg-background/55",
+                )}
+              >
+                <div className="mb-1 flex items-center gap-2 text-[11px] font-medium text-muted-foreground">
+                  <span className="tabular-nums">Step {index + 1}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    {new Date(thought.ts).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" })}
+                  </span>
+                </div>
+                <div className="whitespace-pre-wrap text-sm leading-6 text-foreground/90">
+                  {thought.text}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
   );
 }

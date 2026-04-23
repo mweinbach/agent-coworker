@@ -4,7 +4,7 @@ import type { Interactions } from "@google/genai";
 
 import { getSavedProviderApiKey } from "../../config";
 import type { AgentConfig } from "../../types";
-import { enrichCitationReferences } from "../citationMetadata";
+import { enrichCitationAnnotations } from "../citationMetadata";
 import type { SessionDb } from "../sessionDb";
 import type { StartServerSocket } from "../startServer/types";
 import { buildInteractionToolsFromSettings } from "./settings";
@@ -895,7 +895,7 @@ export class ResearchService {
         ...(sourceHost(url) ? { host: sourceHost(url) } : {}),
       });
     }
-    for (const source of await this.enrichSources(sources)) {
+    for (const source of sources) {
       this.upsertSource(state, source, eventId);
     }
   }
@@ -905,8 +905,9 @@ export class ResearchService {
     annotations: unknown,
     eventId: string | null,
   ): Promise<void> {
+    const enrichedAnnotations = await enrichCitationAnnotations(annotations) ?? asRecordArray(annotations);
     const nextSources: ResearchSource[] = [];
-    for (const annotation of asRecordArray(annotations)) {
+    for (const annotation of enrichedAnnotations) {
       const type = asNonEmptyString(annotation.type);
       if (type === "url_citation") {
         const url = asNonEmptyString(annotation.url);
@@ -947,26 +948,35 @@ export class ResearchService {
       }
     }
 
-    for (const source of await this.enrichSources(nextSources)) {
+    for (const source of nextSources) {
       this.upsertSource(state, source, eventId);
     }
   }
 
-  private async enrichSources(sources: ResearchSource[]): Promise<ResearchSource[]> {
+  private async resolveSourcesViaCitationAnnotations(sources: ResearchSource[]): Promise<ResearchSource[]> {
     if (sources.length === 0) {
       return sources;
     }
 
-    const enriched = await enrichCitationReferences(sources);
-    return enriched.map((source) => {
-      const host = sourceHost(source.url);
-      const next = { ...source };
-      if (host) {
-        next.host = host;
-      } else {
-        delete next.host;
-      }
-      return next;
+    const syntheticAnnotations = sources.map((source, index) => ({
+      type: source.sourceType === "place" ? "place_citation" : "url_citation",
+      url: source.url,
+      ...(source.title ? { title: source.title } : {}),
+      start_index: index,
+      end_index: index,
+    }));
+    const enrichedAnnotations = await enrichCitationAnnotations(syntheticAnnotations) ?? syntheticAnnotations;
+    return enrichedAnnotations.map((annotation, index): ResearchSource => {
+      const original = sources[index]!;
+      const annotationRecord = asRecord(annotation);
+      const url = asNonEmptyString(annotation.url) ?? original.url;
+      const title = asNonEmptyString(annotation.title) ?? asNonEmptyString(annotationRecord?.name) ?? original.title;
+      return {
+        ...original,
+        url,
+        ...(title ? { title } : {}),
+        ...(sourceHost(url) ? { host: sourceHost(url) } : {}),
+      };
     });
   }
 
@@ -975,7 +985,7 @@ export class ResearchService {
       return record;
     }
 
-    const sources = await this.enrichSources(record.sources);
+    const sources = await this.resolveSourcesViaCitationAnnotations(record.sources);
     if (JSON.stringify(sources) === JSON.stringify(record.sources)) {
       return record;
     }

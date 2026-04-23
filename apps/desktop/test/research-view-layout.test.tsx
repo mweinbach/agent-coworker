@@ -81,6 +81,37 @@ describe("research view layout", () => {
       expect(runsPane?.className).toContain("min-w-[18rem]");
       expect(runsPane?.className).toContain("w-[clamp(18rem,26vw,23.75rem)]");
       expect(detailPane?.className).toContain("min-w-0");
+      expect(container.textContent).not.toContain("Deep Research runs in the background");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      resetAppStore();
+      harness.restore();
+    }
+  });
+
+  test("does not render helper copy above the new research composer", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+
+      const root = createRoot(container);
+      resetAppStore();
+
+      await act(async () => {
+        root.render(createElement(ResearchView));
+      });
+
+      expect(container.querySelector('[data-slot="prompt-input-status-row"]')).toBeNull();
+      expect(container.textContent).not.toContain(
+        "Deep Research runs in the background and streams cited markdown as it arrives.",
+      );
 
       await act(async () => {
         root.unmount();

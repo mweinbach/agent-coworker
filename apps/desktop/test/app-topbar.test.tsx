@@ -314,6 +314,51 @@ describe("desktop app top bar", () => {
     }
   });
 
+  test("renders Research as non-interactive title chrome", async () => {
+    const harness = setupJsdom();
+
+    try {
+      harness.dom.window.document.documentElement.dataset.platform = "darwin";
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(AppTopBar, {
+            busy: false,
+            onToggleSidebar: () => {},
+            onNewChat: () => {},
+            sidebarCollapsed: false,
+            sidebarWidth: 280,
+            contextSidebarCollapsed: false,
+            onToggleContextSidebar: () => {},
+            title: "Research",
+            subtitle: null,
+            sessionUsage: null,
+            lastTurnUsage: null,
+            showContextToggle: false,
+            managementMode: "thread",
+          }),
+        );
+      });
+
+      const titleShell = container.querySelector(".app-topbar__thread-shell");
+      const researchTitle = container.querySelector(".app-topbar__thread-title");
+
+      expect(titleShell?.getAttribute("style")).toContain("left: 280px");
+      expect(researchTitle?.textContent).toBe("Research");
+      expect(container.querySelector('button[aria-label="Open thread details"]')).toBeNull();
+      expect(container.querySelector(".app-sidebar-collapse-control")).not.toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("consumes Escape while the thread details popover is open", async () => {
     const harness = setupJsdom();
 

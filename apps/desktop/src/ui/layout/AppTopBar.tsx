@@ -239,7 +239,7 @@ export function AppTopBar({
         className="app-topbar__thread-shell absolute inset-y-0 flex min-w-0 items-center"
         style={{ left: titleOffset, right: titleRightInset }}
       >
-        {title === "Research" ? null : managementMode === "plugins" ? (
+        {managementMode === "plugins" ? (
           <div
             className={cn(
               "app-topbar__thread-anchor relative flex min-w-0 items-center",

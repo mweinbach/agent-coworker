@@ -169,24 +169,33 @@ const ChatShell = memo(function ChatShell({
   return (
     <div className="app-shell app-shell--chat flex h-full min-h-0 flex-col text-foreground">
       <div className="app-window-drag-strip" aria-hidden="true" />
-      {view !== "research" ? (
-        <AppTopBar
-          busy={view === "chat" ? busy : false}
-          onToggleSidebar={toggleSidebar}
-          onNewChat={() => void newThread({ workspaceId: selectedWorkspaceId ?? undefined })}
-          sidebarCollapsed={sidebarCollapsed}
-          sidebarWidth={sidebarWidth}
-          contextSidebarCollapsed={contextSidebarCollapsed}
-          onToggleContextSidebar={toggleContextSidebar}
-          title={topBarTitle}
-          subtitle={topBarSubtitle}
-          sessionUsage={runtime?.sessionUsage ?? null}
-          lastTurnUsage={runtime?.lastTurnUsage ?? null}
-          canClearHardCap={canClearHardCap}
-          onClearHardCap={selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined}
-          showContextToggle={showContextSidebar}
-        />
-      ) : null}
+      <AppTopBar
+        busy={view === "chat" ? busy : false}
+        onToggleSidebar={toggleSidebar}
+        onNewChat={() => void newThread({ workspaceId: selectedWorkspaceId ?? undefined })}
+        sidebarCollapsed={sidebarCollapsed}
+        sidebarWidth={sidebarWidth}
+        contextSidebarCollapsed={contextSidebarCollapsed}
+        onToggleContextSidebar={toggleContextSidebar}
+        title={topBarTitle}
+        subtitle={topBarSubtitle}
+        managementMode={view === "skills" ? "plugins" : "thread"}
+        managementWorkspaceId={pluginSelection.displayWorkspaceId}
+        managementWorkspaces={workspaces.map((workspace) => ({
+          id: workspace.id,
+          name: workspace.name,
+        }))}
+        onSelectManagementWorkspace={
+          view === "skills"
+            ? (workspaceId: string | null) => void setPluginManagementWorkspace(workspaceId)
+            : undefined
+        }
+        sessionUsage={view === "chat" ? (runtime?.sessionUsage ?? null) : null}
+        lastTurnUsage={view === "chat" ? (runtime?.lastTurnUsage ?? null) : null}
+        canClearHardCap={canClearHardCap}
+        onClearHardCap={selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined}
+        showContextToggle={showContextSidebar}
+      />
       <div className="app-chat-body flex min-h-0 min-w-0 flex-1 flex-row">
         <LeftSidebarPane collapsed={sidebarCollapsed} />
         <main className="app-main-content flex min-h-0 min-w-0 flex-1 flex-col">

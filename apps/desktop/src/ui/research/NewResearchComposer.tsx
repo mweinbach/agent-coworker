@@ -8,7 +8,6 @@ import {
   PromptInputFooter,
   PromptInputForm,
   PromptInputRoot,
-  PromptInputStatusRow,
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
@@ -109,10 +108,6 @@ export function NewResearchComposer({
             void submit();
           }}
         >
-          <PromptInputStatusRow>
-            Deep Research runs in the background and streams cited markdown as it arrives.
-          </PromptInputStatusRow>
-
           <PromptInputAttachmentPreviews
             attachments={attachmentPreviews}
             onRemove={(index) => {
@@ -197,4 +192,3 @@ export function NewResearchComposer({
     </div>
   );
 }
-

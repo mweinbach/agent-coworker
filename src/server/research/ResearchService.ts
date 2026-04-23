@@ -4,6 +4,7 @@ import type { Interactions } from "@google/genai";
 
 import { getSavedProviderApiKey } from "../../config";
 import type { AgentConfig } from "../../types";
+import { enrichCitationReferences } from "../citationMetadata";
 import type { SessionDb } from "../sessionDb";
 import type { StartServerSocket } from "../startServer/types";
 import { buildInteractionToolsFromSettings } from "./settings";
@@ -211,7 +212,13 @@ export class ResearchService {
 
   async get(id: string): Promise<ResearchRecord | null> {
     await this.init();
-    return this.states.get(id)?.record ?? this.sessionDb.getResearch(id);
+    const activeState = this.states.get(id);
+    if (activeState) {
+      activeState.record = await this.resolveStoredSourceDestinations(activeState.record);
+      return activeState.record;
+    }
+    const record = this.sessionDb.getResearch(id);
+    return record ? await this.resolveStoredSourceDestinations(record) : null;
   }
 
   async start(params: StartResearchParams): Promise<ResearchRecord> {
@@ -724,7 +731,7 @@ export class ResearchService {
       if (text) {
         this.appendTextDelta(state, text, eventId);
       }
-      this.upsertSources(state, content.annotations, eventId);
+      await this.upsertSources(state, content.annotations, eventId);
       return;
     }
 
@@ -741,12 +748,12 @@ export class ResearchService {
     }
 
     if (contentType === "url_context_result") {
-      this.upsertUrlContextSources(state, content.result, eventId);
+      await this.upsertUrlContextSources(state, content.result, eventId);
       return;
     }
 
     if (contentType === "text_annotation") {
-      this.upsertSources(state, content.annotations, eventId);
+      await this.upsertSources(state, content.annotations, eventId);
     }
   }
 
@@ -782,12 +789,12 @@ export class ResearchService {
     }
 
     if (deltaType === "text_annotation") {
-      this.upsertSources(state, delta.annotations, eventId);
+      await this.upsertSources(state, delta.annotations, eventId);
       return;
     }
 
     if (deltaType === "url_context_result") {
-      this.upsertUrlContextSources(state, delta.result, eventId);
+      await this.upsertUrlContextSources(state, delta.result, eventId);
     }
   }
 
@@ -870,11 +877,11 @@ export class ResearchService {
     );
   }
 
-  private upsertUrlContextSources(
+  private async upsertUrlContextSources(
     state: ResearchRuntimeState,
     result: unknown,
     eventId: string | null,
-  ): void {
+  ): Promise<void> {
     const sources: ResearchSource[] = [];
     for (const entry of asRecordArray(result)) {
       const url = asNonEmptyString(entry.url);
@@ -888,16 +895,16 @@ export class ResearchService {
         ...(sourceHost(url) ? { host: sourceHost(url) } : {}),
       });
     }
-    for (const source of sources) {
+    for (const source of await this.enrichSources(sources)) {
       this.upsertSource(state, source, eventId);
     }
   }
 
-  private upsertSources(
+  private async upsertSources(
     state: ResearchRuntimeState,
     annotations: unknown,
     eventId: string | null,
-  ): void {
+  ): Promise<void> {
     const nextSources: ResearchSource[] = [];
     for (const annotation of asRecordArray(annotations)) {
       const type = asNonEmptyString(annotation.type);
@@ -940,9 +947,45 @@ export class ResearchService {
       }
     }
 
-    for (const source of nextSources) {
+    for (const source of await this.enrichSources(nextSources)) {
       this.upsertSource(state, source, eventId);
     }
+  }
+
+  private async enrichSources(sources: ResearchSource[]): Promise<ResearchSource[]> {
+    if (sources.length === 0) {
+      return sources;
+    }
+
+    const enriched = await enrichCitationReferences(sources);
+    return enriched.map((source) => {
+      const host = sourceHost(source.url);
+      const next = { ...source };
+      if (host) {
+        next.host = host;
+      } else {
+        delete next.host;
+      }
+      return next;
+    });
+  }
+
+  private async resolveStoredSourceDestinations(record: ResearchRecord): Promise<ResearchRecord> {
+    if (record.sources.length === 0) {
+      return record;
+    }
+
+    const sources = await this.enrichSources(record.sources);
+    if (JSON.stringify(sources) === JSON.stringify(record.sources)) {
+      return record;
+    }
+
+    const nextRecord = {
+      ...record,
+      sources,
+    };
+    await this.sessionDb.upsertResearch(nextRecord);
+    return nextRecord;
   }
 
   private upsertSource(

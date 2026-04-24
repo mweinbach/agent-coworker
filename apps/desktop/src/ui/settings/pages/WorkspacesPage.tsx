@@ -222,7 +222,9 @@ function AllowedDomainsField({ domains, onChange }: AllowedDomainsFieldProps) {
   const domainsKey = domains.join("\n");
 
   useEffect(() => {
-    setDraft("");
+    if (domainsKey !== undefined) {
+      setDraft("");
+    }
   }, [domainsKey]);
 
   const addDomains = () => {
@@ -396,9 +398,10 @@ function useSharedUpdateWorkspaceDefaults() {
   const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
   const workspaces = useAppStore((s) => s.workspaces);
   const rawUpdate = useAppStore((s) => s.updateWorkspaceDefaults);
+  type WorkspaceDefaultsPatch = Parameters<typeof rawUpdate>[1];
   return useMemo(() => {
     if (perWorkspaceSettings) return rawUpdate;
-    return async (workspaceId: string, patch: any) => {
+    return async (_workspaceId: string, patch: WorkspaceDefaultsPatch) => {
       await Promise.all(workspaces.map((ws) => rawUpdate(ws.id, patch)));
     };
   }, [perWorkspaceSettings, workspaces, rawUpdate]);
@@ -409,12 +412,9 @@ type OpenAiCompatibleModelSettingsCardProps = {
   updateWorkspaceDefaults: (
     workspaceId: string,
     patch: { providerOptions?: ReturnType<typeof mergeWorkspaceProviderOptions> },
-  ) => Promise<unknown> | void;
-  providerStatusByName: Record<string, any>;
+  ) => Promise<unknown> | undefined;
+  providerStatusByName: Record<string, { verified?: boolean; authorized?: boolean } | undefined>;
 };
-
-const MODEL_SETTINGS_SELECT_CLASS =
-  "w-full min-w-0 rounded-sm border-border/70 bg-background/80 shadow-none sm:w-36";
 const MODEL_SETTINGS_INPUT_CLASS = "h-8 rounded-sm border-border/70 bg-background/80 shadow-none";
 const MODEL_CARD_FIELD_CLASS = "space-y-1.5";
 const MODEL_CARD_PANEL_CLASS = "rounded-lg border border-border/60 bg-background/35 p-3";
@@ -596,8 +596,8 @@ type SearchSettingsCardProps = {
   updateWorkspaceDefaults: (
     workspaceId: string,
     patch: { providerOptions?: ReturnType<typeof mergeWorkspaceProviderOptions> },
-  ) => Promise<unknown> | void;
-  providerStatusByName: Record<string, any>;
+  ) => Promise<unknown> | undefined;
+  providerStatusByName: Record<string, { verified?: boolean; authorized?: boolean } | undefined>;
 };
 
 export function SearchSettingsCard({
@@ -970,8 +970,8 @@ type GeminiApiSettingsCardProps = {
   updateWorkspaceDefaults: (
     workspaceId: string,
     patch: { providerOptions?: ReturnType<typeof mergeWorkspaceProviderOptions> },
-  ) => Promise<unknown> | void;
-  providerStatusByName: Record<string, any>;
+  ) => Promise<unknown> | undefined;
+  providerStatusByName: Record<string, { verified?: boolean; authorized?: boolean } | undefined>;
   googleDefaultModel: string;
 };
 
@@ -1055,7 +1055,7 @@ type WorkspaceUserProfileCardProps = {
   updateWorkspaceDefaults: (
     workspaceId: string,
     patch: { userName?: string; userProfile?: Partial<WorkspaceUserProfile> },
-  ) => Promise<unknown> | void;
+  ) => Promise<unknown> | undefined;
 };
 
 function buildUserProfileDraft(workspace: WorkspaceUserProfileCardProps["workspace"]) {
@@ -1079,13 +1079,7 @@ export function WorkspaceUserProfileCard({
   useEffect(() => {
     setDraft(buildUserProfileDraft(workspace));
     setSaveSuccess(false);
-  }, [
-    workspace.id,
-    workspace.userName,
-    workspace.userProfile?.instructions,
-    workspace.userProfile?.work,
-    workspace.userProfile?.details,
-  ]);
+  }, [workspace]);
 
   const currentProfile = normalizeWorkspaceUserProfile(workspace.userProfile);
   const isDirty =

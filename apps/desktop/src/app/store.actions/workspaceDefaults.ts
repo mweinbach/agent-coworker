@@ -45,7 +45,7 @@ export function createWorkspaceDefaultsActions(
   };
   type DefaultsTargetState = {
     config: { provider?: unknown; model?: unknown } | null | undefined;
-    sessionConfig: any;
+    sessionConfig: Record<string, unknown> | null | undefined;
     enableMcp: boolean | null | undefined;
   };
   type ThreadJsonRpcApplyResult = {
@@ -481,12 +481,13 @@ export function createWorkspaceDefaultsActions(
       }
 
       const preserveSessionModel = mode === "auto-resume";
+      const runtimeConfig = rt.config as { provider?: unknown } | null | undefined;
 
       const inferredProvider =
         !preserveSessionModel && ws.defaultProvider && isProviderName(ws.defaultProvider)
           ? ws.defaultProvider
-          : isProviderName((rt.config as any)?.provider)
-            ? ((rt.config as any).provider as ProviderName)
+          : isProviderName(runtimeConfig?.provider)
+            ? runtimeConfig.provider
             : "google";
 
       let provider = inferredProvider;

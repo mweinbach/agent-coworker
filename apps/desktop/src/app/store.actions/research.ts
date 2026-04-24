@@ -135,9 +135,18 @@ function buildResearchExportFileName(
   format: ResearchExportFormat,
 ): string {
   const extension = extensionForResearchExport(format);
-  const sanitizedTitle = (title ?? "")
-    .normalize("NFKC")
-    .replace(/[<>:"/\\|?*\u0000-\u001F]+/g, " ")
+  const replaceUnsafeFileNameChars = (value: string): string =>
+    Array.from(value, (char) => {
+      const codePoint = char.codePointAt(0);
+      if (codePoint === undefined) {
+        return char;
+      }
+      if (codePoint <= 0x1f || '<>:"/\\|?*'.includes(char)) {
+        return " ";
+      }
+      return char;
+    }).join("");
+  const sanitizedTitle = replaceUnsafeFileNameChars((title ?? "").normalize("NFKC"))
     .replace(/\s+/g, " ")
     .trim()
     .replace(/[. ]+$/g, "");
@@ -629,7 +638,7 @@ export function createResearchActions(
           set({ researchListLoading: false });
           return;
         }
-        set((s) => ({
+        set(() => ({
           researchTransportWorkspaceId: workspaceId,
         }));
         await get().refreshResearchList();
@@ -701,7 +710,7 @@ export function createResearchActions(
         if (!workspaceId) {
           return null;
         }
-        set((s) => ({
+        set(() => ({
           view: "research",
           lastNonSettingsView: "research",
           researchTransportWorkspaceId: workspaceId,

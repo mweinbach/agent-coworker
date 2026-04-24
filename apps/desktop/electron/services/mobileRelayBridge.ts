@@ -6,7 +6,6 @@ import { WebSocket } from "ws";
 
 import {
   buildRelayHandshakeProofPayload,
-  buildRelayKeyFingerprint,
   computeRelayReconnectDelayMs,
   createRelaySharedKey,
   decodeRelaySecureEnvelope,
@@ -80,12 +79,6 @@ function closeSocket(socket: BridgeSocket | null): void {
     return;
   }
   socket.close();
-}
-
-function buildFingerprint(publicKeyBase64: string | null | undefined): string | null {
-  const normalized = typeof publicKeyBase64 === "string" ? publicKeyBase64.trim() : "";
-  if (!normalized) return null;
-  return buildRelayKeyFingerprint(normalized);
 }
 
 function buildInitialState(): MobileRelayBridgeState {

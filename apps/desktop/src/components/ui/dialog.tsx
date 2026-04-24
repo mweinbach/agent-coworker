@@ -354,11 +354,11 @@ function DialogContent({
       const restoreTarget = restoreFocusRef.current;
       const fallbackTrigger = triggerRef.current;
       const restoreFocus = () => {
-        if (restoreTarget && restoreTarget.isConnected) {
+        if (restoreTarget?.isConnected) {
           restoreTarget.focus();
           return;
         }
-        if (fallbackTrigger && fallbackTrigger.isConnected) {
+        if (fallbackTrigger?.isConnected) {
           fallbackTrigger.focus();
         }
       };
@@ -369,7 +369,7 @@ function DialogContent({
         restoreFocusRef.current = null;
       }, 0);
     };
-  }, [handleEscapeDismiss, open]);
+  }, [handleEscapeDismiss, open, restoreFocusRef, triggerRef]);
 
   const handleBackdropClick = React.useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {

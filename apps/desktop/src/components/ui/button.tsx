@@ -64,7 +64,6 @@ function mapVariant(
       return "ghost";
     case "link":
       return "ghost";
-    case "default":
     default:
       return "primary";
   }
@@ -79,8 +78,6 @@ function mapSize(
       return "sm";
     case "lg":
       return "lg";
-    case "default":
-    case "icon":
     default:
       return "md";
   }

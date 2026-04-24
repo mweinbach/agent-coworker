@@ -545,7 +545,7 @@ export class PersistenceService {
 
     for (const [threadId, chunk] of grouped) {
       const filePath = this.transcriptFilePath(threadId);
-      const payload = chunk.map((event) => JSON.stringify(event)).join("\n") + "\n";
+      const payload = `${chunk.map((event) => JSON.stringify(event)).join("\n")}\n`;
       await fs.appendFile(filePath, payload, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
       await fs.chmod(filePath, PRIVATE_FILE_MODE);
     }

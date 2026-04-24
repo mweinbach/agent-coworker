@@ -109,11 +109,15 @@ export function decorateDocxPreviewHtml(rawHtml: string): string {
     }
   }
 
-  root.querySelectorAll("table").forEach((table) => table.classList.add("docx-table"));
-  root.querySelectorAll("td, th").forEach((cell) => cell.classList.add("docx-cell"));
-  root
-    .querySelectorAll("td p, th p")
-    .forEach((paragraph) => paragraph.classList.add("docx-table-paragraph"));
+  root.querySelectorAll("table").forEach((table) => {
+    table.classList.add("docx-table");
+  });
+  root.querySelectorAll("td, th").forEach((cell) => {
+    cell.classList.add("docx-cell");
+  });
+  root.querySelectorAll("td p, th p").forEach((paragraph) => {
+    paragraph.classList.add("docx-table-paragraph");
+  });
 
   return root.innerHTML;
 }

@@ -92,7 +92,7 @@ function basename(p: string) {
 function truncateTitle(s: string, max = 34) {
   const trimmed = s.trim().replace(/\s+/g, " ");
   if (trimmed.length <= max) return trimmed;
-  return trimmed.slice(0, max - 1) + "…";
+  return `${trimmed.slice(0, max - 1)}…`;
 }
 
 function isPlaceholderThreadTitle(title: string): boolean {
@@ -453,7 +453,7 @@ export type AppStoreState = {
 };
 
 export type AppStoreActionKeys = {
-  [K in keyof AppStoreState]: AppStoreState[K] extends (...args: any[]) => any ? K : never;
+  [K in keyof AppStoreState]: AppStoreState[K] extends (...args: unknown[]) => unknown ? K : never;
 }[keyof AppStoreState];
 
 export type AppStoreActions = Pick<AppStoreState, AppStoreActionKeys>;

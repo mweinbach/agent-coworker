@@ -1,9 +1,8 @@
 import type { ProviderName, ServerEvent } from "../../lib/wsProtocol";
-import type { StoreGet, StoreSet } from "../store.helpers";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
-import { normalizeWorkspaceUserProfile } from "../types";
+import type { StoreGet, StoreSet } from "../store.helpers";
 import type { Notification, SessionSnapshot, ThreadRecord } from "../types";
-import { RUNTIME } from "./runtimeState";
+import { normalizeWorkspaceUserProfile } from "../types";
 import {
   ensureWorkspaceJsonRpcSocket,
   registerWorkspaceJsonRpcLifecycle,
@@ -11,13 +10,17 @@ import {
   requestJsonRpc,
   requestJsonRpcThreadList,
   requestJsonRpcThreadRead,
+  type WorkspaceJsonRpcSocket,
 } from "./jsonRpcSocket";
+import { RUNTIME } from "./runtimeState";
 
 type ProviderStatusEvent = Extract<ServerEvent, { type: "provider_status" }>;
 type ProviderStatus = ProviderStatusEvent["providers"][number];
 type ProviderAuthChallengeEvent = Extract<ServerEvent, { type: "provider_auth_challenge" }>;
 
-function sanitizeProviderAuthChallenge(evt: ProviderAuthChallengeEvent): ProviderAuthChallengeEvent {
+function sanitizeProviderAuthChallenge(
+  evt: ProviderAuthChallengeEvent,
+): ProviderAuthChallengeEvent {
   if (evt.provider !== "codex-cli" || evt.methodId !== "oauth_cli" || !evt.challenge.url) {
     return evt;
   }
@@ -94,8 +97,8 @@ export function createControlSocketHelpers(
       const threadId = existing?.id ?? session.sessionId;
       const runtime = threadRuntimeById[threadId];
       const legacyTranscriptId =
-        existing?.legacyTranscriptId
-        ?? (existing && existing.id !== session.sessionId ? existing.id : null);
+        existing?.legacyTranscriptId ??
+        (existing && existing.id !== session.sessionId ? existing.id : null);
       return {
         id: threadId,
         workspaceId,
@@ -103,7 +106,7 @@ export function createControlSocketHelpers(
         titleSource: session.titleSource,
         createdAt: session.createdAt,
         lastMessageAt: session.updatedAt,
-        status: runtime?.connected ? "active" as const : "disconnected" as const,
+        status: runtime?.connected ? ("active" as const) : ("disconnected" as const),
         sessionId: session.sessionId,
         messageCount: session.messageCount,
         lastEventSeq: session.lastEventSeq,
@@ -114,16 +117,22 @@ export function createControlSocketHelpers(
     const claimedLegacyThreadIds = new Set(
       nextServerThreads
         .map((thread) => thread.legacyTranscriptId)
-        .filter((threadId): threadId is string => typeof threadId === "string" && threadId.trim().length > 0),
+        .filter(
+          (threadId): threadId is string =>
+            typeof threadId === "string" && threadId.trim().length > 0,
+        ),
     );
     const claimedServerThreadIds = new Set(nextServerThreads.map((thread) => thread.id));
     return [
       ...allThreads.filter((thread) => thread.workspaceId !== workspaceId),
-      ...nextServerThreads.sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt)),
+      ...nextServerThreads.sort((left, right) =>
+        right.lastMessageAt.localeCompare(left.lastMessageAt),
+      ),
       ...localOnlyThreads
-        .filter((thread) =>
-          thread.draft === true
-          || (!claimedServerThreadIds.has(thread.id) && !claimedLegacyThreadIds.has(thread.id))
+        .filter(
+          (thread) =>
+            thread.draft === true ||
+            (!claimedServerThreadIds.has(thread.id) && !claimedLegacyThreadIds.has(thread.id)),
         )
         .sort((left, right) => right.lastMessageAt.localeCompare(left.lastMessageAt)),
     ];
@@ -156,7 +165,11 @@ export function createControlSocketHelpers(
   ): string[] {
     const liveSessionIds = new Set(sessions.map((session) => session.sessionId));
     const removedSessionIds: string[] = [];
-    for (const sessionId of collectWorkspaceSessionCandidateIds(allThreads, threadRuntimeById, workspaceId)) {
+    for (const sessionId of collectWorkspaceSessionCandidateIds(
+      allThreads,
+      threadRuntimeById,
+      workspaceId,
+    )) {
       if (!liveSessionIds.has(sessionId) && RUNTIME.sessionSnapshots.has(sessionId)) {
         removedSessionIds.push(sessionId);
       }
@@ -178,15 +191,16 @@ export function createControlSocketHelpers(
       return selectedThreadId;
     }
 
-    const migratedThreadId = nextThreads.find((thread) => thread.legacyTranscriptId === selectedThreadId)?.id ?? null;
+    const migratedThreadId =
+      nextThreads.find((thread) => thread.legacyTranscriptId === selectedThreadId)?.id ?? null;
     if (migratedThreadId) {
       return migratedThreadId;
     }
 
     const fallbackWorkspaceId =
-      allThreads.find((thread) => thread.id === selectedThreadId)?.workspaceId
-      ?? selectedWorkspaceId
-      ?? workspaceId;
+      allThreads.find((thread) => thread.id === selectedThreadId)?.workspaceId ??
+      selectedWorkspaceId ??
+      workspaceId;
     return nextThreads.find((thread) => thread.workspaceId === fallbackWorkspaceId)?.id ?? null;
   }
 
@@ -205,7 +219,10 @@ export function createControlSocketHelpers(
     return nextPendingKeys;
   }
 
-  function waitForReady(socket: any, timeoutMs = requestTimeoutMs): Promise<boolean> {
+  function waitForReady(
+    socket: Pick<WorkspaceJsonRpcSocket, "readyPromise">,
+    timeoutMs = requestTimeoutMs,
+  ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       let settled = false;
       const timer = setTimeout(() => {
@@ -231,7 +248,10 @@ export function createControlSocketHelpers(
     });
   }
 
-  function waitForPromiseCompletion(promise: Promise<unknown>, timeoutMs = requestTimeoutMs): Promise<boolean> {
+  function waitForPromiseCompletion(
+    promise: Promise<unknown>,
+    timeoutMs = requestTimeoutMs,
+  ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       let settled = false;
       const timer = setTimeout(() => {
@@ -257,7 +277,10 @@ export function createControlSocketHelpers(
     });
   }
 
-  async function withPendingWaiterCount<T>(waiters: Set<symbol>, task: () => Promise<T>): Promise<T> {
+  async function withPendingWaiterCount<T>(
+    waiters: Set<symbol>,
+    task: () => Promise<T>,
+  ): Promise<T> {
     const token = Symbol("pending-waiter");
     waiters.add(token);
     try {
@@ -441,7 +464,12 @@ export function createControlSocketHelpers(
     return ensureWorkspaceJsonRpcSocket(get, set, workspaceId);
   }
 
-  async function waitForControlSession(get: StoreGet, set: StoreSet, workspaceId: string, timeoutMs = 3_000): Promise<boolean> {
+  async function waitForControlSession(
+    get: StoreGet,
+    set: StoreSet,
+    workspaceId: string,
+    timeoutMs = 3_000,
+  ): Promise<boolean> {
     if (isWorkspaceDisposed(workspaceId)) {
       return false;
     }
@@ -449,7 +477,8 @@ export function createControlSocketHelpers(
       if (isWorkspaceDisposed(workspaceId)) {
         return false;
       }
-      const socket = RUNTIME.jsonRpcSockets.get(workspaceId) ?? ensureControlSocket(get, set, workspaceId);
+      const socket =
+        RUNTIME.jsonRpcSockets.get(workspaceId) ?? ensureControlSocket(get, set, workspaceId);
       if (!socket) {
         return false;
       }
@@ -486,7 +515,8 @@ export function createControlSocketHelpers(
       if (isWorkspaceDisposed(workspaceId)) {
         return null;
       }
-      const socket = RUNTIME.jsonRpcSockets.get(workspaceId) ?? ensureControlSocket(get, set, workspaceId);
+      const socket =
+        RUNTIME.jsonRpcSockets.get(workspaceId) ?? ensureControlSocket(get, set, workspaceId);
       if (!socket) {
         return null;
       }
@@ -494,7 +524,7 @@ export function createControlSocketHelpers(
       if (isWorkspaceDisposed(workspaceId)) {
         return null;
       }
-      let threads: any[] = [];
+      let threads: unknown[] = [];
       try {
         threads = await requestJsonRpcThreadList(get, set, workspaceId);
       } catch {
@@ -503,15 +533,16 @@ export function createControlSocketHelpers(
       if (isWorkspaceDisposed(workspaceId)) {
         return null;
       }
-      const sessions = threads.map((thread) => {
-        const existingThread = get().threads.find((entry) =>
-          entry.workspaceId === workspaceId
-          && (entry.id === thread.id || entry.sessionId === thread.id),
+      const sessions = (threads as any[]).map((thread: any) => {
+        const existingThread = get().threads.find(
+          (entry) =>
+            entry.workspaceId === workspaceId &&
+            (entry.id === thread.id || entry.sessionId === thread.id),
         );
         return {
           sessionId: thread.id,
           title: thread.title ?? "New session",
-          titleSource: existingThread?.titleSource ?? "manual" as const,
+          titleSource: existingThread?.titleSource ?? ("manual" as const),
           titleModel: null,
           provider: thread.modelProvider,
           model: thread.model,
@@ -578,7 +609,11 @@ export function createControlSocketHelpers(
     });
   }
 
-  async function bootstrapJsonRpcControlState(get: StoreGet, set: StoreSet, workspaceId: string): Promise<void> {
+  async function bootstrapJsonRpcControlState(
+    get: StoreGet,
+    set: StoreSet,
+    workspaceId: string,
+  ): Promise<void> {
     if (isWorkspaceDisposed(workspaceId)) {
       return;
     }
@@ -605,7 +640,9 @@ export function createControlSocketHelpers(
       requestWorkspaceSessions(get, set, workspaceId),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/session/state/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", { cwd }),
-      requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/authMethods/read", { cwd }),
+      requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/authMethods/read", {
+        cwd,
+      }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/mcp/servers/read", { cwd }),
       requestJsonRpcControlEvent(get, set, workspaceId, "cowork/memory/list", { cwd }),
@@ -628,7 +665,8 @@ export function createControlSocketHelpers(
       });
     }
 
-    const selectedInstallationId = get().workspaceRuntimeById[workspaceId]?.selectedSkillInstallationId;
+    const selectedInstallationId =
+      get().workspaceRuntimeById[workspaceId]?.selectedSkillInstallationId;
     if (selectedInstallationId) {
       await requestJsonRpcControlEvent(get, set, workspaceId, "cowork/skills/installation/read", {
         cwd,
@@ -647,7 +685,11 @@ export function createControlSocketHelpers(
     }
   }
 
-  function startJsonRpcControlBootstrap(get: StoreGet, set: StoreSet, workspaceId: string): Promise<void> {
+  function startJsonRpcControlBootstrap(
+    get: StoreGet,
+    set: StoreSet,
+    workspaceId: string,
+  ): Promise<void> {
     const promise = bootstrapJsonRpcControlState(get, set, workspaceId).finally(() => {
       if (jsonRpcBootstrapPromises.get(workspaceId) === promise) {
         jsonRpcBootstrapPromises.delete(workspaceId);
@@ -657,7 +699,11 @@ export function createControlSocketHelpers(
     return promise;
   }
 
-  function bootstrapJsonRpcControlStateOnce(get: StoreGet, set: StoreSet, workspaceId: string): Promise<void> {
+  function bootstrapJsonRpcControlStateOnce(
+    get: StoreGet,
+    set: StoreSet,
+    workspaceId: string,
+  ): Promise<void> {
     if (isWorkspaceDisposed(workspaceId)) {
       return Promise.resolve();
     }
@@ -688,15 +734,19 @@ export function createControlSocketHelpers(
     return startJsonRpcControlBootstrap(get, set, workspaceId);
   }
 
-  function applyJsonRpcControlEvent(get: StoreGet, set: StoreSet, workspaceId: string, evt: ServerEvent) {
+  function applyJsonRpcControlEvent(
+    get: StoreGet,
+    set: StoreSet,
+    workspaceId: string,
+    evt: ServerEvent,
+  ) {
     if (isWorkspaceDisposed(workspaceId)) {
       return;
     }
     if (evt.type === "config_updated") {
-      const provider =
-        deps.isProviderName((evt.config as { provider?: unknown })?.provider)
-          ? (evt.config as { provider: ProviderName }).provider
-          : null;
+      const provider = deps.isProviderName((evt.config as { provider?: unknown })?.provider)
+        ? (evt.config as { provider: ProviderName }).provider
+        : null;
       const model =
         typeof (evt.config as { model?: unknown })?.model === "string"
           ? (evt.config as { model: string }).model.trim()
@@ -713,9 +763,9 @@ export function createControlSocketHelpers(
             ...(!workspace.defaultModel && model ? { defaultModel: model } : {}),
           };
           workspaceMirrored =
-            workspaceMirrored
-            || nextWorkspace.defaultProvider !== workspace.defaultProvider
-            || nextWorkspace.defaultModel !== workspace.defaultModel;
+            workspaceMirrored ||
+            nextWorkspace.defaultProvider !== workspace.defaultProvider ||
+            nextWorkspace.defaultModel !== workspace.defaultModel;
           return nextWorkspace;
         }),
         workspaceRuntimeById: {
@@ -754,8 +804,11 @@ export function createControlSocketHelpers(
     }
 
     if (evt.type === "session_config") {
-      const providerOptions = normalizeWorkspaceProviderOptions((evt.config as any).providerOptions);
-      const userProfile = evt.config.userProfile ? normalizeWorkspaceUserProfile(evt.config.userProfile) : undefined;
+      const sessionConfig = evt.config as Record<string, unknown>;
+      const providerOptions = normalizeWorkspaceProviderOptions(sessionConfig.providerOptions);
+      const userProfile = evt.config.userProfile
+        ? normalizeWorkspaceUserProfile(evt.config.userProfile)
+        : undefined;
       set((s) => ({
         workspaces: s.workspaces.map((workspace) =>
           workspace.id === workspaceId
@@ -768,7 +821,9 @@ export function createControlSocketHelpers(
                 defaultAllowedChildModelRefs: evt.config.allowedChildModelRefs,
                 defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
                 providerOptions,
-                ...(typeof evt.config.userName === "string" ? { userName: evt.config.userName } : {}),
+                ...(typeof evt.config.userName === "string"
+                  ? { userName: evt.config.userName }
+                  : {}),
                 ...(userProfile ? { userProfile } : {}),
               }
             : workspace,
@@ -831,7 +886,9 @@ export function createControlSocketHelpers(
           id: deps.makeId(),
           ts: deps.nowIso(),
           kind: evt.ok ? "info" : "error",
-          title: evt.ok ? `MCP validation passed: ${evt.name}` : `MCP validation failed: ${evt.name}`,
+          title: evt.ok
+            ? `MCP validation passed: ${evt.name}`
+            : `MCP validation failed: ${evt.name}`,
           detail: evt.message,
         }),
       }));
@@ -889,8 +946,8 @@ export function createControlSocketHelpers(
             return {
               ...prev,
               skills: evt.skills,
-              selectedSkillName: exists ? prev?.selectedSkillName ?? null : null,
-              selectedSkillContent: exists ? prev?.selectedSkillContent ?? null : null,
+              selectedSkillName: exists ? (prev?.selectedSkillName ?? null) : null,
+              selectedSkillContent: exists ? (prev?.selectedSkillContent ?? null) : null,
             };
           })(),
         },
@@ -917,10 +974,11 @@ export function createControlSocketHelpers(
       set((s) => {
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
         const selectedInstallationId = workspaceRuntime.selectedSkillInstallationId;
-        const selectedInstallation =
-          selectedInstallationId
-            ? evt.catalog.installations.find((installation) => installation.installationId === selectedInstallationId) ?? null
-            : null;
+        const selectedInstallation = selectedInstallationId
+          ? (evt.catalog.installations.find(
+              (installation) => installation.installationId === selectedInstallationId,
+            ) ?? null)
+          : null;
         return {
           workspaceRuntimeById: {
             ...s.workspaceRuntimeById,
@@ -959,12 +1017,13 @@ export function createControlSocketHelpers(
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
         const selectedPluginId = workspaceRuntime.selectedPluginId;
         const selectedPluginScope = workspaceRuntime.selectedPluginScope;
-        const selectedPlugin =
-          selectedPluginId
-            ? evt.catalog.plugins.find((plugin) =>
-              plugin.id === selectedPluginId
-              && (selectedPluginScope === null || plugin.scope === selectedPluginScope)) ?? null
-            : null;
+        const selectedPlugin = selectedPluginId
+          ? (evt.catalog.plugins.find(
+              (plugin) =>
+                plugin.id === selectedPluginId &&
+                (selectedPluginScope === null || plugin.scope === selectedPluginScope),
+            ) ?? null)
+          : null;
         return {
           workspaceRuntimeById: {
             ...s.workspaceRuntimeById,
@@ -1063,7 +1122,9 @@ export function createControlSocketHelpers(
           ...s.workspaceRuntimeById,
           [workspaceId]: {
             ...s.workspaceRuntimeById[workspaceId],
-            selectedSkillInstallationId: evt.installation?.installationId ?? s.workspaceRuntimeById[workspaceId].selectedSkillInstallationId,
+            selectedSkillInstallationId:
+              evt.installation?.installationId ??
+              s.workspaceRuntimeById[workspaceId].selectedSkillInstallationId,
             selectedSkillInstallation: evt.installation,
             selectedSkillContent:
               typeof evt.content === "string"
@@ -1187,7 +1248,7 @@ export function createControlSocketHelpers(
       const connected = evt.connected.filter((provider): provider is ProviderName =>
         deps.isProviderName(provider),
       );
-      set((s) => ({
+      set(() => ({
         providerCatalog: evt.all,
         providerDefaultModelByProvider: evt.default,
         providerConnected: connected,
@@ -1244,7 +1305,9 @@ export function createControlSocketHelpers(
       const refreshGeneration = ++RUNTIME.providerStatusRefreshGeneration;
       set(() => ({ providerStatusRefreshing: true }));
       void Promise.allSettled([
-        requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", { cwd }),
+        requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/status/refresh", {
+          cwd,
+        }),
         requestJsonRpcControlEvent(get, set, workspaceId, "cowork/provider/catalog/read", { cwd }),
       ]).then(() => {
         if (refreshGeneration === RUNTIME.providerStatusRefreshGeneration) {
@@ -1260,8 +1323,8 @@ export function createControlSocketHelpers(
       const pluginInstallWaiter = RUNTIME.pluginInstallWaiters.get(workspaceId);
       const hasPendingSkillStateBefore =
         workspaceRuntimeBefore &&
-        (workspaceRuntimeBefore.skillCatalogLoading
-          || Object.keys(workspaceRuntimeBefore.skillMutationPendingKeys).length > 0);
+        (workspaceRuntimeBefore.skillCatalogLoading ||
+          Object.keys(workspaceRuntimeBefore.skillMutationPendingKeys).length > 0);
       const shouldRejectInstall =
         installWaiter &&
         workspaceRuntimeBefore &&
@@ -1276,14 +1339,16 @@ export function createControlSocketHelpers(
         const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
         const hasPendingMemories = workspaceRuntime.memoriesLoading;
         const pendingSkillMutationKeys = Object.keys(workspaceRuntime.skillMutationPendingKeys);
-        const hasPendingPluginMutation = pendingSkillMutationKeys.some((key) => key.startsWith("plugin:"));
+        const hasPendingPluginMutation = pendingSkillMutationKeys.some((key) =>
+          key.startsWith("plugin:"),
+        );
         const hasPendingSkillState =
-          workspaceRuntime.skillCatalogLoading
-          || pendingSkillMutationKeys.some((key) => !key.startsWith("plugin:"));
+          workspaceRuntime.skillCatalogLoading ||
+          pendingSkillMutationKeys.some((key) => !key.startsWith("plugin:"));
         const hasPendingAnyMutation = hasPendingSkillState || hasPendingPluginMutation;
         const hasPendingBackupState =
-          workspaceRuntime.workspaceBackupsLoading
-          || Object.keys(workspaceRuntime.workspaceBackupPendingActionKeys).length > 0;
+          workspaceRuntime.workspaceBackupsLoading ||
+          Object.keys(workspaceRuntime.workspaceBackupPendingActionKeys).length > 0;
         const hasPendingBackupDelta = workspaceRuntime.workspaceBackupDeltaLoading;
         return {
           notifications: deps.pushNotification(s.notifications, {
@@ -1321,8 +1386,12 @@ export function createControlSocketHelpers(
                     workspaceBackupsLoading: false,
                     workspaceBackupsError: evt.message,
                     workspaceBackupPendingActionKeys: {},
-                    workspaceBackupDeltaLoading: hasPendingBackupDelta ? false : workspaceRuntime.workspaceBackupDeltaLoading,
-                    workspaceBackupDeltaError: hasPendingBackupDelta ? evt.message : workspaceRuntime.workspaceBackupDeltaError,
+                    workspaceBackupDeltaLoading: hasPendingBackupDelta
+                      ? false
+                      : workspaceRuntime.workspaceBackupDeltaLoading,
+                    workspaceBackupDeltaError: hasPendingBackupDelta
+                      ? evt.message
+                      : workspaceRuntime.workspaceBackupDeltaError,
                   }
                 : hasPendingBackupDelta
                   ? {
@@ -1385,11 +1454,7 @@ export function createControlSocketHelpers(
         ? (result as { events: ServerEvent[] }).events
         : [];
       const event = (result as { event?: ServerEvent }).event;
-      const normalizedEvents = events.length > 0
-        ? events
-        : event
-          ? [event]
-          : [];
+      const normalizedEvents = events.length > 0 ? events : event ? [event] : [];
       if (isWorkspaceDisposed(workspaceId)) {
         setErrorDetail("Workspace control session was disposed.");
         return false;

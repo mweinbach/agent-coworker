@@ -17,7 +17,10 @@ export class InteractionManager {
   private readonly pendingAsk = new Map<string, PromiseWithResolvers<string>>();
   private readonly pendingApproval = new Map<string, PromiseWithResolvers<boolean>>();
   private readonly pendingAskEvents = new Map<string, Extract<ServerEvent, { type: "ask" }>>();
-  private readonly pendingApprovalEvents = new Map<string, Extract<ServerEvent, { type: "approval" }>>();
+  private readonly pendingApprovalEvents = new Map<
+    string,
+    Extract<ServerEvent, { type: "approval" }>
+  >();
 
   constructor(
     private readonly opts: {
@@ -29,7 +32,7 @@ export class InteractionManager {
       getConfig: () => AgentConfig;
       isYolo: () => boolean;
       waitForPromptResponse?: <T>(requestId: string, bucket: PromptBucket<T>) => Promise<T>;
-    }
+    },
   ) {}
 
   get hasPendingAsk(): boolean {
@@ -44,15 +47,15 @@ export class InteractionManager {
     return this.pendingAskEvents;
   }
 
-  get pendingApprovalEventsForReplay(): ReadonlyMap<string, Extract<ServerEvent, { type: "approval" }>> {
+  get pendingApprovalEventsForReplay(): ReadonlyMap<
+    string,
+    Extract<ServerEvent, { type: "approval" }>
+  > {
     return this.pendingApprovalEvents;
   }
 
   getPendingPromptEventsForReplay(): ReadonlyArray<PendingPromptReplayEvent> {
-    return [
-      ...this.pendingAskEvents.values(),
-      ...this.pendingApprovalEvents.values(),
-    ];
+    return [...this.pendingAskEvents.values(), ...this.pendingApprovalEvents.values()];
   }
 
   replayPendingPrompts() {
@@ -72,7 +75,7 @@ export class InteractionManager {
       this.opts.emitError(
         "validation_failed",
         "session",
-        `Ask response cannot be empty. Reply with text or ${ASK_SKIP_TOKEN} to skip.`
+        `Ask response cannot be empty. Reply with text or ${ASK_SKIP_TOKEN} to skip.`,
       );
       const pendingEvt = this.pendingAskEvents.get(requestId);
       if (pendingEvt) {

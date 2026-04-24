@@ -1,19 +1,16 @@
-import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-import { startAgentServer, type StartAgentServerOptions } from "../src/server/startServer";
 import { getAiCoworkerPaths } from "../src/connect";
+import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
+import { ASK_SKIP_TOKEN } from "../src/server/protocol";
 import type { AgentSession } from "../src/server/session/AgentSession";
 import { SessionDb } from "../src/server/sessionDb";
 import { refreshSessionsForSkillMutation } from "../src/server/skillMutationRefresh";
-import {
-  ASK_SKIP_TOKEN,
-} from "../src/server/protocol";
-import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
+import { type StartAgentServerOptions, startAgentServer } from "../src/server/startServer";
 import { stopTestServer } from "./helpers/wsHarness";
 
 function repoRoot(): string {
@@ -42,7 +39,10 @@ async function makeTmpProject(): Promise<string> {
 }
 
 /** Common options for starting a test server on an ephemeral port. */
-function serverOpts(tmpDir: string, overrides?: Partial<StartAgentServerOptions>): StartAgentServerOptions {
+function serverOpts(
+  tmpDir: string,
+  overrides?: Partial<StartAgentServerOptions>,
+): StartAgentServerOptions {
   const baseEnv = {
     AGENT_WORKING_DIR: tmpDir,
     AGENT_PROVIDER: "google",
@@ -109,8 +109,8 @@ function sendAndCollect(
       } else {
         reject(
           new Error(
-            `Timed out waiting for ${responseCount} responses after send (got ${responses.length})`
-          )
+            `Timed out waiting for ${responseCount} responses after send (got ${responses.length})`,
+          ),
         );
       }
     }, timeoutMs);
@@ -138,8 +138,7 @@ function sendAndCollect(
 
       if (
         !explicitlyIncluded &&
-        (
-          msg.type === "session_settings" ||
+        (msg.type === "session_settings" ||
           msg.type === "session_config" ||
           msg.type === "session_info" ||
           msg.type === "observability_status" ||
@@ -151,8 +150,7 @@ function sendAndCollect(
           msg.type === "mcp_server_auth_challenge" ||
           msg.type === "mcp_server_auth_result" ||
           msg.type === "model_stream_chunk" ||
-          msg.type === "session_backup_state"
-        )
+          msg.type === "session_backup_state")
       ) {
         return;
       }
@@ -453,7 +451,7 @@ describe("Server Startup", () => {
   test("uses provided hostname and port 0 for ephemeral port", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(
-      serverOpts(tmpDir, { hostname: "127.0.0.1", port: 0 })
+      serverOpts(tmpDir, { hostname: "127.0.0.1", port: 0 }),
     );
     try {
       expect(server.port).toBeGreaterThan(0);
@@ -472,7 +470,7 @@ describe("Server Startup", () => {
           AGENT_PROVIDER: "anthropic",
           COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
         },
-      })
+      }),
     );
     try {
       expect(config.provider).toBe("anthropic");
@@ -497,14 +495,16 @@ describe("Server Startup", () => {
 
   test("shared startup still honors explicit built-in skill opt-out", async () => {
     const tmpDir = await makeTmpProject();
-    const { server, config } = await startAgentServer(serverOpts(tmpDir, {
-      env: {
-        AGENT_WORKING_DIR: tmpDir,
-        AGENT_PROVIDER: "google",
-        COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
-        COWORK_DISABLE_BUILTIN_SKILLS: "1",
-      },
-    }));
+    const { server, config } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: {
+          AGENT_WORKING_DIR: tmpDir,
+          AGENT_PROVIDER: "google",
+          COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          COWORK_DISABLE_BUILTIN_SKILLS: "1",
+        },
+      }),
+    );
     try {
       expect(config.skillsDirs).toHaveLength(3);
       expect(config.skillsDirs).not.toContain(path.join(config.builtInDir, "skills"));
@@ -536,16 +536,17 @@ describe("Server Startup", () => {
 
   test("shared skill refresh includes workspace control sessions and preserves source-session behavior", async () => {
     const calls: string[] = [];
-    const makeSession = (id: string, cwd: string) => ({
-      id,
-      getWorkingDirectory: () => cwd,
-      refreshSystemPromptWithSkills: async (reason: string) => {
-        calls.push(`${id}:system:${reason}`);
-      },
-      refreshSkillStateFromExternalMutation: async (reason: string) => {
-        calls.push(`${id}:external:${reason}`);
-      },
-    }) as unknown as AgentSession;
+    const makeSession = (id: string, cwd: string) =>
+      ({
+        id,
+        getWorkingDirectory: () => cwd,
+        refreshSystemPromptWithSkills: async (reason: string) => {
+          calls.push(`${id}:system:${reason}`);
+        },
+        refreshSkillStateFromExternalMutation: async (reason: string) => {
+          calls.push(`${id}:external:${reason}`);
+        },
+      }) as unknown as AgentSession;
     const sourceSession = makeSession("source", "/tmp/workspace-a");
     const workspacePeer = makeSession("workspace-peer", "/tmp/workspace-a");
     const controlPeer = makeSession("control-peer", "/tmp/workspace-a");
@@ -558,7 +559,11 @@ describe("Server Startup", () => {
     });
 
     await refreshSessionsForSkillMutation({
-      sessionBindings: [bindingFor(sourceSession), bindingFor(workspacePeer), bindingFor(otherWorkspace)],
+      sessionBindings: [
+        bindingFor(sourceSession),
+        bindingFor(workspacePeer),
+        bindingFor(otherWorkspace),
+      ],
       workspaceControlBindings: [bindingFor(controlPeer)],
       workingDirectory: "/tmp/workspace-a",
       sourceSessionId: "source",
@@ -637,15 +642,17 @@ describe("HTTP Handler", () => {
     const tmpDir = await makeTmpProject();
     const previous = process.env.COWORK_WEB_DESKTOP_SERVICE;
     delete process.env.COWORK_WEB_DESKTOP_SERVICE;
-    const { server } = await startAgentServer(serverOpts(tmpDir, {
-      env: {
-        AGENT_WORKING_DIR: tmpDir,
-        AGENT_PROVIDER: "google",
-        AGENT_OBSERVABILITY_ENABLED: "false",
-        COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
-        COWORK_WEB_DESKTOP_SERVICE: "1",
-      },
-    }));
+    const { server } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: {
+          AGENT_WORKING_DIR: tmpDir,
+          AGENT_PROVIDER: "google",
+          AGENT_OBSERVABILITY_ENABLED: "false",
+          COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+          COWORK_WEB_DESKTOP_SERVICE: "1",
+        },
+      }),
+    );
     try {
       const httpUrl = `http://127.0.0.1:${server.port}/cowork/desktop/state`;
       const res = await fetch(httpUrl);
@@ -661,9 +668,7 @@ describe("HTTP Handler", () => {
       await stopTestServer(server);
     }
   });
-
 });
-
 
 // NOTE: Legacy "WebSocket Lifecycle", "Message Parsing", and "Server Resilience"
 // test sections have been removed. They tested the legacy WebSocket protocol

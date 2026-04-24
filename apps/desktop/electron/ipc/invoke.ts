@@ -1,4 +1,4 @@
-import { ipcMain, type IpcMainInvokeEvent } from "electron";
+import { type IpcMainInvokeEvent, ipcMain } from "electron";
 
 import { assertTrustedSender } from "./trustedSender";
 
@@ -11,7 +11,7 @@ function toIpcError(error: unknown): Error {
 
 export function handleDesktopInvoke<TArgs extends unknown[], TResult>(
   channel: string,
-  handler: (event: IpcMainInvokeEvent, ...args: TArgs) => Promise<TResult> | TResult
+  handler: (event: IpcMainInvokeEvent, ...args: TArgs) => Promise<TResult> | TResult,
 ): void {
   ipcMain.handle(channel, async (event, ...args) => {
     try {

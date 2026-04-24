@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-
+import { __internalResearchActionBindings } from "../src/app/store.actions/research";
+import { disposeAllJsonRpcSocketState } from "../src/app/store.helpers/jsonRpcSocket";
+import { defaultWorkspaceRuntime, RUNTIME } from "../src/app/store.helpers/runtimeState";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
@@ -28,75 +30,84 @@ let remoteAccessEnabled = true;
 let stopMobileRelayCalls = 0;
 let packagedApp = false;
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async (state: any) => {
-    savedStates.push(structuredClone(state));
-  },
-  startWorkspaceServer: async () => {
-    startWorkspaceServerCalls += 1;
-    return { url: "ws://mock" };
-  },
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  getDesktopFeatureFlags: (featureOverrides) => ({
-    remoteAccess: typeof featureOverrides?.remoteAccess === "boolean" ? featureOverrides.remoteAccess : remoteAccessEnabled,
-    workspacePicker: typeof featureOverrides?.workspacePicker === "boolean" ? featureOverrides.workspacePicker : true,
-    workspaceLifecycle: typeof featureOverrides?.workspaceLifecycle === "boolean"
-      ? featureOverrides.workspaceLifecycle
-      : true,
-    a2ui: typeof featureOverrides?.a2ui === "boolean" ? featureOverrides.a2ui : false,
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async (state: any) => {
+      savedStates.push(structuredClone(state));
+    },
+    startWorkspaceServer: async () => {
+      startWorkspaceServerCalls += 1;
+      return { url: "ws://mock" };
+    },
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    getDesktopFeatureFlags: (featureOverrides) => ({
+      remoteAccess:
+        typeof featureOverrides?.remoteAccess === "boolean"
+          ? featureOverrides.remoteAccess
+          : remoteAccessEnabled,
+      workspacePicker:
+        typeof featureOverrides?.workspacePicker === "boolean"
+          ? featureOverrides.workspacePicker
+          : true,
+      workspaceLifecycle:
+        typeof featureOverrides?.workspaceLifecycle === "boolean"
+          ? featureOverrides.workspaceLifecycle
+          : true,
+      a2ui: typeof featureOverrides?.a2ui === "boolean" ? featureOverrides.a2ui : false,
+    }),
+    isPackagedDesktopApp: () => packagedApp,
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+    stopMobileRelay: async () => {
+      stopMobileRelayCalls += 1;
+      return {
+        status: "idle",
+        workspaceId: null,
+        workspacePath: null,
+        relaySource: "unavailable",
+        relaySourceMessage: null,
+        relayServiceStatus: "unknown",
+        relayServiceMessage: null,
+        relayServiceUpdatedAt: null,
+        relayUrl: null,
+        sessionId: null,
+        pairingPayload: null,
+        trustedPhoneDeviceId: null,
+        trustedPhoneFingerprint: null,
+        lastError: null,
+      };
+    },
   }),
-  isPackagedDesktopApp: () => packagedApp,
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-  stopMobileRelay: async () => {
-    stopMobileRelayCalls += 1;
-    return {
-      status: "idle",
-      workspaceId: null,
-      workspacePath: null,
-      relaySource: "unavailable",
-      relaySourceMessage: null,
-      relayServiceStatus: "unknown",
-      relayServiceMessage: null,
-      relayServiceUpdatedAt: null,
-      relayUrl: null,
-      sessionId: null,
-      pairingPayload: null,
-      trustedPhoneDeviceId: null,
-      trustedPhoneFingerprint: null,
-      lastError: null,
-    };
-  },
-}));
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
@@ -106,6 +117,25 @@ const { useAppStore } = await import("../src/app/store");
 
 describe("settings nav (store)", () => {
   beforeEach(() => {
+    __internalResearchActionBindings.reset();
+    disposeAllJsonRpcSocketState();
+    RUNTIME.jsonRpcSockets.clear();
+    RUNTIME.workspaceJsonRpcSocketGenerations.clear();
+    RUNTIME.skillInstallWaiters.clear();
+    RUNTIME.pluginInstallWaiters.clear();
+    RUNTIME.optimisticUserMessageIds.clear();
+    RUNTIME.pendingThreadMessages.clear();
+    RUNTIME.pendingThreadAttachments.clear();
+    RUNTIME.pendingThreadSteers.clear();
+    RUNTIME.threadSelectionRequests.clear();
+    RUNTIME.nextThreadSelectionRequestId = 0;
+    RUNTIME.pendingWorkspaceDefaultApplyByThread.clear();
+    RUNTIME.workspaceStartPromises.clear();
+    RUNTIME.workspaceStartGenerations.clear();
+    RUNTIME.modelStreamByThread.clear();
+    RUNTIME.sessionSnapshots.clear();
+    RUNTIME.workspacePickerOpen = false;
+    RUNTIME.providerStatusRefreshGeneration = 0;
     savedStates.length = 0;
     startWorkspaceServerCalls = 0;
     agentSocketConnectCalls = 0;
@@ -125,7 +155,19 @@ describe("settings nav (store)", () => {
       },
       notifications: [],
       workspaces: [],
+      workspaceRuntimeById: {},
       selectedWorkspaceId: null,
+      researchTransportWorkspaceId: null,
+      researchById: {},
+      researchOrder: [],
+      selectedResearchId: null,
+      researchListLoading: false,
+      researchListError: null,
+      researchSubscribedIds: [],
+      researchExportPendingIds: [],
+      threads: [],
+      threadRuntimeById: {},
+      selectedThreadId: null,
     });
   });
 
@@ -312,6 +354,51 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().view).toBe("chat");
     const last = useAppStore.getState().notifications.at(-1);
     expect(last?.title).toBe("Skills need a workspace");
+  });
+
+  test("openResearch switches to the research view before transport refresh completes", async () => {
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/ws-1",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          lastOpenedAt: "2024-01-01T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+        },
+      },
+    });
+
+    RUNTIME.jsonRpcSockets.set("ws-1", {
+      readyPromise: Promise.resolve(),
+      request: (method: string) => {
+        if (method === "research/list") {
+          return Promise.resolve({ research: [] });
+        }
+        return Promise.resolve({});
+      },
+      respond: () => true,
+      close: () => {},
+    } as any);
+
+    const openPromise = useAppStore.getState().openResearch();
+
+    expect(useAppStore.getState().view).toBe("research");
+    expect(useAppStore.getState().lastNonSettingsView).toBe("research");
+    expect(useAppStore.getState().researchListLoading).toBe(true);
+
+    await openPromise;
+    expect(useAppStore.getState().researchListError).toBeNull();
   });
 
   test("newThread falls back to first workspace when none is selected", async () => {

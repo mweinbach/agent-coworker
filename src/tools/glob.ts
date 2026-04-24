@@ -1,34 +1,50 @@
-import fg from "fast-glob";
 import path from "node:path";
+import fg from "fast-glob";
 
 import { z } from "zod";
-
-import type { ToolContext } from "./context";
-import { defineTool } from "./defineTool";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertReadPathAllowed } from "../utils/permissions";
+import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 
-const globInputSchema = z.object({
-  pattern: z.string().describe("Glob pattern to match (e.g. **/*.ts)"),
-  cwd: z.string().optional().describe("Directory to search from (defaults to working directory)"),
-  maxResults: z.number().int().min(1).max(10000).optional().default(2000).describe("Maximum files to return"),
-}).strict();
+const globInputSchema = z
+  .object({
+    pattern: z.string().describe("Glob pattern to match (e.g. **/*.ts)"),
+    cwd: z.string().optional().describe("Directory to search from (defaults to working directory)"),
+    maxResults: z
+      .number()
+      .int()
+      .min(1)
+      .max(10000)
+      .optional()
+      .default(2000)
+      .describe("Maximum files to return"),
+  })
+  .strict();
 const globEntrySchema = z.union([
   z.string(),
-  z.object({
-    path: z.string(),
-    stats: z.object({
-      mtimeMs: z.number().finite().optional(),
-    }).optional(),
-  }).passthrough(),
+  z
+    .object({
+      path: z.string(),
+      stats: z
+        .object({
+          mtimeMs: z.number().finite().optional(),
+        })
+        .optional(),
+    })
+    .passthrough(),
 ]);
-const destroyableStreamSchema = z.object({
-  destroy: z.unknown().optional(),
-}).passthrough();
+const destroyableStreamSchema = z
+  .object({
+    destroy: z.unknown().optional(),
+  })
+  .passthrough();
 
 function assertSafeGlobPattern(pattern: string): void {
   const normalizedPattern = pattern.replace(/\\/g, "/");
-  const maybeNegatedPattern = normalizedPattern.startsWith("!") ? normalizedPattern.slice(1) : normalizedPattern;
+  const maybeNegatedPattern = normalizedPattern.startsWith("!")
+    ? normalizedPattern.slice(1)
+    : normalizedPattern;
 
   if (path.isAbsolute(maybeNegatedPattern) || /^[A-Za-z]:\//.test(maybeNegatedPattern)) {
     throw new Error("glob blocked: pattern must be relative to cwd");
@@ -46,7 +62,9 @@ export function createGlobTool(ctx: ToolContext) {
     execute: async ({ pattern, cwd, maxResults }: z.infer<typeof globInputSchema>) => {
       const parsedInput = globInputSchema.safeParse({ pattern, cwd, maxResults });
       if (!parsedInput.success) {
-        throw new Error(`glob invalid input: ${parsedInput.error.issues[0]?.message ?? "validation_failed"}`);
+        throw new Error(
+          `glob invalid input: ${parsedInput.error.issues[0]?.message ?? "validation_failed"}`,
+        );
       }
       const normalizedInput = parsedInput.data;
       ctx.log(`tool> glob ${JSON.stringify(normalizedInput)}`);
@@ -55,9 +73,12 @@ export function createGlobTool(ctx: ToolContext) {
       assertSafeGlobPattern(normalizedInput.pattern);
 
       const searchCwd = await assertReadPathAllowed(
-        resolveMaybeRelative(normalizedInput.cwd || ctx.config.workingDirectory, ctx.config.workingDirectory),
+        resolveMaybeRelative(
+          normalizedInput.cwd || ctx.config.workingDirectory,
+          ctx.config.workingDirectory,
+        ),
         ctx.config,
-        "glob"
+        "glob",
       );
       const files: Array<{ path: string; mtimeMs: number }> = [];
       const stream = fg.stream(normalizedInput.pattern, {
@@ -98,7 +119,7 @@ export function createGlobTool(ctx: ToolContext) {
         files.map(async (f) => {
           const absoluteMatchPath = path.resolve(searchCwd, f.path);
           await assertReadPathAllowed(absoluteMatchPath, ctx.config, "glob");
-        })
+        }),
       );
 
       const listed = files.map((f) => f.path).join("\n");

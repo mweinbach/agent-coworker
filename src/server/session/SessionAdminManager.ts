@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
+import type {
+  AgentReasoningEffort,
+  AgentRole,
+  AgentSpawnContextOptions,
+} from "../../shared/agents";
 import { decodeBase64Strict, MAX_ATTACHMENT_UPLOAD_BASE64_SIZE } from "../../shared/attachments";
 import type { SessionSnapshot } from "../../shared/sessionSnapshot";
-import type { AgentReasoningEffort, AgentRole, AgentSpawnContextOptions } from "../../shared/agents";
-import type { AgentWaitMode } from "../agents/types";
 import { sameWorkspacePath } from "../../utils/workspacePath";
+import type { AgentWaitMode } from "../agents/types";
 import {
   deletePersistedSessionSnapshot,
   listPersistedSessionSnapshots,
@@ -13,7 +16,9 @@ import {
 } from "../sessionStore";
 import type { SessionContext } from "./SessionContext";
 
-function snapshotToTopLevelSessionSummary(liveSnapshot: SessionSnapshot | null): PersistedSessionSummary | null {
+function snapshotToTopLevelSessionSummary(
+  liveSnapshot: SessionSnapshot | null,
+): PersistedSessionSummary | null {
   if (!liveSnapshot || liveSnapshot.sessionKind !== "root") {
     return null;
   }
@@ -41,7 +46,9 @@ function mergeLiveTopLevelSessionSummary(
   return snapshotToTopLevelSessionSummary(liveSnapshot) ?? session;
 }
 
-function mapLiveTopLevelSessionSummary(liveSnapshot: SessionSnapshot | null): PersistedSessionSummary | null {
+function mapLiveTopLevelSessionSummary(
+  liveSnapshot: SessionSnapshot | null,
+): PersistedSessionSummary | null {
   return snapshotToTopLevelSessionSummary(liveSnapshot);
 }
 
@@ -50,19 +57,18 @@ function shouldIncludeTopLevelSessionSummary(
   liveSnapshot: SessionSnapshot | null,
 ): boolean {
   if (
-    liveSnapshot?.sessionKind === "root"
-    && (
-      liveSnapshot.executionState === "running"
-      || liveSnapshot.executionState === "pending_init"
-    )
+    liveSnapshot?.sessionKind === "root" &&
+    (liveSnapshot.executionState === "running" || liveSnapshot.executionState === "pending_init")
   ) {
     return true;
   }
 
-  return session.messageCount > 0
-    || session.titleSource !== "default"
-    || session.hasPendingAsk
-    || session.hasPendingApproval;
+  return (
+    session.messageCount > 0 ||
+    session.titleSource !== "default" ||
+    session.hasPendingAsk ||
+    session.hasPendingApproval
+  );
 }
 
 export class SessionAdminManager {
@@ -88,7 +94,11 @@ export class SessionAdminManager {
     let total = this.context.state.allMessages.length;
     let slice = this.context.state.allMessages.slice(safeOffset, safeOffset + safeLimit);
     if (this.context.deps.sessionDb) {
-      const persisted = this.context.deps.sessionDb.getMessages(this.context.id, safeOffset, safeLimit);
+      const persisted = this.context.deps.sessionDb.getMessages(
+        this.context.id,
+        safeOffset,
+        safeLimit,
+      );
       total = persisted.total;
       slice = persisted.messages;
     }
@@ -104,19 +114,28 @@ export class SessionAdminManager {
 
   async listSessions(scope: "all" | "workspace" = "all") {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
-      this.context.emitError("validation_failed", "session", "Only root sessions can list sessions");
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "Only root sessions can list sessions",
+      );
       return;
     }
     try {
       const persistedSessions = this.context.deps.sessionDb
         ? this.context.deps.sessionDb.listSessions({
-            ...(scope === "workspace" ? { workingDirectory: this.context.state.config.workingDirectory } : {}),
+            ...(scope === "workspace"
+              ? { workingDirectory: this.context.state.config.workingDirectory }
+              : {}),
           })
         : await listPersistedSessionSnapshots(this.context.getCoworkPaths(), {
-            ...(scope === "workspace" ? { workingDirectory: this.context.state.config.workingDirectory } : {}),
+            ...(scope === "workspace"
+              ? { workingDirectory: this.context.state.config.workingDirectory }
+              : {}),
           });
       const liveSessions = persistedSessions.map((session) => {
-        const liveSnapshot = this.context.deps.getLiveSessionSnapshotImpl?.(session.sessionId) ?? null;
+        const liveSnapshot =
+          this.context.deps.getLiveSessionSnapshotImpl?.(session.sessionId) ?? null;
         return {
           liveSnapshot,
           summary: mergeLiveTopLevelSessionSummary(session, liveSnapshot),
@@ -124,21 +143,20 @@ export class SessionAdminManager {
       });
       let sessions = liveSessions
         .map(({ summary, liveSnapshot }) =>
-          shouldIncludeTopLevelSessionSummary(summary, liveSnapshot)
-            ? summary
-            : null,
+          shouldIncludeTopLevelSessionSummary(summary, liveSnapshot) ? summary : null,
         )
         .filter((session): session is PersistedSessionSummary => session !== null);
-      const activeLiveSnapshot = this.context.deps.getLiveSessionSnapshotImpl?.(this.context.id) ?? null;
+      const activeLiveSnapshot =
+        this.context.deps.getLiveSessionSnapshotImpl?.(this.context.id) ?? null;
       const activeLiveSession = mapLiveTopLevelSessionSummary(activeLiveSnapshot);
       const shouldIncludeActiveLiveSession = activeLiveSession
         ? shouldIncludeTopLevelSessionSummary(activeLiveSession, activeLiveSnapshot)
         : false;
 
       if (
-        activeLiveSession
-        && shouldIncludeActiveLiveSession
-        && !sessions.some((session) => session.sessionId === activeLiveSession.sessionId)
+        activeLiveSession &&
+        shouldIncludeActiveLiveSession &&
+        !sessions.some((session) => session.sessionId === activeLiveSession.sessionId)
       ) {
         sessions = [activeLiveSession, ...sessions];
       }
@@ -146,32 +164,49 @@ export class SessionAdminManager {
       sessions = sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
       this.context.emit({ type: "sessions", sessionId: this.context.id, sessions });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to list sessions: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to list sessions: ${String(err)}`,
+      );
     }
   }
 
   async getSessionSnapshot(targetSessionId: string) {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
-      this.context.emitError("validation_failed", "session", "Only root sessions can fetch session snapshots");
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "Only root sessions can fetch session snapshots",
+      );
       return;
     }
     try {
       const liveSnapshot = this.context.deps.getLiveSessionSnapshotImpl?.(targetSessionId) ?? null;
-      const liveWorkingDirectory = this.context.deps.getLiveSessionWorkingDirectoryImpl?.(targetSessionId) ?? null;
+      const liveWorkingDirectory =
+        this.context.deps.getLiveSessionWorkingDirectoryImpl?.(targetSessionId) ?? null;
       const isSelfSnapshotRequest = targetSessionId === this.context.id;
 
       // Live sessions can answer immediately even if sqlite persistence is still catching up.
       if (liveSnapshot && (isSelfSnapshotRequest || liveWorkingDirectory)) {
         if (liveSnapshot.sessionKind !== "root") {
-          this.context.emitError("validation_failed", "session", "Only root sessions can be hydrated via session snapshots");
+          this.context.emitError(
+            "validation_failed",
+            "session",
+            "Only root sessions can be hydrated via session snapshots",
+          );
           return;
         }
         if (
-          !isSelfSnapshotRequest
-          && liveWorkingDirectory
-          && !sameWorkspacePath(liveWorkingDirectory, this.context.state.config.workingDirectory)
+          !isSelfSnapshotRequest &&
+          liveWorkingDirectory &&
+          !sameWorkspacePath(liveWorkingDirectory, this.context.state.config.workingDirectory)
         ) {
-          this.context.emitError("permission_denied", "session", "Target session is outside the active workspace");
+          this.context.emitError(
+            "permission_denied",
+            "session",
+            "Target session is outside the active workspace",
+          );
           return;
         }
 
@@ -186,32 +221,50 @@ export class SessionAdminManager {
 
       const record = this.context.deps.sessionDb?.getSessionRecord(targetSessionId) ?? null;
       if (!record) {
-        this.context.emitError("validation_failed", "session", `Unknown target session: ${targetSessionId}`);
+        this.context.emitError(
+          "validation_failed",
+          "session",
+          `Unknown target session: ${targetSessionId}`,
+        );
         return;
       }
       if (record.sessionKind !== "root") {
-        this.context.emitError("validation_failed", "session", "Only root sessions can be hydrated via session snapshots");
+        this.context.emitError(
+          "validation_failed",
+          "session",
+          "Only root sessions can be hydrated via session snapshots",
+        );
         return;
       }
       if (!sameWorkspacePath(record.workingDirectory, this.context.state.config.workingDirectory)) {
-        this.context.emitError("permission_denied", "session", "Target session is outside the active workspace");
+        this.context.emitError(
+          "permission_denied",
+          "session",
+          "Target session is outside the active workspace",
+        );
         return;
       }
 
-      let dbSnapshot: ReturnType<NonNullable<SessionContext["deps"]["sessionDb"]>["getSessionSnapshot"]> = null;
+      let dbSnapshot: ReturnType<
+        NonNullable<SessionContext["deps"]["sessionDb"]>["getSessionSnapshot"]
+      > = null;
       try {
         dbSnapshot = this.context.deps.sessionDb?.getSessionSnapshot(targetSessionId) ?? null;
       } catch {
         // Malformed/schema-mismatched snapshot row - fall back to legacy
       }
       const snapshot =
-        liveSnapshot
-        ?? dbSnapshot
-        ?? this.context.deps.buildLegacySessionSnapshotImpl?.(record)
-        ?? null;
+        liveSnapshot ??
+        dbSnapshot ??
+        this.context.deps.buildLegacySessionSnapshotImpl?.(record) ??
+        null;
 
       if (!snapshot) {
-        this.context.emitError("internal_error", "session", `No snapshot available for session: ${targetSessionId}`);
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `No snapshot available for session: ${targetSessionId}`,
+        );
         return;
       }
 
@@ -222,13 +275,21 @@ export class SessionAdminManager {
         snapshot,
       });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to load session snapshot: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to load session snapshot: ${String(err)}`,
+      );
     }
   }
 
   async listAgentSessions() {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
-      this.context.emitError("validation_failed", "session", "Only root sessions can list child agents");
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "Only root sessions can list child agents",
+      );
       return;
     }
     if (!this.context.deps.listAgentSessionsImpl) {
@@ -239,18 +300,28 @@ export class SessionAdminManager {
       const agents = await this.context.deps.listAgentSessionsImpl(this.context.id);
       this.context.emit({ type: "agent_list", sessionId: this.context.id, agents });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to list child agents: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to list child agents: ${String(err)}`,
+      );
     }
   }
 
-  async createAgentSession(opts: AgentSpawnContextOptions & {
-    message: string;
-    role?: AgentRole;
-    model?: string;
-    reasoningEffort?: AgentReasoningEffort;
-  }) {
+  async createAgentSession(
+    opts: AgentSpawnContextOptions & {
+      message: string;
+      role?: AgentRole;
+      model?: string;
+      reasoningEffort?: AgentReasoningEffort;
+    },
+  ) {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
-      this.context.emitError("validation_failed", "session", "Only root sessions can create child agents");
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "Only root sessions can create child agents",
+      );
       return;
     }
     if (!this.context.deps.createAgentSessionImpl) {
@@ -270,20 +341,35 @@ export class SessionAdminManager {
         ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
         ...(opts.contextMode !== undefined ? { contextMode: opts.contextMode } : {}),
         ...(opts.briefing !== undefined ? { briefing: opts.briefing } : {}),
-        ...(opts.includeParentTodos !== undefined ? { includeParentTodos: opts.includeParentTodos } : {}),
-        ...(opts.includeHarnessContext !== undefined ? { includeHarnessContext: opts.includeHarnessContext } : {}),
+        ...(opts.includeParentTodos !== undefined
+          ? { includeParentTodos: opts.includeParentTodos }
+          : {}),
+        ...(opts.includeHarnessContext !== undefined
+          ? { includeHarnessContext: opts.includeHarnessContext }
+          : {}),
         ...(opts.forkContext !== undefined ? { forkContext: opts.forkContext } : {}),
-        parentDepth: typeof this.context.state.sessionInfo.depth === "number" ? this.context.state.sessionInfo.depth : 0,
+        parentDepth:
+          typeof this.context.state.sessionInfo.depth === "number"
+            ? this.context.state.sessionInfo.depth
+            : 0,
       });
       this.context.emit({ type: "agent_spawned", sessionId: this.context.id, agent });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to create child agent: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to create child agent: ${String(err)}`,
+      );
     }
   }
 
   async sendAgentInput(agentId: string, message: string, interrupt?: boolean) {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
-      this.context.emitError("validation_failed", "session", "Only root sessions can control child agents");
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "Only root sessions can control child agents",
+      );
       return;
     }
     if (!this.context.deps.sendAgentInputImpl) {
@@ -298,13 +384,21 @@ export class SessionAdminManager {
         ...(interrupt !== undefined ? { interrupt } : {}),
       });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to send child-agent input: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to send child-agent input: ${String(err)}`,
+      );
     }
   }
 
   async waitForAgents(agentIds: string[], timeoutMs?: number, mode?: AgentWaitMode) {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
-      this.context.emitError("validation_failed", "session", "Only root sessions can wait on child agents");
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "Only root sessions can wait on child agents",
+      );
       return;
     }
     if (!this.context.deps.waitForAgentImpl) {
@@ -329,13 +423,21 @@ export class SessionAdminManager {
         readyAgentIds: result.readyAgentIds,
       });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to wait on child agents: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to wait on child agents: ${String(err)}`,
+      );
     }
   }
 
   async resumeAgent(agentId: string) {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
-      this.context.emitError("validation_failed", "session", "Only root sessions can resume child agents");
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "Only root sessions can resume child agents",
+      );
       return;
     }
     if (!this.context.deps.resumeAgentImpl) {
@@ -348,13 +450,21 @@ export class SessionAdminManager {
         agentId,
       });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to resume child agent: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to resume child agent: ${String(err)}`,
+      );
     }
   }
 
   async closeAgent(agentId: string) {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
-      this.context.emitError("validation_failed", "session", "Only root sessions can close child agents");
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "Only root sessions can close child agents",
+      );
       return;
     }
     if (!this.context.deps.closeAgentImpl) {
@@ -367,7 +477,11 @@ export class SessionAdminManager {
         agentId,
       });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to close child agent: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to close child agent: ${String(err)}`,
+      );
     }
   }
 
@@ -390,7 +504,11 @@ export class SessionAdminManager {
       }
       this.context.emit({ type: "session_deleted", sessionId: this.context.id, targetSessionId });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to delete session: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to delete session: ${String(err)}`,
+      );
     }
   }
 
@@ -398,8 +516,17 @@ export class SessionAdminManager {
     await this.runWorkspaceBackupOp(
       "listWorkspaceBackupsImpl",
       "list workspace backups",
-      (impl) => impl({ requesterSessionId: this.context.id, workingDirectory: this.context.state.config.workingDirectory }),
-      (backups) => ({ type: "workspace_backups" as const, sessionId: this.context.id, workspacePath: this.context.state.config.workingDirectory, backups }),
+      (impl) =>
+        impl({
+          requesterSessionId: this.context.id,
+          workingDirectory: this.context.state.config.workingDirectory,
+        }),
+      (backups) => ({
+        type: "workspace_backups" as const,
+        sessionId: this.context.id,
+        workspacePath: this.context.state.config.workingDirectory,
+        backups,
+      }),
     );
   }
 
@@ -407,8 +534,18 @@ export class SessionAdminManager {
     await this.runWorkspaceBackupOp(
       "createWorkspaceBackupCheckpointImpl",
       "create workspace checkpoint",
-      (impl) => impl({ requesterSessionId: this.context.id, workingDirectory: this.context.state.config.workingDirectory, targetSessionId }),
-      (backups) => ({ type: "workspace_backups" as const, sessionId: this.context.id, workspacePath: this.context.state.config.workingDirectory, backups }),
+      (impl) =>
+        impl({
+          requesterSessionId: this.context.id,
+          workingDirectory: this.context.state.config.workingDirectory,
+          targetSessionId,
+        }),
+      (backups) => ({
+        type: "workspace_backups" as const,
+        sessionId: this.context.id,
+        workspacePath: this.context.state.config.workingDirectory,
+        backups,
+      }),
     );
   }
 
@@ -416,8 +553,19 @@ export class SessionAdminManager {
     await this.runWorkspaceBackupOp(
       "restoreWorkspaceBackupImpl",
       "restore workspace backup",
-      (impl) => impl({ requesterSessionId: this.context.id, workingDirectory: this.context.state.config.workingDirectory, targetSessionId, checkpointId }),
-      (backups) => ({ type: "workspace_backups" as const, sessionId: this.context.id, workspacePath: this.context.state.config.workingDirectory, backups }),
+      (impl) =>
+        impl({
+          requesterSessionId: this.context.id,
+          workingDirectory: this.context.state.config.workingDirectory,
+          targetSessionId,
+          checkpointId,
+        }),
+      (backups) => ({
+        type: "workspace_backups" as const,
+        sessionId: this.context.id,
+        workspacePath: this.context.state.config.workingDirectory,
+        backups,
+      }),
     );
   }
 
@@ -425,8 +573,19 @@ export class SessionAdminManager {
     await this.runWorkspaceBackupOp(
       "deleteWorkspaceBackupCheckpointImpl",
       "delete workspace checkpoint",
-      (impl) => impl({ requesterSessionId: this.context.id, workingDirectory: this.context.state.config.workingDirectory, targetSessionId, checkpointId }),
-      (backups) => ({ type: "workspace_backups" as const, sessionId: this.context.id, workspacePath: this.context.state.config.workingDirectory, backups }),
+      (impl) =>
+        impl({
+          requesterSessionId: this.context.id,
+          workingDirectory: this.context.state.config.workingDirectory,
+          targetSessionId,
+          checkpointId,
+        }),
+      (backups) => ({
+        type: "workspace_backups" as const,
+        sessionId: this.context.id,
+        workspacePath: this.context.state.config.workingDirectory,
+        backups,
+      }),
     );
   }
 
@@ -434,8 +593,18 @@ export class SessionAdminManager {
     await this.runWorkspaceBackupOp(
       "deleteWorkspaceBackupEntryImpl",
       "delete workspace backup",
-      (impl) => impl({ requesterSessionId: this.context.id, workingDirectory: this.context.state.config.workingDirectory, targetSessionId }),
-      (backups) => ({ type: "workspace_backups" as const, sessionId: this.context.id, workspacePath: this.context.state.config.workingDirectory, backups }),
+      (impl) =>
+        impl({
+          requesterSessionId: this.context.id,
+          workingDirectory: this.context.state.config.workingDirectory,
+          targetSessionId,
+        }),
+      (backups) => ({
+        type: "workspace_backups" as const,
+        sessionId: this.context.id,
+        workspacePath: this.context.state.config.workingDirectory,
+        backups,
+      }),
     );
   }
 
@@ -443,12 +612,25 @@ export class SessionAdminManager {
     await this.runWorkspaceBackupOp(
       "getWorkspaceBackupDeltaImpl",
       "inspect workspace backup delta",
-      (impl) => impl({ requesterSessionId: this.context.id, workingDirectory: this.context.state.config.workingDirectory, targetSessionId, checkpointId }),
-      (delta) => ({ type: "workspace_backup_delta" as const, sessionId: this.context.id, ...delta }),
+      (impl) =>
+        impl({
+          requesterSessionId: this.context.id,
+          workingDirectory: this.context.state.config.workingDirectory,
+          targetSessionId,
+          checkpointId,
+        }),
+      (delta) => ({
+        type: "workspace_backup_delta" as const,
+        sessionId: this.context.id,
+        ...delta,
+      }),
     );
   }
 
-  private async runWorkspaceBackupOp<K extends keyof import("./SessionContext").SessionDependencies, T>(
+  private async runWorkspaceBackupOp<
+    K extends keyof import("./SessionContext").SessionDependencies,
+    T,
+  >(
     implKey: K,
     label: string,
     execute: (impl: NonNullable<import("./SessionContext").SessionDependencies[K]>) => Promise<T>,
@@ -460,7 +642,11 @@ export class SessionAdminManager {
     }
     const impl = this.context.deps[implKey];
     if (!impl) {
-      this.context.emitError("internal_error", "backup", `Workspace backup operation is unavailable: ${label}`);
+      this.context.emitError(
+        "internal_error",
+        "backup",
+        `Workspace backup operation is unavailable: ${label}`,
+      );
       return;
     }
     try {
@@ -478,7 +664,9 @@ export class SessionAdminManager {
       return;
     }
 
-    const uploadsDir = this.context.state.config.uploadsDirectory ?? path.resolve(this.context.state.config.workingDirectory, "User Uploads");
+    const uploadsDir =
+      this.context.state.config.uploadsDirectory ??
+      path.resolve(this.context.state.config.workingDirectory, "User Uploads");
     const resolvedUploadsDir = path.resolve(uploadsDir);
     let filePath = path.resolve(resolvedUploadsDir, safeName);
     if (!filePath.startsWith(resolvedUploadsDir + path.sep)) {
@@ -510,7 +698,12 @@ export class SessionAdminManager {
       }
       await fs.mkdir(resolvedUploadsDir, { recursive: true });
       await fs.writeFile(filePath, decoded);
-      this.context.emit({ type: "file_uploaded", sessionId: this.context.id, filename: path.basename(filePath), path: filePath });
+      this.context.emit({
+        type: "file_uploaded",
+        sessionId: this.context.id,
+        filename: path.basename(filePath),
+        path: filePath,
+      });
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to upload file: ${String(err)}`);
     }

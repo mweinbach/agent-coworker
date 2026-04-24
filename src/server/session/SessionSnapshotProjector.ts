@@ -1,4 +1,3 @@
-import type { SessionSnapshot, SessionFeedItem, SessionLastTurnUsage } from "../../shared/sessionSnapshot";
 import type { PersistentAgentSummary } from "../../shared/agents";
 import {
   applyProjectedAgentMessageDelta,
@@ -7,10 +6,15 @@ import {
   applyProjectedReasoningDelta,
   projectedTodosFromItem,
 } from "../../shared/projectedItems";
+import type {
+  SessionFeedItem,
+  SessionLastTurnUsage,
+  SessionSnapshot,
+} from "../../shared/sessionSnapshot";
 import type { ModelMessage, TodoItem } from "../../types";
-import type { PersistedSessionRecord } from "../sessionDb";
-import type { ServerEvent } from "../protocol";
 import { createConversationProjection } from "../projection/conversationProjection";
+import type { ServerEvent } from "../protocol";
+import type { PersistedSessionRecord } from "../sessionDb";
 
 function sortAgentSummaries(agents: PersistentAgentSummary[]): PersistentAgentSummary[] {
   return [...agents].sort((left, right) => {
@@ -20,7 +24,10 @@ function sortAgentSummaries(agents: PersistentAgentSummary[]): PersistentAgentSu
   });
 }
 
-function shouldReplaceAgentSummary(existing: PersistentAgentSummary, nextAgent: PersistentAgentSummary): boolean {
+function shouldReplaceAgentSummary(
+  existing: PersistentAgentSummary,
+  nextAgent: PersistentAgentSummary,
+): boolean {
   const existingTs = Date.parse(existing.updatedAt);
   const nextTs = Date.parse(nextAgent.updatedAt);
   if (Number.isFinite(existingTs) && Number.isFinite(nextTs) && existingTs !== nextTs) {
@@ -42,7 +49,11 @@ function upsertAgentSummary(
   return sortAgentSummaries(nextAgents);
 }
 
-function createLegacyFeedFromMessages(messages: ModelMessage[], todos: TodoItem[], ts: string): SessionFeedItem[] {
+function createLegacyFeedFromMessages(
+  messages: ModelMessage[],
+  todos: TodoItem[],
+  ts: string,
+): SessionFeedItem[] {
   const feed: SessionFeedItem[] = [];
   for (const message of messages) {
     if (!message || (message.role !== "user" && message.role !== "assistant")) continue;
@@ -77,7 +88,8 @@ function contentText(value: unknown): string {
       if (!part || typeof part !== "object") return "";
       const record = part as Record<string, unknown>;
       if (typeof record.text === "string" && record.text.trim()) return record.text.trim();
-      if (typeof record.inputText === "string" && record.inputText.trim()) return record.inputText.trim();
+      if (typeof record.inputText === "string" && record.inputText.trim())
+        return record.inputText.trim();
       return "";
     })
     .filter(Boolean)
@@ -152,7 +164,11 @@ export class SessionSnapshotProjector {
     return this.snapshot;
   }
 
-  syncSessionState(patch: Partial<Omit<SessionSnapshot, "feed" | "agents" | "todos" | "sessionUsage" | "lastTurnUsage">>): void {
+  syncSessionState(
+    patch: Partial<
+      Omit<SessionSnapshot, "feed" | "agents" | "todos" | "sessionUsage" | "lastTurnUsage">
+    >,
+  ): void {
     this.snapshot = {
       ...this.snapshot,
       ...patch,
@@ -181,8 +197,10 @@ export class SessionSnapshotProjector {
         targetPaths: evt.targetPaths ?? this.snapshot.targetPaths,
         requestedModel: evt.requestedModel ?? this.snapshot.requestedModel,
         effectiveModel: evt.effectiveModel ?? this.snapshot.effectiveModel,
-        requestedReasoningEffort: evt.requestedReasoningEffort ?? this.snapshot.requestedReasoningEffort,
-        effectiveReasoningEffort: evt.effectiveReasoningEffort ?? this.snapshot.effectiveReasoningEffort,
+        requestedReasoningEffort:
+          evt.requestedReasoningEffort ?? this.snapshot.requestedReasoningEffort,
+        effectiveReasoningEffort:
+          evt.effectiveReasoningEffort ?? this.snapshot.effectiveReasoningEffort,
         executionState: evt.executionState ?? this.snapshot.executionState,
         lastMessagePreview: evt.lastMessagePreview ?? this.snapshot.lastMessagePreview,
       };
@@ -208,8 +226,10 @@ export class SessionSnapshotProjector {
         targetPaths: evt.targetPaths ?? this.snapshot.targetPaths,
         requestedModel: evt.requestedModel ?? this.snapshot.requestedModel,
         effectiveModel: evt.effectiveModel ?? this.snapshot.effectiveModel,
-        requestedReasoningEffort: evt.requestedReasoningEffort ?? this.snapshot.requestedReasoningEffort,
-        effectiveReasoningEffort: evt.effectiveReasoningEffort ?? this.snapshot.effectiveReasoningEffort,
+        requestedReasoningEffort:
+          evt.requestedReasoningEffort ?? this.snapshot.requestedReasoningEffort,
+        effectiveReasoningEffort:
+          evt.effectiveReasoningEffort ?? this.snapshot.effectiveReasoningEffort,
         executionState: evt.executionState ?? this.snapshot.executionState,
         lastMessagePreview: evt.lastMessagePreview ?? this.snapshot.lastMessagePreview,
         createdAt: evt.createdAt,
@@ -261,7 +281,9 @@ export class SessionSnapshotProjector {
       this.snapshot = {
         ...this.snapshot,
         sessionUsage: evt.usage ? structuredClone(evt.usage) : null,
-        lastTurnUsage: evt.usage ? deriveLastTurnUsageFromSnapshot(evt.usage) : this.snapshot.lastTurnUsage,
+        lastTurnUsage: evt.usage
+          ? deriveLastTurnUsageFromSnapshot(evt.usage)
+          : this.snapshot.lastTurnUsage,
       };
       return;
     }
@@ -311,29 +333,42 @@ export class SessionSnapshotProjector {
         emitTurnStarted: () => {},
         emitTurnCompleted: () => {},
         emitItemStarted: (_turnId, item) => {
+          const projectedTodos = projectedTodosFromItem(item);
           this.snapshot = {
             ...this.snapshot,
             feed: applyProjectedItemStarted(this.snapshot.feed, item, this.projectionTs),
-            ...(projectedTodosFromItem(item) ? { todos: structuredClone(projectedTodosFromItem(item)!) } : {}),
+            ...(projectedTodos ? { todos: structuredClone(projectedTodos) } : {}),
           };
         },
         emitReasoningDelta: (_turnId, itemId, mode, delta) => {
           this.snapshot = {
             ...this.snapshot,
-            feed: applyProjectedReasoningDelta(this.snapshot.feed, itemId, mode, delta, this.projectionTs),
+            feed: applyProjectedReasoningDelta(
+              this.snapshot.feed,
+              itemId,
+              mode,
+              delta,
+              this.projectionTs,
+            ),
           };
         },
         emitAgentMessageDelta: (_turnId, itemId, delta) => {
           this.snapshot = {
             ...this.snapshot,
-            feed: applyProjectedAgentMessageDelta(this.snapshot.feed, itemId, delta, this.projectionTs),
+            feed: applyProjectedAgentMessageDelta(
+              this.snapshot.feed,
+              itemId,
+              delta,
+              this.projectionTs,
+            ),
           };
         },
         emitItemCompleted: (_turnId, item) => {
+          const projectedTodos = projectedTodosFromItem(item);
           this.snapshot = {
             ...this.snapshot,
             feed: applyProjectedItemCompleted(this.snapshot.feed, item, this.projectionTs),
-            ...(projectedTodosFromItem(item) ? { todos: structuredClone(projectedTodosFromItem(item)!) } : {}),
+            ...(projectedTodos ? { todos: structuredClone(projectedTodos) } : {}),
           };
         },
       },

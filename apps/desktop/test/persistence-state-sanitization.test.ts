@@ -152,7 +152,9 @@ describe("desktop persistence state validation", () => {
     expect(loaded.providerState?.statusLastUpdatedAt).toBe(TS);
     expect(loaded.providerState?.statusByName?.["codex-cli"]?.authorized).toBe(true);
     expect(loaded.providerState?.statusByName?.["codex-cli"]?.mode).toBe("oauth");
-    expect(loaded.providerState?.statusByName?.["codex-cli"]?.account?.email).toBe("max@example.com");
+    expect(loaded.providerState?.statusByName?.["codex-cli"]?.account?.email).toBe(
+      "max@example.com",
+    );
   });
 
   test("saveState preserves LM Studio UI visibility preferences", async () => {
@@ -288,9 +290,18 @@ describe("desktop persistence state validation", () => {
     });
 
     const loaded = await persistence.loadState();
-    expect(loaded.workspaces.find((workspace) => workspace.id === "ws_overflow_custom")?.defaultToolOutputOverflowChars).toBe(12000);
-    expect(loaded.workspaces.find((workspace) => workspace.id === "ws_overflow_disabled")?.defaultToolOutputOverflowChars).toBeNull();
-    expect(loaded.workspaces.find((workspace) => workspace.id === "ws_overflow_inherited")?.defaultToolOutputOverflowChars).toBeUndefined();
+    expect(
+      loaded.workspaces.find((workspace) => workspace.id === "ws_overflow_custom")
+        ?.defaultToolOutputOverflowChars,
+    ).toBe(12000);
+    expect(
+      loaded.workspaces.find((workspace) => workspace.id === "ws_overflow_disabled")
+        ?.defaultToolOutputOverflowChars,
+    ).toBeNull();
+    expect(
+      loaded.workspaces.find((workspace) => workspace.id === "ws_overflow_inherited")
+        ?.defaultToolOutputOverflowChars,
+    ).toBeUndefined();
   });
 
   test("saveState preserves workspace user profile defaults", async () => {
@@ -365,7 +376,10 @@ describe("desktop persistence state validation", () => {
     const loaded = await persistence.loadState();
     expect(loaded.workspaces[0]?.defaultChildModelRoutingMode).toBe("cross-provider-allowlist");
     expect(loaded.workspaces[0]?.defaultPreferredChildModelRef).toBe("opencode-zen:glm-5");
-    expect(loaded.workspaces[0]?.defaultAllowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
+    expect(loaded.workspaces[0]?.defaultAllowedChildModelRefs).toEqual([
+      "opencode-zen:glm-5",
+      "opencode-go:glm-5",
+    ]);
   });
 
   test("saveState drops recoverable expired codex status snapshots that would look disconnected on restart", async () => {
@@ -538,11 +552,30 @@ describe("desktop persistence state validation", () => {
     await fs.mkdir(transcriptDir, { recursive: true });
     const transcriptPath = path.join(transcriptDir, "thread_1.jsonl");
 
-    const validEventA = JSON.stringify({ ts: TS, threadId: "thread_1", direction: "server", payload: { type: "log", line: "a" } });
+    const validEventA = JSON.stringify({
+      ts: TS,
+      threadId: "thread_1",
+      direction: "server",
+      payload: { type: "log", line: "a" },
+    });
     const invalidJson = "{not-json";
-    const invalidShape = JSON.stringify({ ts: TS, threadId: "thread_1", direction: "sideways", payload: {} });
-    const validEventB = JSON.stringify({ ts: TS, threadId: "thread_1", direction: "client", payload: { type: "ping" } });
-    await fs.writeFile(transcriptPath, `${validEventA}\n${invalidJson}\n${invalidShape}\n${validEventB}\n`, "utf8");
+    const invalidShape = JSON.stringify({
+      ts: TS,
+      threadId: "thread_1",
+      direction: "sideways",
+      payload: {},
+    });
+    const validEventB = JSON.stringify({
+      ts: TS,
+      threadId: "thread_1",
+      direction: "client",
+      payload: { type: "ping" },
+    });
+    await fs.writeFile(
+      transcriptPath,
+      `${validEventA}\n${invalidJson}\n${invalidShape}\n${validEventB}\n`,
+      "utf8",
+    );
 
     const transcript = await persistence.readTranscript("thread_1");
     expect(transcript).toHaveLength(2);
@@ -607,7 +640,11 @@ describe("desktop persistence state validation", () => {
     expect(loaded.workspaces[0]?.id).toBe("ws_legacy");
     expect(loaded.workspaces[0]?.wsProtocol).toBe("jsonrpc");
     expect(transcript).toHaveLength(1);
-    expect(await fs.readFile(path.join(userDataDir, "state.json"), "utf8")).toContain("\"ws_legacy\"");
-    expect(await fs.readFile(path.join(userDataDir, "transcripts", "thread_legacy.jsonl"), "utf8")).toContain("\"thread_legacy\"");
+    expect(await fs.readFile(path.join(userDataDir, "state.json"), "utf8")).toContain(
+      '"ws_legacy"',
+    );
+    expect(
+      await fs.readFile(path.join(userDataDir, "transcripts", "thread_legacy.jsonl"), "utf8"),
+    ).toContain('"thread_legacy"');
   });
 });

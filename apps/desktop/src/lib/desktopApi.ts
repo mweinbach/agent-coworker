@@ -1,7 +1,9 @@
+import type {
+  DesktopFeatureFlagOverrides,
+  DesktopFeatureFlags,
+} from "../../../../src/shared/featureFlags";
 import desktopPackage from "../../package.json";
-
 import type { HydratedTranscriptSnapshot, PersistedState, TranscriptEvent } from "../app/types";
-import type { DesktopFeatureFlagOverrides, DesktopFeatureFlags } from "../../../../src/shared/featureFlags";
 
 export type StartWorkspaceServerInput = {
   workspaceId: string;
@@ -83,6 +85,11 @@ export type OpenPathInput = {
   path: string;
 };
 
+export type SaveExportedFileInput = {
+  sourcePath: string;
+  defaultFileName: string;
+};
+
 export type PreferredFileAppInput = {
   path: string;
 };
@@ -150,6 +157,7 @@ export type DesktopMenuCommand =
   | "toggleSidebar"
   | "openSettings"
   | "openWorkspacesSettings"
+  | "openResearch"
   | "openSkills"
   | "openUpdates";
 
@@ -224,7 +232,10 @@ export type UpdaterState = {
 
 const desktopAppVersion = desktopPackage.version;
 
-export function createDefaultUpdaterState(currentVersion = desktopAppVersion, packaged = false): UpdaterState {
+export function createDefaultUpdaterState(
+  currentVersion = desktopAppVersion,
+  packaged = false,
+): UpdaterState {
   return {
     phase: packaged ? "idle" : "disabled",
     packaged,
@@ -232,7 +243,9 @@ export function createDefaultUpdaterState(currentVersion = desktopAppVersion, pa
     lastCheckStartedAt: null,
     lastCheckedAt: null,
     downloadedAt: null,
-    message: packaged ? "Updates are ready to check." : "Updates are only available in packaged builds.",
+    message: packaged
+      ? "Updates are ready to check."
+      : "Updates are only available in packaged builds.",
     error: null,
     progress: null,
     release: null,
@@ -277,6 +290,7 @@ export interface DesktopApi {
   getPreferredFileApp(opts: PreferredFileAppInput): Promise<string | null>;
   previewOSFile(opts: PreviewOSFileInput): Promise<void>;
   openPath(opts: OpenPathInput): Promise<void>;
+  saveExportedFile(opts: SaveExportedFileInput): Promise<string | null>;
   openExternalUrl(opts: OpenExternalUrlInput): Promise<void>;
   revealPath(opts: RevealPathInput): Promise<void>;
   copyPath(opts: CopyPathInput): Promise<void>;
@@ -326,6 +340,7 @@ export const DESKTOP_IPC_CHANNELS = {
   getPreferredFileApp: "desktop:getPreferredFileApp",
   previewOSFile: "desktop:previewOSFile",
   openPath: "desktop:openPath",
+  saveExportedFile: "desktop:saveExportedFile",
   openExternalUrl: "desktop:openExternalUrl",
   revealPath: "desktop:revealPath",
   copyPath: "desktop:copyPath",

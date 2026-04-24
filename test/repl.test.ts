@@ -1,10 +1,10 @@
-import { describe, expect, test, mock, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { handleSlashCommand, type ReplCommandContext } from "../src/cli/repl/commandRouter";
-import { __internal as replInternal } from "../src/cli/repl";
 import type { ProviderAuthMethod } from "../src/cli/parser";
+import { __internal as replInternal } from "../src/cli/repl";
+import { handleSlashCommand, type ReplCommandContext } from "../src/cli/repl/commandRouter";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -114,9 +114,7 @@ describe("renderTodos", () => {
   });
 
   test("includes Progress header", () => {
-    const lines = renderTodosToLines([
-      { content: "A", status: "pending", activeForm: "Doing A" },
-    ]);
+    const lines = renderTodosToLines([{ content: "A", status: "pending", activeForm: "Doing A" }]);
     expect(lines[0]).toBe("\n--- Progress ---");
   });
 
@@ -173,10 +171,7 @@ describe("renderToolsToLines", () => {
       { name: "bash", description: "Execute a shell command" },
       { name: "read", description: "read" },
     ]);
-    expect(lines).toEqual([
-      "  - bash: Execute a shell command",
-      "  - read",
-    ]);
+    expect(lines).toEqual(["  - bash: Execute a shell command", "  - read"]);
   });
 
   test("renders legacy string tool entries", () => {
@@ -681,7 +676,7 @@ describe("connect auth method helpers", () => {
         { id: "oauth_cli", type: "oauth", label: "Sign in", oauthMode: "auto" },
         { id: "api_key", type: "api", label: "API key" },
       ],
-      ""
+      "",
     );
     expect(selected?.id).toBe("oauth_cli");
   });
@@ -692,7 +687,7 @@ describe("connect auth method helpers", () => {
         { id: "oauth_cli", type: "oauth", label: "Sign in", oauthMode: "auto" },
         { id: "api_key", type: "api", label: "API key" },
       ],
-      "2"
+      "2",
     );
     expect(selected?.id).toBe("api_key");
   });
@@ -703,7 +698,7 @@ describe("connect auth method helpers", () => {
         { id: "oauth_cli", type: "oauth", label: "Sign in", oauthMode: "auto" },
         { id: "api_key", type: "api", label: "API key" },
       ],
-      "api_key"
+      "api_key",
     );
     expect(selected?.id).toBe("api_key");
   });
@@ -714,7 +709,7 @@ describe("connect auth method helpers", () => {
         { id: "oauth_cli", type: "oauth", label: "Sign in", oauthMode: "auto" },
         { id: "api_key", type: "api", label: "API key" },
       ],
-      "unknown"
+      "unknown",
     );
     expect(selected).toBeNull();
   });

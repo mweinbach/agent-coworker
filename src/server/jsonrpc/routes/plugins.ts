@@ -12,32 +12,29 @@ type PluginMutationResponseEvent = Extract<
   ServerEvent,
   { type: "skills_list" | "skills_catalog" | "plugins_catalog" | "mcp_servers" }
 >;
-type PluginInstallResponseEvent = PluginMutationResponseEvent | Extract<
-  ServerEvent,
-  { type: "plugin_install_preview" | "plugin_detail" }
->;
+type PluginInstallResponseEvent =
+  | PluginMutationResponseEvent
+  | Extract<ServerEvent, { type: "plugin_install_preview" | "plugin_detail" }>;
 const PLUGIN_INSTALL_EVENTS_TIMEOUT_MS = 60_000;
 
 function isPluginMutationResponseEvent(event: ServerEvent): event is PluginMutationResponseEvent {
   return (
-    event.type === "skills_list"
-    || event.type === "skills_catalog"
-    || event.type === "plugins_catalog"
-    || event.type === "mcp_servers"
+    event.type === "skills_list" ||
+    event.type === "skills_catalog" ||
+    event.type === "plugins_catalog" ||
+    event.type === "mcp_servers"
   );
 }
 
 function isPluginInstallResponseEvent(event: ServerEvent): event is PluginInstallResponseEvent {
   return (
-    isPluginMutationResponseEvent(event)
-    || event.type === "plugin_install_preview"
-    || event.type === "plugin_detail"
+    isPluginMutationResponseEvent(event) ||
+    event.type === "plugin_install_preview" ||
+    event.type === "plugin_detail"
   );
 }
 
-export function createPluginsRouteHandlers(
-  context: JsonRpcRouteContext,
-): JsonRpcRequestHandlerMap {
+export function createPluginsRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "cowork/plugins/catalog/read": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
@@ -46,7 +43,8 @@ export function createPluginsRouteHandlers(
         context,
         cwd,
         async (session) => await session.getPluginsCatalog(),
-        (event): event is Extract<ServerEvent, { type: "plugins_catalog" }> => event.type === "plugins_catalog",
+        (event): event is Extract<ServerEvent, { type: "plugins_catalog" }> =>
+          event.type === "plugins_catalog",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -59,7 +57,8 @@ export function createPluginsRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const pluginId = typeof params.pluginId === "string" ? params.pluginId.trim() : "";
-      const scope = params.scope === "workspace" || params.scope === "user" ? params.scope : undefined;
+      const scope =
+        params.scope === "workspace" || params.scope === "user" ? params.scope : undefined;
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
@@ -117,7 +116,8 @@ export function createPluginsRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const pluginId = typeof params.pluginId === "string" ? params.pluginId.trim() : "";
-      const scope = params.scope === "workspace" || params.scope === "user" ? params.scope : undefined;
+      const scope =
+        params.scope === "workspace" || params.scope === "user" ? params.scope : undefined;
       const events = await captureWorkspaceControlMutationEvents(
         context,
         cwd,
@@ -136,7 +136,8 @@ export function createPluginsRouteHandlers(
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
       const pluginId = typeof params.pluginId === "string" ? params.pluginId.trim() : "";
-      const scope = params.scope === "workspace" || params.scope === "user" ? params.scope : undefined;
+      const scope =
+        params.scope === "workspace" || params.scope === "user" ? params.scope : undefined;
       const events = await captureWorkspaceControlMutationEvents(
         context,
         cwd,

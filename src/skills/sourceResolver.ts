@@ -6,13 +6,19 @@ import { z } from "zod";
 
 import type {
   SkillCatalogSnapshot,
+  SkillInstallationDiagnostic,
   SkillInstallPreview,
   SkillInstallPreviewCandidate,
-  SkillInstallationDiagnostic,
   SkillMutationTargetScope,
   SkillSourceDescriptor,
 } from "../types";
-import { downloadGitHubDirectory, parseGitHubShorthand, parseGitHubUrl, type FetchLike, type ParsedGitHubSource } from "./github";
+import {
+  downloadGitHubDirectory,
+  type FetchLike,
+  type ParsedGitHubSource,
+  parseGitHubShorthand,
+  parseGitHubUrl,
+} from "./github";
 
 type MaterializedSkillCandidate = {
   rootDir: string;
@@ -29,10 +35,17 @@ export type MaterializedSkillSource = {
 };
 
 const unknownRecordSchema = z.record(z.string(), z.unknown());
-const skillFrontMatterSchema = z.object({
-  name: z.string().trim().min(1).max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  description: z.string().trim().min(1).max(1024),
-}).passthrough();
+const skillFrontMatterSchema = z
+  .object({
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    description: z.string().trim().min(1).max(1024),
+  })
+  .passthrough();
 
 const precedenceByScope = new Map([
   ["project", 0],
@@ -65,7 +78,10 @@ function splitFrontMatter(raw: string): { frontMatterRaw: string | null; body: s
   };
 }
 
-function parseSkillMetadata(raw: string, expectedDirName: string): { name: string; description: string } | null {
+function parseSkillMetadata(
+  raw: string,
+  expectedDirName: string,
+): { name: string; description: string } | null {
   const { frontMatterRaw } = splitFrontMatter(raw);
   if (!frontMatterRaw) {
     return null;
@@ -173,7 +189,10 @@ function parseSkillsDotSh(raw: string): SkillSourceDescriptor | null {
   };
 }
 
-function buildDescriptorFromGitHubSource(raw: string, parsed: ParsedGitHubSource): SkillSourceDescriptor {
+function buildDescriptorFromGitHubSource(
+  raw: string,
+  parsed: ParsedGitHubSource,
+): SkillSourceDescriptor {
   const kindBySource: Record<ParsedGitHubSource["kind"], SkillSourceDescriptor["kind"]> = {
     repo: "github_repo",
     tree: "github_tree",
@@ -217,15 +236,15 @@ function buildResolvedGitHubDescriptor(
   };
 }
 
-function buildGitHubMaterializationAttempts(descriptor: SkillSourceDescriptor): GitHubMaterializationAttempt[] {
+function buildGitHubMaterializationAttempts(
+  descriptor: SkillSourceDescriptor,
+): GitHubMaterializationAttempt[] {
   const refPathSegments = descriptor.refPath?.split("/").filter(Boolean) ?? [];
   if (
-    refPathSegments.length === 0
-    || (
-      descriptor.kind !== "github_tree"
-      && descriptor.kind !== "github_blob"
-      && descriptor.kind !== "github_raw"
-    )
+    refPathSegments.length === 0 ||
+    (descriptor.kind !== "github_tree" &&
+      descriptor.kind !== "github_blob" &&
+      descriptor.kind !== "github_raw")
   ) {
     return [];
   }
@@ -309,11 +328,17 @@ async function materializeGitHubSource(
   }
 
   const preferredAttempt = descriptor.ref
-    ? [{
-        ref: descriptor.ref,
-        githubPath: descriptor.subdir ?? "",
-        descriptor: buildResolvedGitHubDescriptor(descriptor, descriptor.ref, descriptor.subdir ?? ""),
-      }]
+    ? [
+        {
+          ref: descriptor.ref,
+          githubPath: descriptor.subdir ?? "",
+          descriptor: buildResolvedGitHubDescriptor(
+            descriptor,
+            descriptor.ref,
+            descriptor.subdir ?? "",
+          ),
+        },
+      ]
     : [];
   const attempts = buildGitHubMaterializationAttempts(descriptor);
   const fallbackRefs = descriptor.ref ? [descriptor.ref] : ["main", "master"];
@@ -325,13 +350,15 @@ async function materializeGitHubSource(
       descriptor: buildResolvedGitHubDescriptor(descriptor, ref, githubPath),
     };
   });
-  const materializationAttempts = (attempts.length > 0
-    ? [...preferredAttempt, ...attempts]
-    : [...preferredAttempt, ...fallbackAttempts]
-  ).filter((attempt, index, allAttempts) =>
-    allAttempts.findIndex((candidate) =>
-      candidate.ref === attempt.ref && candidate.githubPath === attempt.githubPath
-    ) === index
+  const materializationAttempts = (
+    attempts.length > 0
+      ? [...preferredAttempt, ...attempts]
+      : [...preferredAttempt, ...fallbackAttempts]
+  ).filter(
+    (attempt, index, allAttempts) =>
+      allAttempts.findIndex(
+        (candidate) => candidate.ref === attempt.ref && candidate.githubPath === attempt.githubPath,
+      ) === index,
   );
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-skill-source-"));
   let resolvedDescriptor: SkillSourceDescriptor | null = null;
@@ -370,14 +397,15 @@ async function materializeGitHubSource(
     }
 
     if (!stageRoot || !resolvedDescriptor) {
-      throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Unable to fetch GitHub source"));
+      throw lastError instanceof Error
+        ? lastError
+        : new Error(String(lastError ?? "Unable to fetch GitHub source"));
     }
 
     const candidates = await loadMaterializedSkillCandidates(stageRoot, resolvedDescriptor);
-    const filteredCandidates =
-      descriptor.requestedSkillName
-        ? candidates.filter((candidate) => candidate.name === descriptor.requestedSkillName)
-        : candidates;
+    const filteredCandidates = descriptor.requestedSkillName
+      ? candidates.filter((candidate) => candidate.name === descriptor.requestedSkillName)
+      : candidates;
 
     return {
       descriptor: resolvedDescriptor,
@@ -408,7 +436,9 @@ async function loadMaterializedSkillCandidates(
           rootDir,
           name: path.basename(rootDir),
           description: "Invalid skill source",
-          diagnostics: [buildDiagnostic("invalid_frontmatter", "error", "Invalid or missing skill frontmatter")],
+          diagnostics: [
+            buildDiagnostic("invalid_frontmatter", "error", "Invalid or missing skill frontmatter"),
+          ],
           relativeRootPath: path.relative(stageRoot, rootDir) || path.basename(rootDir),
         });
         continue;
@@ -426,7 +456,13 @@ async function loadMaterializedSkillCandidates(
         rootDir,
         name: path.basename(rootDir),
         description: "Unreadable skill source",
-        diagnostics: [buildDiagnostic("unreadable_skill_md", "error", `Unable to read SKILL.md: ${String(error)}`)],
+        diagnostics: [
+          buildDiagnostic(
+            "unreadable_skill_md",
+            "error",
+            `Unable to read SKILL.md: ${String(error)}`,
+          ),
+        ],
         relativeRootPath: path.relative(stageRoot, rootDir) || path.basename(rootDir),
       });
     }
@@ -437,12 +473,16 @@ async function loadMaterializedSkillCandidates(
       rootDir: stageRoot,
       name: path.basename(stageRoot),
       description: descriptor.displaySource,
-      diagnostics: [buildDiagnostic("no_skill_found", "error", "No skill roots containing SKILL.md were found")],
+      diagnostics: [
+        buildDiagnostic("no_skill_found", "error", "No skill roots containing SKILL.md were found"),
+      ],
       relativeRootPath: ".",
     });
   }
 
-  return candidates.sort((left, right) => left.relativeRootPath.localeCompare(right.relativeRootPath));
+  return candidates.sort((left, right) =>
+    left.relativeRootPath.localeCompare(right.relativeRootPath),
+  );
 }
 
 export async function materializeSkillSource(opts: {
@@ -462,13 +502,17 @@ function wouldCandidateBeEffective(
   targetScope: SkillMutationTargetScope,
   catalog: SkillCatalogSnapshot,
 ): boolean {
-  const currentEffective = catalog.effectiveSkills.find((installation) => installation.name === candidateName);
+  const currentEffective = catalog.effectiveSkills.find(
+    (installation) => installation.name === candidateName,
+  );
   if (!currentEffective) {
     return true;
   }
 
-  return (precedenceByScope.get(targetScope) ?? Number.POSITIVE_INFINITY)
-    <= (precedenceByScope.get(currentEffective.scope) ?? Number.POSITIVE_INFINITY);
+  return (
+    (precedenceByScope.get(targetScope) ?? Number.POSITIVE_INFINITY) <=
+    (precedenceByScope.get(currentEffective.scope) ?? Number.POSITIVE_INFINITY)
+  );
 }
 
 function buildPreviewCandidate(
@@ -476,8 +520,12 @@ function buildPreviewCandidate(
   targetScope: SkillMutationTargetScope,
   catalog: SkillCatalogSnapshot,
 ): SkillInstallPreviewCandidate {
-  const sameNameInstallations = catalog.installations.filter((installation) => installation.name === candidate.name);
-  const targetScopeConflict = sameNameInstallations.find((installation) => installation.scope === targetScope);
+  const sameNameInstallations = catalog.installations.filter(
+    (installation) => installation.name === candidate.name,
+  );
+  const targetScopeConflict = sameNameInstallations.find(
+    (installation) => installation.scope === targetScope,
+  );
 
   return {
     name: candidate.name,
@@ -490,7 +538,9 @@ function buildPreviewCandidate(
         }
       : {}),
     wouldBeEffective: wouldCandidateBeEffective(candidate.name, targetScope, catalog),
-    shadowedInstallationIds: sameNameInstallations.map((installation) => installation.installationId),
+    shadowedInstallationIds: sameNameInstallations.map(
+      (installation) => installation.installationId,
+    ),
     diagnostics: candidate.diagnostics,
   };
 }
@@ -503,16 +553,19 @@ export async function buildSkillInstallPreview(opts: {
   fetchImpl?: FetchLike;
   materialized?: MaterializedSkillSource;
 }): Promise<SkillInstallPreview> {
-  const materialized = opts.materialized ?? await materializeSkillSource({
-    input: opts.input,
-    cwd: opts.cwd,
-    fetchImpl: opts.fetchImpl,
-  });
+  const materialized =
+    opts.materialized ??
+    (await materializeSkillSource({
+      input: opts.input,
+      cwd: opts.cwd,
+      fetchImpl: opts.fetchImpl,
+    }));
   const shouldCleanup = !opts.materialized;
 
   try {
     const candidates = materialized.candidates.map((candidate) =>
-      buildPreviewCandidate(candidate, opts.targetScope, opts.catalog));
+      buildPreviewCandidate(candidate, opts.targetScope, opts.catalog),
+    );
     const warnings: string[] = [];
     if (candidates.every((candidate) => candidate.diagnostics.length > 0)) {
       warnings.push("No valid skill installations were found in the provided source.");

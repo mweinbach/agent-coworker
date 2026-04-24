@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import {
   A2UI_PROTOCOL_VERSION,
@@ -35,7 +35,10 @@ describe("parseA2uiEnvelope", () => {
   });
 
   test("rejects other versions with a clear error", () => {
-    const result = parseA2uiEnvelope({ version: "v0.8.1", createSurface: { surfaceId: "s", catalogId: "c" } });
+    const result = parseA2uiEnvelope({
+      version: "v0.8.1",
+      createSurface: { surfaceId: "s", catalogId: "c" },
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("unsupported A2UI version");
   });

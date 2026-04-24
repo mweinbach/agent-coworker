@@ -3,14 +3,16 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   __internal as citationMetadataInternal,
   enrichCitationAnnotations,
-  enrichSessionSnapshotCitationsFromCache,
   enrichSessionSnapshotCitations,
+  enrichSessionSnapshotCitationsFromCache,
 } from "../src/server/citationMetadata";
 import type { SessionSnapshot } from "../src/shared/sessionSnapshot";
 
 const googleRedirectUrl = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/example";
-const resolvedArticleUrl = "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23";
-const resolvedArticleTitle = "LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure";
+const resolvedArticleUrl =
+  "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23";
+const resolvedArticleTitle =
+  "LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure";
 
 const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
 
@@ -52,7 +54,8 @@ describe("citationMetadata", () => {
     let fetchCalls = 0;
     installFetchStub(async (input: RequestInfo | URL) => {
       fetchCalls += 1;
-      const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      const url =
+        input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
       if (url.includes("/grounding-api-redirect/example")) {
         return new Response(null, {
           status: 302,
@@ -106,7 +109,8 @@ describe("citationMetadata", () => {
 
   test("enrichSessionSnapshotCitations only rewrites assistant annotations", async () => {
     installFetchStub(async (input: RequestInfo | URL) => {
-      const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      const url =
+        input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
       if (url.includes("/grounding-api-redirect/example")) {
         return new Response(null, {
           status: 302,
@@ -214,7 +218,8 @@ describe("citationMetadata", () => {
 
   test("enrichSessionSnapshotCitationsFromCache only rewrites assistant annotations from cached metadata", async () => {
     installFetchStub(async (input: RequestInfo | URL) => {
-      const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      const url =
+        input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
       if (url.includes("/grounding-api-redirect/example")) {
         return new Response(null, {
           status: 302,
@@ -427,7 +432,8 @@ describe("citationMetadata", () => {
     let fetchCalls = 0;
     installFetchStub(async (input: RequestInfo | URL) => {
       fetchCalls += 1;
-      const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+      const url =
+        input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
       if (url.includes("/grounding-api-redirect/example")) {
         return new Response(null, {
           status: 302,

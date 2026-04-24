@@ -1,41 +1,45 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
-
+import { JsonRpcSocket } from "../client/jsonRpcSocket";
+import { startAgentServer } from "../server/startServer";
+import { ASK_SKIP_TOKEN } from "../shared/ask";
+import { isProviderName, PROVIDER_NAMES } from "../types";
 import { VERSION } from "../version";
-
+import {
+  normalizeProviderAuthMethods,
+  type ParsedCommand,
+  type ProviderAuthMethod,
+  parseReplInput,
+  resolveProviderAuthMethodSelection,
+} from "./parser";
+import { normalizeApprovalAnswer, resolveAskAnswer } from "./prompts";
+import { renderTodosToLines, renderToolsToLines } from "./render";
 import { handleSlashCommand } from "./repl/commandRouter";
 import { activateNextPrompt, type ReplPromptStateAdapter } from "./repl/promptController";
 import {
-  applyCliJsonRpcResult,
-  createNotificationHandler,
   type ApprovalPrompt,
   type AskPrompt,
+  applyCliJsonRpcResult,
+  createNotificationHandler,
   type ProviderStatus,
   type PublicConfig,
   type PublicSessionConfig,
   type ReplServerEventState,
 } from "./repl/serverEventHandler";
-import {
-  normalizeProviderAuthMethods,
-  parseReplInput,
-  resolveProviderAuthMethodSelection,
-  type ParsedCommand,
-  type ProviderAuthMethod,
-} from "./parser";
-import { normalizeApprovalAnswer, resolveAskAnswer } from "./prompts";
-import { renderTodosToLines, renderToolsToLines } from "./render";
 import { getStoredSessionForCwd, setStoredSessionForCwd } from "./repl/stateStore";
 import { CliStreamState } from "./streamState";
-import { JsonRpcSocket } from "../client/jsonRpcSocket";
-import { ASK_SKIP_TOKEN } from "../shared/ask";
-import { startAgentServer } from "../server/startServer";
-import { isProviderName, PROVIDER_NAMES } from "../types";
 
-export { parseReplInput, normalizeProviderAuthMethods, resolveProviderAuthMethodSelection };
 export type { ParsedCommand };
-export { normalizeApprovalAnswer, resolveAskAnswer };
-export { renderTodosToLines, renderToolsToLines };
+export {
+  normalizeApprovalAnswer,
+  normalizeProviderAuthMethods,
+  parseReplInput,
+  renderTodosToLines,
+  renderToolsToLines,
+  resolveAskAnswer,
+  resolveProviderAuthMethodSelection,
+};
 
 // Keep CLI output clean by default.
 const globalSettings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?: boolean };
@@ -52,14 +56,17 @@ type JsonRpcThreadDescriptor = {
 };
 
 function formatDurationSeconds(totalSeconds: unknown): string {
-  if (typeof totalSeconds !== "number" || !Number.isFinite(totalSeconds) || totalSeconds < 0) return "unknown";
+  if (typeof totalSeconds !== "number" || !Number.isFinite(totalSeconds) || totalSeconds < 0)
+    return "unknown";
   if (totalSeconds < 60) return `${Math.round(totalSeconds)}s`;
   if (totalSeconds < 3600) return `${Math.round(totalSeconds / 60)}m`;
   if (totalSeconds < 86400) return `${Math.round(totalSeconds / 3600)}h`;
   return `${Math.round(totalSeconds / 86400)}d`;
 }
 
-function summarizeRateLimitWindow(window: any): string | null {
+function summarizeRateLimitWindow(
+  window: { usedPercent?: number; resetAfterSeconds?: number } | null | undefined,
+): string | null {
   if (!window || typeof window !== "object") return null;
   const left =
     typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent)
@@ -81,7 +88,7 @@ export async function resolveAndValidateDir(dirArg: string): Promise<string> {
   } catch {
     st = null;
   }
-  if (!st || !st.isDirectory()) throw new Error(`--dir is not a directory: ${resolved}`);
+  if (!st?.isDirectory()) throw new Error(`--dir is not a directory: ${resolved}`);
   return resolved;
 }
 
@@ -125,7 +132,7 @@ export async function runCliRepl(
       WebSocket?: { new (url: string, protocols?: string | string[]): WebSocket; OPEN: number };
       createReadlineInterface?: () => readline.Interface;
     };
-  } = {}
+  } = {},
 ) {
   const initialDir = opts.dir ? await resolveAndValidateDir(opts.dir) : process.cwd();
   if (opts.dir) process.chdir(initialDir);
@@ -217,7 +224,12 @@ export async function runCliRepl(
     lastKnownThreadId = descriptor.id;
     disconnectNotified = false;
     workspaceCwd = descriptor.cwd ?? cwdForStorage;
-    if (descriptor.provider && isProviderName(descriptor.provider) && descriptor.model && descriptor.cwd) {
+    if (
+      descriptor.provider &&
+      isProviderName(descriptor.provider) &&
+      descriptor.model &&
+      descriptor.cwd
+    ) {
       config = {
         provider: descriptor.provider,
         model: descriptor.model,
@@ -250,10 +262,16 @@ export async function runCliRepl(
     console.log("  /model <id>           Set model id for this session");
     console.log(`  /provider <name>      Set provider (${UI_PROVIDER_NAMES.join("|")})`);
     console.log("  /verbosity <level>    Set active-provider verbosity (low|medium|high)");
-    console.log("  /reasoning-effort <level>  Set active-provider reasoning effort (none|low|medium|high|xhigh)");
+    console.log(
+      "  /reasoning-effort <level>  Set active-provider reasoning effort (none|low|medium|high|xhigh)",
+    );
     console.log("  /effort <level>       Alias for /reasoning-effort");
-    console.log("  /reasoning-summary <mode>  Set active-provider reasoning summary (auto|concise|detailed)");
-    console.log(`  /connect <name> [key] Connect via auth methods (${UI_PROVIDER_NAMES.join("|")})`);
+    console.log(
+      "  /reasoning-summary <mode>  Set active-provider reasoning summary (auto|concise|detailed)",
+    );
+    console.log(
+      `  /connect <name> [key] Connect via auth methods (${UI_PROVIDER_NAMES.join("|")})`,
+    );
     console.log("  /cwd <path>           Set working directory for this session");
     console.log("  /sessions             List sessions from the server");
     console.log("  /resume <threadId>    Reconnect to a specific thread");
@@ -278,7 +296,12 @@ export async function runCliRepl(
         if (Array.isArray(status.usage?.rateLimits)) {
           for (const entry of status.usage.rateLimits.slice(0, 3)) {
             const name = entry.limitName ?? entry.limitId ?? "limit";
-            const summary = summarizeRateLimitWindow(entry.primaryWindow);
+            const summary = summarizeRateLimitWindow(
+              entry.primaryWindow as
+                | { usedPercent?: number; resetAfterSeconds?: number }
+                | null
+                | undefined,
+            );
             if (summary) console.log(`    ${name}: ${summary}`);
           }
         }
@@ -467,9 +490,6 @@ export async function runCliRepl(
     },
   };
 
-  // Lazily captured rl reference so the notification handler can access it.
-  let rlRef: readline.Interface | null = null;
-
   const handleNotification = createNotificationHandler({
     state: eventState,
     streamState,
@@ -497,7 +517,7 @@ export async function runCliRepl(
       clientInfo: { name: "cli", version: VERSION },
       allowQueryProtocolFallback: true,
       autoReconnect: false,
-      WebSocketImpl: WebSocketImpl as any,
+      WebSocketImpl: WebSocketImpl as unknown as typeof WebSocket,
       onOpen: () => {
         // Connection established; initialization handled after readyPromise.
       },
@@ -529,7 +549,9 @@ export async function runCliRepl(
             requestId: msg.id,
             command: typeof params.command === "string" ? params.command : "unknown command",
             dangerous: params.dangerous === true,
-            reasonCode: (typeof params.reason === "string" ? params.reason : "unknown") as ApprovalPrompt["reasonCode"],
+            reasonCode: (typeof params.reason === "string"
+              ? params.reason
+              : "unknown") as ApprovalPrompt["reasonCode"],
           };
           pendingApproval.push(approvalPrompt);
           activatePrompt(rl);
@@ -537,7 +559,9 @@ export async function runCliRepl(
         }
 
         // Unknown server request — respond with an error to avoid blocking.
-        socket?.respond(msg.id, { error: { code: -32601, message: `Unhandled server request: ${msg.method}` } });
+        socket?.respond(msg.id, {
+          error: { code: -32601, message: `Unhandled server request: ${msg.method}` },
+        });
       },
     });
 
@@ -551,9 +575,14 @@ export async function runCliRepl(
     try {
       let result: Record<string, unknown>;
       if (targetThreadId) {
-        result = (await nextSocket.request("thread/resume", { threadId: targetThreadId })) as Record<string, unknown>;
+        result = (await nextSocket.request("thread/resume", {
+          threadId: targetThreadId,
+        })) as Record<string, unknown>;
       } else {
-        result = (await nextSocket.request("thread/start", { cwd: requestCwd })) as Record<string, unknown>;
+        result = (await nextSocket.request("thread/start", { cwd: requestCwd })) as Record<
+          string,
+          unknown
+        >;
       }
       const descriptor = await applyThreadDescriptor(result, requestCwd);
       await loadWorkspaceMetadata(nextSocket, descriptor?.cwd ?? requestCwd);
@@ -561,7 +590,10 @@ export async function runCliRepl(
       // If resume fails, try starting a new thread.
       if (targetThreadId) {
         try {
-          const result = (await nextSocket.request("thread/start", { cwd: requestCwd })) as Record<string, unknown>;
+          const result = (await nextSocket.request("thread/start", { cwd: requestCwd })) as Record<
+            string,
+            unknown
+          >;
           const descriptor = await applyThreadDescriptor(result, requestCwd);
           await loadWorkspaceMetadata(nextSocket, descriptor?.cwd ?? requestCwd);
         } catch (retryErr) {
@@ -606,7 +638,6 @@ export async function runCliRepl(
   };
 
   const rl = createReadlineInterface();
-  rlRef = rl;
   rl.on("SIGINT", () => {
     rl.close();
   });
@@ -656,7 +687,8 @@ export async function runCliRepl(
           return;
         }
         const approved = normalizeApprovalAnswer(line);
-        const ok = socket?.respond(activeApproval.requestId as string | number, { approved }) ?? false;
+        const ok =
+          socket?.respond(activeApproval.requestId as string | number, { approved }) ?? false;
         if (!ok) {
           handleDisconnect(rl, NOT_CONNECTED_MSG);
           return;
@@ -696,7 +728,7 @@ export async function runCliRepl(
               if (method === "thread/start" || method === "thread/resume") {
                 await applyThreadDescriptor(result, requestCwd);
               }
-              return result as any;
+              return true;
             } catch (err) {
               console.error(`Error: ${String(err)}`);
               if (!socket) {

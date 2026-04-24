@@ -4,36 +4,36 @@ import anthropicClaudeHaiku45 from "../../config/models/anthropic/claude-haiku-4
 import anthropicClaudeOpus46 from "../../config/models/anthropic/claude-opus-4-6.json";
 import anthropicClaudeSonnet45 from "../../config/models/anthropic/claude-sonnet-4-5.json";
 import anthropicClaudeSonnet46 from "../../config/models/anthropic/claude-sonnet-4-6.json";
-import bedrockAmazonNovaLiteV10 from "../../config/models/bedrock/amazon.nova-lite-v1-0.json";
-import bedrockAmazonNovaMicroV10 from "../../config/models/bedrock/amazon.nova-micro-v1-0.json";
-import bedrockAnthropicClaude35Haiku20241022V10 from "../../config/models/bedrock/anthropic.claude-3-5-haiku-20241022-v1-0.json";
 import basetenMoonshotAiKimiK25 from "../../config/models/baseten/moonshotai-kimi-k2.5.json";
 import basetenNvidiaNemotron120bA12b from "../../config/models/baseten/nvidia-nemotron-120b-a12b.json";
 import basetenZaiOrgGlm5 from "../../config/models/baseten/zai-org-glm-5.json";
+import bedrockAmazonNovaLiteV10 from "../../config/models/bedrock/amazon.nova-lite-v1-0.json";
+import bedrockAmazonNovaMicroV10 from "../../config/models/bedrock/amazon.nova-micro-v1-0.json";
+import bedrockAnthropicClaude35Haiku20241022V10 from "../../config/models/bedrock/anthropic.claude-3-5-haiku-20241022-v1-0.json";
 import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
 import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
 import fireworksGlm5 from "../../config/models/fireworks/accounts-fireworks-models-glm-5.json";
 import fireworksKimiK2p5 from "../../config/models/fireworks/accounts-fireworks-models-kimi-k2p5.json";
-import fireworksKimiK2p5Turbo from "../../config/models/fireworks/accounts-fireworks-routers-kimi-k2p5-turbo.json";
 import fireworksMinimaxM2p5 from "../../config/models/fireworks/accounts-fireworks-models-minimax-m2p5.json";
-import googleGemini3FlashPreview from "../../config/models/google/gemini-3-flash-preview.json";
+import fireworksKimiK2p5Turbo from "../../config/models/fireworks/accounts-fireworks-routers-kimi-k2p5-turbo.json";
 import googleGemini31FlashLitePreview from "../../config/models/google/gemini-3.1-flash-lite-preview.json";
 import googleGemini31ProPreview from "../../config/models/google/gemini-3.1-pro-preview.json";
 import googleGemini31ProPreviewCustomtools from "../../config/models/google/gemini-3.1-pro-preview-customtools.json";
-import openaiGpt5Mini from "../../config/models/openai/gpt-5-mini.json";
-import openaiGpt52Pro from "../../config/models/openai/gpt-5.2-pro.json";
+import googleGemini3FlashPreview from "../../config/models/google/gemini-3-flash-preview.json";
+import nvidiaNemotron3Super120bA12b from "../../config/models/nvidia/nvidia-nemotron-3-super-120b-a12b.json";
 import openaiGpt52 from "../../config/models/openai/gpt-5.2.json";
+import openaiGpt52Pro from "../../config/models/openai/gpt-5.2-pro.json";
 import openaiGpt54 from "../../config/models/openai/gpt-5.4.json";
 import openaiGpt54Mini from "../../config/models/openai/gpt-5.4-mini.json";
-import nvidiaNemotron3Super120bA12b from "../../config/models/nvidia/nvidia-nemotron-3-super-120b-a12b.json";
+import openaiGpt5Mini from "../../config/models/openai/gpt-5-mini.json";
 import opencodeGoGlm5 from "../../config/models/opencode-go/glm-5.json";
 import opencodeGoKimiK25 from "../../config/models/opencode-go/kimi-k2.5.json";
 import opencodeZenBigPickle from "../../config/models/opencode-zen/big-pickle.json";
 import opencodeZenGlm5 from "../../config/models/opencode-zen/glm-5.json";
 import opencodeZenKimiK25 from "../../config/models/opencode-zen/kimi-k2.5.json";
 import opencodeZenMimoV2FlashFree from "../../config/models/opencode-zen/mimo-v2-flash-free.json";
-import opencodeZenMiniMaxM25Free from "../../config/models/opencode-zen/minimax-m2.5-free.json";
 import opencodeZenMiniMaxM25 from "../../config/models/opencode-zen/minimax-m2.5.json";
+import opencodeZenMiniMaxM25Free from "../../config/models/opencode-zen/minimax-m2.5-free.json";
 import opencodeZenNemotron3SuperFree from "../../config/models/opencode-zen/nemotron-3-super-free.json";
 import togetherMoonshotAiKimiK25 from "../../config/models/together/moonshotai-kimi-k2.5.json";
 import togetherQwenQwen35397bA17b from "../../config/models/together/qwen-qwen3.5-397b-a17b.json";
@@ -52,23 +52,25 @@ export const STATIC_MODEL_PROVIDER_NAMES = [
   "opencode-go",
   "opencode-zen",
   "codex-cli",
- ] as const satisfies readonly ProviderName[];
+] as const satisfies readonly ProviderName[];
 
 export type StaticModelProviderName = (typeof STATIC_MODEL_PROVIDER_NAMES)[number];
 
 const providerNameSchema = z.enum(STATIC_MODEL_PROVIDER_NAMES);
 
-const supportedModelSchema = z.object({
-  id: z.string().trim().min(1),
-  provider: providerNameSchema,
-  displayName: z.string().trim().min(1),
-  // Vendor-published cutoff strings are user-facing metadata, not a normalized date field.
-  knowledgeCutoff: z.string().trim().min(1),
-  supportsImageInput: z.boolean(),
-  promptTemplate: z.string().trim().min(1),
-  providerOptionsDefaults: z.record(z.string(), z.unknown()),
-  isDefault: z.boolean(),
-}).strict();
+const supportedModelSchema = z
+  .object({
+    id: z.string().trim().min(1),
+    provider: providerNameSchema,
+    displayName: z.string().trim().min(1),
+    // Vendor-published cutoff strings are user-facing metadata, not a normalized date field.
+    knowledgeCutoff: z.string().trim().min(1),
+    supportsImageInput: z.boolean(),
+    promptTemplate: z.string().trim().min(1),
+    providerOptionsDefaults: z.record(z.string(), z.unknown()),
+    isDefault: z.boolean(),
+  })
+  .strict();
 
 export type SupportedModel = z.infer<typeof supportedModelSchema>;
 
@@ -160,9 +162,9 @@ function buildRegistry(entries: SupportedModel[]) {
   return { byProvider, byKey, defaults };
 }
 
-const MODEL_REGISTRY_ENTRIES = RAW_MODEL_REGISTRY_ENTRIES
-  .map((entry) => supportedModelSchema.parse(entry))
-  .sort((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
+const MODEL_REGISTRY_ENTRIES = RAW_MODEL_REGISTRY_ENTRIES.map((entry) =>
+  supportedModelSchema.parse(entry),
+).sort((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
 const MODEL_REGISTRY = buildRegistry(MODEL_REGISTRY_ENTRIES);
 
 /**
@@ -188,24 +190,30 @@ function inferLikelyProviderForModelId(modelId: string): LikelyModelProvider | n
   if (!normalized) return null;
   if (normalized.startsWith("claude-")) return "anthropic";
   if (
-    normalized.startsWith("gpt-5")
-    || normalized.startsWith("gpt-4o")
-    || /^o(?:1|3|4)(?:$|[-.])/.test(normalized)
-    || /(^|[-.])codex(?:$|[-.])/.test(normalized)
+    normalized.startsWith("gpt-5") ||
+    normalized.startsWith("gpt-4o") ||
+    /^o(?:1|3|4)(?:$|[-.])/.test(normalized) ||
+    /(^|[-.])codex(?:$|[-.])/.test(normalized)
   ) {
     return "openai";
   }
   return null;
 }
 
-function providerMatchesLikelyModelProvider(provider: ProviderName, expectedProvider: LikelyModelProvider): boolean {
+function providerMatchesLikelyModelProvider(
+  provider: ProviderName,
+  expectedProvider: LikelyModelProvider,
+): boolean {
   if (expectedProvider === "openai") {
     return provider === "openai" || provider === "codex-cli";
   }
   return provider === expectedProvider;
 }
 
-export function describeModelProviderMismatch(provider: ProviderName, modelId: string): string | null {
+export function describeModelProviderMismatch(
+  provider: ProviderName,
+  modelId: string,
+): string | null {
   const expectedProvider = inferLikelyProviderForModelId(modelId);
   if (!expectedProvider || providerMatchesLikelyModelProvider(provider, expectedProvider)) {
     return null;
@@ -218,7 +226,9 @@ export function describeModelProviderMismatch(provider: ProviderName, modelId: s
 
 export { MODEL_REGISTRY_ENTRIES };
 
-export function isStaticRegistryProvider(provider: ProviderName): provider is StaticModelProviderName {
+export function isStaticRegistryProvider(
+  provider: ProviderName,
+): provider is StaticModelProviderName {
   return (STATIC_MODEL_PROVIDER_NAMES as readonly string[]).includes(provider);
 }
 
@@ -238,7 +248,9 @@ export function getSupportedModel(provider: ProviderName, modelId: string): Supp
 
 export function defaultSupportedModel(provider: ProviderName): SupportedModel {
   if (!isStaticRegistryProvider(provider)) {
-    throw new Error(`Provider ${provider} uses dynamic model discovery and has no static default model.`);
+    throw new Error(
+      `Provider ${provider} uses dynamic model discovery and has no static default model.`,
+    );
   }
   const entry = MODEL_REGISTRY.defaults.get(provider);
   if (!entry) throw new Error(`Missing default model for provider ${provider}.`);
@@ -257,17 +269,24 @@ export function supportsImageInput(provider: ProviderName, modelId: string): boo
   return getSupportedModel(provider, modelId)?.supportsImageInput ?? false;
 }
 
-export function providerOptionsDefaultsForModel(provider: ProviderName, modelId: string): Record<string, unknown> {
+export function providerOptionsDefaultsForModel(
+  provider: ProviderName,
+  modelId: string,
+): Record<string, unknown> {
   return { ...(getSupportedModel(provider, modelId)?.providerOptionsDefaults ?? {}) };
 }
 
-export function assertSupportedModel(provider: ProviderName, modelId: string, source = "model"): SupportedModel {
+export function assertSupportedModel(
+  provider: ProviderName,
+  modelId: string,
+  source = "model",
+): SupportedModel {
   const supported = getSupportedModel(provider, modelId);
   if (supported) return supported;
 
   const mismatchHint = describeModelProviderMismatch(provider, modelId);
   const supportedIds = listSupportedModelIds(provider).join(", ");
   throw new Error(
-    `Unsupported ${source} "${modelId}" for provider ${provider}.${mismatchHint ? ` ${mismatchHint}` : ""} Supported models: ${supportedIds}`
+    `Unsupported ${source} "${modelId}" for provider ${provider}.${mismatchHint ? ` ${mismatchHint}` : ""} Supported models: ${supportedIds}`,
   );
 }

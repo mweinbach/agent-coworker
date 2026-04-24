@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
-
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 
 const workflowPath = new URL("../.github/workflows/desktop-release.yml", import.meta.url);
 const workflow = readFileSync(workflowPath, "utf8");
@@ -35,8 +34,12 @@ describe("desktop release workflow", () => {
     expect(workflow).toMatch(
       /- name: Stage Windows desktop release assets[\s\S]*?apps\/desktop\/release\/\*-win-\$\{\{ matrix\.build_arch \}\}\.exe[\s\S]*?Copy-Item "apps\/desktop\/release\/latest\.yml" -Destination \(Join-Path \$stagingDir "\$\{\{ matrix\.updater_metadata_name \}\}"\)/,
     );
-    expect(workflow).toContain("Windows signing secrets configured; publishing signed installer plus updater metadata.");
-    expect(workflow).toContain("WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD not configured; publishing unsigned installer plus updater metadata.");
+    expect(workflow).toContain(
+      "Windows signing secrets configured; publishing signed installer plus updater metadata.",
+    );
+    expect(workflow).toContain(
+      "WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD not configured; publishing unsigned installer plus updater metadata.",
+    );
   });
 
   test("ARM64 unpacked artifact is for smoke only and excluded from publish download glob", () => {
@@ -49,19 +52,35 @@ describe("desktop release workflow", () => {
     expect(workflow).toContain("- name: Build Windows ARM64 unpacked desktop directory");
     expect(workflow).toContain("runs-on: windows-11-arm");
     expect(workflow).toContain("name: Smoke Windows ARM64 Desktop");
-    expect(workflow).toContain('Get-ChildItem "apps/desktop/release" -Recurse -Filter "cowork-server-manifest.json" -File |');
-    expect(workflow.replace(/\s+/g, " ")).toContain('Where-Object { $_.FullName -match "\\\\win-arm64-unpacked\\\\resources\\\\binaries\\\\" }');
-    expect(workflow).toContain('throw "ARM64 unpacked desktop directory did not include cowork-server-manifest.json under win-arm64-unpacked/resources/binaries"');
-    expect(workflow).toContain('throw "ARM64 unpacked manifest was found outside resources\\\\binaries: $sidecarRoot"');
-    expect(workflow).toContain('throw "ARM64 unpacked sidecar manifest does not point at the expected Bun runtime payload"');
+    expect(workflow).toContain(
+      'Get-ChildItem "apps/desktop/release" -Recurse -Filter "cowork-server-manifest.json" -File |',
+    );
+    expect(workflow.replace(/\s+/g, " ")).toContain(
+      'Where-Object { $_.FullName -match "\\\\win-arm64-unpacked\\\\resources\\\\binaries\\\\" }',
+    );
+    expect(workflow).toContain(
+      'throw "ARM64 unpacked desktop directory did not include cowork-server-manifest.json under win-arm64-unpacked/resources/binaries"',
+    );
+    expect(workflow).toContain(
+      'throw "ARM64 unpacked manifest was found outside resources\\\\binaries: $sidecarRoot"',
+    );
+    expect(workflow).toContain(
+      'throw "ARM64 unpacked sidecar manifest does not point at the expected Bun runtime payload"',
+    );
     expect(workflow).toContain("COWORK_DESKTOP_SMOKE_WORKSPACE");
     expect(workflow).toContain("COWORK_DESKTOP_SMOKE_OUTPUT");
-    expect(workflow).toContain("Start-Process -FilePath $appExe.FullName -WorkingDirectory $appExe.DirectoryName -PassThru");
+    expect(workflow).toContain(
+      "Start-Process -FilePath $appExe.FullName -WorkingDirectory $appExe.DirectoryName -PassThru",
+    );
     expect(workflow).toContain("Desktop smoke output was not written within");
     expect(workflow).toContain("Packaged ARM64 desktop smoke run exited before writing output");
     expect(workflow).toContain("Expected desktop smoke output type=server_listening");
-    expect(workflow).toContain("Expected desktop smoke run to confirm a packaged system prompt load");
-    expect(workflow).toContain("Expected desktop smoke run to exercise the packaged first-turn path");
+    expect(workflow).toContain(
+      "Expected desktop smoke run to confirm a packaged system prompt load",
+    );
+    expect(workflow).toContain(
+      "Expected desktop smoke run to exercise the packaged first-turn path",
+    );
   });
 
   test("publishes release assets only after the ARM64 smoke job passes", () => {

@@ -23,7 +23,7 @@ class FakeWebSocket {
   constructor(url: string, protocols?: string | string[]) {
     this.url = url;
     this.protocols = protocols;
-    this.protocol = typeof protocols === "string" ? protocols : protocols?.[0] ?? "";
+    this.protocol = typeof protocols === "string" ? protocols : (protocols?.[0] ?? "");
     FakeWebSocket.instances.push(this);
     queueMicrotask(() => {
       this.readyState = FakeWebSocket.OPEN;
@@ -67,7 +67,7 @@ class ExhaustingReconnectWebSocket {
   constructor(url: string, protocols?: string | string[]) {
     this.url = url;
     this.protocols = protocols;
-    this.protocol = typeof protocols === "string" ? protocols : protocols?.[0] ?? "";
+    this.protocol = typeof protocols === "string" ? protocols : (protocols?.[0] ?? "");
     ExhaustingReconnectWebSocket.instances.push(this);
     const instanceNumber = ExhaustingReconnectWebSocket.instances.length;
     queueMicrotask(() => {
@@ -120,9 +120,10 @@ function createManualTimers() {
         return { kind: "timeout", id };
       },
       clearTimeout(handle: unknown) {
-        const id = typeof handle === "object" && handle !== null && "id" in handle
-          ? Number((handle as { id?: unknown }).id)
-          : NaN;
+        const id =
+          typeof handle === "object" && handle !== null && "id" in handle
+            ? Number((handle as { id?: unknown }).id)
+            : NaN;
         if (Number.isFinite(id)) {
           timeoutCallbacks.delete(id);
         }
@@ -133,9 +134,10 @@ function createManualTimers() {
         return { kind: "interval", id };
       },
       clearInterval(handle: unknown) {
-        const id = typeof handle === "object" && handle !== null && "id" in handle
-          ? Number((handle as { id?: unknown }).id)
-          : NaN;
+        const id =
+          typeof handle === "object" && handle !== null && "id" in handle
+            ? Number((handle as { id?: unknown }).id)
+            : NaN;
         if (Number.isFinite(id)) {
           intervalCallbacks.delete(id);
         }
@@ -227,13 +229,48 @@ describe("JsonRpcSocket runtime", () => {
     const ws = FakeWebSocket.instances[0]!;
     await ws.emitMessage(JSON.stringify({ id: 1, result: { protocolVersion: "0.1" } }));
     await flushMicrotasks();
-    await ws.emitMessage(JSON.stringify({ id: "req-1", method: "item/tool/requestUserInput", params: { question: "Continue?" } }));
+    await ws.emitMessage(
+      JSON.stringify({
+        id: "req-1",
+        method: "item/tool/requestUserInput",
+        params: { question: "Continue?" },
+      }),
+    );
 
     expect(requests).toEqual([{ id: "req-1", method: "item/tool/requestUserInput" }]);
     expect(socket.respond("req-1", { answer: "yes" })).toBe(true);
     expect(parseSentMessages(ws).at(-1)).toEqual({
       id: "req-1",
       result: { answer: "yes" },
+    });
+  });
+
+  test("preserves JSON-RPC error codes on request failures", async () => {
+    FakeWebSocket.instances = [];
+    const socket = new JsonRpcSocket({
+      url: "ws://example.test/socket",
+      clientInfo: { name: "desktop" },
+      WebSocketImpl: FakeWebSocket as any,
+    });
+
+    socket.connect();
+    await flushMicrotasks();
+
+    const ws = FakeWebSocket.instances[0]!;
+    await ws.emitMessage(JSON.stringify({ id: 1, result: { protocolVersion: "0.1" } }));
+    await flushMicrotasks();
+
+    const requestPromise = socket.request("research/followup", { parentResearchId: "research-1" });
+    await ws.emitMessage(
+      JSON.stringify({
+        id: 2,
+        error: { code: -32602, message: "parent research is not completed" },
+      }),
+    );
+
+    await expect(requestPromise).rejects.toMatchObject({
+      message: "parent research is not completed",
+      jsonRpcCode: -32602,
     });
   });
 
@@ -258,9 +295,9 @@ describe("JsonRpcSocket runtime", () => {
     ws1.close();
 
     const queued = socket.request("thread/list", { cwd: "/workspace" }, { retryable: true });
-    await expect(socket.request("thread/read", { threadId: "thr-1" }, { retryable: true })).rejects.toThrow(
-      "JSON-RPC retry queue is full",
-    );
+    await expect(
+      socket.request("thread/read", { threadId: "thr-1" }, { retryable: true }),
+    ).rejects.toThrow("JSON-RPC retry queue is full");
 
     timers.timeoutCallbacks[0]!();
     await flushMicrotasks();
@@ -333,9 +370,9 @@ describe("JsonRpcSocket runtime", () => {
     await flushMicrotasks();
 
     await expect(queued).rejects.toThrow("max reconnect attempts exceeded");
-    await expect(socket.request("thread/read", { threadId: "thr-1" }, { retryable: true })).rejects.toThrow(
-      "max reconnect attempts exceeded",
-    );
+    await expect(
+      socket.request("thread/read", { threadId: "thr-1" }, { retryable: true }),
+    ).rejects.toThrow("max reconnect attempts exceeded");
   });
 
   test("rejects readyPromise and closes the socket when initialize fails", async () => {
@@ -351,13 +388,15 @@ describe("JsonRpcSocket runtime", () => {
     await flushMicrotasks();
 
     const ws = FakeWebSocket.instances[0]!;
-    await ws.emitMessage(JSON.stringify({
-      id: 1,
-      error: {
-        code: -32000,
-        message: "initialize failed",
-      },
-    }));
+    await ws.emitMessage(
+      JSON.stringify({
+        id: 1,
+        error: {
+          code: -32000,
+          message: "initialize failed",
+        },
+      }),
+    );
     await flushMicrotasks();
 
     await expect(ready).rejects.toThrow("initialize failed");
@@ -439,13 +478,15 @@ describe("JsonRpcSocket runtime", () => {
     await flushMicrotasks();
 
     const ws2 = FakeWebSocket.instances[1]!;
-    await ws2.emitMessage(JSON.stringify({
-      id: 2,
-      error: {
-        code: -32000,
-        message: "initialize failed",
-      },
-    }));
+    await ws2.emitMessage(
+      JSON.stringify({
+        id: 2,
+        error: {
+          code: -32000,
+          message: "initialize failed",
+        },
+      }),
+    );
     await flushMicrotasks();
 
     timers.timeoutCallbacks[1]!();
@@ -501,13 +542,15 @@ describe("JsonRpcSocket runtime", () => {
     await flushMicrotasks();
 
     const ws1 = FakeWebSocket.instances[0]!;
-    await ws1.emitMessage(JSON.stringify({
-      id: 1,
-      error: {
-        code: -32000,
-        message: "initialize failed",
-      },
-    }));
+    await ws1.emitMessage(
+      JSON.stringify({
+        id: 1,
+        error: {
+          code: -32000,
+          message: "initialize failed",
+        },
+      }),
+    );
     await flushMicrotasks();
 
     const queued = socket.request("thread/list", { cwd: "/workspace" }, { retryable: true });
@@ -515,19 +558,21 @@ describe("JsonRpcSocket runtime", () => {
     await flushMicrotasks();
 
     const ws2 = FakeWebSocket.instances[1]!;
-    await ws2.emitMessage(JSON.stringify({
-      id: 2,
-      error: {
-        code: -32000,
-        message: "initialize failed again",
-      },
-    }));
+    await ws2.emitMessage(
+      JSON.stringify({
+        id: 2,
+        error: {
+          code: -32000,
+          message: "initialize failed again",
+        },
+      }),
+    );
     await flushMicrotasks();
 
     await expect(queued).rejects.toThrow("max reconnect attempts exceeded");
-    await expect(socket.request("thread/read", { threadId: "thr-1" }, { retryable: true })).rejects.toThrow(
-      "max reconnect attempts exceeded",
-    );
+    await expect(
+      socket.request("thread/read", { threadId: "thr-1" }, { retryable: true }),
+    ).rejects.toThrow("max reconnect attempts exceeded");
     expect(closedReasons).toContain("max reconnect attempts exceeded");
     expect(timers.timeoutCallbacks).toHaveLength(1);
   });

@@ -1,8 +1,11 @@
+import { getDefaultProviderAuthMethods } from "../../../../src/shared/providerAuthMethods";
 import type { ProviderName, ServerEvent } from "./wsProtocol";
 import { PROVIDER_NAMES } from "./wsProtocol";
-import { getDefaultProviderAuthMethods } from "../../../../src/shared/providerAuthMethods";
 
-type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
+type ProviderAuthMethod = Extract<
+  ServerEvent,
+  { type: "provider_auth_methods" }
+>["methods"][string][number];
 const EXA_AUTH_METHOD_ID = "exa_api_key";
 const PARALLEL_AUTH_METHOD_ID = "parallel_api_key";
 
@@ -36,9 +39,14 @@ export function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[
   return getDefaultProviderAuthMethods(provider);
 }
 
-export function visibleAuthMethods(provider: ProviderName, methods: ProviderAuthMethod[]): ProviderAuthMethod[] {
+export function visibleAuthMethods(
+  provider: ProviderName,
+  methods: ProviderAuthMethod[],
+): ProviderAuthMethod[] {
   if (provider === "google") {
-    return methods.filter((method) => method.id !== EXA_AUTH_METHOD_ID && method.id !== PARALLEL_AUTH_METHOD_ID);
+    return methods.filter(
+      (method) => method.id !== EXA_AUTH_METHOD_ID && method.id !== PARALLEL_AUTH_METHOD_ID,
+    );
   }
   if (provider === "codex-cli") {
     return methods.filter((method) => method.id !== "api_key");

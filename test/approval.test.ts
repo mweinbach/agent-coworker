@@ -3,11 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import {
-  classifyCommand,
-  classifyCommandDetailed,
-  approveCommand,
-} from "../src/utils/approval";
+import { approveCommand, classifyCommand, classifyCommandDetailed } from "../src/utils/approval";
 
 // ---------------------------------------------------------------------------
 // classifyCommand
@@ -180,17 +176,19 @@ describe("classifyCommand", () => {
   // ---- Unknown / prompt (not dangerous) ------------------------------------
 
   describe("unknown commands classified as prompt but not dangerous", () => {
-    test.each(["cat README.md", "head -n 20 file.txt", "tail -f /var/log/syslog", "man ls"])(
-      "%s requires manual review with file-read risk code",
-      (command) => {
-        const c = classifyCommandDetailed(command);
-        expect(c).toEqual({
-          kind: "prompt",
-          dangerous: false,
-          riskCode: "file_read_command_requires_review",
-        });
-      }
-    );
+    test.each([
+      "cat README.md",
+      "head -n 20 file.txt",
+      "tail -f /var/log/syslog",
+      "man ls",
+    ])("%s requires manual review with file-read risk code", (command) => {
+      const c = classifyCommandDetailed(command);
+      expect(c).toEqual({
+        kind: "prompt",
+        dangerous: false,
+        riskCode: "file_read_command_requires_review",
+      });
+    });
 
     test("npm install", () => {
       const c = classifyCommand("npm install express");
@@ -323,7 +321,7 @@ describe("classifyCommandDetailed", () => {
     expect(
       classifyCommandDetailed("ls /etc", {
         allowedRoots: ["/home/user/project", "/home/user/project/output"],
-      })
+      }),
     ).toEqual({
       kind: "prompt",
       dangerous: false,
@@ -335,7 +333,7 @@ describe("classifyCommandDetailed", () => {
     expect(
       classifyCommandDetailed("ls C:\\Windows\\System32", {
         allowedRoots: ["/home/user/project"],
-      })
+      }),
     ).toEqual({
       kind: "prompt",
       dangerous: false,
@@ -347,7 +345,7 @@ describe("classifyCommandDetailed", () => {
     expect(
       classifyCommandDetailed("ls --directory=/etc", {
         allowedRoots: ["/home/user/project"],
-      })
+      }),
     ).toEqual({
       kind: "prompt",
       dangerous: false,
@@ -356,7 +354,7 @@ describe("classifyCommandDetailed", () => {
     expect(
       classifyCommandDetailed("cmd --file=/abs/path", {
         allowedRoots: ["/home/user/project"],
-      })
+      }),
     ).toEqual({
       kind: "prompt",
       dangerous: false,
@@ -368,7 +366,7 @@ describe("classifyCommandDetailed", () => {
     expect(
       classifyCommandDetailed('ls --directory="/etc"', {
         allowedRoots: ["/home/user/project"],
-      })
+      }),
     ).toEqual({
       kind: "prompt",
       dangerous: false,
@@ -377,7 +375,7 @@ describe("classifyCommandDetailed", () => {
     expect(
       classifyCommandDetailed("ls --directory='/etc'", {
         allowedRoots: ["/home/user/project"],
-      })
+      }),
     ).toEqual({
       kind: "prompt",
       dangerous: false,
@@ -386,7 +384,7 @@ describe("classifyCommandDetailed", () => {
     expect(
       classifyCommandDetailed('ls --directory="C:\\Program Files"', {
         allowedRoots: ["/home/user/project"],
-      })
+      }),
     ).toEqual({
       kind: "prompt",
       dangerous: false,
@@ -398,7 +396,7 @@ describe("classifyCommandDetailed", () => {
     expect(
       classifyCommandDetailed("cat /etc/passwd", {
         allowedRoots: ["/home/user/project"],
-      })
+      }),
     ).toEqual({
       kind: "prompt",
       dangerous: false,
@@ -412,7 +410,7 @@ describe("classifyCommandDetailed", () => {
       classifyCommandDetailed("cat ../secrets.txt", {
         allowedRoots: [cwd],
         workingDirectory: cwd,
-      })
+      }),
     ).toEqual({
       kind: "prompt",
       dangerous: false,
@@ -429,7 +427,7 @@ describe("classifyCommandDetailed", () => {
       classifyCommandDetailed("cat ./allowed.txt", {
         allowedRoots: [rootDir],
         workingDirectory: rootDir,
-      })
+      }),
     ).toEqual({
       kind: "prompt",
       dangerous: false,
@@ -444,7 +442,7 @@ describe("classifyCommandDetailed", () => {
     expect(
       classifyCommandDetailed(`cat "${filePath}"`, {
         allowedRoots: [rootDir],
-      })
+      }),
     ).toEqual({
       kind: "prompt",
       dangerous: false,
@@ -478,7 +476,7 @@ describe("classifyCommandDetailed", () => {
     expect(
       classifyCommandDetailed(`ls "${path.join(linkPath, "nested")}"`, {
         allowedRoots: [rootDir],
-      })
+      }),
     ).toEqual({
       kind: "prompt",
       dangerous: false,

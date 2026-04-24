@@ -12,10 +12,7 @@ export type GoogleReasoningEffort = (typeof GOOGLE_REASONING_EFFORT_VALUES)[numb
 const GOOGLE_FLASH_THINKING_LEVELS = ["minimal", "low", "medium", "high"] as const;
 const GOOGLE_PRO_THINKING_LEVELS = ["low", "medium", "high"] as const;
 
-const GOOGLE_FLASH_MODEL_IDS = new Set([
-  "gemini-3-flash-preview",
-  "gemini-3.1-flash-lite-preview",
-]);
+const GOOGLE_FLASH_MODEL_IDS = new Set(["gemini-3-flash-preview", "gemini-3.1-flash-lite-preview"]);
 
 const GOOGLE_PRO_MODEL_IDS = new Set([
   "gemini-3.1-pro-preview",
@@ -23,11 +20,16 @@ const GOOGLE_PRO_MODEL_IDS = new Set([
 ]);
 
 export function isGoogleThinkingLevel(value: unknown): value is GoogleThinkingLevel {
-  return typeof value === "string" && (GOOGLE_THINKING_LEVEL_VALUES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" && (GOOGLE_THINKING_LEVEL_VALUES as readonly string[]).includes(value)
+  );
 }
 
 export function isGoogleReasoningEffort(value: unknown): value is GoogleReasoningEffort {
-  return typeof value === "string" && (GOOGLE_REASONING_EFFORT_VALUES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (GOOGLE_REASONING_EFFORT_VALUES as readonly string[]).includes(value)
+  );
 }
 
 export function listGoogleThinkingLevelsForModel(modelId: string): readonly GoogleThinkingLevel[] {
@@ -40,11 +42,10 @@ export function listGoogleThinkingLevelsForModel(modelId: string): readonly Goog
   return GOOGLE_PRO_THINKING_LEVELS;
 }
 
-export function listGoogleReasoningEffortValuesForModel(modelId: string): readonly GoogleReasoningEffort[] {
-  return [
-    GOOGLE_DYNAMIC_REASONING_EFFORT,
-    ...listGoogleThinkingLevelsForModel(modelId),
-  ] as const;
+export function listGoogleReasoningEffortValuesForModel(
+  modelId: string,
+): readonly GoogleReasoningEffort[] {
+  return [GOOGLE_DYNAMIC_REASONING_EFFORT, ...listGoogleThinkingLevelsForModel(modelId)] as const;
 }
 
 export function normalizeGoogleThinkingLevelForModel(

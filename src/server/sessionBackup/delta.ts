@@ -99,14 +99,24 @@ export async function summarizeSnapshotDelta(opts: {
   let currentTree: { dir: string; entries: Map<string, SnapshotTreeEntry> } | undefined;
 
   try {
-    baselineTree = await materializeSnapshot(opts.sessionDir, opts.baseline, ".delta-baseline-", opts.maxEntries);
-    currentTree = await materializeSnapshot(opts.sessionDir, opts.current, ".delta-current-", opts.maxEntries);
+    baselineTree = await materializeSnapshot(
+      opts.sessionDir,
+      opts.baseline,
+      ".delta-baseline-",
+      opts.maxEntries,
+    );
+    currentTree = await materializeSnapshot(
+      opts.sessionDir,
+      opts.current,
+      ".delta-current-",
+      opts.maxEntries,
+    );
 
     const counts = { added: 0, modified: 0, deleted: 0 };
     const files: WorkspaceBackupDeltaFile[] = [];
-    const allPaths = Array.from(new Set([...baselineTree.entries.keys(), ...currentTree.entries.keys()])).sort((left, right) =>
-      left.localeCompare(right),
-    );
+    const allPaths = Array.from(
+      new Set([...baselineTree.entries.keys(), ...currentTree.entries.keys()]),
+    ).sort((left, right) => left.localeCompare(right));
 
     for (const relativePath of allPaths) {
       const before = baselineTree.entries.get(relativePath);
@@ -122,7 +132,11 @@ export async function summarizeSnapshotDelta(opts: {
         change = "deleted";
         kind = before.kind;
         counts.deleted += 1;
-      } else if (before && after && (before.kind !== after.kind || before.digest !== after.digest)) {
+      } else if (
+        before &&
+        after &&
+        (before.kind !== after.kind || before.digest !== after.digest)
+      ) {
         change = "modified";
         kind = after.kind;
         counts.modified += 1;

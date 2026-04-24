@@ -1,19 +1,18 @@
-import readline from "node:readline";
-
+import type readline from "node:readline";
+import { defaultModelForProvider } from "../../config";
 import {
-  OPENAI_REASONING_EFFORT_VALUES,
-  OPENAI_REASONING_SUMMARY_VALUES,
-  OPENAI_TEXT_VERBOSITY_VALUES,
   isOpenAiCompatibleProviderName,
   isOpenAiReasoningEffort,
   isOpenAiReasoningSummary,
   isOpenAiTextVerbosity,
+  OPENAI_REASONING_EFFORT_VALUES,
+  OPENAI_REASONING_SUMMARY_VALUES,
+  OPENAI_TEXT_VERBOSITY_VALUES,
 } from "../../shared/openaiCompatibleOptions";
-import { promptForApiKey, promptForProviderFields, promptForProviderMethod } from "./authPrompts";
-import { normalizeProviderAuthMethods, type ProviderAuthMethod } from "../parser";
-import { defaultModelForProvider } from "../../config";
 import { listSessionToolNames } from "../../tools";
 import { isProviderName, PROVIDER_NAMES } from "../../types";
+import { normalizeProviderAuthMethods, type ProviderAuthMethod } from "../parser";
+import { promptForApiKey, promptForProviderFields, promptForProviderMethod } from "./authPrompts";
 import type { PublicConfig, PublicSessionConfig } from "./serverEventHandler";
 
 const UI_PROVIDER_NAMES = PROVIDER_NAMES;
@@ -87,13 +86,14 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   }
 
   if (cmd === "clear-hard-cap") {
-    if (!threadId()) {
+    const activeThreadId = threadId();
+    if (!activeThreadId) {
       console.log("not connected: cannot clear the session hard cap yet");
       ctx.activateNextPrompt();
       return true;
     }
     const ok = await ctx.tryRequest("cowork/session/usageBudget/set", {
-      threadId: threadId()!,
+      threadId: activeThreadId,
       stopAtUsd: null,
     });
     if (!ok) return true;
@@ -109,8 +109,12 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       ctx.activateNextPrompt();
       return true;
     }
-    if (threadId()) {
-      const ok = await ctx.tryRequest("cowork/session/model/set", { threadId: threadId()!, model: id });
+    const activeThreadId = threadId();
+    if (activeThreadId) {
+      const ok = await ctx.tryRequest("cowork/session/model/set", {
+        threadId: activeThreadId,
+        model: id,
+      });
       if (!ok) return true;
     }
     ctx.activateNextPrompt();
@@ -134,9 +138,10 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       ctx.activateNextPrompt();
       return true;
     }
-    if (threadId()) {
+    const activeThreadId = threadId();
+    if (activeThreadId) {
       const ok = await ctx.tryRequest("cowork/session/model/set", {
-        threadId: threadId()!,
+        threadId: activeThreadId,
         provider: name,
         model: nextModel,
       });
@@ -150,7 +155,9 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   if (cmd === "verbosity") {
     const provider = currentOpenAiCompatibleProvider(ctx);
     if (!provider) {
-      console.log("current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first");
+      console.log(
+        "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first",
+      );
       ctx.activateNextPrompt();
       return true;
     }
@@ -162,14 +169,15 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
-    if (!threadId()) {
+    const activeThreadId = threadId();
+    if (!activeThreadId) {
       console.log("not connected: cannot change verbosity yet");
       ctx.activateNextPrompt();
       return true;
     }
 
     const ok = await ctx.tryRequest("cowork/session/config/set", {
-      threadId: threadId()!,
+      threadId: activeThreadId,
       config: {
         providerOptions: {
           [provider]: {
@@ -187,7 +195,9 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   if (cmd === "reasoning-effort" || cmd === "effort") {
     const provider = currentOpenAiCompatibleProvider(ctx);
     if (!provider) {
-      console.log("current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first");
+      console.log(
+        "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first",
+      );
       ctx.activateNextPrompt();
       return true;
     }
@@ -199,14 +209,15 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
-    if (!threadId()) {
+    const activeThreadId = threadId();
+    if (!activeThreadId) {
       console.log("not connected: cannot change reasoning effort yet");
       ctx.activateNextPrompt();
       return true;
     }
 
     const ok = await ctx.tryRequest("cowork/session/config/set", {
-      threadId: threadId()!,
+      threadId: activeThreadId,
       config: {
         providerOptions: {
           [provider]: {
@@ -224,7 +235,9 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
   if (cmd === "reasoning-summary") {
     const provider = currentOpenAiCompatibleProvider(ctx);
     if (!provider) {
-      console.log("current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first");
+      console.log(
+        "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first",
+      );
       ctx.activateNextPrompt();
       return true;
     }
@@ -236,14 +249,15 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       return true;
     }
 
-    if (!threadId()) {
+    const activeThreadId = threadId();
+    if (!activeThreadId) {
       console.log("not connected: cannot change reasoning summary yet");
       ctx.activateNextPrompt();
       return true;
     }
 
     const ok = await ctx.tryRequest("cowork/session/config/set", {
-      threadId: threadId()!,
+      threadId: activeThreadId,
       config: {
         providerOptions: {
           [provider]: {
@@ -311,7 +325,9 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
         return true;
       }
       if ((apiMethod.fields?.length ?? 0) > 0) {
-        console.log(`Provider ${serviceToken} requires structured credential fields. Run /connect ${serviceToken} and fill in the prompts.`);
+        console.log(
+          `Provider ${serviceToken} requires structured credential fields. Run /connect ${serviceToken} and fill in the prompts.`,
+        );
         ctx.activateNextPrompt();
         return true;
       }
@@ -413,11 +429,14 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       }
 
       const sessionConfig = ctx.getSessionConfig();
-      const toolNames = listSessionToolNames({
-        provider: config.provider,
-        providerOptions: sessionConfig?.providerOptions,
-        enableMemory: sessionConfig?.enableMemory,
-      }, { includeAgentControl: true });
+      const toolNames = listSessionToolNames(
+        {
+          provider: config.provider,
+          providerOptions: sessionConfig?.providerOptions,
+          enableMemory: sessionConfig?.enableMemory,
+        },
+        { includeAgentControl: true },
+      );
       if (toolNames.length > 0) {
         console.log(`\nTools:\n${toolNames.map((name) => `  - ${name}`).join("\n")}\n`);
       } else {

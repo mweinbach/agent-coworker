@@ -45,9 +45,10 @@ function defaultProcessAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    const code = typeof error === "object" && error !== null && "code" in error
-      ? String((error as { code?: unknown }).code)
-      : "";
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : "";
     if (code === "ESRCH") return false;
     return true;
   }
@@ -58,9 +59,9 @@ async function readOwnerMetadata(ownerPath: string): Promise<LockOwnerMetadata |
     const raw = await fs.readFile(ownerPath, "utf-8");
     const parsed = JSON.parse(raw) as Partial<LockOwnerMetadata>;
     if (
-      typeof parsed.pid !== "number"
-      || typeof parsed.startedAt !== "string"
-      || typeof parsed.updatedAt !== "string"
+      typeof parsed.pid !== "number" ||
+      typeof parsed.startedAt !== "string" ||
+      typeof parsed.updatedAt !== "string"
     ) {
       return null;
     }
@@ -96,9 +97,11 @@ export class SessionDbWriteCoordinator {
     this.staleLockMs = opts.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
     this.heartbeatMs = opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
     this.now = opts.now ?? (() => Date.now());
-    this.sleep = opts.sleep ?? (async (ms: number) => {
-      await new Promise((resolve) => setTimeout(resolve, ms));
-    });
+    this.sleep =
+      opts.sleep ??
+      (async (ms: number) => {
+        await new Promise((resolve) => setTimeout(resolve, ms));
+      });
     this.processAlive = opts.processAlive ?? defaultProcessAlive;
     this.emitTelemetry = opts.emitTelemetry;
   }
@@ -184,9 +187,10 @@ export class SessionDbWriteCoordinator {
           },
         };
       } catch (error) {
-        const code = typeof error === "object" && error !== null && "code" in error
-          ? String((error as { code?: unknown }).code)
-          : "";
+        const code =
+          typeof error === "object" && error !== null && "code" in error
+            ? String((error as { code?: unknown }).code)
+            : "";
         if (code !== "EEXIST") {
           this.emitTelemetry?.(
             "session.db.write_lock_wait",
@@ -237,12 +241,15 @@ export class SessionDbWriteCoordinator {
         ...owner,
         updatedAt: new Date(this.now()).toISOString(),
       };
-      void fs.writeFile(this.ownerFilePath, `${JSON.stringify(next, null, 2)}\n`, {
-        encoding: "utf-8",
-        mode: 0o600,
-      }).then(() => hardenPrivateFile(this.ownerFilePath)).catch(() => {
-        // best effort only; stale lock recovery handles cleanup if needed.
-      });
+      void fs
+        .writeFile(this.ownerFilePath, `${JSON.stringify(next, null, 2)}\n`, {
+          encoding: "utf-8",
+          mode: 0o600,
+        })
+        .then(() => hardenPrivateFile(this.ownerFilePath))
+        .catch(() => {
+          // best effort only; stale lock recovery handles cleanup if needed.
+        });
     }, this.heartbeatMs);
     interval.unref?.();
     return {

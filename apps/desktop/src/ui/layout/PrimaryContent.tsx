@@ -1,24 +1,35 @@
 import { Button } from "../../components/ui/button";
 import { ChatView } from "../ChatView";
+import { ResearchView } from "../ResearchView";
 import { SkillsView } from "../SkillsView";
 
 interface PrimaryContentProps {
   init: () => Promise<void>;
   ready: boolean;
   startupError: string | null;
-  view: "chat" | "skills";
+  view: "chat" | "skills" | "research";
 }
 
-type PrimaryContentVariant = "starting" | "error" | "chat" | "skills";
+type PrimaryContentVariant = "starting" | "error" | "chat" | "skills" | "research";
 
-function resolveVariant({ ready, startupError, view }: Omit<PrimaryContentProps, "init">): PrimaryContentVariant {
+function resolveVariant({
+  ready,
+  startupError,
+  view,
+}: Omit<PrimaryContentProps, "init">): PrimaryContentVariant {
   if (!ready) {
     return "starting";
   }
   if (startupError) {
     return "error";
   }
-  return view === "skills" ? "skills" : "chat";
+  if (view === "skills") {
+    return "skills";
+  }
+  if (view === "research") {
+    return "research";
+  }
+  return "chat";
 }
 
 function StartingContent() {
@@ -49,10 +60,28 @@ export function PrimaryContent({ init, ready, startupError, view }: PrimaryConte
     case "error":
       return <ErrorContent startupError={startupError ?? "Startup error"} init={init} />;
     case "skills":
-      return <div className="h-full min-h-0 bg-panel"><SkillsView /></div>;
+      return (
+        <div className="h-full min-h-0 bg-panel">
+          <SkillsView />
+        </div>
+      );
+    case "research":
+      return (
+        <div className="h-full min-h-0 bg-panel">
+          <ResearchView />
+        </div>
+      );
     case "chat":
-      return <div className="h-full min-h-0 bg-panel"><ChatView /></div>;
+      return (
+        <div className="h-full min-h-0 bg-panel">
+          <ChatView />
+        </div>
+      );
     default:
-      return <div className="h-full min-h-0 bg-panel"><ChatView /></div>;
+      return (
+        <div className="h-full min-h-0 bg-panel">
+          <ChatView />
+        </div>
+      );
   }
 }

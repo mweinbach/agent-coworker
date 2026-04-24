@@ -58,7 +58,8 @@ export function getByPointer(model: DataModel, tokens: readonly string[]): unkno
       continue;
     }
     if (typeof cursor === "object") {
-      cursor = (cursor as Record<string, unknown>)[token!];
+      if (token === undefined) return undefined;
+      cursor = (cursor as Record<string, unknown>)[token];
       continue;
     }
     return undefined;

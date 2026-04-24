@@ -1,15 +1,12 @@
-import { BrowserWindow, type BrowserWindowConstructorOptions, nativeTheme } from "electron";
+import { type BrowserWindow, type BrowserWindowConstructorOptions, nativeTheme } from "electron";
 
 import type {
   SetWindowAppearanceInput,
   SystemAppearance,
   WindowsBackgroundMaterial,
 } from "../../src/lib/desktopApi";
-import {
-  shouldUseMacosNativeGlass,
-  syncWindowChromeAppearance,
-} from "./windowEnhancements";
 import { resolveWindowChromePaint } from "./windowAppearancePaint";
+import { shouldUseMacosNativeGlass, syncWindowChromeAppearance } from "./windowEnhancements";
 
 export function getSystemAppearanceSnapshot(): SystemAppearance {
   return {
@@ -36,17 +33,19 @@ type SyncWindowAppearanceOptions = {
   backgroundMaterial?: WindowsBackgroundMaterial;
 };
 
-function resolveWindowAppearance(options: {
-  platform?: NodeJS.Platform;
-  useMacosNativeGlass?: boolean;
-  useDarkColors?: boolean;
-  backgroundMaterial?: WindowsBackgroundMaterial;
-} = {}): ResolvedWindowAppearance {
+function resolveWindowAppearance(
+  options: {
+    platform?: NodeJS.Platform;
+    useMacosNativeGlass?: boolean;
+    useDarkColors?: boolean;
+    backgroundMaterial?: WindowsBackgroundMaterial;
+  } = {},
+): ResolvedWindowAppearance {
   const platform = options.platform ?? process.platform;
   const useDarkColors = options.useDarkColors ?? nativeTheme.shouldUseDarkColors;
   const useMacosNativeGlass =
-    options.useMacosNativeGlass
-    ?? shouldUseMacosNativeGlass(platform, process.env, {
+    options.useMacosNativeGlass ??
+    shouldUseMacosNativeGlass(platform, process.env, {
       prefersReducedTransparency: nativeTheme.prefersReducedTransparency,
     });
 
@@ -58,11 +57,13 @@ function resolveWindowAppearance(options: {
   });
 }
 
-export function getInitialWindowAppearanceOptions(options: {
-  platform?: NodeJS.Platform;
-  useMacosNativeGlass?: boolean;
-  useDarkColors?: boolean;
-} = {}): Pick<BrowserWindowConstructorOptions, "show" | "backgroundColor" | "backgroundMaterial"> {
+export function getInitialWindowAppearanceOptions(
+  options: {
+    platform?: NodeJS.Platform;
+    useMacosNativeGlass?: boolean;
+    useDarkColors?: boolean;
+  } = {},
+): Pick<BrowserWindowConstructorOptions, "show" | "backgroundColor" | "backgroundMaterial"> {
   const { backgroundColor, backgroundMaterial } = resolveWindowAppearance(options);
 
   return {
@@ -126,7 +127,10 @@ export function applySystemAppearanceToWindow(
   });
 }
 
-export function applyWindowAppearance(win: BrowserWindow, opts: SetWindowAppearanceInput): SystemAppearance {
+export function applyWindowAppearance(
+  win: BrowserWindow,
+  opts: SetWindowAppearanceInput,
+): SystemAppearance {
   if (opts.themeSource) {
     nativeTheme.themeSource = opts.themeSource;
   }

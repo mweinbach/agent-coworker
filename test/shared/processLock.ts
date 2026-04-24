@@ -10,10 +10,7 @@ function getLockRegistry(): Map<string, Promise<void>> {
   return globalState[globalKey]!;
 }
 
-export async function withGlobalTestLock<T>(
-  name: string,
-  run: () => Promise<T>,
-): Promise<T> {
+export async function withGlobalTestLock<T>(name: string, run: () => Promise<T>): Promise<T> {
   const registry = getLockRegistry();
   const previous = registry.get(name) ?? Promise.resolve();
   let release!: () => void;

@@ -158,10 +158,12 @@ describe("mobile control stores", () => {
 
     await useWorkspaceStore.getState().switchWorkspace("ws_2");
 
-    expect(calls).toEqual([{
-      method: "workspace/switch",
-      params: { workspaceId: "ws_2" },
-    }]);
+    expect(calls).toEqual([
+      {
+        method: "workspace/switch",
+        params: { workspaceId: "ws_2" },
+      },
+    ]);
     expect(resetTransportSession).toHaveBeenCalledWith("Workspace switched.");
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe("ws_2");
     expect(useWorkspaceStore.getState().activeWorkspaceCwd).toBe("/tmp/workspace-two");
@@ -176,20 +178,24 @@ describe("mobile control stores", () => {
     });
     setActiveCoworkJsonRpcClient(client);
     useWorkspaceStore.setState({
-      workspaces: [{
-        id: "ws_1",
-        name: "Workspace One",
-        path: workspaceCwd,
-        createdAt: new Date(0).toISOString(),
-        lastOpenedAt: new Date(0).toISOString(),
-        yolo: false,
-      }],
+      workspaces: [
+        {
+          id: "ws_1",
+          name: "Workspace One",
+          path: workspaceCwd,
+          createdAt: new Date(0).toISOString(),
+          lastOpenedAt: new Date(0).toISOString(),
+          yolo: false,
+        },
+      ],
       activeWorkspaceId: "ws_1",
       activeWorkspaceName: "Workspace One",
       activeWorkspaceCwd: workspaceCwd,
     });
 
-    await expect(useWorkspaceStore.getState().switchWorkspace("ws_1")).rejects.toThrow("Workspace switch failed");
+    await expect(useWorkspaceStore.getState().switchWorkspace("ws_1")).rejects.toThrow(
+      "Workspace switch failed",
+    );
     expect(useWorkspaceStore.getState().error).toBe("Workspace switch failed");
     expect(resetTransportSession).not.toHaveBeenCalled();
   });
@@ -202,15 +208,17 @@ describe("mobile control stores", () => {
             event: {
               type: "provider_status",
               sessionId: "control-session",
-              providers: [{
-                provider: "google",
-                authorized: false,
-                verified: false,
-                mode: "missing",
-                account: null,
-                message: "Missing credentials",
-                checkedAt: new Date(0).toISOString(),
-              }],
+              providers: [
+                {
+                  provider: "google",
+                  authorized: false,
+                  verified: false,
+                  mode: "missing",
+                  account: null,
+                  message: "Missing credentials",
+                  checkedAt: new Date(0).toISOString(),
+                },
+              ],
             },
           };
         case "cowork/provider/catalog/read":
@@ -218,17 +226,21 @@ describe("mobile control stores", () => {
             event: {
               type: "provider_catalog",
               sessionId: "control-session",
-              all: [{
-                id: "google",
-                name: "Google",
-                models: [{
-                  id: "gemini-2.5-flash",
-                  displayName: "Gemini 2.5 Flash",
-                  knowledgeCutoff: "Unknown",
-                  supportsImageInput: true,
-                }],
-                defaultModel: "gemini-2.5-flash",
-              }],
+              all: [
+                {
+                  id: "google",
+                  name: "Google",
+                  models: [
+                    {
+                      id: "gemini-2.5-flash",
+                      displayName: "Gemini 2.5 Flash",
+                      knowledgeCutoff: "Unknown",
+                      supportsImageInput: true,
+                    },
+                  ],
+                  defaultModel: "gemini-2.5-flash",
+                },
+              ],
               default: {
                 google: "gemini-2.5-flash",
               },
@@ -241,11 +253,13 @@ describe("mobile control stores", () => {
               type: "provider_auth_methods",
               sessionId: "control-session",
               methods: {
-                google: [{
-                  id: "api-key",
-                  type: "api",
-                  label: "API key",
-                }],
+                google: [
+                  {
+                    id: "api-key",
+                    type: "api",
+                    label: "API key",
+                  },
+                ],
               },
             },
           };
@@ -272,7 +286,12 @@ describe("mobile control stores", () => {
 
     expect(calls[0]?.method).toBe("cowork/provider/status/refresh");
     expect(calls[1]?.method).toBe("cowork/provider/auth/setApiKey");
-    expect(calls.slice(2).map((entry) => entry.method).sort()).toEqual([
+    expect(
+      calls
+        .slice(2)
+        .map((entry) => entry.method)
+        .sort(),
+    ).toEqual([
       "cowork/provider/authMethods/read",
       "cowork/provider/catalog/read",
       "cowork/provider/status/refresh",
@@ -282,11 +301,11 @@ describe("mobile control stores", () => {
   test("backup store uses workspace backup endpoints for read and mutations", async () => {
     const { client, calls } = createFakeClient((method) => {
       if (
-        method === "cowork/backups/workspace/read"
-        || method === "cowork/backups/workspace/checkpoint"
-        || method === "cowork/backups/workspace/restore"
-        || method === "cowork/backups/workspace/deleteCheckpoint"
-        || method === "cowork/backups/workspace/deleteEntry"
+        method === "cowork/backups/workspace/read" ||
+        method === "cowork/backups/workspace/checkpoint" ||
+        method === "cowork/backups/workspace/restore" ||
+        method === "cowork/backups/workspace/deleteCheckpoint" ||
+        method === "cowork/backups/workspace/deleteEntry"
       ) {
         return workspaceBackupsEvent();
       }
@@ -316,18 +335,20 @@ describe("mobile control stores", () => {
           event: {
             type: "mcp_servers",
             sessionId: "control-session",
-            servers: [{
-              name: "docs",
-              transport: {
-                type: "stdio",
-                command: "uvx",
+            servers: [
+              {
+                name: "docs",
+                transport: {
+                  type: "stdio",
+                  command: "uvx",
+                },
+                source: "workspace",
+                inherited: false,
+                authMode: "none",
+                authScope: "workspace",
+                authMessage: "Ready",
               },
-              source: "workspace",
-              inherited: false,
-              authMode: "none",
-              authScope: "workspace",
-              authMessage: "Ready",
-            }],
+            ],
             legacy: {
               workspace: {
                 path: `${workspaceCwd}/.cowork/mcp-legacy.json`,

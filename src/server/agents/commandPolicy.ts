@@ -17,17 +17,7 @@ type ShellCommandRule = {
 };
 
 const SHELL_COMMAND_ARG_FLAGS = new Set(["-c", "-command", "--command"]);
-const SHELL_SHORT_NO_VALUE_COMMAND_FLAGS = new Set([
-  "a",
-  "c",
-  "e",
-  "i",
-  "l",
-  "r",
-  "s",
-  "v",
-  "x",
-]);
+const SHELL_SHORT_NO_VALUE_COMMAND_FLAGS = new Set(["a", "c", "e", "i", "l", "r", "s", "v", "x"]);
 const SHELL_COMMAND_LAUNCHERS = new Set([
   "sh",
   "bash",
@@ -43,8 +33,8 @@ const SHELL_COMMAND_SEPARATORS = new Set([
   "!",
   "&",
   "&&",
-  "(" ,
-  ")" ,
+  "(",
+  ")",
   ";",
   "case",
   "do",
@@ -75,7 +65,17 @@ const SHELL_EXECUTION_WRAPPERS = new Set([
   "sudo",
   "time",
 ]);
-const FILESYSTEM_MUTATION_COMMANDS = new Set(["chmod", "cp", "ln", "mkdir", "mv", "rm", "touch", "truncate", "tar"]);
+const FILESYSTEM_MUTATION_COMMANDS = new Set([
+  "chmod",
+  "cp",
+  "ln",
+  "mkdir",
+  "mv",
+  "rm",
+  "touch",
+  "truncate",
+  "tar",
+]);
 const INLINE_INTERPRETER_COMMANDS = new Set([
   "node",
   "nodejs",
@@ -155,21 +155,70 @@ const SHELL_LAUNCHER_OPTIONS_WITH_VALUES: Record<string, Set<string>> = {
   dash: new Set(["-o"]),
   fish: new Set(["-C", "--init-command"]),
   ksh: new Set(["-o"]),
-  powershell: new Set(["-configurationname", "-custompipename", "-ep", "-executionpolicy", "-file", "-inputformat", "-outputformat", "-settingsfile", "-version", "-workingdirectory"]),
-  "powershell.exe": new Set(["-configurationname", "-custompipename", "-ep", "-executionpolicy", "-file", "-inputformat", "-outputformat", "-settingsfile", "-version", "-workingdirectory"]),
-  pwsh: new Set(["-configurationname", "-custompipename", "-ep", "-executionpolicy", "-file", "-inputformat", "-outputformat", "-settingsfile", "-version", "-workingdirectory"]),
+  powershell: new Set([
+    "-configurationname",
+    "-custompipename",
+    "-ep",
+    "-executionpolicy",
+    "-file",
+    "-inputformat",
+    "-outputformat",
+    "-settingsfile",
+    "-version",
+    "-workingdirectory",
+  ]),
+  "powershell.exe": new Set([
+    "-configurationname",
+    "-custompipename",
+    "-ep",
+    "-executionpolicy",
+    "-file",
+    "-inputformat",
+    "-outputformat",
+    "-settingsfile",
+    "-version",
+    "-workingdirectory",
+  ]),
+  pwsh: new Set([
+    "-configurationname",
+    "-custompipename",
+    "-ep",
+    "-executionpolicy",
+    "-file",
+    "-inputformat",
+    "-outputformat",
+    "-settingsfile",
+    "-version",
+    "-workingdirectory",
+  ]),
   sh: new Set(["-o"]),
   zsh: new Set(["-o"]),
 };
 const PACKAGE_MANAGER_OPTIONS_WITH_VALUES: Record<string, Set<string>> = {
   bun: new Set(["--cwd", "-c", "--config", "--filter"]),
   npm: new Set(["--cache", "--prefix", "--userconfig", "--workspace", "-w"]),
-  pip: new Set(["--constraint", "--find-links", "--index-url", "--log", "--proxy", "--requirement", "--src", "--target", "-c", "-i", "-r", "-t"]),
+  pip: new Set([
+    "--constraint",
+    "--find-links",
+    "--index-url",
+    "--log",
+    "--proxy",
+    "--requirement",
+    "--src",
+    "--target",
+    "-c",
+    "-i",
+    "-r",
+    "-t",
+  ]),
   pnpm: new Set(["--dir", "-c", "--filter", "--workspace-dir"]),
   yarn: new Set(["--cache-folder", "--cwd", "--mutex", "--use-yarnrc"]),
 };
 
-function regexRule(reason: ShellCommandPolicyViolation["reason"], pattern: RegExp): ShellCommandRule {
+function regexRule(
+  reason: ShellCommandPolicyViolation["reason"],
+  pattern: RegExp,
+): ShellCommandRule {
   return {
     reason,
     input: "stripped",
@@ -410,7 +459,8 @@ function findSegmentExecutableIndex(tokens: string[]): number {
           continue;
         }
         const option = (envToken.split("=")[0] ?? envToken).toLowerCase();
-        const attachedShortOption = !option.startsWith("--") && option.length > 2 ? option.slice(0, 2) : null;
+        const attachedShortOption =
+          !option.startsWith("--") && option.length > 2 ? option.slice(0, 2) : null;
         if (ENV_OPTIONS_WITH_VALUES.has(option)) {
           index += envToken.includes("=") ? 1 : 2;
           continue;
@@ -498,13 +548,13 @@ function hasShellWriteRedirection(command: string): boolean {
       continue;
     }
 
-    if (ch === "$" && (next === "'" || next === "\"")) {
+    if (ch === "$" && (next === "'" || next === '"')) {
       const quoted = consumeQuotedShellToken(command, index + 2, next);
       index = quoted.endIndex;
       continue;
     }
 
-    if (ch === "'" || ch === "\"" || ch === "`") {
+    if (ch === "'" || ch === '"' || ch === "`") {
       const quoted = consumeQuotedShellToken(command, index + 1, ch);
       index = quoted.endIndex;
       continue;
@@ -622,7 +672,11 @@ function hasGitWriteCommand(command: string): boolean {
   return false;
 }
 
-function findPackageManagerSubcommandIndex(segment: string[], executableIndex: number, executable: string): number {
+function findPackageManagerSubcommandIndex(
+  segment: string[],
+  executableIndex: number,
+  executable: string,
+): number {
   const optionsWithValues = PACKAGE_MANAGER_OPTIONS_WITH_VALUES[executable] ?? new Set<string>();
   let index = executableIndex + 1;
 
@@ -683,7 +737,11 @@ function hasPackageInstallCommand(command: string): boolean {
       const pipExecutableIndex = findPythonSubcommandIndex(segment, executableIndex);
       const pipSubcommand = segment[pipExecutableIndex]?.toLowerCase();
       if (pipSubcommand === "pip") {
-        const pipSubcommandIndex = findPackageManagerSubcommandIndex(segment, pipExecutableIndex, "pip");
+        const pipSubcommandIndex = findPackageManagerSubcommandIndex(
+          segment,
+          pipExecutableIndex,
+          "pip",
+        );
         const pipInstallSubcommand = segment[pipSubcommandIndex]?.toLowerCase();
         if (pipInstallSubcommand === "install") {
           return true;
@@ -740,11 +798,11 @@ function stripSingleAndDoubleQuotedSegments(command: string): string {
 function extractCommandSubstitutionSegments(command: string): string[] {
   const segments: string[] = [];
   const re = /\$\(((?:\\.|[^()\\])*)\)|`((?:\\.|[^`\\])*)`/g;
-  let match: RegExpExecArray | null = null;
-
-  while ((match = re.exec(command)) !== null) {
-    const segment = ((match[1] ?? match[2] ?? "").replace(/\\`/g, "`")).trim();
+  let match = re.exec(command);
+  while (match !== null) {
+    const segment = (match[1] ?? match[2] ?? "").replace(/\\`/g, "`").trim();
     if (segment) segments.push(segment);
+    match = re.exec(command);
   }
 
   return segments;
@@ -778,11 +836,11 @@ function extractEnvSplitStringSegments(command: string): string[] {
       if (!normalizedArg.startsWith("-")) break;
       if (!arg.includes("=")) {
         const option = normalizedArg.split("=")[0] ?? normalizedArg;
-        const attachedShortOption = !option.startsWith("--") && option.length > 2 ? option.slice(0, 2) : null;
+        const attachedShortOption =
+          !option.startsWith("--") && option.length > 2 ? option.slice(0, 2) : null;
         if (ENV_OPTIONS_WITH_VALUES.has(option)) {
           j += 1;
         } else if (attachedShortOption && ENV_OPTIONS_WITH_VALUES.has(attachedShortOption)) {
-          continue;
         }
       }
     }
@@ -802,7 +860,10 @@ function extractShellCommandStringSegments(command: string): string[] {
     const launcherIndex = findSegmentExecutableIndex(commandSegment);
     if (launcherIndex < 0) continue;
     if (getShellTokenBaseName(commandSegment[launcherIndex] ?? "") === "eval") {
-      const evalPayload = commandSegment.slice(launcherIndex + 1).join(" ").trim();
+      const evalPayload = commandSegment
+        .slice(launcherIndex + 1)
+        .join(" ")
+        .trim();
       if (evalPayload) segments.push(evalPayload);
       continue;
     }
@@ -843,7 +904,11 @@ function extractShellCommandStringSegments(command: string): string[] {
         }
       }
 
-      if (SHELL_COMMAND_ARG_FLAGS.has(normalizedArg) || /^-[a-z]*c$/i.test(normalizedArg) || hasStandaloneCFlag) {
+      if (
+        SHELL_COMMAND_ARG_FLAGS.has(normalizedArg) ||
+        /^-[a-z]*c$/i.test(normalizedArg) ||
+        hasStandaloneCFlag
+      ) {
         const segment = commandSegment[j + 1]?.trim();
         if (segment) segments.push(segment);
         break;
@@ -900,8 +965,8 @@ function isInlineInterpreterInvocationSegment(segment: string[]): boolean {
       return true;
     }
     if (
-      (normalizedToken.startsWith("-c") && normalizedToken !== "-c")
-      || (normalizedToken.startsWith("-e") && normalizedToken !== "-e")
+      (normalizedToken.startsWith("-c") && normalizedToken !== "-c") ||
+      (normalizedToken.startsWith("-e") && normalizedToken !== "-e")
     ) {
       return true;
     }

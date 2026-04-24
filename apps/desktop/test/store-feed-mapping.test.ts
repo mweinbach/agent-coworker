@@ -1,6 +1,4 @@
 import { describe, expect, test } from "bun:test";
-
-import type { TranscriptEvent } from "../src/app/types";
 import {
   createThreadModelStreamRuntime,
   extractAgentStateFromTranscript,
@@ -8,6 +6,7 @@ import {
   mapTranscriptToFeed,
   reasoningInsertBeforeAssistantAfterStreamReplay,
 } from "../src/app/store.feedMapping";
+import type { TranscriptEvent } from "../src/app/types";
 
 describe("desktop transcript feed mapping", () => {
   test("anchors late final reasoning before streamed assistant output", () => {
@@ -145,7 +144,11 @@ describe("desktop transcript feed mapping", () => {
           provider: "google",
           model: "gemini-3.1-pro-preview-customtools",
           partType: "tool_call",
-          part: { toolCallId: "tool-1", toolName: "webSearch", input: { query: "NVIDIA GTC 2026" } },
+          part: {
+            toolCallId: "tool-1",
+            toolName: "webSearch",
+            input: { query: "NVIDIA GTC 2026" },
+          },
         },
       },
       {
@@ -205,7 +208,11 @@ describe("desktop transcript feed mapping", () => {
           provider: "google",
           model: "gemini-3.1-pro-preview-customtools",
           partType: "tool_call",
-          part: { toolCallId: "tool-2", toolName: "webSearch", input: { query: "NVIDIA GTC 2027" } },
+          part: {
+            toolCallId: "tool-2",
+            toolName: "webSearch",
+            input: { query: "NVIDIA GTC 2027" },
+          },
         },
       },
       {
@@ -227,7 +234,11 @@ describe("desktop transcript feed mapping", () => {
         ts: "2024-01-01T00:00:08.000Z",
         threadId: "thread-1",
         direction: "server",
-        payload: { type: "reasoning", kind: "reasoning", text: "Searching for the latest GTC details." },
+        payload: {
+          type: "reasoning",
+          kind: "reasoning",
+          text: "Searching for the latest GTC details.",
+        },
       },
       {
         ts: "2024-01-01T00:00:09.000Z",
@@ -246,11 +257,22 @@ describe("desktop transcript feed mapping", () => {
       "Searching for the latest GTC details.",
       "Verifying the final conference details.",
     ]);
-    if (tools[0]?.kind !== "tool" || tools[1]?.kind !== "tool") throw new Error("Expected tool feed items");
+    if (tools[0]?.kind !== "tool" || tools[1]?.kind !== "tool")
+      throw new Error("Expected tool feed items");
     expect(tools).toHaveLength(2);
-    expect(tools.map((tool) => tool.args)).toEqual([{ query: "NVIDIA GTC 2026" }, { query: "NVIDIA GTC 2027" }]);
+    expect(tools.map((tool) => tool.args)).toEqual([
+      { query: "NVIDIA GTC 2026" },
+      { query: "NVIDIA GTC 2027" },
+    ]);
     expect(tools.map((tool) => tool.result)).toEqual(["result", "result-2"]);
-    expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "tool", "reasoning", "tool", "message"]);
+    expect(feed.map((item) => item.kind)).toEqual([
+      "message",
+      "reasoning",
+      "tool",
+      "reasoning",
+      "tool",
+      "message",
+    ]);
   });
 
   test("dedupes aggregate final reasoning across streamed steps on normalized turns", () => {
@@ -414,7 +436,11 @@ describe("desktop transcript feed mapping", () => {
         ts: "2024-01-01T00:00:04.000Z",
         threadId: "thread-1",
         direction: "server",
-        payload: { type: "reasoning", kind: "reasoning", text: "Final synthesis after the second step." },
+        payload: {
+          type: "reasoning",
+          kind: "reasoning",
+          text: "Final synthesis after the second step.",
+        },
       },
       {
         ts: "2024-01-01T00:00:05.000Z",
@@ -491,7 +517,11 @@ describe("desktop transcript feed mapping", () => {
         ts: "2024-01-01T00:00:04.000Z",
         threadId: "thread-1",
         direction: "server",
-        payload: { type: "reasoning", kind: "reasoning", text: "Searching for the latest GTC details." },
+        payload: {
+          type: "reasoning",
+          kind: "reasoning",
+          text: "Searching for the latest GTC details.",
+        },
       },
       {
         ts: "2024-01-01T00:00:05.000Z",
@@ -940,7 +970,11 @@ describe("desktop transcript feed mapping", () => {
           provider: "opencode-zen",
           model: "nemotron-3-super-free",
           partType: "tool_call",
-          part: { toolCallId: "tool-1", toolName: "todoWrite", input: { todos: [{ content: "Task", status: "pending" }] } },
+          part: {
+            toolCallId: "tool-1",
+            toolName: "todoWrite",
+            input: { todos: [{ content: "Task", status: "pending" }] },
+          },
         },
       },
       {
@@ -963,7 +997,9 @@ describe("desktop transcript feed mapping", () => {
     const feed = mapTranscriptToFeed(transcript);
 
     expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "tool", "reasoning"]);
-    expect(feed.filter((item) => item.kind === "message" && item.role === "assistant")).toHaveLength(0);
+    expect(
+      feed.filter((item) => item.kind === "message" && item.role === "assistant"),
+    ).toHaveLength(0);
   });
 
   test("skips whitespace-only assistant_message payloads during transcript replay", () => {
@@ -991,7 +1027,9 @@ describe("desktop transcript feed mapping", () => {
     const feed = mapTranscriptToFeed(transcript);
 
     expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning"]);
-    expect(feed.filter((item) => item.kind === "message" && item.role === "assistant")).toHaveLength(0);
+    expect(
+      feed.filter((item) => item.kind === "message" && item.role === "assistant"),
+    ).toHaveLength(0);
   });
 
   test("suppresses client-side usage budget updates during transcript replay", () => {
@@ -1067,7 +1105,9 @@ describe("desktop transcript feed mapping", () => {
     ];
 
     const feed = mapTranscriptToFeed(transcript);
-    const systemLines = feed.map((item) => (item.kind === "system" ? item.line : null)).filter(Boolean);
+    const systemLines = feed
+      .map((item) => (item.kind === "system" ? item.line : null))
+      .filter(Boolean);
 
     expect(systemLines).toEqual([
       "Observability: enabled=yes, configured=yes, health=ready (runtime_ready)",
@@ -1664,7 +1704,14 @@ describe("desktop transcript feed mapping", () => {
 
     const feed = mapTranscriptToFeed(transcript);
 
-    expect(feed.map((item) => item.kind)).toEqual(["message", "system", "reasoning", "tool", "tool", "message"]);
+    expect(feed.map((item) => item.kind)).toEqual([
+      "message",
+      "system",
+      "reasoning",
+      "tool",
+      "tool",
+      "message",
+    ]);
 
     const reasoning = feed.find((item) => item.kind === "reasoning");
     expect(reasoning?.kind).toBe("reasoning");
@@ -1757,7 +1804,10 @@ describe("desktop transcript feed mapping", () => {
           event: {
             event_type: "content.delta",
             index: 0,
-            delta: { type: "thought_summary", content: { type: "text", text: "Planning the report." } },
+            delta: {
+              type: "thought_summary",
+              content: { type: "text", text: "Planning the report." },
+            },
           },
         },
       },
@@ -1866,7 +1916,10 @@ describe("desktop transcript feed mapping", () => {
           event: {
             event_type: "content.delta",
             index: 0,
-            delta: { type: "thought_summary", content: { type: "text", text: "Verifying the output." } },
+            delta: {
+              type: "thought_summary",
+              content: { type: "text", text: "Verifying the output." },
+            },
           },
         },
       },
@@ -1937,7 +1990,9 @@ describe("desktop transcript feed mapping", () => {
 
     const feed = mapTranscriptToFeed(transcript);
     const contentKinds = feed
-      .filter((item) => item.kind === "reasoning" || item.kind === "tool" || item.kind === "message")
+      .filter(
+        (item) => item.kind === "reasoning" || item.kind === "tool" || item.kind === "message",
+      )
       .map((item) => item.kind);
 
     expect(contentKinds).toEqual(["message", "reasoning", "tool", "reasoning", "tool", "message"]);
@@ -2063,7 +2118,9 @@ describe("desktop transcript feed mapping", () => {
     const tools = feed.filter((item) => item.kind === "tool");
 
     expect(tools).toHaveLength(2);
-    expect(tools.every((item) => item.kind === "tool" && item.name === "nativeWebSearch")).toBeTrue();
+    expect(
+      tools.every((item) => item.kind === "tool" && item.name === "nativeWebSearch"),
+    ).toBeTrue();
     if (tools[0]?.kind !== "tool" || tools[1]?.kind !== "tool") {
       throw new Error("Expected tool items");
     }

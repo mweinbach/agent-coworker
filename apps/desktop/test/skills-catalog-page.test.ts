@@ -1,6 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
@@ -27,42 +26,44 @@ const MOCK_UPDATE_STATE = {
   error: null,
 };
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
@@ -97,7 +98,13 @@ describe("skills catalog page", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(SkillsCatalogPage, { workspaceId: "ws-1", searchQuery: "", setSearchQuery: () => {} }));
+        root.render(
+          createElement(SkillsCatalogPage, {
+            workspaceId: "ws-1",
+            searchQuery: "",
+            setSearchQuery: () => {},
+          }),
+        );
       });
 
       expect(container.firstElementChild?.className).toContain("app-skills-view");
@@ -142,7 +149,13 @@ describe("skills catalog page", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(SkillsCatalogPage, { workspaceId: "ws-1", searchQuery: "", setSearchQuery: () => {} }));
+        root.render(
+          createElement(SkillsCatalogPage, {
+            workspaceId: "ws-1",
+            searchQuery: "",
+            setSearchQuery: () => {},
+          }),
+        );
       });
 
       expect(container.textContent).toContain("No skills found");
@@ -183,7 +196,13 @@ describe("skills catalog page", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(SkillsCatalogPage, { workspaceId: "ws-1", searchQuery: "", setSearchQuery: () => {} }));
+        root.render(
+          createElement(SkillsCatalogPage, {
+            workspaceId: "ws-1",
+            searchQuery: "",
+            setSearchQuery: () => {},
+          }),
+        );
       });
 
       expect(container.textContent).toContain("Connection issue");
@@ -252,12 +271,14 @@ describe("skills catalog page", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(SkillsCatalogPage, {
-          workspaceId: "ws-1",
-          managementScope: "global",
-          searchQuery: "",
-          setSearchQuery: () => {},
-        }));
+        root.render(
+          createElement(SkillsCatalogPage, {
+            workspaceId: "ws-1",
+            managementScope: "global",
+            searchQuery: "",
+            setSearchQuery: () => {},
+          }),
+        );
       });
 
       expect(container.textContent).toContain("figma-toolkit:import-frame");
@@ -335,12 +356,14 @@ describe("skills catalog page", () => {
       const root = createRoot(container);
 
       await act(async () => {
-        root.render(createElement(SkillsCatalogPage, {
-          workspaceId: "ws-1",
-          managementScope: "global",
-          searchQuery: "",
-          setSearchQuery: () => {},
-        }));
+        root.render(
+          createElement(SkillsCatalogPage, {
+            workspaceId: "ws-1",
+            managementScope: "global",
+            searchQuery: "",
+            setSearchQuery: () => {},
+          }),
+        );
       });
 
       expect(container.textContent).toContain("custom-toolkit");

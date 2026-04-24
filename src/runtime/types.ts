@@ -1,6 +1,5 @@
-import type { AgentConfig } from "../types";
-import type { ModelMessage } from "../types";
 import type { ProviderContinuationState } from "../shared/providerContinuation";
+import type { AgentConfig, ModelMessage } from "../types";
 
 export type RuntimeModelRawEvent = {
   format: "openai-responses-v1" | "google-interactions-v1";

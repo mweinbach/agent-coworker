@@ -19,14 +19,21 @@ const SETTINGS_PROVIDER_PRIORITY = new Map<ProviderName, number>(
 );
 
 export function compareProviderNamesForSettings(left: ProviderName, right: ProviderName): number {
-  const leftPriority = SETTINGS_PROVIDER_PRIORITY.get(left) ?? SETTINGS_PROVIDER_ORDER.length + PROVIDER_NAMES.indexOf(left);
+  const leftPriority =
+    SETTINGS_PROVIDER_PRIORITY.get(left) ??
+    SETTINGS_PROVIDER_ORDER.length + PROVIDER_NAMES.indexOf(left);
   const rightPriority =
-    SETTINGS_PROVIDER_PRIORITY.get(right) ?? SETTINGS_PROVIDER_ORDER.length + PROVIDER_NAMES.indexOf(right);
+    SETTINGS_PROVIDER_PRIORITY.get(right) ??
+    SETTINGS_PROVIDER_ORDER.length + PROVIDER_NAMES.indexOf(right);
   return leftPriority - rightPriority;
 }
 
-export function sortProviderEntriesForSettings<T extends { provider: ProviderName }>(entries: readonly T[]): T[] {
-  return [...entries].sort((left, right) => compareProviderNamesForSettings(left.provider, right.provider));
+export function sortProviderEntriesForSettings<T extends { provider: ProviderName }>(
+  entries: readonly T[],
+): T[] {
+  return [...entries].sort((left, right) =>
+    compareProviderNamesForSettings(left.provider, right.provider),
+  );
 }
 
 export function sortProviderNamesForSettings(providers: readonly ProviderName[]): ProviderName[] {

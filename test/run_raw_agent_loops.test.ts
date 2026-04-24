@@ -4,16 +4,15 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  buildRawLoopHarnessContext,
-  buildRawLoopBudgetSummary,
   buildGoogleCustomtoolsToolCoverageRuns,
   buildMixedRuns,
+  buildRawLoopBudgetSummary,
+  buildRawLoopHarnessContext,
   countObservedLoopSteps,
-  createToolsWithTracing,
   createRawLoopAgentControl,
+  createToolsWithTracing,
 } from "../scripts/run_raw_agent_loops";
-import type { ModelMessage } from "../src/types";
-import type { AgentConfig } from "../src/types";
+import type { AgentConfig, ModelMessage } from "../src/types";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const dir = "/tmp/raw-loop-agent-control";
@@ -77,10 +76,12 @@ describe("raw loop child-agent control", () => {
       timeoutMs: 1000,
     });
 
-    expect(spawned).toEqual(expect.objectContaining({
-      provider: "opencode-zen",
-      effectiveModel: "glm-5",
-    }));
+    expect(spawned).toEqual(
+      expect.objectContaining({
+        provider: "opencode-zen",
+        effectiveModel: "glm-5",
+      }),
+    );
     expect(run).toHaveBeenCalledWith(
       expect.objectContaining({
         role: "worker",
@@ -126,10 +127,12 @@ describe("raw loop child-agent control", () => {
       timeoutMs: 1000,
     });
 
-    expect(spawned).toEqual(expect.objectContaining({
-      provider: "codex-cli",
-      effectiveModel: "gpt-5.4",
-    }));
+    expect(spawned).toEqual(
+      expect.objectContaining({
+        provider: "codex-cli",
+        effectiveModel: "gpt-5.4",
+      }),
+    );
     expect(run).toHaveBeenCalledWith(
       expect.objectContaining({
         config: expect.objectContaining({
@@ -262,7 +265,11 @@ describe("raw loop child-agent control", () => {
 
   test("seeds parent todos into raw-loop child runs when requested", async () => {
     const seededTodos = [
-      { content: "Reuse the parent checklist", status: "in_progress", activeForm: "Reusing the parent checklist" },
+      {
+        content: "Reuse the parent checklist",
+        status: "in_progress",
+        activeForm: "Reusing the parent checklist",
+      },
     ];
     const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
     const control = createRawLoopAgentControl(
@@ -389,7 +396,9 @@ describe("raw loop child-agent control", () => {
 
 describe("raw loop scripted spawnAgent prompts", () => {
   test("use the current spawnAgent handle contract", () => {
-    const gctRun = buildGoogleCustomtoolsToolCoverageRuns().find((run) => run.id === "gct-04-gapfill-edit-grep-spawn");
+    const gctRun = buildGoogleCustomtoolsToolCoverageRuns().find(
+      (run) => run.id === "gct-04-gapfill-edit-grep-spawn",
+    );
     const mixedRun = buildMixedRuns().find((run) => run.id === "run-08");
     expect(gctRun).toBeDefined();
     expect(mixedRun).toBeDefined();
@@ -397,8 +406,12 @@ describe("raw loop scripted spawnAgent prompts", () => {
     const gctPrompt = gctRun!.prompt({ runDir: "/tmp/raw-loop", repoDir: "/tmp/repo" });
     const mixedPrompt = mixedRun!.prompt({ runDir: "/tmp/raw-loop", repoDir: "/tmp/repo" });
 
-    expect(gctRun!.requiredToolCalls).toEqual(expect.arrayContaining(["spawnAgent", "waitForAgent"]));
-    expect(mixedRun!.requiredToolCalls).toEqual(expect.arrayContaining(["spawnAgent", "waitForAgent"]));
+    expect(gctRun!.requiredToolCalls).toEqual(
+      expect.arrayContaining(["spawnAgent", "waitForAgent"]),
+    );
+    expect(mixedRun!.requiredToolCalls).toEqual(
+      expect.arrayContaining(["spawnAgent", "waitForAgent"]),
+    );
 
     expect(gctPrompt).toContain('role="worker" and message:');
     expect(gctPrompt).toContain("waitForAgent");
@@ -460,11 +473,7 @@ describe("raw loop harness context", () => {
   });
 
   test("buildRawLoopBudgetSummary uses actual loop turn count instead of traced entry count", () => {
-    expect(buildRawLoopBudgetSummary(
-      ["tool> bash {}", "tool> read {}"],
-      3,
-      1,
-    )).toEqual({
+    expect(buildRawLoopBudgetSummary(["tool> bash {}", "tool> read {}"], 3, 1)).toEqual({
       toolCalls: 2,
       bashCalls: 1,
       webCalls: 0,
@@ -480,7 +489,14 @@ describe("raw loop harness context", () => {
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
-      ['---', 'name: "spreadsheet"', 'description: "Spreadsheet skill"', '---', '', '# Spreadsheet'].join("\n"),
+      [
+        "---",
+        'name: "spreadsheet"',
+        'description: "Spreadsheet skill"',
+        "---",
+        "",
+        "# Spreadsheet",
+      ].join("\n"),
       "utf-8",
     );
 

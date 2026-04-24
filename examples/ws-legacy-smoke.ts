@@ -32,11 +32,13 @@ async function main() {
     console.log(JSON.stringify(message));
 
     if (message.type === "server_hello") {
-      ws.send(JSON.stringify({
-        type: "user_message",
-        sessionId: message.sessionId,
-        text: "reply with exactly: legacy smoke ok",
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "user_message",
+          sessionId: message.sessionId,
+          text: "reply with exactly: legacy smoke ok",
+        }),
+      );
       return;
     }
 

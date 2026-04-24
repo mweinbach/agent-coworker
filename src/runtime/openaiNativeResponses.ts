@@ -1,5 +1,10 @@
 import OpenAI from "openai";
-
+import { CODEX_OAUTH_ORIGINATOR } from "../providers/codex-auth";
+import {
+  convertResponsesMessages,
+  convertResponsesTools,
+  processResponsesStream,
+} from "./openaiResponsesShared";
 import {
   asFiniteNumber,
   asNonEmptyString,
@@ -7,12 +12,6 @@ import {
   buildOpenAiContinuationRequestOptions,
   type PiModel,
 } from "./piRuntimeOptions";
-import {
-  convertResponsesMessages,
-  convertResponsesTools,
-  processResponsesStream,
-} from "./openaiResponsesShared";
-import { CODEX_OAUTH_ORIGINATOR } from "../providers/codex-auth";
 
 type OpenAiCompatibleProvider = "openai" | "codex-cli";
 
@@ -69,7 +68,9 @@ const CODEX_RESPONSE_STATUSES = new Set([
 
 const OPENAI_ALLOWED_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex"]);
 
-function usesCodexChatGptBackend(opts: Pick<OpenAiNativeStepRequest, "provider" | "model">): boolean {
+function usesCodexChatGptBackend(
+  opts: Pick<OpenAiNativeStepRequest, "provider" | "model">,
+): boolean {
   if (opts.provider !== "codex-cli") return false;
   return opts.model.api === "openai-codex-responses" || opts.model.provider === "openai-codex";
 }
@@ -177,7 +178,7 @@ function convertPiMessagesToResponsesInput(
 }
 
 function convertPiToolsToResponsesTools(
-  provider: OpenAiCompatibleProvider,
+  _provider: OpenAiCompatibleProvider,
   tools: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
   return convertResponsesTools(tools, {
@@ -209,10 +210,11 @@ function normalizeAllowedDomains(value: unknown): string[] {
     const raw = asNonEmptyString(entry);
     if (!raw) continue;
 
-    let domain = raw
-      .replace(/^[a-z]+:\/\//i, "")
-      .replace(/^\/+/, "")
-      .split(/[/?#]/, 1)[0] ?? "";
+    let domain =
+      raw
+        .replace(/^[a-z]+:\/\//i, "")
+        .replace(/^\/+/, "")
+        .split(/[/?#]/, 1)[0] ?? "";
     domain = domain.trim().replace(/\/+$/g, "").toLowerCase();
     if (!domain || seen.has(domain)) continue;
     seen.add(domain);
@@ -226,11 +228,15 @@ function normalizeWebSearchLocation(value: unknown): Record<string, string> | un
   const location = asRecord(value);
   if (!location) return undefined;
 
+  const country = asNonEmptyString(location.country);
+  const region = asNonEmptyString(location.region);
+  const city = asNonEmptyString(location.city);
+  const timezone = asNonEmptyString(location.timezone);
   const normalized = {
-    ...(asNonEmptyString(location.country) ? { country: asNonEmptyString(location.country)! } : {}),
-    ...(asNonEmptyString(location.region) ? { region: asNonEmptyString(location.region)! } : {}),
-    ...(asNonEmptyString(location.city) ? { city: asNonEmptyString(location.city)! } : {}),
-    ...(asNonEmptyString(location.timezone) ? { timezone: asNonEmptyString(location.timezone)! } : {}),
+    ...(country ? { country } : {}),
+    ...(region ? { region } : {}),
+    ...(city ? { city } : {}),
+    ...(timezone ? { timezone } : {}),
   };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -240,7 +246,9 @@ function resolveCodexWebSearchBackend(opts: OpenAiNativeStepRequest): "native" |
   return configured === "exa" || configured === "parallel" ? "local" : "native";
 }
 
-function resolveCodexNativeWebSearchMode(opts: OpenAiNativeStepRequest): "disabled" | "cached" | "live" {
+function resolveCodexNativeWebSearchMode(
+  opts: OpenAiNativeStepRequest,
+): "disabled" | "cached" | "live" {
   if (resolveCodexWebSearchBackend(opts) !== "native") {
     return "disabled";
   }
@@ -252,7 +260,9 @@ function resolveCodexNativeWebSearchMode(opts: OpenAiNativeStepRequest): "disabl
   return "live";
 }
 
-function buildCodexNativeWebSearchTool(opts: OpenAiNativeStepRequest): Record<string, unknown> | null {
+function buildCodexNativeWebSearchTool(
+  opts: OpenAiNativeStepRequest,
+): Record<string, unknown> | null {
   if (opts.provider !== "codex-cli") return null;
   if (resolveCodexWebSearchBackend(opts) !== "native") return null;
 
@@ -276,7 +286,8 @@ export function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<
   const input = convertPiMessagesToResponsesInput(opts.model, opts.piMessages);
   const useCodexChatGptBackend = usesCodexChatGptBackend(opts);
   const nativeWebSearchTool = buildCodexNativeWebSearchTool(opts);
-  const stripLegacyWebSearch = opts.provider === "codex-cli" && resolveCodexWebSearchBackend(opts) === "native";
+  const stripLegacyWebSearch =
+    opts.provider === "codex-cli" && resolveCodexWebSearchBackend(opts) === "native";
   const continuationOptions = useCodexChatGptBackend
     ? {}
     : buildOpenAiContinuationRequestOptions(opts.previousResponseId);
@@ -285,7 +296,7 @@ export function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<
     instructions: opts.systemPrompt,
     input,
     stream: true,
-    store: useCodexChatGptBackend ? false : true,
+    store: !useCodexChatGptBackend,
     ...continuationOptions,
   };
 
@@ -301,7 +312,12 @@ export function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<
 
   const reasoningEffort = asNonEmptyString(opts.streamOptions.reasoningEffort);
   const reasoningSummary = asNonEmptyString(opts.streamOptions.reasoningSummary);
-  const reasoning = maybeBuildReasoningPayload(reasoningEffort, reasoningSummary, opts.provider, opts.model.id);
+  const reasoning = maybeBuildReasoningPayload(
+    reasoningEffort,
+    reasoningSummary,
+    opts.provider,
+    opts.model.id,
+  );
   if (reasoning) {
     request.reasoning = reasoning;
     request.include = ["reasoning.encrypted_content"];
@@ -322,10 +338,7 @@ export function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<
       ? opts.tools.filter((tool) => asNonEmptyString(tool.name) !== "webSearch")
       : opts.tools,
   );
-  const requestTools = [
-    ...functionTools,
-    ...(nativeWebSearchTool ? [nativeWebSearchTool] : []),
-  ];
+  const requestTools = [...functionTools, ...(nativeWebSearchTool ? [nativeWebSearchTool] : [])];
   if (requestTools.length > 0) {
     request.tools = requestTools;
   }
@@ -333,7 +346,10 @@ export function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<
   if (opts.provider === "codex-cli") {
     request.parallel_tool_calls = true;
     request.tool_choice = "auto";
-    const include = mergeUniqueStrings(request.include, nativeWebSearchTool ? ["web_search_call.action.sources"] : []);
+    const include = mergeUniqueStrings(
+      request.include,
+      nativeWebSearchTool ? ["web_search_call.action.sources"] : [],
+    );
     if (include) {
       request.include = include;
     }
@@ -352,7 +368,9 @@ function normalizeCodexStatus(status: unknown): string | undefined {
   return CODEX_RESPONSE_STATUSES.has(status) ? status : undefined;
 }
 
-export async function* normalizeCodexEvents(events: AsyncIterable<unknown>): AsyncIterable<unknown> {
+export async function* normalizeCodexEvents(
+  events: AsyncIterable<unknown>,
+): AsyncIterable<unknown> {
   for await (const event of events) {
     const record = asRecord(event);
     const type = typeof record?.type === "string" ? record.type : undefined;
@@ -439,9 +457,10 @@ export const runOpenAiNativeResponseStep: RunOpenAiNativeResponseStep = async (
     request as any,
     opts.streamOptions.signal ? { signal: opts.streamOptions.signal } : undefined,
   );
-  const normalizedEvents = opts.provider === "codex-cli"
-    ? normalizeCodexEvents(rawStream as unknown as AsyncIterable<unknown>)
-    : (rawStream as unknown as AsyncIterable<unknown>);
+  const normalizedEvents =
+    opts.provider === "codex-cli"
+      ? normalizeCodexEvents(rawStream as unknown as AsyncIterable<unknown>)
+      : (rawStream as unknown as AsyncIterable<unknown>);
 
   let responseId: string | undefined;
   let pendingEventDelivery = Promise.resolve();
@@ -464,7 +483,9 @@ export const runOpenAiNativeResponseStep: RunOpenAiNativeResponseStep = async (
       assistant as Record<string, any>,
       {
         push: (event) => {
-          pendingEventDelivery = pendingEventDelivery.then(() => emitOpenAiNativeEvent(opts, event));
+          pendingEventDelivery = pendingEventDelivery.then(() =>
+            emitOpenAiNativeEvent(opts, event),
+          );
         },
       },
       opts.model,

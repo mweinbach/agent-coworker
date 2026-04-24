@@ -1,10 +1,5 @@
+import { focusSurface, markSurfaceSeen, setActiveRevision, setExpanded } from "../a2uiDockReducer";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
-import {
-  focusSurface,
-  markSurfaceSeen,
-  setActiveRevision,
-  setExpanded,
-} from "../a2uiDockReducer";
 import { createDefaultA2uiDock } from "../types";
 
 type A2uiDockActionKeys =

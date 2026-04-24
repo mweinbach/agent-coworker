@@ -1,7 +1,6 @@
-import React from "react";
-import { Modal, Pressable, View, Text, ScrollView, PlatformColor } from "react-native";
+import { Modal, Pressable, ScrollView, Text, View } from "react-native";
+import Animated, { FadeIn, FadeOut, SlideInRight, SlideOutRight } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Animated, { SlideInRight, SlideOutRight, FadeIn, FadeOut } from "react-native-reanimated";
 
 import { useAppTheme } from "@/theme/use-app-theme";
 
@@ -56,17 +55,29 @@ export function FileExplorerDrawer({ visible, onClose, workspaceName = "Cowork" 
               borderBottomColor: theme.borderMuted,
             }}
           >
-            <Text style={{ color: theme.textSecondary, fontSize: 13, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.5 }}>
+            <Text
+              style={{
+                color: theme.textSecondary,
+                fontSize: 13,
+                fontWeight: "600",
+                textTransform: "uppercase",
+                letterSpacing: 0.5,
+              }}
+            >
               FILES / {workspaceName}
             </Text>
             <Pressable onPress={onClose} hitSlop={10}>
               <SFSymbol name="xmark" size={16} color={theme.textSecondary} />
             </Pressable>
           </View>
-          
+
           <ScrollView
             style={{ flex: 1 }}
-            contentContainerStyle={{ padding: 16, paddingBottom: Math.max(insets.bottom, 16), gap: 8 }}
+            contentContainerStyle={{
+              padding: 16,
+              paddingBottom: Math.max(insets.bottom, 16),
+              gap: 8,
+            }}
           >
             {/* Placeholder File Tree */}
             <View style={{ gap: 12 }}>
@@ -92,7 +103,9 @@ export function FileExplorerDrawer({ visible, onClose, workspaceName = "Cowork" 
                   <SFSymbol name="doc.text" size={16} color={theme.textSecondary} />
                   <View>
                     <Text style={{ color: theme.text, fontSize: 15 }}>Modal.tsx</Text>
-                    <Text style={{ color: theme.textTertiary, fontSize: 12 }}>4 KB · Yesterday</Text>
+                    <Text style={{ color: theme.textTertiary, fontSize: 12 }}>
+                      4 KB · Yesterday
+                    </Text>
                   </View>
                 </View>
               </View>

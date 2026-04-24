@@ -15,7 +15,12 @@ type ProviderStoreState = {
   statusByProvider: Record<string, ProviderStatusEntry>;
   loading: boolean;
   error: string | null;
-  lastAuthChallenge: { provider: string; methodId: string; instructions: string; url?: string } | null;
+  lastAuthChallenge: {
+    provider: string;
+    methodId: string;
+    instructions: string;
+    url?: string;
+  } | null;
   lastAuthResult: { provider: string; methodId: string; ok: boolean; message: string } | null;
 
   fetchCatalog(): Promise<void>;
@@ -65,7 +70,9 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
   async fetchAuthMethods() {
     const { client, cwd } = getClientAndCwd();
     try {
-      const result = await callParsedControlMethod(client, "cowork/provider/authMethods/read", { cwd });
+      const result = await callParsedControlMethod(client, "cowork/provider/authMethods/read", {
+        cwd,
+      });
       set({ authMethodsByProvider: result.event.methods });
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error) });
@@ -75,7 +82,9 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
   async fetchStatus() {
     const { client, cwd } = getClientAndCwd();
     try {
-      const result = await callParsedControlMethod(client, "cowork/provider/status/refresh", { cwd });
+      const result = await callParsedControlMethod(client, "cowork/provider/status/refresh", {
+        cwd,
+      });
       set({ statusByProvider: toStatusByProvider(result.event.providers) });
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error) });
@@ -85,11 +94,7 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
   async refresh() {
     set({ loading: true, error: null });
     try {
-      await Promise.all([
-        get().fetchCatalog(),
-        get().fetchAuthMethods(),
-        get().fetchStatus(),
-      ]);
+      await Promise.all([get().fetchCatalog(), get().fetchAuthMethods(), get().fetchStatus()]);
       set({ loading: false });
     } catch (error) {
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
@@ -101,7 +106,7 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
     try {
       const result = await callParsedControlMethod(client, "cowork/provider/auth/setApiKey", {
         cwd,
-        provider: provider as any,
+        provider: provider as ProviderCatalogEntry["id"],
         methodId,
         apiKey,
       });
@@ -125,8 +130,8 @@ export const useProviderStore = create<ProviderStoreState>((set, get) => ({
     try {
       const result = await callParsedControlMethod(client, "cowork/provider/auth/copyApiKey", {
         cwd,
-        provider: provider as any,
-        sourceProvider: sourceProvider as any,
+        provider: provider as ProviderCatalogEntry["id"],
+        sourceProvider: sourceProvider as ProviderCatalogEntry["id"],
       });
       set({
         lastAuthChallenge: null,

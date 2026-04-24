@@ -12,8 +12,8 @@ import { defineTool } from "./defineTool";
 const envelopeValueSchema = z
   .union([z.record(z.string(), z.unknown()), z.string()])
   .describe(
-    'Single A2UI envelope. Either an object like { version: "v0.9", createSurface: {...} } '
-      + "or a JSON-encoded string of the same.",
+    'Single A2UI envelope. Either an object like { version: "v0.9", createSurface: {...} } ' +
+      "or a JSON-encoded string of the same.",
   );
 
 const a2uiInputSchema = z
@@ -25,7 +25,9 @@ const a2uiInputSchema = z
     reason: z
       .string()
       .optional()
-      .describe("Optional free-form note explaining why these envelopes were sent. Shown in tool traces."),
+      .describe(
+        "Optional free-form note explaining why these envelopes were sent. Shown in tool traces.",
+      ),
   })
   .strict();
 
@@ -72,29 +74,32 @@ export function createA2uiTool(ctx: ToolContext) {
   return defineTool({
     description: A2UI_TOOL_DESCRIPTION,
     inputSchema: a2uiInputSchema,
-    execute: async (
-      input: z.infer<typeof a2uiInputSchema>,
-      options?: { toolCallId?: string },
-    ) => {
+    execute: async (input: z.infer<typeof a2uiInputSchema>, options?: { toolCallId?: string }) => {
       if (!ctx.applyA2uiEnvelope) {
         throw new Error(
           "A2UI is not enabled for this session. Enable `featureFlags.workspace.a2ui` for this workspace.",
         );
       }
       if (input.reason) {
-        ctx.log(`tool> a2ui ${JSON.stringify({ count: input.envelopes.length, reason: input.reason })}`);
+        ctx.log(
+          `tool> a2ui ${JSON.stringify({ count: input.envelopes.length, reason: input.reason })}`,
+        );
       } else {
         ctx.log(`tool> a2ui ${JSON.stringify({ count: input.envelopes.length })}`);
       }
 
-      const meta = input.reason || options?.toolCallId
-        ? {
-            ...(input.reason ? { reason: input.reason } : {}),
-            ...(options?.toolCallId ? { toolCallId: options.toolCallId } : {}),
-          }
-        : undefined;
+      const meta =
+        input.reason || options?.toolCallId
+          ? {
+              ...(input.reason ? { reason: input.reason } : {}),
+              ...(options?.toolCallId ? { toolCallId: options.toolCallId } : {}),
+            }
+          : undefined;
       const results = input.envelopes.map((envelope, index) => {
-        const applied = ctx.applyA2uiEnvelope!(envelope, meta);
+        const applied = ctx.applyA2uiEnvelope?.(envelope, meta) ?? {
+          ok: false,
+          error: "A2UI envelope application is unavailable in this session",
+        };
         return {
           index,
           ok: applied.ok,

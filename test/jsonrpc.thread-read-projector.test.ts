@@ -491,9 +491,7 @@ describe("JSON-RPC thread read projector", () => {
       {
         id: "turn-1",
         status: "inProgress",
-        items: [
-          { id: "assistant-1", type: "agentMessage", text: "\n\nFinal answer." },
-        ],
+        items: [{ id: "assistant-1", type: "agentMessage", text: "\n\nFinal answer." }],
       },
     ]);
   });

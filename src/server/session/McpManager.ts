@@ -1,9 +1,9 @@
 import type { MCPServerConfig } from "../../types";
-import type { SessionContext } from "./SessionContext";
 import { McpAuthFlow } from "./mcp/McpAuthFlow";
 import { McpRegistryFlow } from "./mcp/McpRegistryFlow";
 import { McpServerResolver } from "./mcp/McpServerResolver";
 import { McpValidationFlow } from "./mcp/McpValidationFlow";
+import type { SessionContext } from "./SessionContext";
 
 export class McpManager {
   private readonly resolver: McpServerResolver;
@@ -11,7 +11,7 @@ export class McpManager {
   private readonly validationFlow: McpValidationFlow;
   private readonly authFlow: McpAuthFlow;
 
-  constructor(private readonly context: SessionContext) {
+  constructor(context: SessionContext) {
     this.resolver = new McpServerResolver(context);
     this.registryFlow = new McpRegistryFlow(context);
     this.validationFlow = new McpValidationFlow(context, this.resolver);

@@ -4,12 +4,12 @@ import { jsonRpcAgentRequestSchemas } from "../schema.agents";
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
-export function createAgentRouteHandlers(
-  context: JsonRpcRouteContext,
-): JsonRpcRequestHandlerMap {
+export function createAgentRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "cowork/session/agent/spawn": async (ws, message) => {
-      const parsed = jsonRpcAgentRequestSchemas["cowork/session/agent/spawn"].safeParse(message.params);
+      const parsed = jsonRpcAgentRequestSchemas["cowork/session/agent/spawn"].safeParse(
+        message.params,
+      );
       if (!parsed.success) {
         const detail = parsed.error.issues[0]?.message;
         context.jsonrpc.sendError(ws, message.id, {
@@ -93,12 +93,18 @@ export function createAgentRouteHandlers(
         return;
       }
 
-      await session.sendAgentInput(agentId, prompt, typeof params.interrupt === "boolean" ? params.interrupt : undefined);
+      await session.sendAgentInput(
+        agentId,
+        prompt,
+        typeof params.interrupt === "boolean" ? params.interrupt : undefined,
+      );
       context.jsonrpc.sendResult(ws, message.id, {});
     },
 
     "cowork/session/agent/wait": async (ws, message) => {
-      const parsed = jsonRpcAgentRequestSchemas["cowork/session/agent/wait"].safeParse(message.params);
+      const parsed = jsonRpcAgentRequestSchemas["cowork/session/agent/wait"].safeParse(
+        message.params,
+      );
       if (!parsed.success) {
         const detail = parsed.error.issues[0]?.message;
         context.jsonrpc.sendError(ws, message.id, {
@@ -124,7 +130,9 @@ export function createAgentRouteHandlers(
     },
 
     "cowork/session/agent/inspect": async (ws, message) => {
-      const parsed = jsonRpcAgentRequestSchemas["cowork/session/agent/inspect"].safeParse(message.params);
+      const parsed = jsonRpcAgentRequestSchemas["cowork/session/agent/inspect"].safeParse(
+        message.params,
+      );
       if (!parsed.success) {
         const detail = parsed.error.issues[0]?.message;
         context.jsonrpc.sendError(ws, message.id, {

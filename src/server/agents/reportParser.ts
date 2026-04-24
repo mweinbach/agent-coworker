@@ -1,4 +1,4 @@
-import { childAgentReportSchema, type ChildAgentReport } from "../../shared/agents";
+import { type ChildAgentReport, childAgentReportSchema } from "../../shared/agents";
 
 export const REPORT_RE = /<agent_report>\s*([\s\S]*?)\s*<\/agent_report>/i;
 

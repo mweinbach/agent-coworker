@@ -6,9 +6,7 @@ function normalizeLine(value: string | undefined): string | null {
 }
 
 function normalizeList(values: string[]): string[] {
-  return values
-    .map((value) => value.trim())
-    .filter(Boolean);
+  return values.map((value) => value.trim()).filter(Boolean);
 }
 
 function normalizeMetadata(

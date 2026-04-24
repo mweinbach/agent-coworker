@@ -1,9 +1,9 @@
 import {
-  MAX_A2UI_REVISIONS_PER_SURFACE,
   type A2uiChangeKind,
   type A2uiSurfaceRevision,
   type A2uiThreadDock,
   type FeedItem,
+  MAX_A2UI_REVISIONS_PER_SURFACE,
 } from "./types";
 
 export type ProjectedUiSurface = {
@@ -52,9 +52,10 @@ const COALESCE_WINDOW_MS = 2000;
 function shouldCoalesceWithPrevious(prev: A2uiSurfaceRevision, next: A2uiSurfaceRevision): boolean {
   const prevMs = Date.parse(prev.ts);
   const nextMs = Date.parse(next.ts);
-  const withinWindow = Number.isFinite(prevMs) && Number.isFinite(nextMs)
-    ? Math.abs(nextMs - prevMs) <= COALESCE_WINDOW_MS
-    : false;
+  const withinWindow =
+    Number.isFinite(prevMs) && Number.isFinite(nextMs)
+      ? Math.abs(nextMs - prevMs) <= COALESCE_WINDOW_MS
+      : false;
 
   if (prev.toolCallId && next.toolCallId && prev.toolCallId === next.toolCallId) {
     return true;
@@ -102,7 +103,9 @@ export function recordSurfaceRevision(
   const shouldFocus = !dock.focusedSurfaceId || !hadSameRevision;
   // Active revision: sticky at the latest unless the user has scrubbed back.
   const existingActive = dock.activeRevisionBySurfaceId[item.surfaceId];
-  const wasAtLatest = existingActive === undefined || existingActive === (existing[existing.length - 1]?.revision ?? -1);
+  const wasAtLatest =
+    existingActive === undefined ||
+    existingActive === (existing[existing.length - 1]?.revision ?? -1);
   const nextActive = wasAtLatest ? item.revision : existingActive;
 
   return {
@@ -121,10 +124,7 @@ export function recordSurfaceRevision(
   };
 }
 
-export function focusSurface(
-  dock: A2uiThreadDock,
-  surfaceId: string | null,
-): A2uiThreadDock {
+export function focusSurface(dock: A2uiThreadDock, surfaceId: string | null): A2uiThreadDock {
   if (dock.focusedSurfaceId === surfaceId) return dock;
   return { ...dock, focusedSurfaceId: surfaceId };
 }
@@ -182,7 +182,8 @@ export function seedDockFromFeed(
   for (const item of feed) {
     if (item.kind !== "ui_surface") continue;
     const existingRevs = dock.revisionsBySurfaceId[item.surfaceId] ?? [];
-    const existingMaxRev = existingRevs.length ? existingRevs[existingRevs.length - 1]!.revision : -1;
+    const latestExistingRev = existingRevs[existingRevs.length - 1];
+    const existingMaxRev = latestExistingRev?.revision ?? -1;
     if (item.revision <= existingMaxRev) continue;
     const projected: ProjectedUiSurface = {
       type: "uiSurface",
@@ -203,8 +204,10 @@ export function seedDockFromFeed(
   return dock;
 }
 
-export function latestRevision(revisions: readonly A2uiSurfaceRevision[]): A2uiSurfaceRevision | null {
-  return revisions.length === 0 ? null : revisions[revisions.length - 1]!;
+export function latestRevision(
+  revisions: readonly A2uiSurfaceRevision[],
+): A2uiSurfaceRevision | null {
+  return revisions[revisions.length - 1] ?? null;
 }
 
 export function revisionByNumber(

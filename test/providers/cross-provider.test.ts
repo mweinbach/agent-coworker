@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
-
-import type { ProviderName } from "../../src/types";
-import { PROVIDER_NAMES } from "../../src/types";
 import { defaultModelForProvider, getModel } from "../../src/config";
 import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
+import type { ProviderName } from "../../src/types";
+import { PROVIDER_NAMES } from "../../src/types";
 import { makeConfig } from "./helpers";
 
 // ---------------------------------------------------------------------------
@@ -65,7 +64,9 @@ describe("Provider model catalog invariants", () => {
         expect(PROVIDER_MODEL_CATALOG[provider].defaultModel).toBe("");
         return;
       }
-      expect(PROVIDER_MODEL_CATALOG[provider].availableModels).toContain(PROVIDER_MODEL_CATALOG[provider].defaultModel);
+      expect(PROVIDER_MODEL_CATALOG[provider].availableModels).toContain(
+        PROVIDER_MODEL_CATALOG[provider].defaultModel,
+      );
     });
   }
 });
@@ -115,5 +116,4 @@ describe("Session reasoning kind mapping", () => {
   test("codex-cli provider maps to 'summary' reasoning kind", () => {
     expect(reasoningModeForProvider("codex-cli")).toBe("summary");
   });
-
 });

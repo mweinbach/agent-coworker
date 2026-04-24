@@ -9,10 +9,10 @@ import {
   forgetTrustedMac,
   getTransportState,
   listTrustedMacs,
-  sendPlaintext,
   type RemodexQrPairingPayload,
   type RemodexSecureTransportState,
   type RemodexTrustedMacSummary,
+  sendPlaintext,
 } from "../../../modules/remodex-secure-transport/src";
 import type {
   RelayConnectionStatus,
@@ -33,7 +33,6 @@ function mapStatus(state: RemodexSecureTransportState["status"]): RelayConnectio
       return "reconnecting";
     case "error":
       return "error";
-    case "idle":
     default:
       return "idle";
   }
@@ -49,7 +48,6 @@ function mapTransportMode(mode: RemodexSecureTransportState["transportMode"]): R
       return "fallback";
     case "unsupported":
       return "unsupported";
-    case "native":
     default:
       return "native";
   }
@@ -100,10 +98,7 @@ export class SecureTransportClient {
   }
 
   async getSnapshot(): Promise<SecureTransportSnapshot> {
-    const [trustedMacs, state] = await Promise.all([
-      listTrustedMacs(),
-      getTransportState(),
-    ]);
+    const [trustedMacs, state] = await Promise.all([listTrustedMacs(), getTransportState()]);
     this.trustedMacs = trustedMacs;
     return toSnapshot(state, trustedMacs);
   }
@@ -138,22 +133,30 @@ export class SecureTransportClient {
   subscribe(events: SecureTransportClientEvents): () => void {
     const subscriptions: EventSubscription[] = [];
 
-    subscriptions.push(addRemodexListener("stateChanged", async (state) => {
-      this.trustedMacs = await listTrustedMacs().catch(() => this.trustedMacs);
-      events.onStateChanged?.(toSnapshot(state, this.trustedMacs));
-    }));
+    subscriptions.push(
+      addRemodexListener("stateChanged", async (state) => {
+        this.trustedMacs = await listTrustedMacs().catch(() => this.trustedMacs);
+        events.onStateChanged?.(toSnapshot(state, this.trustedMacs));
+      }),
+    );
 
-    subscriptions.push(addRemodexListener("plaintextMessage", (payload) => {
-      events.onPlaintextMessage?.(payload.text);
-    }));
+    subscriptions.push(
+      addRemodexListener("plaintextMessage", (payload) => {
+        events.onPlaintextMessage?.(payload.text);
+      }),
+    );
 
-    subscriptions.push(addRemodexListener("secureError", (payload) => {
-      events.onSecureError?.(payload.message);
-    }));
+    subscriptions.push(
+      addRemodexListener("secureError", (payload) => {
+        events.onSecureError?.(payload.message);
+      }),
+    );
 
-    subscriptions.push(addRemodexListener("socketClosed", (payload) => {
-      events.onSocketClosed?.(payload.reason ?? null);
-    }));
+    subscriptions.push(
+      addRemodexListener("socketClosed", (payload) => {
+        events.onSocketClosed?.(payload.reason ?? null);
+      }),
+    );
 
     return () => {
       for (const subscription of subscriptions) {

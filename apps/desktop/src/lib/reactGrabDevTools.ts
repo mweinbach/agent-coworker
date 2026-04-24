@@ -26,8 +26,5 @@ export async function maybeLoadReactGrabDevTools(
 ): Promise<void> {
   if (!shouldLoadReactGrabDevTools(isDev, userAgent)) return;
 
-  await Promise.all([
-    loaders.loadReactGrab(),
-    loaders.loadReactGrabMcpClient(),
-  ]);
+  await Promise.all([loaders.loadReactGrab(), loaders.loadReactGrabMcpClient()]);
 }

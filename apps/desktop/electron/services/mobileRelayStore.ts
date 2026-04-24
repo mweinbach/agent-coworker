@@ -1,7 +1,7 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 
 import {
   buildRelayKeyFingerprint,
@@ -9,10 +9,7 @@ import {
   isValidRelayKeyPair,
   isValidRelayPublicKey,
 } from "../../../../src/shared/mobileRelaySecurity";
-import type {
-  MobileRelayStoreState,
-  MobileRelayTrustedPhoneRecord,
-} from "./mobileRelayTypes";
+import type { MobileRelayStoreState, MobileRelayTrustedPhoneRecord } from "./mobileRelayTypes";
 
 const COWORK_HOME_DIRNAME = ".cowork";
 const MOBILE_RELAY_DIRNAME = "mobile-relay";
@@ -38,7 +35,9 @@ function normalizeTrustedPhoneRecord(raw: unknown): MobileRelayTrustedPhoneRecor
   return {
     phoneDeviceId,
     phoneIdentityPublicKey,
-    fingerprint: normalizeNonEmptyString(record.fingerprint) || buildTrustedPhoneFingerprint(phoneIdentityPublicKey),
+    fingerprint:
+      normalizeNonEmptyString(record.fingerprint) ||
+      buildTrustedPhoneFingerprint(phoneIdentityPublicKey),
     displayName: normalizeNonEmptyString(record.displayName) || null,
     lastPairedAt: normalizeNonEmptyString(record.lastPairedAt) || new Date().toISOString(),
     lastConnectedAt: normalizeNonEmptyString(record.lastConnectedAt) || null,
@@ -57,10 +56,12 @@ function normalizeStoreState(raw: unknown): MobileRelayStoreState {
   const macIdentityPublicKey = normalizeNonEmptyString(record.macIdentityPublicKey);
   const macIdentityPrivateKey = normalizeNonEmptyString(record.macIdentityPrivateKey);
   const trustedPhone = normalizeTrustedPhoneRecord(record.trustedPhone);
-  if (!isValidRelayKeyPair({
-    publicKeyBase64: macIdentityPublicKey,
-    privateKeyBase64: macIdentityPrivateKey,
-  })) {
+  if (
+    !isValidRelayKeyPair({
+      publicKeyBase64: macIdentityPublicKey,
+      privateKeyBase64: macIdentityPrivateKey,
+    })
+  ) {
     const keyPair = generateRelayKeyPair();
     return {
       version: 1,
@@ -102,18 +103,26 @@ export function resolveMobileRelayStoreFile(storeRootPath = resolveDefaultStoreR
   return path.join(resolveMobileRelayStoreDir(storeRootPath), "device-state.json");
 }
 
-export function loadOrCreateMobileRelayStoreState(storeRootPath = resolveDefaultStoreRoot()): MobileRelayStoreState {
+export function loadOrCreateMobileRelayStoreState(
+  storeRootPath = resolveDefaultStoreRoot(),
+): MobileRelayStoreState {
   const storeFile = resolveMobileRelayStoreFile(storeRootPath);
   if (fs.existsSync(storeFile)) {
     try {
       const raw = fs.readFileSync(storeFile, "utf8");
       const normalized = normalizeStoreState(JSON.parse(raw));
-      fs.writeFileSync(storeFile, JSON.stringify(normalized, null, 2), { encoding: "utf8", mode: 0o600 });
+      fs.writeFileSync(storeFile, JSON.stringify(normalized, null, 2), {
+        encoding: "utf8",
+        mode: 0o600,
+      });
       return normalized;
     } catch {
       const created = createStoreState();
       fs.mkdirSync(resolveMobileRelayStoreDir(storeRootPath), { recursive: true });
-      fs.writeFileSync(storeFile, JSON.stringify(created, null, 2), { encoding: "utf8", mode: 0o600 });
+      fs.writeFileSync(storeFile, JSON.stringify(created, null, 2), {
+        encoding: "utf8",
+        mode: 0o600,
+      });
       return created;
     }
   }

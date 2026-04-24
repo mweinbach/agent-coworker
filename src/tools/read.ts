@@ -4,11 +4,10 @@ import path from "node:path";
 import readline from "node:readline";
 
 import { z } from "zod";
-
-import type { ToolContext } from "./context";
-import { defineTool } from "./defineTool";
 import { resolveMaybeRelative, truncateLine } from "../utils/paths";
 import { assertReadPathAllowed } from "../utils/permissions";
+import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 
 function supportedImageMimeType(filePath: string): string | null {
   switch (path.extname(filePath).toLowerCase()) {
@@ -49,7 +48,7 @@ export function createReadTool(ctx: ToolContext) {
       const abs = await assertReadPathAllowed(
         resolveMaybeRelative(filePath, ctx.config.workingDirectory),
         ctx.config,
-        "read"
+        "read",
       );
 
       const imageMimeType = supportedImageMimeType(abs);
@@ -63,7 +62,7 @@ export function createReadTool(ctx: ToolContext) {
           ],
         };
         ctx.log(
-          `tool< read ${JSON.stringify({ image: true, mimeType: imageMimeType, bytes: buffer.length })}`
+          `tool< read ${JSON.stringify({ image: true, mimeType: imageMimeType, bytes: buffer.length })}`,
         );
         return result;
       }

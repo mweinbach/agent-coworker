@@ -1,3 +1,4 @@
+import { useAutoAnimate } from "@formkit/auto-animate/react";
 import {
   BrainIcon,
   ChevronDownIcon,
@@ -6,8 +7,7 @@ import {
   PlusIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { useAutoAnimate } from "@formkit/auto-animate/react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import type { MemoryListEntry } from "../../../app/types";
@@ -23,8 +23,8 @@ import {
   SelectValue,
 } from "../../../components/ui/select";
 import { Textarea } from "../../../components/ui/textarea";
-import { cn } from "../../../lib/utils";
 import { confirmAction } from "../../../lib/desktopCommands";
+import { cn } from "../../../lib/utils";
 
 type DraftMemory = {
   scope: "workspace" | "user";
@@ -92,6 +92,7 @@ export function MemoryPage() {
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
   const memories = runtime?.memories ?? [];
   const memoriesLoading = runtime?.memoriesLoading ?? false;
+  const activeWorkspaceId = workspace?.id ?? null;
 
   const [draft, setDraft] = useState<DraftMemory>(emptyDraft);
   const [editingEntry, setEditingEntry] = useState<MemoryListEntry | null>(null);
@@ -103,19 +104,22 @@ export function MemoryPage() {
 
   const [parent] = useAutoAnimate();
 
-  const requestMemories = (workspaceId: string) => {
-    setMemoryLoadRequestedAt(Date.now());
-    setMemoryLoadStalled(false);
-    void requestWorkspaceMemories(workspaceId);
-  };
+  const requestMemories = useCallback(
+    (workspaceId: string) => {
+      setMemoryLoadRequestedAt(Date.now());
+      setMemoryLoadStalled(false);
+      void requestWorkspaceMemories(workspaceId);
+    },
+    [requestWorkspaceMemories],
+  );
 
   useEffect(() => {
-    if (!workspace) return;
+    if (!activeWorkspaceId) return;
     setEditingEntry(null);
     setDraft(emptyDraft());
     setDialogOpen(false);
-    requestMemories(workspace.id);
-  }, [workspace?.id]);
+    requestMemories(activeWorkspaceId);
+  }, [activeWorkspaceId, requestMemories]);
 
   useEffect(() => {
     if (!memoriesLoading) {
@@ -134,13 +138,17 @@ export function MemoryPage() {
       return;
     }
 
-    const timer = window.setTimeout(() => {
-      setMemoryLoadStalled(true);
-    }, Math.max(0, MEMORY_LOADING_STALL_MS - (Date.now() - requestedAt)));
+    const timer = window.setTimeout(
+      () => {
+        setMemoryLoadStalled(true);
+      },
+      Math.max(0, MEMORY_LOADING_STALL_MS - (Date.now() - requestedAt)),
+    );
     return () => window.clearTimeout(timer);
-  }, [memoriesLoading, memoryLoadRequestedAt, workspace?.id]);
+  }, [memoriesLoading, memoryLoadRequestedAt]);
 
-  const filtered = filterScope === "all" ? memories : memories.filter((m) => m.scope === filterScope);
+  const filtered =
+    filterScope === "all" ? memories : memories.filter((m) => m.scope === filterScope);
   const showMemoryLoading = memoriesLoading && !memoryLoadStalled;
 
   const toggleExpand = (key: string) => {
@@ -188,7 +196,8 @@ export function MemoryPage() {
     void deleteWorkspaceMemory(workspace.id, entry.scope, entry.id);
   };
 
-  const scopeLabel = (scope: "workspace" | "user") => (scope === "workspace" ? "Workspace" : "Global");
+  const scopeLabel = (scope: "workspace" | "user") =>
+    scope === "workspace" ? "Workspace" : "Global";
 
   return (
     <div className="space-y-5">
@@ -240,7 +249,12 @@ export function MemoryPage() {
         </div>
 
         {workspace ? (
-          <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={openCreateDialog}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={openCreateDialog}
+          >
             <PlusIcon className="w-4 h-4 mr-1.5" />
             Add memory
           </Button>
@@ -260,15 +274,25 @@ export function MemoryPage() {
           ) : null}
         </div>
       ) : (
-        <div className="rounded-xl border border-border/70 overflow-hidden bg-background/50" ref={parent}>
+        <div
+          className="rounded-xl border border-border/70 overflow-hidden bg-background/50"
+          ref={parent}
+        >
           {filtered.map((entry) => {
             const key = entryKey(entry);
             const isExpanded = expandedIds[key] ?? false;
 
             return (
-              <div key={key} className={cn("border-b border-border/70 last:border-b-0", isExpanded && "bg-card/40")}>
-                <div
-                  className="flex items-center justify-between p-4 cursor-pointer hover:bg-card/60 transition-colors"
+              <div
+                key={key}
+                className={cn(
+                  "border-b border-border/70 last:border-b-0",
+                  isExpanded && "bg-card/40",
+                )}
+              >
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-card/60"
                   onClick={() => toggleExpand(key)}
                 >
                   <div className="flex items-center gap-3">
@@ -278,26 +302,32 @@ export function MemoryPage() {
                       <ChevronRightIcon className="w-4 h-4 text-muted-foreground" />
                     )}
                     <span className="font-medium text-foreground text-sm">{entry.id}</span>
-                    <Badge variant={entry.scope === "workspace" ? "default" : "secondary"} className="text-[10px] uppercase h-5">
+                    <Badge
+                      variant={entry.scope === "workspace" ? "default" : "secondary"}
+                      className="text-[10px] uppercase h-5"
+                    >
                       {scopeLabel(entry.scope)}
                     </Badge>
                   </div>
                   <span className="text-xs text-muted-foreground/60">
                     Updated {relativeTime(entry.updatedAt)}
                   </span>
-                </div>
+                </button>
 
                 {isExpanded && (
                   <div className="px-10 pb-4 text-xs space-y-3">
                     <pre className="whitespace-pre-wrap text-muted-foreground font-sans text-[13px] leading-relaxed">
                       {entry.content}
                     </pre>
-                    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-2">
                       <Button
                         variant="ghost"
                         size="sm"
                         className="h-7 text-xs text-muted-foreground hover:text-foreground"
-                        onClick={() => openEditDialog(entry)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openEditDialog(entry);
+                        }}
                       >
                         <PencilIcon className="w-3.5 h-3.5 mr-1" />
                         Edit
@@ -306,7 +336,10 @@ export function MemoryPage() {
                         variant="ghost"
                         size="sm"
                         className="h-7 text-xs text-destructive/70 hover:text-destructive hover:bg-destructive/10"
-                        onClick={() => void handleDelete(entry)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleDelete(entry);
+                        }}
                       >
                         <Trash2Icon className="w-3.5 h-3.5 mr-1" />
                         Delete
@@ -320,15 +353,23 @@ export function MemoryPage() {
         </div>
       )}
 
-      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) closeDialog(); }}>
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          if (!open) closeDialog();
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{editingEntry ? `Edit memory` : "Add memory"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-foreground">Title</label>
+              <label htmlFor="memory-title" className="text-xs font-medium text-foreground">
+                Title
+              </label>
               <Input
+                id="memory-title"
                 placeholder="Optional — leave blank for general memory"
                 value={draft.id}
                 disabled={!!editingEntry}
@@ -337,13 +378,17 @@ export function MemoryPage() {
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-foreground">Scope</label>
+              <label htmlFor="memory-scope" className="text-xs font-medium text-foreground">
+                Scope
+              </label>
               <Select
                 value={draft.scope}
                 disabled={!!editingEntry}
-                onValueChange={(value) => setDraft((prev) => ({ ...prev, scope: value as "workspace" | "user" }))}
+                onValueChange={(value) =>
+                  setDraft((prev) => ({ ...prev, scope: value as "workspace" | "user" }))
+                }
               >
-                <SelectTrigger aria-label="Memory scope">
+                <SelectTrigger id="memory-scope" aria-label="Memory scope">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -354,8 +399,11 @@ export function MemoryPage() {
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-foreground">Content</label>
+              <label htmlFor="memory-content" className="text-xs font-medium text-foreground">
+                Content
+              </label>
               <Textarea
+                id="memory-content"
                 placeholder="What should Cowork remember?"
                 className="min-h-[100px]"
                 value={draft.content}

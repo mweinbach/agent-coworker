@@ -1,12 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createElement, StrictMode } from "react";
-import { act } from "react";
+import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-
+import { buildAttachmentSignature } from "../src/app/attachmentInputs";
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
-import { buildAttachmentSignature } from "../src/app/attachmentInputs";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -30,7 +28,9 @@ const MOCK_UPDATE_STATE = {
 class MockMutationObserver {
   observe() {}
   disconnect() {}
-  takeRecords() { return []; }
+  takeRecords() {
+    return [];
+  }
 }
 
 const requestAnimationFrameMock = (callback: FrameRequestCallback) =>
@@ -38,42 +38,44 @@ const requestAnimationFrameMock = (callback: FrameRequestCallback) =>
 
 const cancelAnimationFrameMock = (id: number) => clearTimeout(id);
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
@@ -91,15 +93,22 @@ function setupChatViewJsdom() {
       dom.window.cancelAnimationFrame = cancelAnimationFrameMock;
       Object.assign(dom.window, { event: undefined });
       if (typeof dom.window.HTMLElement.prototype.attachEvent !== "function") {
-        (dom.window.HTMLElement.prototype as { attachEvent?: (name: string, handler: unknown) => void }).attachEvent = () => {};
+        (
+          dom.window.HTMLElement.prototype as {
+            attachEvent?: (name: string, handler: unknown) => void;
+          }
+        ).attachEvent = () => {};
       }
       if (typeof dom.window.HTMLElement.prototype.detachEvent !== "function") {
-        (dom.window.HTMLElement.prototype as { detachEvent?: (name: string, handler: unknown) => void }).detachEvent = () => {};
+        (
+          dom.window.HTMLElement.prototype as {
+            detachEvent?: (name: string, handler: unknown) => void;
+          }
+        ).detachEvent = () => {};
       }
     },
   });
 }
-
 
 const { useAppStore } = await import("../src/app/store");
 const { ChatView, countActiveChildAgents } = await import("../src/ui/ChatView");
@@ -173,17 +182,13 @@ describe("desktop chat view stability", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(
-          createElement(
-            StrictMode,
-            null,
-            createElement(ChatView),
-          ),
-        );
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
       });
 
       expect(container.textContent).toContain("Send a message to start.");
-      expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(false);
+      expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(
+        false,
+      );
       expect(container.querySelector('[data-slot="prompt-input-status-row"]')).toBeNull();
       expect(container.textContent).not.toContain("Press Enter to send");
     } finally {
@@ -457,13 +462,7 @@ describe("desktop chat view stability", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(
-          createElement(
-            StrictMode,
-            null,
-            createElement(ChatView),
-          ),
-        );
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
       });
 
       const separator = container.querySelector('[aria-label="Resize minimum message bar height"]');
@@ -642,13 +641,7 @@ describe("desktop chat view stability", () => {
       root = createRoot(container);
 
       await act(async () => {
-        root.render(
-          createElement(
-            StrictMode,
-            null,
-            createElement(ChatView),
-          ),
-        );
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
       });
 
       expect(container.textContent).toContain("Loading thread");
@@ -761,7 +754,9 @@ describe("desktop chat view stability", () => {
         root.render(createElement(StrictMode, null, createElement(ChatView)));
       });
 
-      const chipButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Collision Report"));
+      const chipButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Collision Report"),
+      );
       expect(chipButton).not.toBeNull();
       expect(container.textContent).not.toContain("Sources");
     } finally {
@@ -859,7 +854,9 @@ describe("desktop chat view stability", () => {
       expect(steerButton).not.toBeNull();
       expect(steerButton?.className).toContain("bg-warning");
       const steerRow = container.querySelector('[data-slot="prompt-input-status-row"]');
-      expect(steerRow?.textContent).toContain("Steer ready. Press Enter to inject it into the current run.");
+      expect(steerRow?.textContent).toContain(
+        "Steer ready. Press Enter to inject it into the current run.",
+      );
 
       await act(async () => {
         useAppStore.setState((state) => ({
@@ -879,7 +876,9 @@ describe("desktop chat view stability", () => {
 
       expect(container.querySelector('[aria-label="Steer current response"]')).not.toBeNull();
       const pendingRow = container.querySelector('[data-slot="prompt-input-status-row"]');
-      expect(pendingRow?.textContent).toContain("Steer sent. Waiting for the running turn to accept it.");
+      expect(pendingRow?.textContent).toContain(
+        "Steer sent. Waiting for the running turn to accept it.",
+      );
 
       await act(async () => {
         useAppStore.setState((state) => ({
@@ -996,9 +995,9 @@ describe("desktop chat view stability", () => {
       });
 
       expect(container.textContent).toContain("diagram.png");
-      expect(container.querySelector('[data-slot="prompt-input-status-row"]')?.textContent).toContain(
-        "Steer ready. Press Enter to inject it into the current run.",
-      );
+      expect(
+        container.querySelector('[data-slot="prompt-input-status-row"]')?.textContent,
+      ).toContain("Steer ready. Press Enter to inject it into the current run.");
       const steerButton = container.querySelector('[aria-label="Steer current response"]');
       expect(steerButton).not.toBeNull();
       expect(steerButton?.hasAttribute("disabled")).toBe(false);
@@ -1072,7 +1071,11 @@ describe("desktop chat view stability", () => {
         },
       },
       composerText: "",
-      sendMessage: async (text: string, busyPolicy?: "reject" | "steer", attachments?: Array<{ filename: string; contentBase64: string; mimeType: string }>) => {
+      sendMessage: async (
+        text: string,
+        busyPolicy?: "reject" | "steer",
+        attachments?: Array<{ filename: string; contentBase64: string; mimeType: string }>,
+      ) => {
         expect(text).toBe("");
         expect(busyPolicy).toBe("steer");
         submittedAttachmentSignature = buildAttachmentSignature(attachments);
@@ -1115,7 +1118,9 @@ describe("desktop chat view stability", () => {
       expect(container.textContent).toContain("diagram.png");
 
       await act(async () => {
-        form.dispatchEvent(new harness.dom.window.Event("submit", { bubbles: true, cancelable: true }));
+        form.dispatchEvent(
+          new harness.dom.window.Event("submit", { bubbles: true, cancelable: true }),
+        );
         await Promise.resolve();
       });
 
@@ -1140,10 +1145,14 @@ describe("desktop chat view stability", () => {
         await Promise.resolve();
       });
 
-      const pendingSteerButton = container.querySelector('button[aria-label="Steer current response"]');
+      const pendingSteerButton = container.querySelector(
+        'button[aria-label="Steer current response"]',
+      );
       expect(pendingSteerButton).not.toBeNull();
       expect((pendingSteerButton as HTMLButtonElement | null)?.disabled).toBe(true);
-      expect(container.textContent).toContain("Steer sent. Waiting for the running turn to accept it.");
+      expect(container.textContent).toContain(
+        "Steer sent. Waiting for the running turn to accept it.",
+      );
 
       await act(async () => {
         useAppStore.setState((state) => ({
@@ -1175,52 +1184,54 @@ describe("desktop chat view stability", () => {
   });
 
   test("counts only active child agents for stop-scope decisions", () => {
-    expect(countActiveChildAgents([
-      {
-        agentId: "agent-running",
-        parentSessionId: "session-1",
-        role: "worker",
-        mode: "delegate",
-        depth: 1,
-        title: "Running worker",
-        provider: "openai",
-        effectiveModel: "gpt-5.4-mini",
-        createdAt: "2026-03-12T00:00:00.000Z",
-        updatedAt: "2026-03-12T00:00:05.000Z",
-        lifecycleState: "active",
-        executionState: "running",
-        busy: true,
-      },
-      {
-        agentId: "agent-complete",
-        parentSessionId: "session-1",
-        role: "worker",
-        mode: "delegate",
-        depth: 1,
-        title: "Completed worker",
-        provider: "openai",
-        effectiveModel: "gpt-5.4-mini",
-        createdAt: "2026-03-12T00:00:00.000Z",
-        updatedAt: "2026-03-12T00:00:05.000Z",
-        lifecycleState: "active",
-        executionState: "completed",
-        busy: false,
-      },
-      {
-        agentId: "agent-closed",
-        parentSessionId: "session-1",
-        role: "worker",
-        mode: "delegate",
-        depth: 1,
-        title: "Closed worker",
-        provider: "openai",
-        effectiveModel: "gpt-5.4-mini",
-        createdAt: "2026-03-12T00:00:00.000Z",
-        updatedAt: "2026-03-12T00:00:05.000Z",
-        lifecycleState: "closed",
-        executionState: "closed",
-        busy: false,
-      },
-    ])).toBe(1);
+    expect(
+      countActiveChildAgents([
+        {
+          agentId: "agent-running",
+          parentSessionId: "session-1",
+          role: "worker",
+          mode: "delegate",
+          depth: 1,
+          title: "Running worker",
+          provider: "openai",
+          effectiveModel: "gpt-5.4-mini",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          updatedAt: "2026-03-12T00:00:05.000Z",
+          lifecycleState: "active",
+          executionState: "running",
+          busy: true,
+        },
+        {
+          agentId: "agent-complete",
+          parentSessionId: "session-1",
+          role: "worker",
+          mode: "delegate",
+          depth: 1,
+          title: "Completed worker",
+          provider: "openai",
+          effectiveModel: "gpt-5.4-mini",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          updatedAt: "2026-03-12T00:00:05.000Z",
+          lifecycleState: "active",
+          executionState: "completed",
+          busy: false,
+        },
+        {
+          agentId: "agent-closed",
+          parentSessionId: "session-1",
+          role: "worker",
+          mode: "delegate",
+          depth: 1,
+          title: "Closed worker",
+          provider: "openai",
+          effectiveModel: "gpt-5.4-mini",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          updatedAt: "2026-03-12T00:00:05.000Z",
+          lifecycleState: "closed",
+          executionState: "closed",
+          busy: false,
+        },
+      ]),
+    ).toBe(1);
   });
 });

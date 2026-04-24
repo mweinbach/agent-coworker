@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
-import os from "node:os";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -14,13 +14,22 @@ import {
 } from "@aws-sdk/client-bedrock";
 
 import { getAiCoworkerPaths, readConnectionStore } from "../connect";
-import type { ProviderCatalogModelEntry } from "./connectionCatalog";
 import type { ResolvedModelMetadata } from "../models/metadataTypes";
-import { defaultModelIdForProvider, getSupportedModel, listSupportedModels } from "../models/registry";
-import { parseConnectionStoreJson, type AiCoworkerPaths, type ConnectionStore, type StoredConnection } from "../store/connections";
+import {
+  defaultModelIdForProvider,
+  getSupportedModel,
+  listSupportedModels,
+} from "../models/registry";
+import {
+  type AiCoworkerPaths,
+  type ConnectionStore,
+  parseConnectionStoreJson,
+  type StoredConnection,
+} from "../store/connections";
+import type { AgentConfig } from "../types";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 import { resolveAuthHomeDir } from "../utils/authHome";
-import type { AgentConfig } from "../types";
+import type { ProviderCatalogModelEntry } from "./connectionCatalog";
 
 export type BedrockAuthMethodId = "aws_default" | "aws_profile" | "aws_keys" | "api_key";
 
@@ -139,8 +148,11 @@ function fileHasAwsDefaultProfile(filePath: string, patterns: RegExp[]): boolean
 function hasAmbientDefaultAwsProfile(home: string): boolean {
   const paths = sharedAwsConfigPaths(home);
   return (
-    fileHasAwsDefaultProfile(paths.credentials, [/^\s*\[default\]\s*$/m])
-    || fileHasAwsDefaultProfile(paths.config, [/^\s*\[profile\s+default\]\s*$/m, /^\s*\[default\]\s*$/m])
+    fileHasAwsDefaultProfile(paths.credentials, [/^\s*\[default\]\s*$/m]) ||
+    fileHasAwsDefaultProfile(paths.config, [
+      /^\s*\[profile\s+default\]\s*$/m,
+      /^\s*\[default\]\s*$/m,
+    ])
   );
 }
 
@@ -203,7 +215,9 @@ function resolveAmbientBedrockAuth(
       source: "env",
       accessKeyId,
       secretAccessKey,
-      ...(asNonEmptyString(env.AWS_SESSION_TOKEN) ? { sessionToken: asNonEmptyString(env.AWS_SESSION_TOKEN) } : {}),
+      ...(asNonEmptyString(env.AWS_SESSION_TOKEN)
+        ? { sessionToken: asNonEmptyString(env.AWS_SESSION_TOKEN) }
+        : {}),
       region: normalizeRegionForMethod("aws_keys", region, env),
     };
   }
@@ -219,12 +233,12 @@ function resolveAmbientBedrockAuth(
   }
 
   if (
-    asNonEmptyString(env.AWS_WEB_IDENTITY_TOKEN_FILE)
-    || asNonEmptyString(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI)
-    || asNonEmptyString(env.AWS_CONTAINER_CREDENTIALS_FULL_URI)
-    || asNonEmptyString(env.AWS_EC2_METADATA_DISABLED) === "false"
-    || (asNonEmptyString(env.AWS_EXECUTION_ENV)?.toLowerCase().includes("ec2") ?? false)
-    || hasAmbientDefaultAwsProfile(home)
+    asNonEmptyString(env.AWS_WEB_IDENTITY_TOKEN_FILE) ||
+    asNonEmptyString(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI) ||
+    asNonEmptyString(env.AWS_CONTAINER_CREDENTIALS_FULL_URI) ||
+    asNonEmptyString(env.AWS_EC2_METADATA_DISABLED) === "false" ||
+    (asNonEmptyString(env.AWS_EXECUTION_ENV)?.toLowerCase().includes("ec2") ?? false) ||
+    hasAmbientDefaultAwsProfile(home)
   ) {
     return {
       methodId: "aws_default",
@@ -236,11 +250,13 @@ function resolveAmbientBedrockAuth(
   return null;
 }
 
-export async function resolveBedrockAuthConfig(opts: {
-  paths?: AiCoworkerPaths;
-  env?: NodeJS.ProcessEnv;
-  config?: Pick<AgentConfig, "skillsDirs">;
-} = {}): Promise<ResolvedBedrockAuthConfig | null> {
+export async function resolveBedrockAuthConfig(
+  opts: {
+    paths?: AiCoworkerPaths;
+    env?: NodeJS.ProcessEnv;
+    config?: Pick<AgentConfig, "skillsDirs">;
+  } = {},
+): Promise<ResolvedBedrockAuthConfig | null> {
   const env = opts.env ?? process.env;
   const home = opts.paths ? path.dirname(opts.paths.rootDir) : resolveAuthHomeDir(opts.config);
   const paths = opts.paths ?? bedrockConfigPaths(home);
@@ -248,11 +264,9 @@ export async function resolveBedrockAuthConfig(opts: {
   return resolveSavedBedrockAuthFromStore(store, env) ?? resolveAmbientBedrockAuth(env, home);
 }
 
-export function resolveBedrockAuthConfigSync(opts: {
-  home?: string;
-  env?: NodeJS.ProcessEnv;
-  config?: Pick<AgentConfig, "skillsDirs">;
-} = {}): ResolvedBedrockAuthConfig | null {
+export function resolveBedrockAuthConfigSync(
+  opts: { home?: string; env?: NodeJS.ProcessEnv; config?: Pick<AgentConfig, "skillsDirs"> } = {},
+): ResolvedBedrockAuthConfig | null {
   const env = opts.env ?? process.env;
   const home = opts.home ?? resolveAuthHomeDir(opts.config);
   const paths = bedrockConfigPaths(home);
@@ -264,7 +278,10 @@ export function bedrockDiscoveryCachePath(paths: AiCoworkerPaths): string {
   return path.join(paths.configDir, BEDROCK_DISCOVERY_CACHE_NAME);
 }
 
-export function bedrockClientConfig(auth: ResolvedBedrockAuthConfig, env: NodeJS.ProcessEnv = process.env): BedrockClientConfig {
+export function bedrockClientConfig(
+  auth: ResolvedBedrockAuthConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): BedrockClientConfig {
   const config: BedrockClientConfig = {};
   const region = normalizeRegionForMethod(auth.methodId, auth.region, env);
   if (region) {
@@ -357,7 +374,11 @@ function readBedrockDiscoveryCacheSync(paths: AiCoworkerPaths): BedrockDiscovery
   try {
     const raw = fsSync.readFileSync(filePath, "utf-8");
     const parsed = JSON.parse(raw) as Partial<BedrockDiscoveryCacheFile>;
-    if (parsed.version !== BEDROCK_DISCOVERY_CACHE_VERSION || !parsed.snapshots || typeof parsed.snapshots !== "object") {
+    if (
+      parsed.version !== BEDROCK_DISCOVERY_CACHE_VERSION ||
+      !parsed.snapshots ||
+      typeof parsed.snapshots !== "object"
+    ) {
       return { version: BEDROCK_DISCOVERY_CACHE_VERSION, snapshots: {} };
     }
     return {
@@ -373,7 +394,9 @@ function readBedrockDiscoveryCacheSync(paths: AiCoworkerPaths): BedrockDiscovery
   }
 }
 
-async function readBedrockDiscoveryCache(paths: AiCoworkerPaths): Promise<BedrockDiscoveryCacheFile> {
+async function readBedrockDiscoveryCache(
+  paths: AiCoworkerPaths,
+): Promise<BedrockDiscoveryCacheFile> {
   return readBedrockDiscoveryCacheSync(paths);
 }
 
@@ -382,11 +405,9 @@ async function writeBedrockDiscoveryCache(
   cacheFile: BedrockDiscoveryCacheFile,
 ): Promise<void> {
   await fs.mkdir(paths.configDir, { recursive: true, mode: 0o700 });
-  await writeTextFileAtomic(
-    bedrockDiscoveryCachePath(paths),
-    JSON.stringify(cacheFile, null, 2),
-    { mode: 0o600 },
-  );
+  await writeTextFileAtomic(bedrockDiscoveryCachePath(paths), JSON.stringify(cacheFile, null, 2), {
+    mode: 0o600,
+  });
 }
 
 function foundationModelIdFromArn(modelArn?: string): string | undefined {
@@ -406,7 +427,9 @@ function supportsImageInputFromModalities(modalities: readonly string[] | undefi
   return Boolean(modalities?.some((modality) => modality.toUpperCase() === "IMAGE"));
 }
 
-function buildFoundationModelsLookup(entries: readonly CachedBedrockModel[]): Map<string, CachedBedrockModel> {
+function buildFoundationModelsLookup(
+  entries: readonly CachedBedrockModel[],
+): Map<string, CachedBedrockModel> {
   const lookup = new Map<string, CachedBedrockModel>();
   for (const entry of entries) {
     lookup.set(entry.id, entry);
@@ -417,7 +440,9 @@ function buildFoundationModelsLookup(entries: readonly CachedBedrockModel[]): Ma
   return lookup;
 }
 
-function foundationSummaryToCachedModel(summary: FoundationModelSummary): CachedBedrockModel | null {
+function foundationSummaryToCachedModel(
+  summary: FoundationModelSummary,
+): CachedBedrockModel | null {
   const modelId = asNonEmptyString(summary.modelId);
   if (!modelId) return null;
   if (summary.responseStreamingSupported === false) return null;
@@ -438,9 +463,14 @@ function inferenceProfileToCachedModel(
 ): CachedBedrockModel | null {
   const inferenceProfileId = asNonEmptyString(summary.inferenceProfileId);
   if (!inferenceProfileId) return null;
-  const referenced = summary.models
-    ?.map((model) => foundationLookup.get(model.modelArn ?? "") ?? foundationLookup.get(modelIdFromArn(model.modelArn) ?? ""))
-    .filter((entry): entry is CachedBedrockModel => !!entry) ?? [];
+  const referenced =
+    summary.models
+      ?.map(
+        (model) =>
+          foundationLookup.get(model.modelArn ?? "") ??
+          foundationLookup.get(modelIdFromArn(model.modelArn) ?? ""),
+      )
+      .filter((entry): entry is CachedBedrockModel => !!entry) ?? [];
   if (referenced.length === 0) return null;
   return {
     id: inferenceProfileId,
@@ -460,10 +490,10 @@ function provisionedModelToCachedModel(
   const id = asNonEmptyString(summary.provisionedModelArn);
   if (!id) return null;
   const reference =
-    foundationLookup.get(summary.foundationModelArn ?? "")
-    ?? foundationLookup.get(modelIdFromArn(summary.foundationModelArn) ?? "")
-    ?? foundationLookup.get(summary.modelArn ?? "")
-    ?? foundationLookup.get(modelIdFromArn(summary.modelArn) ?? "");
+    foundationLookup.get(summary.foundationModelArn ?? "") ??
+    foundationLookup.get(modelIdFromArn(summary.foundationModelArn) ?? "") ??
+    foundationLookup.get(summary.modelArn ?? "") ??
+    foundationLookup.get(modelIdFromArn(summary.modelArn) ?? "");
   if (!reference) return null;
   return {
     id,
@@ -476,7 +506,9 @@ function provisionedModelToCachedModel(
   };
 }
 
-function customDeploymentToCachedModel(summary: CustomModelDeploymentSummary): CachedBedrockModel | null {
+function customDeploymentToCachedModel(
+  summary: CustomModelDeploymentSummary,
+): CachedBedrockModel | null {
   const id = asNonEmptyString(summary.customModelDeploymentArn);
   if (!id) return null;
   return {
@@ -516,7 +548,9 @@ async function listAllInferenceProfiles(client: Bedrock): Promise<InferenceProfi
   return out;
 }
 
-async function listAllCustomModelDeployments(client: Bedrock): Promise<CustomModelDeploymentSummary[]> {
+async function listAllCustomModelDeployments(
+  client: Bedrock,
+): Promise<CustomModelDeploymentSummary[]> {
   const out: CustomModelDeploymentSummary[] = [];
   let nextToken: string | undefined;
   do {
@@ -531,7 +565,9 @@ async function listAllCustomModelDeployments(client: Bedrock): Promise<CustomMod
   return out;
 }
 
-async function listAllProvisionedModelThroughputs(client: Bedrock): Promise<ProvisionedModelSummary[]> {
+async function listAllProvisionedModelThroughputs(
+  client: Bedrock,
+): Promise<ProvisionedModelSummary[]> {
   const out: ProvisionedModelSummary[] = [];
   let nextToken: string | undefined;
   do {
@@ -560,8 +596,9 @@ async function listAllImportedModels(client: Bedrock): Promise<ImportedModelSumm
 }
 
 function sortBedrockModels(models: CachedBedrockModel[]): CachedBedrockModel[] {
-  return [...models].sort((left, right) =>
-    left.displayName.localeCompare(right.displayName) || left.id.localeCompare(right.id),
+  return [...models].sort(
+    (left, right) =>
+      left.displayName.localeCompare(right.displayName) || left.id.localeCompare(right.id),
   );
 }
 
@@ -577,7 +614,9 @@ function formatBedrockDiscoveryError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function liveDiscoverBedrockModels(auth: ResolvedBedrockAuthConfig): Promise<CachedBedrockModel[]> {
+async function liveDiscoverBedrockModels(
+  auth: ResolvedBedrockAuthConfig,
+): Promise<CachedBedrockModel[]> {
   const client = new Bedrock(bedrockClientConfig(auth));
   const foundationResponse = await client.listFoundationModels({});
   const foundationModels = (foundationResponse.modelSummaries ?? [])
@@ -585,17 +624,13 @@ async function liveDiscoverBedrockModels(auth: ResolvedBedrockAuthConfig): Promi
     .filter((entry: CachedBedrockModel | null): entry is CachedBedrockModel => !!entry);
   const foundationLookup = buildFoundationModelsLookup(foundationModels);
 
-  const [
-    inferenceProfiles,
-    customDeployments,
-    provisionedModels,
-    importedModels,
-  ] = await Promise.all([
-    listAllInferenceProfiles(client),
-    listAllCustomModelDeployments(client),
-    listAllProvisionedModelThroughputs(client),
-    listAllImportedModels(client),
-  ]);
+  const [inferenceProfiles, customDeployments, provisionedModels, importedModels] =
+    await Promise.all([
+      listAllInferenceProfiles(client),
+      listAllCustomModelDeployments(client),
+      listAllProvisionedModelThroughputs(client),
+      listAllImportedModels(client),
+    ]);
 
   return dedupeBedrockModels([
     ...foundationModels,
@@ -617,11 +652,13 @@ async function liveDiscoverBedrockModels(auth: ResolvedBedrockAuthConfig): Promi
   ]);
 }
 
-export async function refreshBedrockDiscoveryCache(opts: {
-  paths?: AiCoworkerPaths;
-  env?: NodeJS.ProcessEnv;
-  config?: Pick<AgentConfig, "skillsDirs">;
-} = {}): Promise<{
+export async function refreshBedrockDiscoveryCache(
+  opts: {
+    paths?: AiCoworkerPaths;
+    env?: NodeJS.ProcessEnv;
+    config?: Pick<AgentConfig, "skillsDirs">;
+  } = {},
+): Promise<{
   ok: boolean;
   auth: ResolvedBedrockAuthConfig | null;
   models: CachedBedrockModel[];
@@ -664,7 +701,9 @@ export async function refreshBedrockDiscoveryCache(opts: {
       ok: true,
       auth,
       models,
-      defaultModel: models.some((model) => model.id === defaultModel) ? defaultModel : (models[0]?.id ?? defaultModel),
+      defaultModel: models.some((model) => model.id === defaultModel)
+        ? defaultModel
+        : (models[0]?.id ?? defaultModel),
       message: "Amazon Bedrock credentials verified.",
       usedCache: false,
       updatedAt,
@@ -675,7 +714,9 @@ export async function refreshBedrockDiscoveryCache(opts: {
         ok: false,
         auth,
         models: cached.models,
-        defaultModel: cached.models.some((model) => model.id === defaultModel) ? defaultModel : (cached.models[0]?.id ?? defaultModel),
+        defaultModel: cached.models.some((model) => model.id === defaultModel)
+          ? defaultModel
+          : (cached.models[0]?.id ?? defaultModel),
         message: `Bedrock discovery failed: ${formatBedrockDiscoveryError(error)} Using cached Bedrock catalog from ${cached.updatedAt}.`,
         usedCache: true,
         updatedAt: cached.updatedAt,
@@ -692,11 +733,13 @@ export async function refreshBedrockDiscoveryCache(opts: {
   }
 }
 
-export async function readBedrockCatalogSnapshot(opts: {
-  paths?: AiCoworkerPaths;
-  env?: NodeJS.ProcessEnv;
-  config?: Pick<AgentConfig, "skillsDirs">;
-} = {}): Promise<{
+export async function readBedrockCatalogSnapshot(
+  opts: {
+    paths?: AiCoworkerPaths;
+    env?: NodeJS.ProcessEnv;
+    config?: Pick<AgentConfig, "skillsDirs">;
+  } = {},
+): Promise<{
   auth: ResolvedBedrockAuthConfig | null;
   models: CachedBedrockModel[];
   defaultModel: string;
@@ -736,7 +779,9 @@ export async function readBedrockCatalogSnapshot(opts: {
   return {
     auth,
     models: cached.models,
-    defaultModel: cached.models.some((model) => model.id === defaultModel) ? defaultModel : (cached.models[0]?.id ?? defaultModel),
+    defaultModel: cached.models.some((model) => model.id === defaultModel)
+      ? defaultModel
+      : (cached.models[0]?.id ?? defaultModel),
     state: "ready",
     connected: true,
   };
@@ -801,11 +846,9 @@ export async function resolveBedrockModelMetadata(opts: {
   return known ?? buildBedrockPlaceholderMetadata(normalized);
 }
 
-export async function resolveDefaultBedrockModelMetadata(opts: {
-  home?: string;
-  config?: Pick<AgentConfig, "skillsDirs">;
-  env?: NodeJS.ProcessEnv;
-} = {}): Promise<ResolvedModelMetadata> {
+export async function resolveDefaultBedrockModelMetadata(
+  opts: { home?: string; config?: Pick<AgentConfig, "skillsDirs">; env?: NodeJS.ProcessEnv } = {},
+): Promise<ResolvedModelMetadata> {
   const snapshot = await readBedrockCatalogSnapshot({
     paths: opts.home ? bedrockConfigPaths(opts.home) : undefined,
     env: opts.env,

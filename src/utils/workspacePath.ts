@@ -6,7 +6,10 @@ import path from "node:path";
  * usually compare equal. Windows paths are case-folded because workspace lookups there are
  * case-insensitive in practice.
  */
-export function canonicalWorkspacePath(dir: string, platform: NodeJS.Platform = process.platform): string {
+export function canonicalWorkspacePath(
+  dir: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
   const trimmed = dir.trim();
   if (!trimmed) return trimmed;
   const pathImpl = platform === "win32" ? path.win32 : path.posix;
@@ -14,7 +17,11 @@ export function canonicalWorkspacePath(dir: string, platform: NodeJS.Platform = 
   return platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-export function sameWorkspacePath(a: string, b: string, platform: NodeJS.Platform = process.platform): boolean {
+export function sameWorkspacePath(
+  a: string,
+  b: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
   return canonicalWorkspacePath(a, platform) === canonicalWorkspacePath(b, platform);
 }
 
@@ -22,7 +29,11 @@ export function sameWorkspacePath(a: string, b: string, platform: NodeJS.Platfor
  * Returns true when either path is a prefix (ancestor) of or equal to the other.
  * This catches the case where copying sourceRoot into a subtree of itself would recurse.
  */
-export function workspacePathOverlaps(a: string, b: string, platform: NodeJS.Platform = process.platform): boolean {
+export function workspacePathOverlaps(
+  a: string,
+  b: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
   const ca = canonicalWorkspacePath(a, platform);
   const cb = canonicalWorkspacePath(b, platform);
   if (ca === cb) return true;

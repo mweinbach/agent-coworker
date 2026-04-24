@@ -9,6 +9,13 @@ export const DEFAULT_CODEX_CLI_PROVIDER_OPTIONS = {
 
 export const codexCliProvider = {
   keyCandidates: ["codex-cli"] as const,
-  createModel: ({ config, modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) =>
-    createCodexCliModelAdapter(config, modelId, savedKey),
+  createModel: ({
+    config,
+    modelId,
+    savedKey,
+  }: {
+    config: AgentConfig;
+    modelId: string;
+    savedKey?: string;
+  }) => createCodexCliModelAdapter(config, modelId, savedKey),
 };

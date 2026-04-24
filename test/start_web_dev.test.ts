@@ -20,8 +20,8 @@ describe("createServerStdoutMonitor", () => {
     const echoed: string[] = [];
     const monitor = createServerStdoutMonitor(
       createStdoutStream([
-        "{\"type\":\"server_",
-        "listening\",\"url\":\"ws://127.0.0.1:7337/ws\"}\n",
+        '{"type":"server_',
+        'listening","url":"ws://127.0.0.1:7337/ws"}\n',
         "server log after ready\n",
       ]),
       (line) => echoed.push(line),

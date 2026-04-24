@@ -89,8 +89,10 @@ export async function captureWorkspaceControlEvent<T extends ServerEvent>(
   action: (session: AgentSession) => Promise<void> | void,
   predicate: (event: ServerEvent) => event is T,
 ): Promise<T> {
-  return await context.workspaceControl.withSession(cwd, async (binding, session) =>
-    await captureBindingEvent(context, binding, async () => await action(session), predicate)
+  return await context.workspaceControl.withSession(
+    cwd,
+    async (binding, session) =>
+      await captureBindingEvent(context, binding, async () => await action(session), predicate),
   );
 }
 
@@ -100,8 +102,10 @@ export async function captureWorkspaceControlOutcome<T extends ServerEvent>(
   action: (session: AgentSession) => Promise<void> | void,
   predicate: (event: ServerEvent) => event is T,
 ): Promise<JsonRpcSessionOutcome<T>> {
-  return await context.workspaceControl.withSession(cwd, async (binding, session) =>
-    await captureBindingOutcome(context, binding, async () => await action(session), predicate)
+  return await context.workspaceControl.withSession(
+    cwd,
+    async (binding, session) =>
+      await captureBindingOutcome(context, binding, async () => await action(session), predicate),
   );
 }
 
@@ -111,8 +115,15 @@ export async function captureWorkspaceControlMutationOutcome<T extends ServerEve
   action: (session: AgentSession) => Promise<void> | void,
   predicate: (event: ServerEvent) => event is T,
 ): Promise<JsonRpcSessionOutcome<T> | null> {
-  return await context.workspaceControl.withSession(cwd, async (binding, session) =>
-    await captureBindingMutationOutcome(context, binding, async () => await action(session), predicate)
+  return await context.workspaceControl.withSession(
+    cwd,
+    async (binding, session) =>
+      await captureBindingMutationOutcome(
+        context,
+        binding,
+        async () => await action(session),
+        predicate,
+      ),
   );
 }
 
@@ -121,8 +132,10 @@ export async function captureWorkspaceControlMutationError(
   cwd: string,
   action: (session: AgentSession) => Promise<void> | void,
 ): Promise<JsonRpcSessionError | null> {
-  return await context.workspaceControl.withSession(cwd, async (binding, session) =>
-    await captureBindingMutationError(context, binding, async () => await action(session))
+  return await context.workspaceControl.withSession(
+    cwd,
+    async (binding, session) =>
+      await captureBindingMutationError(context, binding, async () => await action(session)),
   );
 }
 
@@ -133,8 +146,16 @@ export async function captureWorkspaceControlMutationEvents<T extends ServerEven
   predicate: (event: ServerEvent) => event is T,
   options?: MutationEventCaptureOptions,
 ): Promise<JsonRpcSessionOutcome<T>[]> {
-  return await context.workspaceControl.withSession(cwd, async (binding, session) =>
-    await captureBindingMutationEvents(context, binding, async () => await action(session), predicate, options)
+  return await context.workspaceControl.withSession(
+    cwd,
+    async (binding, session) =>
+      await captureBindingMutationEvents(
+        context,
+        binding,
+        async () => await action(session),
+        predicate,
+        options,
+      ),
   );
 }
 

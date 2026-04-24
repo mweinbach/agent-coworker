@@ -55,15 +55,16 @@ function buildDefaultConfirmDialog(
   };
 }
 
-export function buildConfirmDialog(input: ConfirmActionInput, platform: NodeJS.Platform = process.platform): BuiltConfirmDialog {
+export function buildConfirmDialog(
+  input: ConfirmActionInput,
+  platform: NodeJS.Platform = process.platform,
+): BuiltConfirmDialog {
   const confirmLabel = trimOrDefault(input.confirmLabel, "Confirm");
   const cancelLabel = trimOrDefault(input.cancelLabel, "Cancel");
 
   switch (platform) {
     case "darwin":
       return buildDarwinConfirmDialog(input, confirmLabel, cancelLabel);
-    case "win32":
-    case "linux":
     default:
       return buildDefaultConfirmDialog(input, confirmLabel, cancelLabel);
   }

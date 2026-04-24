@@ -1,21 +1,25 @@
-import type { connectProvider as connectModelProvider, ConnectProviderResult, getAiCoworkerPaths } from "../../connect";
-import type { loadSystemPromptWithSkills } from "../../prompt";
-import type { SessionCostTracker, SessionUsageSnapshot } from "../../session/costTracker";
 import type { runTurn } from "../../agent";
+import type {
+  ConnectProviderResult,
+  connectProvider as connectModelProvider,
+  getAiCoworkerPaths,
+} from "../../connect";
 import type { HarnessContextStore } from "../../harness/contextStore";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
-import type { getProviderCatalog } from "../../providers/connectionCatalog";
+import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { getProviderStatuses } from "../../providerStatus";
-import type { OpenAiCompatibleProviderOptionsByProvider } from "../../shared/openaiCompatibleOptions";
-import type { ProviderContinuationState } from "../../shared/providerContinuation";
+import type { getProviderCatalog } from "../../providers/connectionCatalog";
+import type { SessionCostTracker, SessionUsageSnapshot } from "../../session/costTracker";
 import type {
-  AgentSpawnContextOptions,
   AgentInspectResult,
   AgentReasoningEffort,
-  PersistentAgentSummary,
   AgentRole,
+  AgentSpawnContextOptions,
+  PersistentAgentSummary,
 } from "../../shared/agents";
-import type { AgentWaitMode, AgentWaitResult } from "../agents/types";
+import type { OpenAiCompatibleProviderOptionsByProvider } from "../../shared/openaiCompatibleOptions";
+import type { ProviderContinuationState } from "../../shared/providerContinuation";
+import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type {
   AgentConfig,
   ChildModelRoutingMode,
@@ -25,6 +29,7 @@ import type {
   ServerErrorSource,
   TodoItem,
 } from "../../types";
+import type { AgentWaitMode, AgentWaitResult } from "../agents/types";
 import type { ServerEvent } from "../protocol";
 import type {
   SessionBackupHandle,
@@ -34,9 +39,8 @@ import type {
   WorkspaceBackupPublicEntry,
 } from "../sessionBackup";
 import type { SessionDb, SessionPersistenceStatus } from "../sessionDb";
-import type { generateSessionTitle, SessionTitleSource } from "../sessionTitleService";
 import type { writePersistedSessionSnapshot } from "../sessionStore";
-import type { SessionSnapshot } from "../../shared/sessionSnapshot";
+import type { generateSessionTitle } from "../sessionTitleService";
 
 export type SessionBackupFactory = (opts: SessionBackupInitOptions) => Promise<SessionBackupHandle>;
 
@@ -74,7 +78,10 @@ export type PersistedProjectConfigPatch = Partial<
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
 };
 
-export type SessionInfoState = Omit<Extract<ServerEvent, { type: "session_info" }>, "type" | "sessionId">;
+export type SessionInfoState = Omit<
+  Extract<ServerEvent, { type: "session_info" }>,
+  "type" | "sessionId"
+>;
 
 export type HydratedSessionState = {
   sessionId: string;
@@ -150,15 +157,17 @@ export type SessionDependencies = {
   generateSessionTitleImpl: typeof generateSessionTitle;
   sessionDb: SessionDb | null;
   writePersistedSessionSnapshotImpl: typeof writePersistedSessionSnapshot;
-  createAgentSessionImpl?: (opts: AgentSpawnContextOptions & {
-    parentSessionId: string;
-    parentConfig: AgentConfig;
-    message: string;
-    role?: AgentRole;
-    model?: string;
-    reasoningEffort?: AgentReasoningEffort;
-    parentDepth?: number;
-  }) => Promise<PersistentAgentSummary>;
+  createAgentSessionImpl?: (
+    opts: AgentSpawnContextOptions & {
+      parentSessionId: string;
+      parentConfig: AgentConfig;
+      message: string;
+      role?: AgentRole;
+      model?: string;
+      reasoningEffort?: AgentReasoningEffort;
+      parentDepth?: number;
+    },
+  ) => Promise<PersistentAgentSummary>;
   listAgentSessionsImpl?: (parentSessionId: string) => Promise<PersistentAgentSummary[]>;
   sendAgentInputImpl?: (opts: {
     parentSessionId: string;
@@ -223,7 +232,9 @@ export type SessionDependencies = {
   }) => Promise<WorkspaceBackupDeltaPreview>;
   getLiveSessionSnapshotImpl?: (sessionId: string) => SessionSnapshot | null;
   getLiveSessionWorkingDirectoryImpl?: (sessionId: string) => string | null;
-  buildLegacySessionSnapshotImpl?: (record: import("../sessionDb").PersistedSessionRecord) => SessionSnapshot;
+  buildLegacySessionSnapshotImpl?: (
+    record: import("../sessionDb").PersistedSessionRecord,
+  ) => SessionSnapshot;
   getSkillMutationBlockReasonImpl?: (workingDirectory: string) => string | null;
   refreshSkillsAcrossWorkspaceSessionsImpl?: (opts: {
     workingDirectory: string;
@@ -242,12 +253,14 @@ export type SessionContext = {
     name: string,
     status: "ok" | "error",
     attributes?: Record<string, string | number | boolean>,
-    durationMs?: number
+    durationMs?: number,
   ) => void;
   formatError: (err: unknown) => string;
   guardBusy: () => boolean;
   getCoworkPaths: () => ReturnType<typeof getAiCoworkerPaths>;
-  runProviderConnect: (opts: Parameters<typeof connectModelProvider>[0]) => Promise<ConnectProviderResult>;
+  runProviderConnect: (
+    opts: Parameters<typeof connectModelProvider>[0],
+  ) => Promise<ConnectProviderResult>;
   getMcpServerByName: (nameRaw: string) => Promise<MCPRegistryServer | null>;
   queuePersistSessionSnapshot: (reason: string) => void;
   updateSessionInfo: (

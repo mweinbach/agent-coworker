@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { createElement, StrictMode } from "react";
-import { act } from "react";
+import { act, createElement, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { clearJsonRpcSocketOverride, NoopJsonRpcSocket, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
+import {
+  clearJsonRpcSocketOverride,
+  NoopJsonRpcSocket,
+  setJsonRpcSocketOverride,
+} from "./helpers/jsonRpcSocketMock";
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 import { setupJsdom } from "./jsdomHarness";
 
@@ -30,42 +33,44 @@ const MOCK_UPDATE_STATE = {
   progress: null,
 };
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
@@ -82,7 +87,9 @@ const {
   ensureControlSocket,
   ensureThreadSocket,
 } = await import("../src/app/store.helpers");
-const { __internal: jsonRpcSocketInternal } = await import("../src/app/store.helpers/jsonRpcSocket");
+const { __internal: jsonRpcSocketInternal } = await import(
+  "../src/app/store.helpers/jsonRpcSocket"
+);
 const defaultStoreState = useAppStore.getState();
 
 class MockJsonRpcSocket {
@@ -285,12 +292,21 @@ describe("App JSON-RPC shutdown disposal", () => {
 
       await act(async () => {
         ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
-        ensureThreadSocket(useAppStore.getState as any, useAppStore.setState as any, threadId, "ws://mock");
+        ensureThreadSocket(
+          useAppStore.getState as any,
+          useAppStore.setState as any,
+          threadId,
+          "ws://mock",
+        );
         await flushAsyncWork();
       });
 
-      expect(jsonRpcSocketInternal.getWorkspaceStateSnapshot(workspaceId).routerCount).toBeGreaterThan(0);
-      expect(jsonRpcSocketInternal.getWorkspaceStateSnapshot(workspaceId).lifecycleListenerCount).toBeGreaterThan(0);
+      expect(
+        jsonRpcSocketInternal.getWorkspaceStateSnapshot(workspaceId).routerCount,
+      ).toBeGreaterThan(0);
+      expect(
+        jsonRpcSocketInternal.getWorkspaceStateSnapshot(workspaceId).lifecycleListenerCount,
+      ).toBeGreaterThan(0);
       expect(RUNTIME.jsonRpcSockets.has(workspaceId)).toBe(true);
 
       await act(async () => {

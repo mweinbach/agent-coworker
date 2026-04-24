@@ -5,11 +5,11 @@ import {
   buildJsonRpcResultResponse,
   JSONRPC_ERROR_CODES,
   JSONRPC_PROTOCOL_VERSION,
-  parseInitializeParams,
-  parseInitializedParams,
   type JsonRpcLiteClientResponse,
   type JsonRpcLiteNotification,
   type JsonRpcLiteRequest,
+  parseInitializedParams,
+  parseInitializeParams,
 } from "./protocol";
 
 type DispatchJsonRpcMessageArgs = {
@@ -41,15 +41,25 @@ function isJsonRpcResponse(
   return "id" in message && !("method" in message);
 }
 
-export function dispatchJsonRpcMessage({ ws, message, onRequest, onNotification, onResponse, send }: DispatchJsonRpcMessageArgs): void {
+export function dispatchJsonRpcMessage({
+  ws,
+  message,
+  onRequest,
+  onNotification,
+  onResponse,
+  send,
+}: DispatchJsonRpcMessageArgs): void {
   const sendJsonRpc = send ?? defaultSendJsonRpc;
   const rpc = ws.data.rpc;
   if (!rpc) {
     if (isJsonRpcRequest(message) || isJsonRpcResponse(message)) {
-      sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
-        code: JSONRPC_ERROR_CODES.internalError,
-        message: "Missing JSON-RPC connection state",
-      }));
+      sendJsonRpc(
+        ws,
+        buildJsonRpcErrorResponse(message.id, {
+          code: JSONRPC_ERROR_CODES.internalError,
+          message: "Missing JSON-RPC connection state",
+        }),
+      );
     }
     return;
   }
@@ -61,17 +71,23 @@ export function dispatchJsonRpcMessage({ ws, message, onRequest, onNotification,
 
   if (message.method === "initialize") {
     if (!isJsonRpcRequest(message)) {
-      sendJsonRpc(ws, buildJsonRpcErrorResponse(null, {
-        code: JSONRPC_ERROR_CODES.invalidRequest,
-        message: "initialize must be sent as a request",
-      }));
+      sendJsonRpc(
+        ws,
+        buildJsonRpcErrorResponse(null, {
+          code: JSONRPC_ERROR_CODES.invalidRequest,
+          message: "initialize must be sent as a request",
+        }),
+      );
       return;
     }
     if (rpc.initializeRequestReceived) {
-      sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
-        code: JSONRPC_ERROR_CODES.alreadyInitialized,
-        message: "Already initialized",
-      }));
+      sendJsonRpc(
+        ws,
+        buildJsonRpcErrorResponse(message.id, {
+          code: JSONRPC_ERROR_CODES.alreadyInitialized,
+          message: "Already initialized",
+        }),
+      );
       return;
     }
     const parsed = parseInitializeParams(message.params);
@@ -85,20 +101,23 @@ export function dispatchJsonRpcMessage({ ws, message, onRequest, onNotification,
       experimentalApi: parsed.params.capabilities?.experimentalApi === true,
       optOutNotificationMethods: [...(parsed.params.capabilities?.optOutNotificationMethods ?? [])],
     };
-    sendJsonRpc(ws, buildJsonRpcResultResponse(message.id, {
-      protocolVersion: JSONRPC_PROTOCOL_VERSION,
-      serverInfo: {
-        name: "cowork",
-        subprotocol: ws.data.selectedSubprotocol ?? undefined,
-      },
-      capabilities: {
-        experimentalApi: true,
-      },
-      transport: {
-        type: "websocket",
-        protocolMode: ws.data.protocolMode ?? "jsonrpc",
-      },
-    }));
+    sendJsonRpc(
+      ws,
+      buildJsonRpcResultResponse(message.id, {
+        protocolVersion: JSONRPC_PROTOCOL_VERSION,
+        serverInfo: {
+          name: "cowork",
+          subprotocol: ws.data.selectedSubprotocol ?? undefined,
+        },
+        capabilities: {
+          experimentalApi: true,
+        },
+        transport: {
+          type: "websocket",
+          protocolMode: ws.data.protocolMode ?? "jsonrpc",
+        },
+      }),
+    );
     return;
   }
 
@@ -113,10 +132,13 @@ export function dispatchJsonRpcMessage({ ws, message, onRequest, onNotification,
       return;
     }
     if (!rpc.initializeRequestReceived) {
-      sendJsonRpc(ws, buildJsonRpcErrorResponse(isJsonRpcRequest(message) ? message.id : null, {
-        code: JSONRPC_ERROR_CODES.notInitialized,
-        message: "Not initialized",
-      }));
+      sendJsonRpc(
+        ws,
+        buildJsonRpcErrorResponse(isJsonRpcRequest(message) ? message.id : null, {
+          code: JSONRPC_ERROR_CODES.notInitialized,
+          message: "Not initialized",
+        }),
+      );
       return;
     }
     rpc.initializedNotificationReceived = true;
@@ -128,15 +150,21 @@ export function dispatchJsonRpcMessage({ ws, message, onRequest, onNotification,
 
   if (!rpc.initializeRequestReceived || !rpc.initializedNotificationReceived) {
     if (isJsonRpcRequest(message)) {
-      sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
-        code: JSONRPC_ERROR_CODES.notInitialized,
-        message: "Not initialized",
-      }));
+      sendJsonRpc(
+        ws,
+        buildJsonRpcErrorResponse(message.id, {
+          code: JSONRPC_ERROR_CODES.notInitialized,
+          message: "Not initialized",
+        }),
+      );
     } else {
-      sendJsonRpc(ws, buildJsonRpcErrorResponse(null, {
-        code: JSONRPC_ERROR_CODES.notInitialized,
-        message: "Not initialized",
-      }));
+      sendJsonRpc(
+        ws,
+        buildJsonRpcErrorResponse(null, {
+          code: JSONRPC_ERROR_CODES.notInitialized,
+          message: "Not initialized",
+        }),
+      );
     }
     return;
   }
@@ -151,8 +179,11 @@ export function dispatchJsonRpcMessage({ ws, message, onRequest, onNotification,
     return;
   }
 
-  sendJsonRpc(ws, buildJsonRpcErrorResponse(message.id, {
-    code: JSONRPC_ERROR_CODES.methodNotFound,
-    message: `Unknown method: ${message.method}`,
-  }));
+  sendJsonRpc(
+    ws,
+    buildJsonRpcErrorResponse(message.id, {
+      code: JSONRPC_ERROR_CODES.methodNotFound,
+      message: `Unknown method: ${message.method}`,
+    }),
+  );
 }

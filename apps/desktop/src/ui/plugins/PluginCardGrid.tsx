@@ -38,14 +38,16 @@ export function PluginCardGrid({
                 </div>
               </div>
               {plugin.enabled ? (
-                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Enabled</Badge>
+                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                  Enabled
+                </Badge>
               ) : (
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0">Disabled</Badge>
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                  Disabled
+                </Badge>
               )}
             </div>
-            <div className="mb-3 flex-1 line-clamp-3 text-xs text-muted-foreground">
-              {subtitle}
-            </div>
+            <div className="mb-3 flex-1 line-clamp-3 text-xs text-muted-foreground">{subtitle}</div>
             <div className="mt-auto flex flex-wrap items-center gap-2">
               {plugin.marketplace?.category ? (
                 <Badge variant="outline" className="text-[10px] px-1.5 py-0">

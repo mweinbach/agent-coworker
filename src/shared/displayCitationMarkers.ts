@@ -1,5 +1,5 @@
-const citationClusterPattern = /(?:[ \t]*[【\[]\d+(?::\d+)?†[^\]】]+[】\]])+/g;
-const citationMarkerPattern = /[【\[](\d+)(?::\d+)?†[^\]】]+[】\]]/g;
+const citationClusterPattern = /(?:[ \t]*[【[]\d+(?::\d+)?†[^\]】]+[】\]])+/g;
+const citationMarkerPattern = /[【[](\d+)(?::\d+)?†[^\]】]+[】\]]/g;
 const citationSpacingExemptPrefix = /[\s([{'"“‘-]/;
 const citationChipTitlePrefix = "__cowork_citation_sources__:";
 
@@ -82,19 +82,28 @@ function maybeParseJson(value: string): unknown {
   }
 }
 
-function toMarkdownCitationLabel(id: string, citationUrlsByIndex?: ReadonlyMap<number, string>): string | null {
+function toMarkdownCitationLabel(
+  id: string,
+  citationUrlsByIndex?: ReadonlyMap<number, string>,
+): string | null {
   const numericId = Number.parseInt(id, 10);
   const url = Number.isFinite(numericId) ? citationUrlsByIndex?.get(numericId) : undefined;
   return url ? `[${id}](${url})` : null;
 }
 
-function toHtmlCitationLabel(id: string, citationUrlsByIndex?: ReadonlyMap<number, string>): string | null {
+function toHtmlCitationLabel(
+  id: string,
+  citationUrlsByIndex?: ReadonlyMap<number, string>,
+): string | null {
   const numericId = Number.parseInt(id, 10);
   const url = Number.isFinite(numericId) ? citationUrlsByIndex?.get(numericId) : undefined;
   return url ? `<a href="${url}">${id}</a>` : null;
 }
 
-function toHtmlCitationCluster(ids: string[], citationUrlsByIndex?: ReadonlyMap<number, string>): string {
+function toHtmlCitationCluster(
+  ids: string[],
+  citationUrlsByIndex?: ReadonlyMap<number, string>,
+): string {
   const renderedIds = ids
     .map((id) => toHtmlCitationLabel(id, citationUrlsByIndex))
     .filter((value): value is string => Boolean(value));
@@ -182,7 +191,11 @@ function skipMarkdownLinePrefix(text: string, index: number): number {
     const base = cursor;
     let probe = cursor;
 
-    while (probe < text.length && (text[probe] === " " || text[probe] === "\t") && probe - base < 4) {
+    while (
+      probe < text.length &&
+      (text[probe] === " " || text[probe] === "\t") &&
+      probe - base < 4
+    ) {
       probe += 1;
     }
 
@@ -251,7 +264,7 @@ function markdownDelimiterRunLengthAt(text: string, index: number): number {
     return length;
   }
 
-  const previous = index > 0 ? text[index - 1] ?? "" : "";
+  const previous = index > 0 ? (text[index - 1] ?? "") : "";
   const next = text[end] ?? "";
   const previousWhitespace = previous.length === 0 || /\s/.test(previous);
   const nextWhitespace = next.length === 0 || /\s/.test(next);
@@ -496,7 +509,11 @@ function findPreviousSentenceBoundaryIndex(text: string, index: number): number 
   return null;
 }
 
-function countLeadingWordCharsSince(text: string, boundaryIndex: number, targetIndex: number): number {
+function countLeadingWordCharsSince(
+  text: string,
+  boundaryIndex: number,
+  targetIndex: number,
+): number {
   let count = 0;
   for (let cursor = boundaryIndex + 1; cursor <= targetIndex && cursor < text.length; cursor += 1) {
     const current = text[cursor];
@@ -525,7 +542,11 @@ function resolveRawAnnotationEndIndex(text: string, rawEndIndex: number): number
   let anchorCharIndex = previousAnchorCharIndex;
   const previousSentenceBoundaryIndex = findPreviousSentenceBoundaryIndex(text, anchorCharIndex);
   if (previousSentenceBoundaryIndex !== null && previousSentenceBoundaryIndex < anchorCharIndex) {
-    const leadingWordChars = countLeadingWordCharsSince(text, previousSentenceBoundaryIndex, anchorCharIndex);
+    const leadingWordChars = countLeadingWordCharsSince(
+      text,
+      previousSentenceBoundaryIndex,
+      anchorCharIndex,
+    );
     if (leadingWordChars > 0 && leadingWordChars <= 3) {
       anchorCharIndex = previousSentenceBoundaryIndex;
     }
@@ -537,9 +558,10 @@ function resolveRawAnnotationEndIndex(text: string, rawEndIndex: number): number
 function resolveMarkdownAnnotationEndIndex(text: string, rawEndIndex: number): number {
   const visibleOffsetMap = buildMarkdownVisibleOffsetMap(text);
   const normalizedEndIndex = Math.max(0, Math.trunc(rawEndIndex));
-  const mappedIndex = normalizedEndIndex < visibleOffsetMap.length
-    ? visibleOffsetMap[normalizedEndIndex]!
-    : Math.min(normalizedEndIndex, text.length);
+  const mappedIndex =
+    normalizedEndIndex < visibleOffsetMap.length
+      ? visibleOffsetMap[normalizedEndIndex]!
+      : Math.min(normalizedEndIndex, text.length);
   return Math.min(advancePastTrailingMarkdownSyntax(text, mappedIndex), text.length);
 }
 
@@ -665,7 +687,9 @@ function extractLinkCitationAnnotations(value: unknown): LinkCitationAnnotation[
     });
   }
 
-  return annotations.sort((left, right) => left.endIndex - right.endIndex || left.startIndex - right.startIndex);
+  return annotations.sort(
+    (left, right) => left.endIndex - right.endIndex || left.startIndex - right.startIndex,
+  );
 }
 
 export function extractCitationUrlsFromAnnotations(annotations: unknown): Map<number, string> {
@@ -695,9 +719,7 @@ export type CitationSourceDisplayInfo = {
   titleLabel: string;
 };
 
-const opaqueCitationRedirectHosts = new Set([
-  "vertexaisearch.cloud.google.com",
-]);
+const opaqueCitationRedirectHosts = new Set(["vertexaisearch.cloud.google.com"]);
 
 function citationSourceHostname(url: string): string | null {
   try {
@@ -713,7 +735,10 @@ function normalizeCitationHostnameLabel(value: string | undefined): string | nul
     return null;
   }
 
-  const trimmed = value.trim().replace(/^https?:\/\//i, "").replace(/^www\./i, "");
+  const trimmed = value
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "");
   if (!trimmed || /[/?#\s]/.test(trimmed)) {
     return null;
   }
@@ -724,7 +749,10 @@ function normalizeCitationHostnameLabel(value: string | undefined): string | nul
 export function isOpaqueCitationRedirectUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    return opaqueCitationRedirectHosts.has(parsed.hostname) && parsed.pathname.startsWith("/grounding-api-redirect/");
+    return (
+      opaqueCitationRedirectHosts.has(parsed.hostname) &&
+      parsed.pathname.startsWith("/grounding-api-redirect/")
+    );
   } catch {
     return false;
   }
@@ -736,8 +764,8 @@ export function describeCitationSource(source: CitationSource): CitationSourceDi
   const titleHostname = normalizeCitationHostnameLabel(source.title);
   const urlHostname = citationSourceHostname(source.url);
   const hostLabel = opaqueRedirect
-    ? titleHostname ?? urlHostname ?? "Source"
-    : urlHostname ?? titleHostname ?? source.url;
+    ? (titleHostname ?? urlHostname ?? "Source")
+    : (urlHostname ?? titleHostname ?? source.url);
 
   return {
     titleLabel,
@@ -758,7 +786,8 @@ function extractCitationSourcesByIndexFromAnnotations(
   annotations: unknown,
   citationUrlsByIndex?: ReadonlyMap<number, string>,
 ): Map<number, CitationSource> {
-  const resolvedCitationUrlsByIndex = citationUrlsByIndex ?? extractCitationUrlsFromAnnotations(annotations);
+  const resolvedCitationUrlsByIndex =
+    citationUrlsByIndex ?? extractCitationUrlsFromAnnotations(annotations);
   const indexByUrl = new Map<string, number>();
   for (const [index, url] of resolvedCitationUrlsByIndex) {
     indexByUrl.set(url, index);
@@ -771,9 +800,10 @@ function extractCitationSourcesByIndexFromAnnotations(
       continue;
     }
 
-    out.set(citationIndex, annotation.title
-      ? { url: annotation.url, title: annotation.title }
-      : { url: annotation.url });
+    out.set(
+      citationIndex,
+      annotation.title ? { url: annotation.url, title: annotation.title } : { url: annotation.url },
+    );
   }
   return out;
 }
@@ -785,7 +815,10 @@ function buildCitationSourcesByIndex(options: CitationDisplayOptions): Map<numbe
     out.set(index, source);
   }
 
-  for (const [index, source] of extractCitationSourcesByIndexFromAnnotations(options.annotations, options.citationUrlsByIndex)) {
+  for (const [index, source] of extractCitationSourcesByIndexFromAnnotations(
+    options.annotations,
+    options.citationUrlsByIndex,
+  )) {
     if (!out.has(index)) {
       out.set(index, source);
     }
@@ -843,23 +876,30 @@ function renderCitationChip(ids: string[], options: CitationDisplayOptions): str
         return null;
       }
 
-      return source?.title
-        ? { id, url, title: source.title }
-        : { id, url };
+      return source?.title ? { id, url, title: source.title } : { id, url };
     })
     .filter((source): source is CitationChipSourcePayload => Boolean(source));
-  const primaryId = ids.find((id) => {
-    const numericId = Number.parseInt(id, 10);
-    return Number.isFinite(numericId) && citationSourcesByIndex.has(numericId);
-  }) ?? ids[0]!;
+  const primaryId =
+    ids.find((id) => {
+      const numericId = Number.parseInt(id, 10);
+      return Number.isFinite(numericId) && citationSourcesByIndex.has(numericId);
+    }) ?? ids[0]!;
   const primaryIndex = Number.parseInt(primaryId, 10);
-  const primarySource = Number.isFinite(primaryIndex) ? citationSourcesByIndex.get(primaryIndex) : undefined;
-  const primaryUrl = Number.isFinite(primaryIndex) ? options.citationUrlsByIndex?.get(primaryIndex) : undefined;
-  const baseLabel = primarySource ? displayCitationSourceLabel(primarySource) : `Source ${primaryId}`;
-  const chipLabel = ids.length > 1
-    ? `${truncateLabel(baseLabel, 26)} +${ids.length - 1}`
-    : truncateLabel(baseLabel, 30);
-  const encodedSources = resolvedSources.length > 0 ? serializeCitationChipSources(resolvedSources) : "";
+  const primarySource = Number.isFinite(primaryIndex)
+    ? citationSourcesByIndex.get(primaryIndex)
+    : undefined;
+  const primaryUrl = Number.isFinite(primaryIndex)
+    ? options.citationUrlsByIndex?.get(primaryIndex)
+    : undefined;
+  const baseLabel = primarySource
+    ? displayCitationSourceLabel(primarySource)
+    : `Source ${primaryId}`;
+  const chipLabel =
+    ids.length > 1
+      ? `${truncateLabel(baseLabel, 26)} +${ids.length - 1}`
+      : truncateLabel(baseLabel, 30);
+  const encodedSources =
+    resolvedSources.length > 0 ? serializeCitationChipSources(resolvedSources) : "";
 
   if (!primaryUrl || primaryUrl.trim().length === 0) {
     return `<cite>${escapeHtml(chipLabel)}</cite>`;
@@ -937,7 +977,9 @@ function extractCitationUrlsFromNativeWebSearchResult(result: unknown): Map<numb
   return new Map(urls.map((url, index) => [index + 1, url] as const));
 }
 
-function extractCitationSourcesFromNativeWebSearchResult(result: unknown): Map<number, CitationSource> {
+function extractCitationSourcesFromNativeWebSearchResult(
+  result: unknown,
+): Map<number, CitationSource> {
   const record = isRecord(result) ? result : null;
   const directSources = Array.isArray(record?.sources)
     ? record.sources
@@ -958,28 +1000,25 @@ function extractCitationSourcesFromNativeWebSearchResult(result: unknown): Map<n
   return new Map(sources.map((source, index) => [index + 1, source] as const));
 }
 
-function extractCitationSourcesFromNativeUrlContextResult(result: unknown): Map<number, CitationSource> {
+function extractCitationSourcesFromNativeUrlContextResult(
+  result: unknown,
+): Map<number, CitationSource> {
   const record = isRecord(result) ? result : null;
   const urls = [
-    ...(
-      Array.isArray(record?.urls)
-        ? record.urls
-        : []
-    ),
-    ...(
-      Array.isArray(record?.results)
-        ? record.results.map((entry) => isRecord(entry) ? entry.url : undefined)
-        : []
-    ),
-  ]
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+    ...(Array.isArray(record?.urls) ? record.urls : []),
+    ...(Array.isArray(record?.results)
+      ? record.results.map((entry) => (isRecord(entry) ? entry.url : undefined))
+      : []),
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
   const deduped = [...new Set(urls)];
   return new Map(deduped.map((url, index) => [index + 1, { url }] as const));
 }
 
 function extractCitationUrlsFromNativeUrlContextResult(result: unknown): Map<number, string> {
   return new Map(
-    [...extractCitationSourcesFromNativeUrlContextResult(result).entries()].map(([index, source]) => [index, source.url] as const),
+    [...extractCitationSourcesFromNativeUrlContextResult(result).entries()].map(
+      ([index, source]) => [index, source.url] as const,
+    ),
   );
 }
 
@@ -998,12 +1037,14 @@ function renderCitationIds(
   }
 
   const spacingPrefix = previousChar && !citationSpacingExemptPrefix.test(previousChar) ? " " : "";
-  const renderedIds = ids.map((id) => {
-    if (renderMode === "markdown") {
-      return toMarkdownCitationLabel(id, options.citationUrlsByIndex);
-    }
-    return `[${id}]`;
-  }).filter((value): value is string => Boolean(value));
+  const renderedIds = ids
+    .map((id) => {
+      if (renderMode === "markdown") {
+        return toMarkdownCitationLabel(id, options.citationUrlsByIndex);
+      }
+      return `[${id}]`;
+    })
+    .filter((value): value is string => Boolean(value));
 
   if (renderedIds.length === 0) {
     return "";
@@ -1026,12 +1067,14 @@ function renderSourcesFooter(options: CitationDisplayOptions): string {
       .filter((value): value is string => Boolean(value));
     return links.length > 0 ? `<p>Sources: ${links.join(", ")}</p>` : "";
   }
-  const renderedIds = ids.map((id) => {
-    if (renderMode === "markdown") {
-      return toMarkdownCitationLabel(id, citationUrlsByIndex);
-    }
-    return `[${id}]`;
-  }).filter((value): value is string => Boolean(value));
+  const renderedIds = ids
+    .map((id) => {
+      if (renderMode === "markdown") {
+        return toMarkdownCitationLabel(id, citationUrlsByIndex);
+      }
+      return `[${id}]`;
+    })
+    .filter((value): value is string => Boolean(value));
   return renderedIds.length > 0 ? `Sources: ${renderedIds.join(", ")}` : "";
 }
 
@@ -1041,7 +1084,8 @@ function insertNativeCitationMarkers(text: string, options: CitationDisplayOptio
     return text;
   }
 
-  const citationUrlsByIndex = options.citationUrlsByIndex ?? extractCitationUrlsFromAnnotations(options.annotations);
+  const citationUrlsByIndex =
+    options.citationUrlsByIndex ?? extractCitationUrlsFromAnnotations(options.annotations);
   const indexByUrl = new Map<string, number>();
   for (const [index, url] of citationUrlsByIndex) {
     indexByUrl.set(url, index);
@@ -1052,9 +1096,10 @@ function insertNativeCitationMarkers(text: string, options: CitationDisplayOptio
     const citationIndex = indexByUrl.get(annotation.url);
     if (!citationIndex) continue;
     const resolvedEndIndex = resolveAnnotationEndIndex(text, annotation.endIndex);
-    const insertionEndIndex = options.citationMode === "html"
-      ? resolveCitationBlockEndIndex(text, resolvedEndIndex)
-      : resolvedEndIndex;
+    const insertionEndIndex =
+      options.citationMode === "html"
+        ? resolveCitationBlockEndIndex(text, resolvedEndIndex)
+        : resolvedEndIndex;
     const currentIds = idsByEndIndex.get(insertionEndIndex) ?? [];
     const nextId = String(citationIndex);
     if (!currentIds.includes(nextId)) {
@@ -1080,11 +1125,15 @@ function insertNativeCitationMarkers(text: string, options: CitationDisplayOptio
         citationUrlsByIndex,
       });
     } else {
-      const previousChar = endIndex > 0 ? text[endIndex - 1] ?? "" : "";
-      out += renderCitationIds(ids, {
-        ...options,
-        citationUrlsByIndex,
-      }, previousChar);
+      const previousChar = endIndex > 0 ? (text[endIndex - 1] ?? "") : "";
+      out += renderCitationIds(
+        ids,
+        {
+          ...options,
+          citationUrlsByIndex,
+        },
+        previousChar,
+      );
     }
     cursor = endIndex;
   }
@@ -1109,9 +1158,10 @@ export function extractCitationSourcesFromWebSearchResult(result: unknown): Cita
       const url = lines[i];
       // The line before the URL is typically the title
       const titleCandidate = i > 0 ? lines[i - 1] : "";
-      const title = titleCandidate && !/^https?:\/\//.test(titleCandidate) && titleCandidate.length > 0
-        ? titleCandidate
-        : undefined;
+      const title =
+        titleCandidate && !/^https?:\/\//.test(titleCandidate) && titleCandidate.length > 0
+          ? titleCandidate
+          : undefined;
       sources.push({ url, title });
     }
   }
@@ -1142,7 +1192,9 @@ export function extractCitationOverflowFilePathFromWebSearchResult(result: unkno
   return extractOverflowFilePath(result);
 }
 
-export function buildCitationOverflowFilePathsByMessageId<T extends CitationFeedItem>(feed: readonly T[]): Map<string, string> {
+export function buildCitationOverflowFilePathsByMessageId<T extends CitationFeedItem>(
+  feed: readonly T[],
+): Map<string, string> {
   const overflowFilePathByMessageId = new Map<string, string>();
   let currentOverflowFilePath: string | null = null;
   let latestAssistantId: string | null = null;
@@ -1186,7 +1238,9 @@ export function buildCitationOverflowFilePathsByMessageId<T extends CitationFeed
   return overflowFilePathByMessageId;
 }
 
-export function buildCitationUrlsByMessageId<T extends CitationFeedItem>(feed: readonly T[]): Map<string, Map<number, string>> {
+export function buildCitationUrlsByMessageId<T extends CitationFeedItem>(
+  feed: readonly T[],
+): Map<string, Map<number, string>> {
   const citationUrlsByMessageId = new Map<string, Map<number, string>>();
   let currentCitationUrls = new Map<number, string>();
 
@@ -1237,7 +1291,9 @@ export function buildCitationUrlsByMessageId<T extends CitationFeedItem>(feed: r
   return citationUrlsByMessageId;
 }
 
-export function buildCitationSourcesByMessageId<T extends CitationFeedItem>(feed: readonly T[]): Map<string, CitationSource[]> {
+export function buildCitationSourcesByMessageId<T extends CitationFeedItem>(
+  feed: readonly T[],
+): Map<string, CitationSource[]> {
   const sourcesByMessageId = new Map<string, CitationSource[]>();
   let currentSources: CitationSource[] = [];
   let latestAssistantId: string | null = null;
@@ -1290,12 +1346,19 @@ export function buildCitationSourcesByMessageId<T extends CitationFeedItem>(feed
   return sourcesByMessageId;
 }
 
-export function normalizeDisplayCitationMarkers(text: string, options: CitationDisplayOptions = {}): string {
+export function normalizeDisplayCitationMarkers(
+  text: string,
+  options: CitationDisplayOptions = {},
+): string {
   if (!text.includes("†")) {
     if (options.annotations) {
       return insertNativeCitationMarkers(text, options);
     }
-    if (options.fallbackToSourcesFooter && options.citationUrlsByIndex?.size && !/\bSources:\b/i.test(text)) {
+    if (
+      options.fallbackToSourcesFooter &&
+      options.citationUrlsByIndex?.size &&
+      !/\bSources:\b/i.test(text)
+    ) {
       const footer = renderSourcesFooter(options);
       return footer ? `${text}\n\n${footer}` : text;
     }
@@ -1320,7 +1383,7 @@ export function normalizeDisplayCitationMarkers(text: string, options: CitationD
     }
 
     const leadingWhitespace = match.match(/^\s*/)?.[0] ?? "";
-    const previousChar = offset > 0 ? input[offset - 1] ?? "" : "";
+    const previousChar = offset > 0 ? (input[offset - 1] ?? "") : "";
     const rendered = renderCitationIds(ids, options, previousChar);
     if (!rendered) {
       return "";

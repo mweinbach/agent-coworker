@@ -1,11 +1,10 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
-
-import type { AgentConfig, MCPServerConfig } from "../../src/types";
 import { runTurnWithDeps } from "../../src/agent";
 import { loadMCPTools } from "../../src/mcp";
+import type { AgentConfig, MCPServerConfig } from "../../src/types";
 
 type RunnerResult =
   | {
@@ -41,7 +40,10 @@ function resolveNodeCommand(): string {
     if (!candidate || seen.has(candidate)) continue;
     seen.add(candidate);
 
-    if (candidate === process.execPath && !path.basename(candidate).toLowerCase().includes("node")) {
+    if (
+      candidate === process.execPath &&
+      !path.basename(candidate).toLowerCase().includes("node")
+    ) {
       continue;
     }
 
@@ -97,12 +99,14 @@ async function runLoadToolsScenario(): Promise<RunnerResult> {
   const logs: string[] = [];
   const loaded = await loadMCPTools(servers, { log: (line) => logs.push(line) });
   try {
-    const tool = loaded.tools["mcp__local__echo"] as {
-      annotations?: Record<string, unknown>;
-      execute: (input: Record<string, unknown>) => Promise<{
-        content?: Array<{ type?: string; text?: string }>;
-      }>;
-    } | undefined;
+    const tool = loaded.tools["mcp__local__echo"] as
+      | {
+          annotations?: Record<string, unknown>;
+          execute: (input: Record<string, unknown>) => Promise<{
+            content?: Array<{ type?: string; text?: string }>;
+          }>;
+        }
+      | undefined;
     if (!tool) {
       throw new Error("Expected mcp__local__echo to be available.");
     }
@@ -217,9 +221,11 @@ async function main() {
 try {
   await main();
 } catch (error) {
-  console.error(JSON.stringify({
-    error: error instanceof Error ? error.message : String(error),
-    stack: error instanceof Error ? error.stack : undefined,
-  }));
+  console.error(
+    JSON.stringify({
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    }),
+  );
   process.exit(1);
 }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { activateNextPrompt, type ReplPromptStateAdapter } from "../src/cli/repl/promptController";
-import type { AskPrompt, ApprovalPrompt } from "../src/cli/repl/serverEventHandler";
+import type { ApprovalPrompt, AskPrompt } from "../src/cli/repl/serverEventHandler";
 
 class FakeReadline {
   lastPrompt: string | null = null;

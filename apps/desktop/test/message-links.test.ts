@@ -1,13 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   decodeDesktopExternalHref,
-  encodeDesktopExternalHref,
   decodeDesktopLocalFileHref,
+  encodeDesktopExternalHref,
   encodeDesktopLocalFileHref,
   fileUrlToDesktopPath,
   MessageResponse,
@@ -19,19 +18,25 @@ import { setupJsdom } from "./jsdomHarness";
 
 describe("desktop message local file links", () => {
   test("converts file URLs into desktop paths", () => {
-    expect(fileUrlToDesktopPath("file:///Users/mweinbach/Desktop/Cowork%20Test/create_models.py")).toBe(
-      "/Users/mweinbach/Desktop/Cowork Test/create_models.py",
-    );
-    expect(fileUrlToDesktopPath("file:///C:/Users/Test/Desktop/Cowork%20Test/create_models.py")).toBe(
-      "C:\\Users\\Test\\Desktop\\Cowork Test\\create_models.py",
-    );
+    expect(
+      fileUrlToDesktopPath("file:///Users/mweinbach/Desktop/Cowork%20Test/create_models.py"),
+    ).toBe("/Users/mweinbach/Desktop/Cowork Test/create_models.py");
+    expect(
+      fileUrlToDesktopPath("file:///C:/Users/Test/Desktop/Cowork%20Test/create_models.py"),
+    ).toBe("C:\\Users\\Test\\Desktop\\Cowork Test\\create_models.py");
     expect(fileUrlToDesktopPath("https://example.com")).toBeNull();
   });
 
   test("round-trips encoded desktop local file hrefs", () => {
-    const encodedHref = encodeDesktopLocalFileHref("file:///Users/mweinbach/Desktop/Cowork%20Test/create_models.py");
-    expect(encodedHref).toBe("cowork-file://open?path=%2FUsers%2Fmweinbach%2FDesktop%2FCowork%20Test%2Fcreate_models.py");
-    expect(decodeDesktopLocalFileHref(encodedHref)).toBe("/Users/mweinbach/Desktop/Cowork Test/create_models.py");
+    const encodedHref = encodeDesktopLocalFileHref(
+      "file:///Users/mweinbach/Desktop/Cowork%20Test/create_models.py",
+    );
+    expect(encodedHref).toBe(
+      "cowork-file://open?path=%2FUsers%2Fmweinbach%2FDesktop%2FCowork%20Test%2Fcreate_models.py",
+    );
+    expect(decodeDesktopLocalFileHref(encodedHref)).toBe(
+      "/Users/mweinbach/Desktop/Cowork Test/create_models.py",
+    );
     expect(decodeDesktopLocalFileHref("https://example.com")).toBeNull();
   });
 
@@ -40,7 +45,9 @@ describe("desktop message local file links", () => {
     expect(encodedHref).toBe(
       "cowork-external://open?url=craftdocs%3A%2F%2Fopen%3FspaceId%3Dabc%26documentId%3Ddef",
     );
-    expect(decodeDesktopExternalHref(encodedHref)).toBe("craftdocs://open?spaceId=abc&documentId=def");
+    expect(decodeDesktopExternalHref(encodedHref)).toBe(
+      "craftdocs://open?spaceId=abc&documentId=def",
+    );
     expect(decodeDesktopExternalHref("https://example.com")).toBeNull();
   });
 
@@ -104,7 +111,12 @@ describe("desktop message local file links", () => {
       children: [
         {
           type: "paragraph",
-          children: [{ type: "text", value: "PDF: C:\\Users\\Test\\Desktop\\Cowork Test\\macbook_neo_report.pdf" }],
+          children: [
+            {
+              type: "text",
+              value: "PDF: C:\\Users\\Test\\Desktop\\Cowork Test\\macbook_neo_report.pdf",
+            },
+          ],
         },
       ],
     };
@@ -203,7 +215,9 @@ describe("desktop message local file links", () => {
     expect(html).toContain("macbook_neo_report.pdf");
     expect(html).toContain("macbook_neo_report_page_1.png");
     expect(html).not.toContain("C:\\Users\\Test\\Desktop\\Cowork Test\\macbook_neo_report.pdf");
-    expect(html).not.toContain("C:\\Users\\Test\\Desktop\\Cowork Test\\macbook_neo_report_page_1.png");
+    expect(html).not.toContain(
+      "C:\\Users\\Test\\Desktop\\Cowork Test\\macbook_neo_report_page_1.png",
+    );
   });
 
   test("auto-links file paths inside inline code when the entire value is a path", () => {
@@ -377,7 +391,9 @@ describe("desktop message local file links", () => {
         );
       });
 
-      const chipButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Safety Memo +1"));
+      const chipButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Safety Memo +1"),
+      );
       if (!chipButton) {
         throw new Error("missing grouped citation chip button");
       }
@@ -389,13 +405,17 @@ describe("desktop message local file links", () => {
       expect(harness.dom.window.document.body.textContent).toContain("1/2");
       expect(harness.dom.window.document.body.textContent).toContain("Safety Memo");
 
-      const popup = harness.dom.window.document.querySelector('[role="dialog"][aria-label="Citation sources"]');
+      const popup = harness.dom.window.document.querySelector(
+        '[role="dialog"][aria-label="Citation sources"]',
+      );
       expect(popup?.getAttribute("class")).toContain("fixed");
       expect(popup?.getAttribute("class")).toContain("z-[70]");
       expect(popup?.getAttribute("class")).toContain("w-[min(16rem,calc(100vw-2rem))]");
       expect(popup?.textContent).toContain("Safety Memo");
 
-      const nextButton = harness.dom.window.document.querySelector('button[aria-label="Next source"]');
+      const nextButton = harness.dom.window.document.querySelector(
+        'button[aria-label="Next source"]',
+      );
       if (!nextButton) {
         throw new Error("missing next source button");
       }
@@ -444,7 +464,9 @@ describe("desktop message local file links", () => {
               MessageResponse,
               {
                 normalizeDisplayCitations: true,
-                citationSources: [{ title: "preload-check.example", url: "https://example.com/preload-check" }],
+                citationSources: [
+                  { title: "preload-check.example", url: "https://example.com/preload-check" },
+                ],
                 citationAnnotations: [
                   {
                     type: "url_citation",
@@ -461,7 +483,9 @@ describe("desktop message local file links", () => {
           );
         });
 
-        expect(assignedImageUrls).toContain("https://www.google.com/s2/favicons?domain=preload-check.example&sz=32");
+        expect(assignedImageUrls).toContain(
+          "https://www.google.com/s2/favicons?domain=preload-check.example&sz=32",
+        );
 
         await act(async () => {
           root.unmount();
@@ -484,7 +508,8 @@ describe("desktop message local file links", () => {
       const root = createRoot(container);
 
       const text = "* **Airport Impact:** LaGuardia closed while investigators responded.";
-      const redirectUrl = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQH4iedWtHk5dpRaMko9c5l9JzmcarVDEORW9szHs95gjSSCj2JkhUUyZvaidzIWRapHw_3-kZ7dCNLNntqbNOG-1k1kPLkRV77xUiqNQZ2hgjRNwSIsvIO0LzWHRiZctDIIpgP8RF0M5PxFPx_NDRrWdX84KIiwhoTOJp2zgYRiG_IQu2QGnPiGcX2MdP6NcIWkgJfjNk0XM9FfYY_dHpZJqg==";
+      const redirectUrl =
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQH4iedWtHk5dpRaMko9c5l9JzmcarVDEORW9szHs95gjSSCj2JkhUUyZvaidzIWRapHw_3-kZ7dCNLNntqbNOG-1k1kPLkRV77xUiqNQZ2hgjRNwSIsvIO0LzWHRiZctDIIpgP8RF0M5PxFPx_NDRrWdX84KIiwhoTOJp2zgYRiG_IQu2QGnPiGcX2MdP6NcIWkgJfjNk0XM9FfYY_dHpZJqg==";
 
       await act(async () => {
         root.render(
@@ -509,7 +534,9 @@ describe("desktop message local file links", () => {
         );
       });
 
-      const chipButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("cbsnews.com"));
+      const chipButton = Array.from(container.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("cbsnews.com"),
+      );
       if (!chipButton) {
         throw new Error("missing Google citation chip button");
       }

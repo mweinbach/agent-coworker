@@ -2,7 +2,13 @@ import { useMemo, useState } from "react";
 
 import { useAppStore } from "../../app/store";
 import { Button } from "../../components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog";
 import { Textarea } from "../../components/ui/textarea";
 
 type PluginPreviewScope = "workspace" | "user";
@@ -10,8 +16,14 @@ type PluginPreviewState = NonNullable<
   ReturnType<typeof useAppStore.getState>["workspaceRuntimeById"][string]["selectedPluginPreview"]
 >;
 
-function previewSummary(preview: NonNullable<ReturnType<typeof useAppStore.getState>["workspaceRuntimeById"][string]["selectedPluginPreview"]>) {
-  const validCount = preview.candidates.filter((candidate) => candidate.diagnostics.length === 0).length;
+function previewSummary(
+  preview: NonNullable<
+    ReturnType<typeof useAppStore.getState>["workspaceRuntimeById"][string]["selectedPluginPreview"]
+  >,
+) {
+  const validCount = preview.candidates.filter(
+    (candidate) => candidate.diagnostics.length === 0,
+  ).length;
   if (validCount === 0) {
     return "No valid plugins found";
   }
@@ -24,14 +36,15 @@ export function isPluginPreviewVisibleForInput(opts: {
   lastPreviewTargetScope: PluginPreviewScope | null;
   pluginPreview: PluginPreviewState | null;
 }): boolean {
-  const previewMatchesCurrentInput = opts.lastPreviewSourceInput !== null
-    && opts.normalizedSourceInput.length > 0
-    && opts.normalizedSourceInput === opts.lastPreviewSourceInput;
+  const previewMatchesCurrentInput =
+    opts.lastPreviewSourceInput !== null &&
+    opts.normalizedSourceInput.length > 0 &&
+    opts.normalizedSourceInput === opts.lastPreviewSourceInput;
   return Boolean(
-    opts.pluginPreview
-    && previewMatchesCurrentInput
-    && opts.lastPreviewTargetScope !== null
-    && opts.pluginPreview.targetScope === opts.lastPreviewTargetScope,
+    opts.pluginPreview &&
+      previewMatchesCurrentInput &&
+      opts.lastPreviewTargetScope !== null &&
+      opts.pluginPreview.targetScope === opts.lastPreviewTargetScope,
   );
 }
 
@@ -42,9 +55,11 @@ export function shouldRequireFreshPluginPreviewForScope(opts: {
   pluginPreview: PluginPreviewState | null;
   targetScope: PluginPreviewScope;
 }): boolean {
-  return isPluginPreviewVisibleForInput(opts)
-    && opts.lastPreviewTargetScope !== null
-    && opts.lastPreviewTargetScope !== opts.targetScope;
+  return (
+    isPluginPreviewVisibleForInput(opts) &&
+    opts.lastPreviewTargetScope !== null &&
+    opts.lastPreviewTargetScope !== opts.targetScope
+  );
 }
 
 export function shouldDisablePluginInstallForScope(opts: {
@@ -65,27 +80,32 @@ export function shouldDisablePluginInstallForScope(opts: {
   if (!previewVisible || opts.lastPreviewTargetScope !== opts.targetScope) {
     return false;
   }
-  return (opts.pluginPreview?.candidates.some((candidate) => candidate.diagnostics.length === 0) ?? false) === false;
+  return (
+    (opts.pluginPreview?.candidates.some((candidate) => candidate.diagnostics.length === 0) ??
+      false) === false
+  );
 }
 
-export function InstallPluginDialog({
-  workspaceId,
-}: {
-  workspaceId: string;
-}) {
+export function InstallPluginDialog({ workspaceId }: { workspaceId: string }) {
   const [open, setOpen] = useState(false);
   const [sourceInput, setSourceInput] = useState("");
   const [lastPreviewSourceInput, setLastPreviewSourceInput] = useState<string | null>(null);
-  const [lastPreviewTargetScope, setLastPreviewTargetScope] = useState<"workspace" | "user" | null>(null);
+  const [lastPreviewTargetScope, setLastPreviewTargetScope] = useState<"workspace" | "user" | null>(
+    null,
+  );
   const [lastMutationSourceInput, setLastMutationSourceInput] = useState<string | null>(null);
-  const [lastMutationTargetScope, setLastMutationTargetScope] = useState<"workspace" | "user" | null>(null);
+  const [lastMutationTargetScope, setLastMutationTargetScope] = useState<
+    "workspace" | "user" | null
+  >(null);
 
   const runtime = useAppStore((state) => state.workspaceRuntimeById[workspaceId]);
   const previewPluginInstall = useAppStore((state) => state.previewPluginInstall);
   const installPlugins = useAppStore((state) => state.installPlugins);
 
   const pluginPreview = runtime?.selectedPluginPreview ?? null;
-  const pluginInstallInFlight = Object.keys(runtime?.skillMutationPendingKeys ?? {}).some((key) => key.startsWith("plugin:install:"));
+  const pluginInstallInFlight = Object.keys(runtime?.skillMutationPendingKeys ?? {}).some((key) =>
+    key.startsWith("plugin:install:"),
+  );
   const pluginPreviewPending = runtime?.skillMutationPendingKeys["plugin:preview"] === true;
   const normalizedSourceInput = sourceInput.trim();
   const showPreview = isPluginPreviewVisibleForInput({
@@ -94,41 +114,42 @@ export function InstallPluginDialog({
     lastPreviewTargetScope,
     pluginPreview,
   });
-  const showPreviewPending = pluginPreviewPending
-    && lastPreviewSourceInput !== null
-    && normalizedSourceInput.length > 0
-    && normalizedSourceInput === lastPreviewSourceInput;
-  const showMutationError = Boolean(runtime?.skillMutationError)
-    && lastMutationSourceInput !== null
-    && normalizedSourceInput.length > 0
-    && normalizedSourceInput === lastMutationSourceInput;
-  const showPluginsError = Boolean(runtime?.pluginsError)
-    && lastMutationSourceInput !== null
-    && normalizedSourceInput.length > 0
-    && normalizedSourceInput === lastMutationSourceInput;
+  const showPreviewPending =
+    pluginPreviewPending &&
+    lastPreviewSourceInput !== null &&
+    normalizedSourceInput.length > 0 &&
+    normalizedSourceInput === lastPreviewSourceInput;
+  const showMutationError =
+    Boolean(runtime?.skillMutationError) &&
+    lastMutationSourceInput !== null &&
+    normalizedSourceInput.length > 0 &&
+    normalizedSourceInput === lastMutationSourceInput;
+  const showPluginsError =
+    Boolean(runtime?.pluginsError) &&
+    lastMutationSourceInput !== null &&
+    normalizedSourceInput.length > 0 &&
+    normalizedSourceInput === lastMutationSourceInput;
   const dialogError = showMutationError
-    ? runtime?.skillMutationError ?? null
+    ? (runtime?.skillMutationError ?? null)
     : showPluginsError
-      ? runtime?.pluginsError ?? null
+      ? (runtime?.pluginsError ?? null)
       : null;
-  const requiresFreshPreviewForScope = (targetScope: PluginPreviewScope) => shouldRequireFreshPluginPreviewForScope({
-    normalizedSourceInput,
-    lastPreviewSourceInput,
-    lastPreviewTargetScope,
-    pluginPreview,
-    targetScope,
-  });
-  const disableInstallForScope = (targetScope: PluginPreviewScope) => shouldDisablePluginInstallForScope({
-    normalizedSourceInput,
-    lastPreviewSourceInput,
-    lastPreviewTargetScope,
-    pluginPreview,
-    targetScope,
-    pluginInstallInFlight,
-  });
+  const disableInstallForScope = (targetScope: PluginPreviewScope) =>
+    shouldDisablePluginInstallForScope({
+      normalizedSourceInput,
+      lastPreviewSourceInput,
+      lastPreviewTargetScope,
+      pluginPreview,
+      targetScope,
+      pluginInstallInFlight,
+    });
 
   const validPreviewCandidates = useMemo(
-    () => showPreview ? pluginPreview?.candidates.filter((candidate) => candidate.diagnostics.length === 0) ?? [] : [],
+    () =>
+      showPreview
+        ? (pluginPreview?.candidates.filter((candidate) => candidate.diagnostics.length === 0) ??
+          [])
+        : [],
     [pluginPreview, showPreview],
   );
 
@@ -201,10 +222,20 @@ export function InstallPluginDialog({
             />
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap gap-2">
-                <Button variant="outline" size="sm" onClick={() => void handlePreview("workspace")} type="button">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handlePreview("workspace")}
+                  type="button"
+                >
                   Preview in Workspace
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => void handlePreview("user")} type="button">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handlePreview("user")}
+                  type="button"
+                >
                   Preview in Global
                 </Button>
               </div>
@@ -237,17 +268,27 @@ export function InstallPluginDialog({
 
             {showPreview ? (
               <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-3 text-xs text-muted-foreground">
-                <div className="font-medium text-foreground">{previewSummary(pluginPreview!)}</div>
+                <div className="font-medium text-foreground">
+                  {pluginPreview ? previewSummary(pluginPreview) : "No plugin preview"}
+                </div>
                 <div className="mt-1 text-[11px] text-muted-foreground">
-                  Previewed for {pluginPreview!.targetScope === "workspace" ? "workspace" : "global"} install.
+                  Previewed for{" "}
+                  {pluginPreview?.targetScope === "workspace" ? "workspace" : "global"} install.
                 </div>
                 <div className="mt-2 space-y-1.5">
-                  {pluginPreview!.candidates.map((candidate) => (
-                    <div key={`${candidate.pluginId}:${candidate.relativeRootPath}`} className="rounded border border-border/60 bg-background/40 px-2.5 py-2">
+                  {pluginPreview?.candidates.map((candidate) => (
+                    <div
+                      key={`${candidate.pluginId}:${candidate.relativeRootPath}`}
+                      className="rounded border border-border/60 bg-background/40 px-2.5 py-2"
+                    >
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="truncate font-medium text-foreground">{candidate.displayName}</div>
-                          <div className="truncate text-[11px] text-muted-foreground">{candidate.pluginId}</div>
+                          <div className="truncate font-medium text-foreground">
+                            {candidate.displayName}
+                          </div>
+                          <div className="truncate text-[11px] text-muted-foreground">
+                            {candidate.pluginId}
+                          </div>
                         </div>
                         <div className="shrink-0 text-[11px] text-muted-foreground">
                           {candidate.conflictsWithScope === "workspace"
@@ -259,20 +300,24 @@ export function InstallPluginDialog({
                                 : "Shadowed"}
                         </div>
                       </div>
-                      <div className="mt-1 text-[11px] text-muted-foreground">{candidate.description}</div>
+                      <div className="mt-1 text-[11px] text-muted-foreground">
+                        {candidate.description}
+                      </div>
                       {candidate.diagnostics.length > 0 ? (
                         <div className="mt-2 space-y-1 text-[11px] text-destructive">
                           {candidate.diagnostics.map((diagnostic) => (
-                            <div key={`${candidate.pluginId}:${diagnostic.code}`}>{diagnostic.message}</div>
+                            <div key={`${candidate.pluginId}:${diagnostic.code}`}>
+                              {diagnostic.message}
+                            </div>
                           ))}
                         </div>
                       ) : null}
                     </div>
                   ))}
                 </div>
-                {pluginPreview!.warnings.length > 0 ? (
+                {(pluginPreview?.warnings?.length ?? 0) > 0 ? (
                   <div className="mt-2 space-y-1 text-[11px] text-destructive">
-                    {pluginPreview!.warnings.map((warning) => (
+                    {pluginPreview?.warnings.map((warning) => (
                       <div key={warning}>{warning}</div>
                     ))}
                   </div>
@@ -287,12 +332,14 @@ export function InstallPluginDialog({
             ) : null}
             {dialogError && lastMutationTargetScope ? (
               <div className="text-[11px] text-muted-foreground">
-                Last attempted target: {lastMutationTargetScope === "workspace" ? "workspace" : "global"}.
+                Last attempted target:{" "}
+                {lastMutationTargetScope === "workspace" ? "workspace" : "global"}.
               </div>
             ) : null}
             {showPreview ? (
               <div className="text-[11px] text-muted-foreground">
-                To install to {lastPreviewTargetScope === "workspace" ? "global" : "workspace"}, run a new preview for that scope first.
+                To install to {lastPreviewTargetScope === "workspace" ? "global" : "workspace"}, run
+                a new preview for that scope first.
               </div>
             ) : null}
             {showPreview && validPreviewCandidates.length === 0 ? (

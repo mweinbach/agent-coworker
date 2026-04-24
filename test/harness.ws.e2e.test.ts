@@ -22,11 +22,10 @@ describe("WebSocket harness context runtime visibility", () => {
     const { server, url } = await startAgentServer(serverOpts(tmpDir, { runTurnImpl }));
 
     try {
-      await withSession(
-        url,
-        ({ ws, sessionId, message, resolve }) => {
-          if (message.type === "server_hello") {
-            ws.send(JSON.stringify({
+      await withSession(url, ({ ws, sessionId, message, resolve }) => {
+        if (message.type === "server_hello") {
+          ws.send(
+            JSON.stringify({
               type: "harness_context_set",
               sessionId,
               context: {
@@ -36,24 +35,26 @@ describe("WebSocket harness context runtime visibility", () => {
                 constraints: ["Do not override safety policy"],
                 metadata: { owner: "agent" },
               },
-            }));
-            return;
-          }
+            }),
+          );
+          return;
+        }
 
-          if (message.type === "harness_context") {
-            ws.send(JSON.stringify({
+        if (message.type === "harness_context") {
+          ws.send(
+            JSON.stringify({
               type: "user_message",
               sessionId,
               text: "run the task",
-            }));
-            return;
-          }
+            }),
+          );
+          return;
+        }
 
-          if (message.type === "assistant_message") {
-            resolve(undefined);
-          }
-        },
-      );
+        if (message.type === "assistant_message") {
+          resolve(undefined);
+        }
+      });
 
       expect(capturedSystems).toHaveLength(1);
       expect(capturedSystems[0]).toContain("## Active Harness Context");
@@ -71,9 +72,10 @@ describe("WebSocket harness context runtime visibility", () => {
       createRuntime: () => ({
         name: "pi",
         runTurn: async (params) => {
-          const roleKey = params.config.provider && Object.keys(params.tools).includes("write")
-            ? "worker"
-            : "unknown";
+          const roleKey =
+            params.config.provider && Object.keys(params.tools).includes("write")
+              ? "worker"
+              : "unknown";
           const bucket = capturedByRole.get(roleKey) ?? [];
           bucket.push(params.system);
           capturedByRole.set(roleKey, bucket);
@@ -87,11 +89,10 @@ describe("WebSocket harness context runtime visibility", () => {
     const { server, url } = await startAgentServer(serverOpts(tmpDir, { runTurnImpl }));
 
     try {
-      await withSession(
-        url,
-        ({ ws, sessionId, message, resolve }) => {
-          if (message.type === "server_hello") {
-            ws.send(JSON.stringify({
+      await withSession(url, ({ ws, sessionId, message, resolve }) => {
+        if (message.type === "server_hello") {
+          ws.send(
+            JSON.stringify({
               type: "harness_context_set",
               sessionId,
               context: {
@@ -100,12 +101,14 @@ describe("WebSocket harness context runtime visibility", () => {
                 acceptanceCriteria: ["Forked child sees harness context"],
                 constraints: ["Do not duplicate into transcript"],
               },
-            }));
-            return;
-          }
+            }),
+          );
+          return;
+        }
 
-          if (message.type === "harness_context") {
-            ws.send(JSON.stringify({
+        if (message.type === "harness_context") {
+          ws.send(
+            JSON.stringify({
               type: "agent_spawn",
               sessionId,
               role: "worker",
@@ -113,20 +116,24 @@ describe("WebSocket harness context runtime visibility", () => {
               briefing: "Carry the active harness contract into the child runtime.",
               includeHarnessContext: true,
               message: "handle the child task",
-            }));
-            return;
-          }
+            }),
+          );
+          return;
+        }
 
-          if (message.type === "agent_spawned") {
-            setTimeout(() => resolve(undefined), 50);
-          }
-        },
-      );
+        if (message.type === "agent_spawned") {
+          setTimeout(() => resolve(undefined), 50);
+        }
+      });
 
       const workerSystems = capturedByRole.get("worker") ?? [];
       expect(workerSystems.length).toBeGreaterThan(0);
       expect(workerSystems.some((system) => system.includes("- Run ID: run-child"))).toBe(true);
-      expect(workerSystems.some((system) => system.includes("- Objective: Verify child runtime prompt injection"))).toBe(true);
+      expect(
+        workerSystems.some((system) =>
+          system.includes("- Objective: Verify child runtime prompt injection"),
+        ),
+      ).toBe(true);
     } finally {
       await stopTestServer(server);
     }
@@ -142,16 +149,18 @@ describe("WebSocket harness context runtime visibility", () => {
         first.url,
         ({ ws, sessionId: nextSessionId, message, resolve }) => {
           if (message.type === "server_hello") {
-            ws.send(JSON.stringify({
-              type: "harness_context_set",
-              sessionId: nextSessionId,
-              context: {
-                runId: "run-persisted",
-                objective: "Persist harness context across restart",
-                acceptanceCriteria: ["Resume returns stored harness context"],
-                constraints: ["Use the real session boundary"],
-              },
-            }));
+            ws.send(
+              JSON.stringify({
+                type: "harness_context_set",
+                sessionId: nextSessionId,
+                context: {
+                  runId: "run-persisted",
+                  objective: "Persist harness context across restart",
+                  acceptanceCriteria: ["Resume returns stored harness context"],
+                  constraints: ["Use the real session boundary"],
+                },
+              }),
+            );
             return;
           }
 
@@ -173,10 +182,12 @@ describe("WebSocket harness context runtime visibility", () => {
           if (message.type === "server_hello") {
             expect(message.sessionId).toBe(sessionId);
             expect(message.isResume).toBe(true);
-            ws.send(JSON.stringify({
-              type: "harness_context_get",
-              sessionId: resumedSessionId,
-            }));
+            ws.send(
+              JSON.stringify({
+                type: "harness_context_get",
+                sessionId: resumedSessionId,
+              }),
+            );
             return;
           }
 
@@ -200,15 +211,17 @@ describe("WebSocket harness context runtime visibility", () => {
 describe("WebSocket harness golden flows", () => {
   test("ask flow works over the real session boundary", async () => {
     const tmpDir = await makeTmpProject();
-    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
-      runTurnImpl: (async (params: any) => {
-        const answer = await params.askUser("Pick one", ["a", "b"]);
-        return {
-          text: `answer:${answer}`,
-          responseMessages: [],
-        };
-      }) as any,
-    }));
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: any) => {
+          const answer = await params.askUser("Pick one", ["a", "b"]);
+          return {
+            text: `answer:${answer}`,
+            responseMessages: [],
+          };
+        }) as any,
+      }),
+    );
 
     try {
       const assistantText = await withSession<string>(
@@ -220,12 +233,14 @@ describe("WebSocket harness golden flows", () => {
           }
 
           if (message.type === "ask") {
-            ws.send(JSON.stringify({
-              type: "ask_response",
-              sessionId,
-              requestId: message.requestId,
-              answer: "b",
-            }));
+            ws.send(
+              JSON.stringify({
+                type: "ask_response",
+                sessionId,
+                requestId: message.requestId,
+                answer: "b",
+              }),
+            );
             return;
           }
 
@@ -243,40 +258,41 @@ describe("WebSocket harness golden flows", () => {
 
   test("approval flow handles both approve and deny responses", async () => {
     const tmpDir = await makeTmpProject();
-    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
-      runTurnImpl: (async (params: any) => {
-        const approved = await params.approveCommand("rm -rf /tmp/example");
-        return {
-          text: approved ? "approved" : "denied",
-          responseMessages: [],
-        };
-      }) as any,
-    }));
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async (params: any) => {
+          const approved = await params.approveCommand("rm -rf /tmp/example");
+          return {
+            text: approved ? "approved" : "denied",
+            responseMessages: [],
+          };
+        }) as any,
+      }),
+    );
 
     const runApprovalFlow = async (approved: boolean) => {
-      return await withSession<string>(
-        url,
-        ({ ws, sessionId, message, resolve }) => {
-          if (message.type === "server_hello") {
-            ws.send(JSON.stringify({ type: "user_message", sessionId, text: "start approval flow" }));
-            return;
-          }
+      return await withSession<string>(url, ({ ws, sessionId, message, resolve }) => {
+        if (message.type === "server_hello") {
+          ws.send(JSON.stringify({ type: "user_message", sessionId, text: "start approval flow" }));
+          return;
+        }
 
-          if (message.type === "approval") {
-            ws.send(JSON.stringify({
+        if (message.type === "approval") {
+          ws.send(
+            JSON.stringify({
               type: "approval_response",
               sessionId,
               requestId: message.requestId,
               approved,
-            }));
-            return;
-          }
+            }),
+          );
+          return;
+        }
 
-          if (message.type === "assistant_message") {
-            resolve(message.text);
-          }
-        },
-      );
+        if (message.type === "assistant_message") {
+          resolve(message.text);
+        }
+      });
     };
 
     try {
@@ -289,12 +305,14 @@ describe("WebSocket harness golden flows", () => {
 
   test("child-agent spawn/list/wait works over the real protocol boundary", async () => {
     const tmpDir = await makeTmpProject();
-    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
-      runTurnImpl: (async () => ({
-        text: "child finished",
-        responseMessages: [],
-      })) as any,
-    }));
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        runTurnImpl: (async () => ({
+          text: "child finished",
+          responseMessages: [],
+        })) as any,
+      }),
+    );
 
     try {
       const result = await withSession<{ childId: string; listed: boolean; waited: boolean }>(
@@ -307,24 +325,28 @@ describe("WebSocket harness golden flows", () => {
           });
 
           if (message.type === "server_hello") {
-            ws.send(JSON.stringify({
-              type: "agent_spawn",
-              sessionId,
-              role: "worker",
-              message: "handle the child task",
-            }));
+            ws.send(
+              JSON.stringify({
+                type: "agent_spawn",
+                sessionId,
+                role: "worker",
+                message: "handle the child task",
+              }),
+            );
             return;
           }
 
           if (message.type === "agent_spawned") {
             state.childId = message.agent.agentId;
             ws.send(JSON.stringify({ type: "agent_list_get", sessionId }));
-            ws.send(JSON.stringify({
-              type: "agent_wait",
-              sessionId,
-              agentIds: [message.agent.agentId],
-              timeoutMs: 1_000,
-            }));
+            ws.send(
+              JSON.stringify({
+                type: "agent_wait",
+                sessionId,
+                agentIds: [message.agent.agentId],
+                timeoutMs: 1_000,
+              }),
+            );
             return;
           }
 
@@ -334,9 +356,9 @@ describe("WebSocket harness golden flows", () => {
 
           if (message.type === "agent_wait_result") {
             state.waited =
-              !message.timedOut
-              && message.mode === "any"
-              && message.readyAgentIds.includes(message.agentIds[0]);
+              !message.timedOut &&
+              message.mode === "any" &&
+              message.readyAgentIds.includes(message.agentIds[0]);
           }
 
           if (state.childId && state.listed && state.waited) {
@@ -375,24 +397,23 @@ describe("WebSocket harness golden flows", () => {
     const { server, url } = await startAgentServer(serverOpts(tmpDir, { runTurnImpl }));
 
     const spawnRole = async (role: "explorer" | "worker") => {
-      await withSession<void>(
-        url,
-        ({ ws, sessionId, message, resolve }) => {
-          if (message.type === "server_hello") {
-            ws.send(JSON.stringify({
+      await withSession<void>(url, ({ ws, sessionId, message, resolve }) => {
+        if (message.type === "server_hello") {
+          ws.send(
+            JSON.stringify({
               type: "agent_spawn",
               sessionId,
               role,
               message: `run as ${role}`,
-            }));
-            return;
-          }
+            }),
+          );
+          return;
+        }
 
-          if (message.type === "agent_spawned") {
-            setTimeout(() => resolve(undefined), 50);
-          }
-        },
-      );
+        if (message.type === "agent_spawned") {
+          setTimeout(() => resolve(undefined), 50);
+        }
+      });
     };
 
     try {
@@ -407,7 +428,9 @@ describe("WebSocket harness golden flows", () => {
       expect(explorerTools).not.toContain("edit");
       expect(explorerTools).not.toContain("notebookEdit");
 
-      expect(workerTools).toEqual(expect.arrayContaining(["bash", "glob", "grep", "read", "write", "edit"]));
+      expect(workerTools).toEqual(
+        expect.arrayContaining(["bash", "glob", "grep", "read", "write", "edit"]),
+      );
     } finally {
       await stopTestServer(server);
     }
@@ -443,94 +466,107 @@ describe("WebSocket harness golden flows", () => {
         childId: string;
         closed: boolean;
         resumed: boolean;
-      }>(
-        url,
-        ({ ws, sessionId, message, resolve }) => {
-          const state = ((ws as any).__followUpState ??= {
-            childId: "",
-            waitCount: 0,
-            sawClosed: false,
-            sawResumed: false,
-          });
+      }>(url, ({ ws, sessionId, message, resolve }) => {
+        const state = ((ws as any).__followUpState ??= {
+          childId: "",
+          waitCount: 0,
+          sawClosed: false,
+          sawResumed: false,
+        });
 
-          if (message.type === "server_hello") {
-            ws.send(JSON.stringify({
+        if (message.type === "server_hello") {
+          ws.send(
+            JSON.stringify({
               type: "agent_spawn",
               sessionId,
               role: "worker",
               message: "first task",
-            }));
-            return;
-          }
+            }),
+          );
+          return;
+        }
 
-          if (message.type === "agent_spawned") {
-            state.childId = message.agent.agentId;
-            ws.send(JSON.stringify({
+        if (message.type === "agent_spawned") {
+          state.childId = message.agent.agentId;
+          ws.send(
+            JSON.stringify({
               type: "agent_wait",
               sessionId,
               agentIds: [state.childId],
               timeoutMs: 1_000,
-            }));
-            return;
-          }
+            }),
+          );
+          return;
+        }
 
-          if (message.type === "agent_wait_result") {
-            state.waitCount += 1;
-            if (state.waitCount === 1) {
-              ws.send(JSON.stringify({
+        if (message.type === "agent_wait_result") {
+          state.waitCount += 1;
+          if (state.waitCount === 1) {
+            ws.send(
+              JSON.stringify({
                 type: "agent_input_send",
                 sessionId,
                 agentId: state.childId,
                 message: "second task",
-              }));
-              ws.send(JSON.stringify({
+              }),
+            );
+            ws.send(
+              JSON.stringify({
                 type: "agent_wait",
                 sessionId,
                 agentIds: [state.childId],
                 timeoutMs: 1_000,
-              }));
-              return;
-            }
-
-            if (state.waitCount === 2) {
-              ws.send(JSON.stringify({
-                type: "agent_close",
-                sessionId,
-                agentId: state.childId,
-              }));
-            }
+              }),
+            );
             return;
           }
 
-          if (message.type === "agent_status" && message.agent?.agentId === state.childId) {
-            if (message.agent.executionState === "closed") {
-              state.sawClosed = true;
-              ws.send(JSON.stringify({
+          if (state.waitCount === 2) {
+            ws.send(
+              JSON.stringify({
+                type: "agent_close",
+                sessionId,
+                agentId: state.childId,
+              }),
+            );
+          }
+          return;
+        }
+
+        if (message.type === "agent_status" && message.agent?.agentId === state.childId) {
+          if (message.agent.executionState === "closed") {
+            state.sawClosed = true;
+            ws.send(
+              JSON.stringify({
                 type: "agent_resume",
                 sessionId,
                 agentId: state.childId,
-              }));
-              return;
-            }
-
-            if (state.sawClosed && message.agent.executionState === "completed") {
-              state.sawResumed = true;
-              resolve({
-                childId: state.childId,
-                closed: state.sawClosed,
-                resumed: state.sawResumed,
-              });
-            }
+              }),
+            );
+            return;
           }
-        },
-      );
+
+          if (state.sawClosed && message.agent.executionState === "completed") {
+            state.sawResumed = true;
+            resolve({
+              childId: state.childId,
+              closed: state.sawClosed,
+              resumed: state.sawResumed,
+            });
+          }
+        }
+      });
 
       expect(flow.childId).toEqual(expect.any(String));
       expect(flow.closed).toBe(true);
       expect(flow.resumed).toBe(true);
       expect(childMessageSnapshots).toHaveLength(2);
       expect(childMessageSnapshots[0]?.map((message) => message.role)).toEqual(["user"]);
-      expect(childMessageSnapshots[1]?.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+      expect(childMessageSnapshots[1]?.map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "user",
+      ]);
     } finally {
       await stopTestServer(server);
     }

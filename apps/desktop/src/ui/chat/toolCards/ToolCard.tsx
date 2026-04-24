@@ -2,12 +2,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 
 import type { ToolApprovalMetadata, ToolFeedState } from "../../../app/types";
 
-import {
-  Tool,
-  ToolCodeBlock,
-  ToolContent,
-  ToolHeader,
-} from "../../../components/ai-elements/tool";
+import { Tool, ToolCodeBlock, ToolContent, ToolHeader } from "../../../components/ai-elements/tool";
 
 import { formatToolCard } from "./toolCardFormatting";
 
@@ -57,9 +52,10 @@ export const ToolCard = memo(function ToolCard(props: ToolCardProps) {
     () => formatting.details.filter((row) => row.label !== "Status"),
     [formatting.details],
   );
-  const hasExpandableContent = props.variant === "trace"
-    ? detailRows.length > 0
-    : Boolean(approvalJson || argsJson || resultJson);
+  const hasExpandableContent =
+    props.variant === "trace"
+      ? detailRows.length > 0
+      : Boolean(approvalJson || argsJson || resultJson);
   const [expanded, setExpanded] = useState(shouldAutoExpand && hasExpandableContent);
 
   useEffect(() => {
@@ -82,7 +78,10 @@ export const ToolCard = memo(function ToolCard(props: ToolCardProps) {
           <ToolContent variant="trace">
             <div className="grid gap-2 sm:grid-cols-2">
               {detailRows.map((row) => (
-                <div key={`${props.name}-${row.label}`} className="rounded-lg border border-border/50 bg-muted/15 px-2.5 py-2">
+                <div
+                  key={`${props.name}-${row.label}`}
+                  className="rounded-lg border border-border/50 bg-muted/15 px-2.5 py-2"
+                >
                   <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                     {row.label}
                   </div>
@@ -118,9 +117,17 @@ export const ToolCard = memo(function ToolCard(props: ToolCardProps) {
           {argsJson ? <ToolCodeBlock label="Input" value={argsJson} /> : null}
           {resultJson ? (
             <ToolCodeBlock
-              label={props.state === "output-error" || props.state === "output-denied" ? "Issue" : "Output"}
+              label={
+                props.state === "output-error" || props.state === "output-denied"
+                  ? "Issue"
+                  : "Output"
+              }
               value={resultJson}
-              tone={props.state === "output-error" || props.state === "output-denied" ? "error" : "default"}
+              tone={
+                props.state === "output-error" || props.state === "output-denied"
+                  ? "error"
+                  : "default"
+              }
             />
           ) : null}
         </ToolContent>

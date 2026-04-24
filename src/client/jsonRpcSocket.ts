@@ -1,16 +1,24 @@
 import { z } from "zod";
 
 import {
-  JSONRPC_ERROR_CODES,
-  parseJsonRpcClientMessage,
   type JsonRpcLiteClientResponse,
   type JsonRpcLiteRequest,
+  parseJsonRpcClientMessage,
 } from "../server/jsonrpc/protocol";
 
-type WebSocketLike = Pick<
-  WebSocket,
-  "readyState" | "send" | "close"
-> & Partial<Pick<WebSocket, "addEventListener" | "removeEventListener" | "onopen" | "onmessage" | "onerror" | "onclose" | "protocol">>;
+type WebSocketLike = Pick<WebSocket, "readyState" | "send" | "close"> &
+  Partial<
+    Pick<
+      WebSocket,
+      | "addEventListener"
+      | "removeEventListener"
+      | "onopen"
+      | "onmessage"
+      | "onerror"
+      | "onclose"
+      | "protocol"
+    >
+  >;
 
 type WebSocketConstructorLike = {
   new (url: string, protocols?: string | string[]): WebSocketLike;
@@ -38,7 +46,9 @@ type QueuedOperation =
       params?: unknown;
     };
 
-const webSocketImplSchema = z.custom<WebSocketConstructorLike>((value) => typeof value === "function");
+const webSocketImplSchema = z.custom<WebSocketConstructorLike>(
+  (value) => typeof value === "function",
+);
 const defaultTimerScheduler: JsonRpcSocketTimerScheduler = {
   setTimeout: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
   clearTimeout: (handle) => globalThis.clearTimeout(handle as never),
@@ -91,6 +101,10 @@ export type JsonRpcSocketInvalidMessage = {
   raw: unknown;
 };
 
+export type JsonRpcRequestError = Error & {
+  jsonRpcCode?: number;
+};
+
 export type JsonRpcSocketOpts = {
   url: string;
   clientInfo: {
@@ -126,9 +140,7 @@ function normalizeProtocols(protocols: string | string[] | undefined): string[] 
   if (typeof protocols === "string") {
     return protocols.trim() ? [protocols.trim()] : [];
   }
-  return (protocols ?? [])
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return (protocols ?? []).map((entry) => entry.trim()).filter(Boolean);
 }
 
 function buildQueryProtocolFallbackUrl(url: string): string {
@@ -137,9 +149,7 @@ function buildQueryProtocolFallbackUrl(url: string): string {
     next.searchParams.set("protocol", "jsonrpc");
     return next.toString();
   } catch {
-    return url.includes("?")
-      ? `${url}&protocol=jsonrpc`
-      : `${url}?protocol=jsonrpc`;
+    return url.includes("?") ? `${url}&protocol=jsonrpc` : `${url}?protocol=jsonrpc`;
   }
 }
 
@@ -149,11 +159,13 @@ function buildConnectionTargets(
   allowQueryProtocolFallback: boolean,
 ): JsonRpcConnectionTarget[] {
   const normalizedProtocols = normalizeProtocols(protocols);
-  const targets: JsonRpcConnectionTarget[] = [{
-    url,
-    protocols,
-    mode: normalizedProtocols.length > 0 ? "subprotocol" : "query",
-  }];
+  const targets: JsonRpcConnectionTarget[] = [
+    {
+      url,
+      protocols,
+      mode: normalizedProtocols.length > 0 ? "subprotocol" : "query",
+    },
+  ];
   if (!allowQueryProtocolFallback) {
     return targets;
   }
@@ -203,7 +215,10 @@ export class JsonRpcSocket {
   private pendingInitializationFailure: Error | null = null;
   private pendingInitializationFailureAllowsFallback = false;
   private nextId = 0;
-  private pendingRequests = new Map<string | number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  private pendingRequests = new Map<
+    string | number,
+    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+  >();
   private queuedOperations: QueuedOperation[] = [];
 
   constructor(opts: JsonRpcSocketOpts) {
@@ -278,7 +293,11 @@ export class JsonRpcSocket {
     this.ws = null;
   }
 
-  async request(method: string, params?: unknown, opts?: { retryable?: boolean }): Promise<unknown> {
+  async request(
+    method: string,
+    params?: unknown,
+    opts?: { retryable?: boolean },
+  ): Promise<unknown> {
     if (!this.initialized || !this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) {
       if (this.reconnectExhausted) {
         throw new Error("max reconnect attempts exceeded");
@@ -326,7 +345,9 @@ export class JsonRpcSocket {
     }
   }
 
-  private async enqueueOperation(operation: Omit<Extract<QueuedOperation, { kind: "request" }>, "resolve" | "reject">): Promise<unknown> {
+  private async enqueueOperation(
+    operation: Omit<Extract<QueuedOperation, { kind: "request" }>, "resolve" | "reject">,
+  ): Promise<unknown> {
     if (this.queuedOperations.length >= this.maxQueuedMessages) {
       throw new Error("JSON-RPC retry queue is full");
     }
@@ -351,7 +372,10 @@ export class JsonRpcSocket {
     this.reconnectExhausted = false;
     this.pendingInitializationFailure = null;
     this.pendingInitializationFailureAllowsFallback = false;
-    const target = this.connectionTargets[this.connectionTargetIndex] ?? this.connectionTargets[0]!;
+    const target = this.connectionTargets[this.connectionTargetIndex] ?? this.connectionTargets[0];
+    if (!target) {
+      throw new Error("No JSON-RPC connection targets available");
+    }
     const ws = new this.WebSocketImpl(target.url, target.protocols);
     this.ws = ws;
     this.armOpenTimeout(ws, target);
@@ -406,14 +430,20 @@ export class JsonRpcSocket {
     bindSocketHandler(ws, "close", () => {
       const wasInitialized = this.initialized;
       const failure = this.pendingInitializationFailure ?? new Error("websocket closed");
-      const allowFallback = this.pendingInitializationFailureAllowsFallback
-        || (!this.pendingInitializationFailure && !wasInitialized);
+      const allowFallback =
+        this.pendingInitializationFailureAllowsFallback ||
+        (!this.pendingInitializationFailure && !wasInitialized);
       this.initialized = false;
       this.ws = null;
       this.pendingInitializationFailure = null;
       this.pendingInitializationFailureAllowsFallback = false;
       this.clearConnectionTimeouts();
-      if (!wasInitialized && !this.intentionalClose && allowFallback && this.advanceConnectionTarget()) {
+      if (
+        !wasInitialized &&
+        !this.intentionalClose &&
+        allowFallback &&
+        this.advanceConnectionTarget()
+      ) {
         this.doConnect();
         return;
       }
@@ -484,7 +514,9 @@ export class JsonRpcSocket {
       }
       this.failInitialization(
         ws,
-        new Error(`Timed out waiting for JSON-RPC initialize response over ${target.mode} socket after ${this.handshakeTimeoutMs}ms`),
+        new Error(
+          `Timed out waiting for JSON-RPC initialize response over ${target.mode} socket after ${this.handshakeTimeoutMs}ms`,
+        ),
         true,
       );
     }, this.handshakeTimeoutMs);
@@ -548,7 +580,9 @@ export class JsonRpcSocket {
     }
     this.pendingRequests.delete(message.id);
     if (message.error) {
-      pending.reject(new Error(message.error.message));
+      const error = new Error(message.error.message) as JsonRpcRequestError;
+      error.jsonRpcCode = message.error.code;
+      pending.reject(error);
       return;
     }
     pending.resolve(message.result);

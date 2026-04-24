@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-
-import { AlertTriangleIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 
+import { AlertTriangleIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { formatCost, formatTokenCount } from "../../../../../../src/session/pricing";
 import { useAppStore } from "../../../app/store";
 import type { ThreadRuntime } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
@@ -15,10 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../../components/ui/dialog";
-import { cn } from "../../../lib/utils";
 import { useOptionalSettingsChrome } from "../SettingsChromeContext";
-import { formatCost, formatTokenCount } from "../../../../../../src/session/pricing";
-import type { ModelUsageSummary } from "../../../../../../src/session/costTracker";
 
 // ── Aggregation types ────────────────────────────────────────────────
 
@@ -161,9 +158,13 @@ function formatEstimatedCost(value: number | null, available: boolean): string {
 function UsageStat(props: { label: string; value: string; detail?: string }) {
   return (
     <div className="rounded-xl border border-border/70 bg-background/70 p-4">
-      <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">{props.label}</div>
+      <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+        {props.label}
+      </div>
       <div className="mt-2 text-lg font-semibold text-foreground">{props.value}</div>
-      {props.detail ? <div className="mt-1 text-xs text-muted-foreground">{props.detail}</div> : null}
+      {props.detail ? (
+        <div className="mt-1 text-xs text-muted-foreground">{props.detail}</div>
+      ) : null}
     </div>
   );
 }
@@ -185,9 +186,12 @@ export function UsagePage(props: UsagePageProps = {}) {
   useEffect(() => {
     if (props.aggregate !== undefined) return; // skip when overridden (tests)
     void loadAllThreadUsage();
-  }, []);
+  }, [props.aggregate, loadAllThreadUsage]);
 
-  const computedAggregate = useMemo(() => aggregateUsageFromRuntimes(threadRuntimeById), [threadRuntimeById]);
+  const computedAggregate = useMemo(
+    () => aggregateUsageFromRuntimes(threadRuntimeById),
+    [threadRuntimeById],
+  );
   const aggregate = props.aggregate ?? computedAggregate;
 
   const [estimateNoticeOpenInternal, setEstimateNoticeOpenInternal] = useState(false);
@@ -211,21 +215,26 @@ export function UsagePage(props: UsagePageProps = {}) {
         <DialogHeader>
           <DialogTitle>Usage estimates</DialogTitle>
           <DialogDescription>
-            These numbers are estimates based on provider-reported token usage and Cowork&apos;s local pricing catalog.
+            These numbers are estimates based on provider-reported token usage and Cowork&apos;s
+            local pricing catalog.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 text-sm text-muted-foreground">
           <p>
-            Billing may vary. Providers can round differently, apply cached-token discounts differently, or change
-            prices independently of what is bundled in the app.
+            Billing may vary. Providers can round differently, apply cached-token discounts
+            differently, or change prices independently of what is bundled in the app.
           </p>
           <p>
-            Be careful while using these estimates for spend decisions. Treat totals as protective guidance, not exact
-            invoices.
+            Be careful while using these estimates for spend decisions. Treat totals as protective
+            guidance, not exact invoices.
           </p>
         </div>
         <DialogFooter>
-          <Button type="button" variant="secondary" onClick={() => handleEstimateNoticeOpenChange?.(false)}>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => handleEstimateNoticeOpenChange?.(false)}
+          >
             Got it
           </Button>
         </DialogFooter>
@@ -258,23 +267,45 @@ export function UsagePage(props: UsagePageProps = {}) {
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <UsageStat
           label="Estimated total cost"
-          value={hasUsage ? formatEstimatedCost(aggregate.totalCostUsd, aggregate.costTrackingAvailable) : "—"}
-          detail={hasUsage && aggregate.costTrackingAvailable ? "Based on local pricing data" : hasUsage ? "Pricing unavailable for some models" : "No usage recorded yet"}
+          value={
+            hasUsage
+              ? formatEstimatedCost(aggregate.totalCostUsd, aggregate.costTrackingAvailable)
+              : "—"
+          }
+          detail={
+            hasUsage && aggregate.costTrackingAvailable
+              ? "Based on local pricing data"
+              : hasUsage
+                ? "Pricing unavailable for some models"
+                : "No usage recorded yet"
+          }
         />
         <UsageStat
           label="Total tokens"
           value={hasUsage ? formatTokenCount(aggregate.totalTokens) : "0"}
-          detail={hasUsage ? `${formatTokenCount(aggregate.totalPromptTokens)} in · ${formatTokenCount(aggregate.totalCompletionTokens)} out` : "No usage recorded yet"}
+          detail={
+            hasUsage
+              ? `${formatTokenCount(aggregate.totalPromptTokens)} in · ${formatTokenCount(aggregate.totalCompletionTokens)} out`
+              : "No usage recorded yet"
+          }
         />
         <UsageStat
           label="Total turns"
           value={hasUsage ? String(aggregate.totalTurns) : "0"}
-          detail={hasUsage ? `Across ${aggregate.totalSessions} session${aggregate.totalSessions === 1 ? "" : "s"}` : "No sessions yet"}
+          detail={
+            hasUsage
+              ? `Across ${aggregate.totalSessions} session${aggregate.totalSessions === 1 ? "" : "s"}`
+              : "No sessions yet"
+          }
         />
         <UsageStat
           label="Providers"
           value={hasUsage ? String(aggregate.providers.length) : "0"}
-          detail={hasUsage ? `${aggregate.providers.reduce((n, p) => n + p.models.length, 0)} model${aggregate.providers.reduce((n, p) => n + p.models.length, 0) === 1 ? "" : "s"} used` : "No models used yet"}
+          detail={
+            hasUsage
+              ? `${aggregate.providers.reduce((n, p) => n + p.models.length, 0)} model${aggregate.providers.reduce((n, p) => n + p.models.length, 0) === 1 ? "" : "s"} used`
+              : "No models used yet"
+          }
         />
       </div>
 
@@ -288,8 +319,9 @@ export function UsagePage(props: UsagePageProps = {}) {
               return (
                 <div key={group.provider} className="border-b border-border/70 last:border-b-0">
                   {/* Provider header */}
-                  <div
-                    className="flex items-center justify-between p-4 cursor-pointer hover:bg-card/60 transition-colors"
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-card/60"
                     onClick={() => toggleProvider(group.provider)}
                   >
                     <div className="flex items-center gap-3">
@@ -298,19 +330,23 @@ export function UsagePage(props: UsagePageProps = {}) {
                       ) : (
                         <ChevronRightIcon className="w-4 h-4 text-muted-foreground" />
                       )}
-                      <span className="font-medium text-foreground text-sm capitalize">{group.provider}</span>
+                      <span className="font-medium text-foreground text-sm capitalize">
+                        {group.provider}
+                      </span>
                       <Badge variant="secondary" className="text-[10px] uppercase h-5">
                         {group.models.length} model{group.models.length === 1 ? "" : "s"}
                       </Badge>
                     </div>
                     <div className="flex items-center gap-4 text-xs text-muted-foreground">
                       <span>{formatTokenCount(group.totalTokens)} tokens</span>
-                      <span>{group.totalTurns} turn{group.totalTurns === 1 ? "" : "s"}</span>
+                      <span>
+                        {group.totalTurns} turn{group.totalTurns === 1 ? "" : "s"}
+                      </span>
                       {typeof group.estimatedCostUsd === "number" ? (
                         <Badge variant="outline">{formatCost(group.estimatedCostUsd)}</Badge>
                       ) : null}
                     </div>
-                  </div>
+                  </button>
 
                   {/* Model rows */}
                   {isExpanded && (
@@ -322,9 +358,12 @@ export function UsagePage(props: UsagePageProps = {}) {
                         >
                           <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-foreground">{model.model}</span>
+                              <span className="text-sm font-medium text-foreground">
+                                {model.model}
+                              </span>
                               <span className="text-xs text-muted-foreground">
-                                {model.turns} turn{model.turns === 1 ? "" : "s"} across {model.sessions} session{model.sessions === 1 ? "" : "s"}
+                                {model.turns} turn{model.turns === 1 ? "" : "s"} across{" "}
+                                {model.sessions} session{model.sessions === 1 ? "" : "s"}
                               </span>
                             </div>
                             {typeof model.estimatedCostUsd === "number" ? (
@@ -336,15 +375,21 @@ export function UsagePage(props: UsagePageProps = {}) {
                           <div className="grid gap-2 grid-cols-3 text-xs">
                             <div>
                               <span className="text-muted-foreground">Prompt: </span>
-                              <span className="text-foreground font-medium">{formatTokenCount(model.totalPromptTokens)}</span>
+                              <span className="text-foreground font-medium">
+                                {formatTokenCount(model.totalPromptTokens)}
+                              </span>
                             </div>
                             <div>
                               <span className="text-muted-foreground">Completion: </span>
-                              <span className="text-foreground font-medium">{formatTokenCount(model.totalCompletionTokens)}</span>
+                              <span className="text-foreground font-medium">
+                                {formatTokenCount(model.totalCompletionTokens)}
+                              </span>
                             </div>
                             <div>
                               <span className="text-muted-foreground">Total: </span>
-                              <span className="text-foreground font-medium">{formatTokenCount(model.totalTokens)}</span>
+                              <span className="text-foreground font-medium">
+                                {formatTokenCount(model.totalTokens)}
+                              </span>
                             </div>
                           </div>
                         </div>

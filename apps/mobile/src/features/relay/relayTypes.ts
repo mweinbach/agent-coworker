@@ -6,10 +6,7 @@ export type RelayConnectionStatus =
   | "reconnecting"
   | "error";
 
-export type RelayTransportMode =
-  | "native"
-  | "fallback"
-  | "unsupported";
+export type RelayTransportMode = "native" | "fallback" | "unsupported";
 
 export type RelayTrustedDesktop = {
   macDeviceId: string;

@@ -5,13 +5,18 @@ import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
 
 const jsonRpcRequests: Array<{ method: string; params?: unknown }> = [];
 const jsonRpcActivityLog: string[] = [];
-const jsonRpcResponseOverrides = new Map<string, (params?: unknown) => unknown | Promise<unknown>>();
-const transcriptBatches: Array<Array<{
-  ts: string;
-  threadId: string;
-  direction: "server" | "client";
-  payload: unknown;
-}>> = [];
+const jsonRpcResponseOverrides = new Map<
+  string,
+  (params?: unknown) => unknown | Promise<unknown>
+>();
+const transcriptBatches: Array<
+  Array<{
+    ts: string;
+    threadId: string;
+    direction: "server" | "client";
+    payload: unknown;
+  }>
+> = [];
 let mockedLoadedState: any = { version: 2, workspaces: [], threads: [] };
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -52,7 +57,13 @@ class MockJsonRpcSocket {
   static instances: MockJsonRpcSocket[] = [];
   readonly readyPromise = Promise.resolve();
 
-  constructor(public readonly opts: { onOpen?: () => void; onClose?: () => void; onNotification?: (message: any) => void }) {
+  constructor(
+    public readonly opts: {
+      onOpen?: () => void;
+      onClose?: () => void;
+      onNotification?: (message: any) => void;
+    },
+  ) {
     MockJsonRpcSocket.instances.push(this);
   }
 
@@ -70,43 +81,55 @@ class MockJsonRpcSocket {
 
     if (method === "thread/list") {
       const cwd =
-        params && typeof params === "object" && typeof (params as { cwd?: unknown }).cwd === "string"
+        params &&
+        typeof params === "object" &&
+        typeof (params as { cwd?: unknown }).cwd === "string"
           ? (params as { cwd: string }).cwd
           : null;
-      const workspaceId =
-        cwd
-          ? mockedLoadedState.workspaces?.find((workspace: { path?: string; id?: string }) => workspace.path === cwd)?.id ?? null
-          : null;
+      const workspaceId = cwd
+        ? (mockedLoadedState.workspaces?.find(
+            (workspace: { path?: string; id?: string }) => workspace.path === cwd,
+          )?.id ?? null)
+        : null;
       const threads = workspaceId
         ? (mockedLoadedState.threads ?? [])
-            .filter((thread: { workspaceId?: string; sessionId?: string | null }) =>
-              thread.workspaceId === workspaceId && typeof thread.sessionId === "string" && thread.sessionId.trim().length > 0,
+            .filter(
+              (thread: { workspaceId?: string; sessionId?: string | null }) =>
+                thread.workspaceId === workspaceId &&
+                typeof thread.sessionId === "string" &&
+                thread.sessionId.trim().length > 0,
             )
-            .map((thread: {
-              title?: string;
-              sessionId: string;
-              createdAt?: string;
-              lastMessageAt?: string;
-            }) => ({
-              id: thread.sessionId,
-              title: thread.title ?? "Recovered thread",
-              modelProvider: "openai",
-              model: "gpt-5.2",
-              cwd: cwd ?? "/tmp/workspace",
-              createdAt: thread.createdAt ?? "2024-01-01T00:00:00.000Z",
-              updatedAt: thread.lastMessageAt ?? "2024-01-01T00:00:02.000Z",
-              status: { type: "loaded" },
-            }))
+            .map(
+              (thread: {
+                title?: string;
+                sessionId: string;
+                createdAt?: string;
+                lastMessageAt?: string;
+              }) => ({
+                id: thread.sessionId,
+                title: thread.title ?? "Recovered thread",
+                modelProvider: "openai",
+                model: "gpt-5.2",
+                cwd: cwd ?? "/tmp/workspace",
+                createdAt: thread.createdAt ?? "2024-01-01T00:00:00.000Z",
+                updatedAt: thread.lastMessageAt ?? "2024-01-01T00:00:02.000Z",
+                status: { type: "loaded" },
+              }),
+            )
         : [];
       return { threads };
     }
 
     if (method === "thread/read") {
       const threadId =
-        params && typeof params === "object" && typeof (params as { threadId?: unknown }).threadId === "string"
+        params &&
+        typeof params === "object" &&
+        typeof (params as { threadId?: unknown }).threadId === "string"
           ? (params as { threadId: string }).threadId
           : "thread-session";
-      const persistedThread = (mockedLoadedState.threads ?? []).find((thread: { sessionId?: string | null }) => thread.sessionId === threadId);
+      const persistedThread = (mockedLoadedState.threads ?? []).find(
+        (thread: { sessionId?: string | null }) => thread.sessionId === threadId,
+      );
       return {
         coworkSnapshot: makeSessionSnapshot(threadId, {
           title: persistedThread?.title ?? "Harness Snapshot Thread",
@@ -116,10 +139,14 @@ class MockJsonRpcSocket {
 
     if (method === "thread/resume") {
       const threadId =
-        params && typeof params === "object" && typeof (params as { threadId?: unknown }).threadId === "string"
+        params &&
+        typeof params === "object" &&
+        typeof (params as { threadId?: unknown }).threadId === "string"
           ? (params as { threadId: string }).threadId
           : "thread-session";
-      const persistedThread = (mockedLoadedState.threads ?? []).find((thread: { sessionId?: string | null }) => thread.sessionId === threadId);
+      const persistedThread = (mockedLoadedState.threads ?? []).find(
+        (thread: { sessionId?: string | null }) => thread.sessionId === threadId,
+      );
       return {
         thread: {
           id: threadId,
@@ -196,7 +223,11 @@ class MockJsonRpcSocket {
         event: {
           type: "skills_catalog",
           sessionId: "jsonrpc-control",
-          catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+          catalog: {
+            installations: [],
+            sources: [],
+            stats: { totalInstallations: 0, enabledInstallations: 0 },
+          },
           mutationBlocked: false,
         },
       };
@@ -293,49 +324,53 @@ class MockJsonRpcSocket {
   }
 }
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async (events: Array<{
-    ts: string;
-    threadId: string;
-    direction: "server" | "client";
-    payload: unknown;
-  }>) => {
-    transcriptBatches.push(events);
-  },
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => mockedLoadedState,
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async (
+      events: Array<{
+        ts: string;
+        threadId: string;
+        direction: "server" | "client";
+        payload: unknown;
+      }>,
+    ) => {
+      transcriptBatches.push(events);
+    },
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => mockedLoadedState,
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: MockJsonRpcSocket,
@@ -352,7 +387,9 @@ const {
   ensureThreadSocket,
   requestJsonRpcControlEvent,
 } = await import("../src/app/store.helpers");
-const { __internal: jsonRpcSocketInternal } = await import("../src/app/store.helpers/jsonRpcSocket");
+const { __internal: jsonRpcSocketInternal } = await import(
+  "../src/app/store.helpers/jsonRpcSocket"
+);
 
 function requestsFor(method: string) {
   return jsonRpcRequests.filter((entry) => entry.method === method);
@@ -381,7 +418,8 @@ function setControlSessionConfigResponse(config: Record<string, unknown>) {
 }
 
 function primeWorkspaceConnection() {
-  const workspaceId = useAppStore.getState().selectedWorkspaceId ?? useAppStore.getState().workspaces[0]?.id;
+  const workspaceId =
+    useAppStore.getState().selectedWorkspaceId ?? useAppStore.getState().workspaces[0]?.id;
   if (!workspaceId) {
     throw new Error("expected workspace");
   }
@@ -412,7 +450,8 @@ function syncMockedWorkspaceSessions() {
 }
 
 function seedConnectedThread(overrides: Partial<Record<string, unknown>> = {}) {
-  const workspaceId = useAppStore.getState().selectedWorkspaceId ?? useAppStore.getState().workspaces[0]?.id;
+  const workspaceId =
+    useAppStore.getState().selectedWorkspaceId ?? useAppStore.getState().workspaces[0]?.id;
   if (!workspaceId) {
     throw new Error("expected workspace");
   }
@@ -495,10 +534,7 @@ function seedConnectedThread(overrides: Partial<Record<string, unknown>> = {}) {
   return { threadId, sessionId };
 }
 
-function makeSessionSnapshot(
-  sessionId: string,
-  overrides: Partial<Record<string, unknown>> = {},
-) {
+function makeSessionSnapshot(sessionId: string, overrides: Partial<Record<string, unknown>> = {}) {
   return {
     sessionId,
     title: "Harness Snapshot Thread",
@@ -779,9 +815,15 @@ describe("workspace settings sync", () => {
     await useAppStore.getState().init();
 
     const workspaces = useAppStore.getState().workspaces;
-    expect(workspaces.find((workspace) => workspace.id === "ws-null")?.defaultToolOutputOverflowChars).toBeNull();
-    expect(workspaces.find((workspace) => workspace.id === "ws-default")?.defaultToolOutputOverflowChars).toBe(25000);
-    expect(workspaces.find((workspace) => workspace.id === "ws-missing")?.defaultToolOutputOverflowChars).toBeUndefined();
+    expect(
+      workspaces.find((workspace) => workspace.id === "ws-null")?.defaultToolOutputOverflowChars,
+    ).toBeNull();
+    expect(
+      workspaces.find((workspace) => workspace.id === "ws-default")?.defaultToolOutputOverflowChars,
+    ).toBe(25000);
+    expect(
+      workspaces.find((workspace) => workspace.id === "ws-missing")?.defaultToolOutputOverflowChars,
+    ).toBeUndefined();
   });
 
   test("init hydrates persisted provider status snapshots before the first refresh completes", async () => {
@@ -969,7 +1011,10 @@ describe("workspace settings sync", () => {
     expect(workspace?.defaultPreferredChildModel).toBe("gpt-5-mini");
     expect(workspace?.defaultChildModelRoutingMode).toBe("cross-provider-allowlist");
     expect(workspace?.defaultPreferredChildModelRef).toBe("opencode-zen:glm-5");
-    expect(workspace?.defaultAllowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
+    expect(workspace?.defaultAllowedChildModelRefs).toEqual([
+      "opencode-zen:glm-5",
+      "opencode-go:glm-5",
+    ]);
     expect(workspace?.defaultBackupsEnabled).toBe(false);
     expect(workspace?.defaultToolOutputOverflowChars).toBe(12000);
     expect(workspace?.userName).toBe("Alex");
@@ -977,7 +1022,10 @@ describe("workspace settings sync", () => {
     expect(runtime?.controlSessionConfig?.preferredChildModel).toBe("gpt-5-mini");
     expect(runtime?.controlSessionConfig?.childModelRoutingMode).toBe("cross-provider-allowlist");
     expect(runtime?.controlSessionConfig?.preferredChildModelRef).toBe("opencode-zen:glm-5");
-    expect(runtime?.controlSessionConfig?.allowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
+    expect(runtime?.controlSessionConfig?.allowedChildModelRefs).toEqual([
+      "opencode-zen:glm-5",
+      "opencode-go:glm-5",
+    ]);
     expect(runtime?.controlSessionConfig?.backupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.defaultBackupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.defaultToolOutputOverflowChars).toBe(12000);
@@ -1224,7 +1272,9 @@ describe("workspace settings sync", () => {
 
     const notification = useAppStore.getState().notifications.at(-1);
     expect(notification?.title).toBe("Workspace settings partially applied");
-    expect(notification?.detail).toBe("Control session is not fully connected yet. Reopen the workspace settings to retry.");
+    expect(notification?.detail).toBe(
+      "Control session is not fully connected yet. Reopen the workspace settings to retry.",
+    );
   });
 
   test("applyWorkspaceDefaultsToThread routes thread defaults over the shared JsonRpcSocket", async () => {
@@ -1360,9 +1410,13 @@ describe("workspace settings sync", () => {
     }));
     jsonRpcRequests.length = 0;
 
-    await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId, "auto", null, { allowBeforeHydration: true });
+    await useAppStore
+      .getState()
+      .applyWorkspaceDefaultsToThread(threadId, "auto", null, { allowBeforeHydration: true });
 
-    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId)?.allowBeforeHydration).toBe(true);
+    expect(RUNTIME.pendingWorkspaceDefaultApplyByThread.get(threadId)?.allowBeforeHydration).toBe(
+      true,
+    );
     expect(requestsFor("cowork/session/defaults/apply")).toHaveLength(0);
   });
 
@@ -1372,9 +1426,17 @@ describe("workspace settings sync", () => {
     const { threadId: helperThreadId } = seedConnectedThread();
     syncMockedWorkspaceSessions();
     const blockedProviderStatus = createDeferred<unknown>();
-    jsonRpcResponseOverrides.set("cowork/provider/status/refresh", async () => await blockedProviderStatus.promise);
+    jsonRpcResponseOverrides.set(
+      "cowork/provider/status/refresh",
+      async () => await blockedProviderStatus.promise,
+    );
     ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
-    ensureThreadSocket(useAppStore.getState as any, useAppStore.setState as any, helperThreadId, "ws://mock");
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      helperThreadId,
+      "ws://mock",
+    );
     await flushAsyncWork();
 
     const helperStateBefore = getWorkspaceJsonRpcHelperState(workspaceId);
@@ -1415,12 +1477,14 @@ describe("workspace settings sync", () => {
     await flushAsyncWork();
 
     expect(MockJsonRpcSocket.instances.length).toBe(socketsBefore);
-    expect(requestsFor("thread/unsubscribe")).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        method: "thread/unsubscribe",
-        params: { threadId: sessionId },
-      }),
-    ]));
+    expect(requestsFor("thread/unsubscribe")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          method: "thread/unsubscribe",
+          params: { threadId: sessionId },
+        }),
+      ]),
+    );
     const unsubscribeIndexes = jsonRpcActivityLog
       .map((entry, index) => (entry === "request:thread/unsubscribe" ? index : -1))
       .filter((index) => index >= 0);
@@ -1501,7 +1565,9 @@ describe("workspace settings sync", () => {
 
     const state = useAppStore.getState();
     expect(state.pluginManagementWorkspaceId).toBeNull();
-    expect(state.workspaces.some((workspace) => workspace.id === managementWorkspaceId)).toBe(false);
+    expect(state.workspaces.some((workspace) => workspace.id === managementWorkspaceId)).toBe(
+      false,
+    );
   });
 
   test("ensureServerRunning reactivates disposed JSON-RPC helper state for an existing workspace", async () => {
@@ -1509,7 +1575,12 @@ describe("workspace settings sync", () => {
     const { threadId } = seedConnectedThread();
     syncMockedWorkspaceSessions();
     ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
-    ensureThreadSocket(useAppStore.getState as any, useAppStore.setState as any, threadId, "ws://mock");
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
     await flushAsyncWork();
     await flushAsyncWork();
 
@@ -1537,9 +1608,18 @@ describe("workspace settings sync", () => {
       },
     });
 
-    await ensureServerRunning(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
+    await ensureServerRunning(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      workspaceId,
+    );
     ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
-    ensureThreadSocket(useAppStore.getState as any, useAppStore.setState as any, threadId, "ws://mock");
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
     await flushAsyncWork();
     await flushAsyncWork();
 
@@ -1568,7 +1648,12 @@ describe("workspace settings sync", () => {
     const { threadId } = seedConnectedThread();
     syncMockedWorkspaceSessions();
     ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
-    ensureThreadSocket(useAppStore.getState as any, useAppStore.setState as any, threadId, "ws://mock");
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
     await flushAsyncWork();
     jsonRpcRequests.length = 0;
 
@@ -1594,14 +1679,25 @@ describe("workspace settings sync", () => {
       reconnectThreadIds: [],
     });
     expect(requestsFor("thread/list").length).toBeGreaterThan(0);
-    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.controlSessionId).toBe("jsonrpc-control");
+    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.controlSessionId).toBe(
+      "jsonrpc-control",
+    );
     jsonRpcRequests.length = 0;
-    ensureThreadSocket(useAppStore.getState as any, useAppStore.setState as any, threadId, "ws://mock");
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
     await flushAsyncWork();
     await flushAsyncWork();
     expect(requestsFor("thread/resume").length).toBeGreaterThan(0);
-    expect(getWorkspaceJsonRpcHelperState(workspaceId).thread.reconnectThreadIds).toEqual([threadId]);
-    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.status).toBe("active");
+    expect(getWorkspaceJsonRpcHelperState(workspaceId).thread.reconnectThreadIds).toEqual([
+      threadId,
+    ]);
+    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.status).toBe(
+      "active",
+    );
   });
 
   test("restartWorkspaceServer clears stale disposed JSON-RPC helper state before reconnecting", async () => {
@@ -1609,7 +1705,12 @@ describe("workspace settings sync", () => {
     const { threadId } = seedConnectedThread();
     syncMockedWorkspaceSessions();
     ensureControlSocket(useAppStore.getState as any, useAppStore.setState as any, workspaceId);
-    ensureThreadSocket(useAppStore.getState as any, useAppStore.setState as any, threadId, "ws://mock");
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
     await flushAsyncWork();
     await flushAsyncWork();
 
@@ -1628,10 +1729,17 @@ describe("workspace settings sync", () => {
       reconnectThreadIds: [],
     });
     expect(requestsFor("thread/list").length).toBeGreaterThan(0);
-    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.controlSessionId).toBe("jsonrpc-control");
+    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.controlSessionId).toBe(
+      "jsonrpc-control",
+    );
 
     jsonRpcRequests.length = 0;
-    ensureThreadSocket(useAppStore.getState as any, useAppStore.setState as any, threadId, "ws://mock");
+    ensureThreadSocket(
+      useAppStore.getState as any,
+      useAppStore.setState as any,
+      threadId,
+      "ws://mock",
+    );
     await flushAsyncWork();
     await flushAsyncWork();
 
@@ -1752,11 +1860,13 @@ describe("workspace settings sync", () => {
 
     const appliedDefaultsEntries = transcriptBatches
       .flat()
-      .filter((entry) =>
-        entry.direction === "client"
-        && typeof entry.payload === "object"
-        && entry.payload !== null
-        && (entry.payload as { type?: unknown }).type === "apply_session_defaults");
+      .filter(
+        (entry) =>
+          entry.direction === "client" &&
+          typeof entry.payload === "object" &&
+          entry.payload !== null &&
+          (entry.payload as { type?: unknown }).type === "apply_session_defaults",
+      );
     expect(appliedDefaultsEntries).toHaveLength(0);
     expect(useAppStore.getState().notifications.at(-1)?.detail).toBe(
       "Unable to apply workspace defaults to the active thread.",

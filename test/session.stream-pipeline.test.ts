@@ -1,9 +1,9 @@
-import { describe, expect, test, mock, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-import type { AgentConfig } from "../src/types";
-import type { ServerEvent } from "../src/server/protocol";
-import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import * as REAL_AGENT from "../src/agent";
+import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
+import type { ServerEvent } from "../src/server/protocol";
+import type { AgentConfig } from "../src/types";
 
 const mockRunTurn = mock(async () => ({
   text: "",
@@ -49,7 +49,12 @@ function makeConfig(dir: string): AgentConfig {
 
 function makeEmit(): { emit: (evt: ServerEvent) => void; events: ServerEvent[] } {
   const events: ServerEvent[] = [];
-  return { emit: (event: ServerEvent) => { events.push(event); }, events };
+  return {
+    emit: (event: ServerEvent) => {
+      events.push(event);
+    },
+    events,
+  };
 }
 
 function makeSession(overrides?: { config?: AgentConfig; provider?: string }) {
@@ -89,7 +94,7 @@ function getRawStreamEvents(events: ServerEvent[]): RawStreamEvent[] {
  */
 async function sendWithStreamParts(
   session: InstanceType<typeof AgentSession>,
-  rawParts: unknown[]
+  rawParts: unknown[],
 ): Promise<void> {
   mockRunTurn.mockImplementationOnce(async (params: any) => {
     for (const rawPart of rawParts) {
@@ -595,7 +600,12 @@ describe("AgentSession stream pipeline", () => {
       { type: "tool-input-delta", id: "tc-seq", delta: '{"command":"ls"}' },
       { type: "tool-input-end", id: "tc-seq" },
       { type: "tool-call", toolCallId: "tc-seq", toolName: "bash", input: { command: "ls" } },
-      { type: "tool-result", toolCallId: "tc-seq", toolName: "bash", output: "file1.txt\nfile2.txt" },
+      {
+        type: "tool-result",
+        toolCallId: "tc-seq",
+        toolName: "bash",
+        output: "file1.txt\nfile2.txt",
+      },
       { type: "finish-step", stepNumber: 0, finishReason: "tool-calls" },
       { type: "start-step", stepNumber: 1 },
       { type: "text-start", id: "txt-seq" },
@@ -748,9 +758,7 @@ describe("AgentSession stream pipeline", () => {
 
     test("reasoning-start with openai provider gets mode: summary", async () => {
       const { session, events } = makeSession({ provider: "openai" });
-      await sendWithStreamParts(session, [
-        { type: "reasoning-start", id: "r-openai-start" },
-      ]);
+      await sendWithStreamParts(session, [{ type: "reasoning-start", id: "r-openai-start" }]);
 
       const chunks = getStreamChunks(events);
       expect(chunks).toHaveLength(1);
@@ -760,9 +768,7 @@ describe("AgentSession stream pipeline", () => {
 
     test("reasoning-end with openai provider gets mode: summary", async () => {
       const { session, events } = makeSession({ provider: "openai" });
-      await sendWithStreamParts(session, [
-        { type: "reasoning-end", id: "r-openai-end" },
-      ]);
+      await sendWithStreamParts(session, [{ type: "reasoning-end", id: "r-openai-end" }]);
 
       const chunks = getStreamChunks(events);
       expect(chunks).toHaveLength(1);
@@ -772,9 +778,7 @@ describe("AgentSession stream pipeline", () => {
 
     test("reasoning-start with google provider gets mode: reasoning", async () => {
       const { session, events } = makeSession({ provider: "google" });
-      await sendWithStreamParts(session, [
-        { type: "reasoning-start", id: "r-google-start" },
-      ]);
+      await sendWithStreamParts(session, [{ type: "reasoning-start", id: "r-google-start" }]);
 
       const chunks = getStreamChunks(events);
       expect(chunks).toHaveLength(1);

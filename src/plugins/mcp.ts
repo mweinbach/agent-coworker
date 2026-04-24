@@ -8,63 +8,82 @@ import { isRecord } from "../utils/typeGuards";
 
 const stringMapSchema = z.record(z.string(), z.string());
 
-const stdioTransportSchema = z.object({
-  type: z.literal("stdio"),
-  command: z.string().trim().min(1),
-  args: z.array(z.string()).optional(),
-  env: stringMapSchema.optional(),
-  cwd: z.string().trim().min(1).optional(),
-}).strict();
+const stdioTransportSchema = z
+  .object({
+    type: z.literal("stdio"),
+    command: z.string().trim().min(1),
+    args: z.array(z.string()).optional(),
+    env: stringMapSchema.optional(),
+    cwd: z.string().trim().min(1).optional(),
+  })
+  .strict();
 
-const httpTransportSchema = z.object({
-  type: z.enum(["http", "sse"]),
-  url: z.string().trim().min(1),
-  headers: stringMapSchema.optional(),
-}).strict();
+const httpTransportSchema = z
+  .object({
+    type: z.enum(["http", "sse"]),
+    url: z.string().trim().min(1),
+    headers: stringMapSchema.optional(),
+  })
+  .strict();
 
 const transportSchema = z.discriminatedUnion("type", [stdioTransportSchema, httpTransportSchema]);
 
 const authSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("none") }).strict(),
-  z.object({
-    type: z.literal("api_key"),
-    headerName: z.string().trim().min(1).optional(),
-    prefix: z.string().trim().min(1).optional(),
-    keyId: z.string().trim().min(1).optional(),
-  }).strict(),
-  z.object({
-    type: z.literal("oauth"),
-    scope: z.string().trim().min(1).optional(),
-    resource: z.string().trim().min(1).optional(),
-    oauthMode: z.enum(["auto", "code"]).optional(),
-  }).strict(),
+  z
+    .object({
+      type: z.literal("api_key"),
+      headerName: z.string().trim().min(1).optional(),
+      prefix: z.string().trim().min(1).optional(),
+      keyId: z.string().trim().min(1).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("oauth"),
+      scope: z.string().trim().min(1).optional(),
+      resource: z.string().trim().min(1).optional(),
+      oauthMode: z.enum(["auto", "code"]).optional(),
+    })
+    .strict(),
 ]);
 
-const wrappedMcpServerConfigSchema = z.object({
-  transport: transportSchema,
-  required: z.boolean().optional(),
-  retries: z.number().finite().optional(),
-  auth: authSchema.optional(),
-}).strict();
+const wrappedMcpServerConfigSchema = z
+  .object({
+    transport: transportSchema,
+    required: z.boolean().optional(),
+    retries: z.number().finite().optional(),
+    auth: authSchema.optional(),
+  })
+  .strict();
 
 const shorthandMcpServerConfigSchema = z.union([
-  stdioTransportSchema.extend({
-    required: z.boolean().optional(),
-    retries: z.number().finite().optional(),
-    auth: authSchema.optional(),
-  }).strict(),
-  httpTransportSchema.extend({
-    required: z.boolean().optional(),
-    retries: z.number().finite().optional(),
-    auth: authSchema.optional(),
-  }).strict(),
+  stdioTransportSchema
+    .extend({
+      required: z.boolean().optional(),
+      retries: z.number().finite().optional(),
+      auth: authSchema.optional(),
+    })
+    .strict(),
+  httpTransportSchema
+    .extend({
+      required: z.boolean().optional(),
+      retries: z.number().finite().optional(),
+      auth: authSchema.optional(),
+    })
+    .strict(),
 ]);
 
-const mcpServerConfigSchema = z.union([wrappedMcpServerConfigSchema, shorthandMcpServerConfigSchema]);
+const mcpServerConfigSchema = z.union([
+  wrappedMcpServerConfigSchema,
+  shorthandMcpServerConfigSchema,
+]);
 
-const mcpDocumentSchema = z.object({
-  mcpServers: z.record(z.string().trim().min(1), mcpServerConfigSchema).default({}),
-}).strict();
+const mcpDocumentSchema = z
+  .object({
+    mcpServers: z.record(z.string().trim().min(1), mcpServerConfigSchema).default({}),
+  })
+  .strict();
 
 function formatZodError(error: z.ZodError): string {
   const issue = error.issues[0];
@@ -73,7 +92,10 @@ function formatZodError(error: z.ZodError): string {
   return `${issuePath}: ${issue.message}`;
 }
 
-export function parsePluginMcpDocument(rawJson: string, filePath = ".mcp.json"): { servers: MCPServerConfig[] } {
+export function parsePluginMcpDocument(
+  rawJson: string,
+  filePath = ".mcp.json",
+): { servers: MCPServerConfig[] } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawJson);
@@ -148,7 +170,9 @@ export async function readPluginMcpServerNames(mcpPath: string | undefined): Pro
   }
 }
 
-export async function readPluginMcpServers(mcpPath: string | undefined): Promise<MCPServerConfig[]> {
+export async function readPluginMcpServers(
+  mcpPath: string | undefined,
+): Promise<MCPServerConfig[]> {
   if (!mcpPath) return [];
   const raw = await fs.readFile(mcpPath, "utf-8");
   return parsePluginMcpDocument(raw, mcpPath).servers;
@@ -160,13 +184,18 @@ export async function readPluginAppIds(appPath: string | undefined): Promise<str
     const raw = await fs.readFile(appPath, "utf-8");
     const parsed = JSON.parse(raw);
     if (!isRecord(parsed)) return [];
-    return coerceAppPathSummary(parsed.apps ?? parsed).sort((left, right) => left.localeCompare(right));
+    return coerceAppPathSummary(parsed.apps ?? parsed).sort((left, right) =>
+      left.localeCompare(right),
+    );
   } catch {
     return [];
   }
 }
 
-export function validatePluginMcpPath(pluginRoot: string, mcpPath: string | undefined): string | null {
+export function validatePluginMcpPath(
+  pluginRoot: string,
+  mcpPath: string | undefined,
+): string | null {
   if (!mcpPath) return null;
   const resolved = path.resolve(mcpPath);
   if (!isPathInside(pluginRoot, resolved)) {

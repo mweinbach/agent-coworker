@@ -7,17 +7,17 @@ import { mapPiEventToRawParts } from "../runtime/piStreamParts";
 import { normalizeModelStreamPart } from "../server/modelStream";
 import type { ServerEvent } from "../server/protocol";
 import {
-  mapGoogleInteractionsEventToStreamParts,
-  processGoogleInteractionsStreamEvent,
   type GoogleInteractionsContentBlock,
   type GoogleInteractionsProviderToolCallState,
+  mapGoogleInteractionsEventToStreamParts,
+  processGoogleInteractionsStreamEvent,
 } from "./googleInteractionsStreamParts";
 
 import {
-  mapModelStreamChunk,
-  mapModelStreamRawEvent,
   type ModelStreamChunkEvent,
   type ModelStreamUpdate,
+  mapModelStreamChunk,
+  mapModelStreamRawEvent,
 } from "./modelStream";
 
 export type ModelStreamRawEvent = Extract<ServerEvent, { type: "model_stream_raw" }>;
@@ -25,10 +25,13 @@ export type ModelStreamRawEvent = Extract<ServerEvent, { type: "model_stream_raw
 export type ModelStreamReplayRuntime = {
   rawBackedTurns: Set<string>;
   projectorByTurn: Map<string, ResponsesStreamProjector>;
-  googleStateByTurn: Map<string, {
-    contentBlocks: Map<number, GoogleInteractionsContentBlock>;
-    providerToolCallsById: Map<string, GoogleInteractionsProviderToolCallState>;
-  }>;
+  googleStateByTurn: Map<
+    string,
+    {
+      contentBlocks: Map<number, GoogleInteractionsContentBlock>;
+      providerToolCallsById: Map<string, GoogleInteractionsProviderToolCallState>;
+    }
+  >;
 };
 
 export function createModelStreamReplayRuntime(): ModelStreamReplayRuntime {
@@ -131,7 +134,11 @@ export function replayModelStreamRawEvent(
 
     try {
       const state = getOrCreateGoogleState(runtime, evt.turnId);
-      processGoogleInteractionsStreamEvent(rawEvent, state.contentBlocks, state.providerToolCallsById);
+      processGoogleInteractionsStreamEvent(
+        rawEvent,
+        state.contentBlocks,
+        state.providerToolCallsById,
+      );
       const updates = [
         ...directUpdates,
         ...mapRawPartsToUpdates(
@@ -144,7 +151,11 @@ export function replayModelStreamRawEvent(
         ),
       ];
 
-      if (updates.some((update) => update.kind !== "tool_input_start" && update.kind !== "tool_result")) {
+      if (
+        updates.some(
+          (update) => update.kind !== "tool_input_start" && update.kind !== "tool_result",
+        )
+      ) {
         runtime.rawBackedTurns.add(evt.turnId);
       }
 
@@ -173,7 +184,9 @@ export function replayModelStreamRawEvent(
     updates.push(...mapRawPartsToUpdates(evt, mapPiEventToRawParts(piEvent, evt.provider, true)));
   }
 
-  if (updates.some((update) => update.kind !== "tool_input_start" && update.kind !== "tool_result")) {
+  if (
+    updates.some((update) => update.kind !== "tool_input_start" && update.kind !== "tool_result")
+  ) {
     runtime.rawBackedTurns.add(evt.turnId);
   }
 

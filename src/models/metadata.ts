@@ -1,6 +1,6 @@
 import {
-  getKnownBedrockResolvedModelMetadataSync,
   buildBedrockPlaceholderMetadata,
+  getKnownBedrockResolvedModelMetadataSync,
   resolveBedrockModelMetadata,
   resolveDefaultBedrockModelMetadata,
 } from "../providers/bedrockShared";
@@ -10,14 +10,14 @@ import {
   resolveLmStudioDiscoveredModelMetadata,
 } from "../providers/lmstudio/catalog";
 import type { ProviderName } from "../types";
-import {
-  assertSupportedModel,
-  defaultSupportedModel,
-  getSupportedModel,
-} from "./registry";
 import type { ResolvedModelMetadata } from "./metadataTypes";
+import { assertSupportedModel, defaultSupportedModel, getSupportedModel } from "./registry";
 
-function toResolvedStaticModel(provider: ProviderName, modelId: string, source = "model"): ResolvedModelMetadata {
+function toResolvedStaticModel(
+  provider: ProviderName,
+  modelId: string,
+  source = "model",
+): ResolvedModelMetadata {
   const model = assertSupportedModel(provider, modelId, source);
   return {
     id: model.id,
@@ -59,8 +59,11 @@ export function getResolvedModelMetadataSync(
     return buildLmStudioPlaceholderMetadata(normalizeModelIdForProvider(provider, modelId, source));
   }
   if (provider === "bedrock") {
-    return getKnownBedrockResolvedModelMetadataSync({ modelId: normalizeModelIdForProvider(provider, modelId, source) })
-      ?? buildBedrockPlaceholderMetadata(normalizeModelIdForProvider(provider, modelId, source));
+    return (
+      getKnownBedrockResolvedModelMetadataSync({
+        modelId: normalizeModelIdForProvider(provider, modelId, source),
+      }) ?? buildBedrockPlaceholderMetadata(normalizeModelIdForProvider(provider, modelId, source))
+    );
   }
   return toResolvedStaticModel(provider, modelId, source);
 }

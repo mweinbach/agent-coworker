@@ -14,9 +14,7 @@ export function ReasoningCard({ mode, text }: ReasoningCardProps) {
 
   const lines = text.split("\n");
   const isLong = lines.length > 4 || text.length > 300;
-  const preview = isLong
-    ? lines.slice(0, 3).join("\n") + (lines.length > 3 ? "..." : "")
-    : text;
+  const preview = isLong ? lines.slice(0, 3).join("\n") + (lines.length > 3 ? "..." : "") : text;
 
   return (
     <Pressable

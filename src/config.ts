@@ -6,24 +6,6 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 import { getAiCoworkerPaths } from "./connect";
-import { parseConnectionStoreJson } from "./store/connections";
-import { getModelForProvider, getProviderKeyCandidates } from "./providers";
-import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
-import {
-  normalizeRuntimeNameForProvider,
-  resolveChildModelRoutingMode,
-  resolveProviderName,
-  resolveRuntimeName as resolveRuntimeNameFromValue,
-} from "./types";
-import type {
-  AgentConfig,
-  CommandTemplateConfig,
-  ProviderName,
-  RuntimeName,
-  WorkspaceFeatureFlagOverrides,
-} from "./types";
-import { resolveAuthHomeDir } from "./utils/authHome";
-import { defaultSupportedModel, describeModelProviderMismatch, getSupportedModel } from "./models/registry";
 import { normalizeChildRoutingConfig } from "./models/childModelRouting";
 import {
   getResolvedModelMetadataSync,
@@ -32,6 +14,28 @@ import {
   resolveDefaultModelMetadata,
   resolveModelMetadata,
 } from "./models/metadata";
+import {
+  defaultSupportedModel,
+  describeModelProviderMismatch,
+  getSupportedModel,
+} from "./models/registry";
+import { getModelForProvider, getProviderKeyCandidates } from "./providers";
+import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
+import { parseConnectionStoreJson } from "./store/connections";
+import type {
+  AgentConfig,
+  CommandTemplateConfig,
+  ProviderName,
+  RuntimeName,
+  WorkspaceFeatureFlagOverrides,
+} from "./types";
+import {
+  normalizeRuntimeNameForProvider,
+  resolveChildModelRoutingMode,
+  resolveProviderName,
+  resolveRuntimeName as resolveRuntimeNameFromValue,
+} from "./types";
+import { resolveAuthHomeDir } from "./utils/authHome";
 
 export { defaultModelForProvider } from "./providers";
 
@@ -48,28 +52,47 @@ const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const finiteNumberSchema = z.number().finite();
 const booleanLikeSchema = z.union([
   z.boolean(),
-  z.string().trim().transform((raw, ctx) => {
-    const normalized = raw.toLowerCase();
-    if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "y" || normalized === "on") {
-      return true;
-    }
-    if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "n" || normalized === "off") {
-      return false;
-    }
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "invalid_boolean" });
-    return z.NEVER;
-  }),
+  z
+    .string()
+    .trim()
+    .transform((raw, ctx) => {
+      const normalized = raw.toLowerCase();
+      if (
+        normalized === "1" ||
+        normalized === "true" ||
+        normalized === "yes" ||
+        normalized === "y" ||
+        normalized === "on"
+      ) {
+        return true;
+      }
+      if (
+        normalized === "0" ||
+        normalized === "false" ||
+        normalized === "no" ||
+        normalized === "n" ||
+        normalized === "off"
+      ) {
+        return false;
+      }
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "invalid_boolean" });
+      return z.NEVER;
+    }),
 ]);
 const numberLikeSchema = z.union([
   finiteNumberSchema,
-  z.string().trim().min(1).transform((raw, ctx) => {
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "invalid_number" });
-      return z.NEVER;
-    }
-    return parsed;
-  }),
+  z
+    .string()
+    .trim()
+    .min(1)
+    .transform((raw, ctx) => {
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "invalid_number" });
+        return z.NEVER;
+      }
+      return parsed;
+    }),
 ]);
 const nonNegativeIntegerLikeSchema = numberLikeSchema
   .transform((value) => Math.floor(value))
@@ -98,9 +121,13 @@ function mergeProviderOptionDefaults(
   providerOptions: Record<string, any> | undefined,
 ): Record<string, any> | undefined {
   const defaults = getResolvedModelMetadataSync(provider, modelId, "model").providerOptionsDefaults;
-  const current = isPlainObject(providerOptions) ? deepMerge({}, providerOptions) as Record<string, any> : undefined;
+  const current = isPlainObject(providerOptions)
+    ? (deepMerge({}, providerOptions) as Record<string, any>)
+    : undefined;
   const currentProviderOptions =
-    current && isPlainObject(current[provider]) ? current[provider] as Record<string, unknown> : undefined;
+    current && isPlainObject(current[provider])
+      ? (current[provider] as Record<string, unknown>)
+      : undefined;
   const mergedProviderOptions = deepMerge(
     deepMerge({}, defaults as Record<string, unknown>),
     currentProviderOptions ?? {},
@@ -140,7 +167,7 @@ async function resolveConfiguredModelMetadata(
   const fallback = defaultSupportedModel(provider);
   const mismatchHint = describeModelProviderMismatch(provider, modelId);
   console.warn(
-    `[config] Ignoring unsupported ${source} "${modelId}" for provider ${provider}; using "${fallback.id}".${mismatchHint ? ` ${mismatchHint}` : ""}`
+    `[config] Ignoring unsupported ${source} "${modelId}" for provider ${provider}; using "${fallback.id}".${mismatchHint ? ` ${mismatchHint}` : ""}`,
   );
   return fallback;
 }
@@ -169,49 +196,63 @@ async function loadJsonSafe(filePath: string): Promise<Record<string, unknown>> 
   }
 }
 
-const commandTemplateSchema = z.object({
-  template: z.string().trim().min(1),
-  description: z.string().optional(),
-  source: z.enum(["command", "mcp", "skill"]),
-}).strict();
+const commandTemplateSchema = z
+  .object({
+    template: z.string().trim().min(1),
+    description: z.string().optional(),
+    source: z.enum(["command", "mcp", "skill"]),
+  })
+  .strict();
 
-const commandConfigSchema = z.record(z.string().trim().min(1), commandTemplateSchema).transform((rawCommands) => {
-  const commands: Record<string, CommandTemplateConfig> = {};
-  for (const [name, command] of Object.entries(rawCommands)) {
-    commands[name.trim()] = {
-      template: command.template,
-      source: command.source,
-      ...(command.description !== undefined ? { description: command.description } : {}),
-    };
-  }
-  return commands;
-});
-const observabilityLayerSchema = z.object({
-  baseUrl: nonEmptyTrimmedStringSchema.optional(),
-  publicKey: nonEmptyTrimmedStringSchema.optional(),
-  secretKey: nonEmptyTrimmedStringSchema.optional(),
-  tracingEnvironment: nonEmptyTrimmedStringSchema.optional(),
-  release: nonEmptyTrimmedStringSchema.optional(),
-}).passthrough();
-const harnessLayerSchema = z.object({
-  reportOnly: booleanLikeSchema.optional(),
-  strictMode: booleanLikeSchema.optional(),
-}).passthrough();
-const modelSettingsLayerSchema = z.object({
-  maxRetries: nonNegativeIntegerLikeSchema.optional(),
-}).passthrough();
-const userProfileLayerSchema = z.object({
-  instructions: z.string().optional(),
-  work: z.string().optional(),
-  details: z.string().optional(),
-}).passthrough();
+const commandConfigSchema = z
+  .record(z.string().trim().min(1), commandTemplateSchema)
+  .transform((rawCommands) => {
+    const commands: Record<string, CommandTemplateConfig> = {};
+    for (const [name, command] of Object.entries(rawCommands)) {
+      commands[name.trim()] = {
+        template: command.template,
+        source: command.source,
+        ...(command.description !== undefined ? { description: command.description } : {}),
+      };
+    }
+    return commands;
+  });
+const observabilityLayerSchema = z
+  .object({
+    baseUrl: nonEmptyTrimmedStringSchema.optional(),
+    publicKey: nonEmptyTrimmedStringSchema.optional(),
+    secretKey: nonEmptyTrimmedStringSchema.optional(),
+    tracingEnvironment: nonEmptyTrimmedStringSchema.optional(),
+    release: nonEmptyTrimmedStringSchema.optional(),
+  })
+  .passthrough();
+const harnessLayerSchema = z
+  .object({
+    reportOnly: booleanLikeSchema.optional(),
+    strictMode: booleanLikeSchema.optional(),
+  })
+  .passthrough();
+const modelSettingsLayerSchema = z
+  .object({
+    maxRetries: nonNegativeIntegerLikeSchema.optional(),
+  })
+  .passthrough();
+const userProfileLayerSchema = z
+  .object({
+    instructions: z.string().optional(),
+    work: z.string().optional(),
+    details: z.string().optional(),
+  })
+  .passthrough();
 
 function parseCommandConfig(raw: unknown): AgentConfig["command"] | undefined {
   if (raw === undefined) return undefined;
 
   const parsedRaw = commandConfigSchema.safeParse(raw);
   if (!parsedRaw.success) {
-    throw new Error(`Invalid command config: ${parsedRaw.error.issues[0]?.message ?? "validation_failed"}`);
+    throw new Error(
+      `Invalid command config: ${parsedRaw.error.issues[0]?.message ?? "validation_failed"}`,
+    );
   }
 
   if (Object.keys(parsedRaw.data).length === 0) return undefined;
@@ -264,7 +305,9 @@ function asBoolean(v: unknown): boolean | null {
   return parsed.success ? parsed.data : null;
 }
 
-function normalizeWorkspaceFeatureFlagLayer(value: unknown): WorkspaceFeatureFlagOverrides | undefined {
+function normalizeWorkspaceFeatureFlagLayer(
+  value: unknown,
+): WorkspaceFeatureFlagOverrides | undefined {
   if (!isPlainObject(value)) {
     return undefined;
   }
@@ -298,7 +341,10 @@ function normalizeNullableNonNegativeInt(v: unknown): number | null | undefined 
   return normalizeNonNegativeInt(v);
 }
 
-export function getSavedProviderApiKeyForHome(home: string, provider: ProviderName): string | undefined {
+export function getSavedProviderApiKeyForHome(
+  home: string,
+  provider: ProviderName,
+): string | undefined {
   const paths = getAiCoworkerPaths({ homedir: home });
   const keyCandidates = getProviderKeyCandidates(provider);
 
@@ -309,7 +355,9 @@ export function getSavedProviderApiKeyForHome(home: string, provider: ProviderNa
     const parsedCode = errorWithCodeSchema.safeParse(error);
     const code = parsedCode.success ? parsedCode.data.code : undefined;
     if (code === "ENOENT") return undefined;
-    throw new Error(`Failed to read connection store at ${paths.connectionsFile}: ${String(error)}`);
+    throw new Error(
+      `Failed to read connection store at ${paths.connectionsFile}: ${String(error)}`,
+    );
   }
 
   const parsedStore = parseConnectionStoreJson(raw, paths.connectionsFile);
@@ -322,7 +370,10 @@ export function getSavedProviderApiKeyForHome(home: string, provider: ProviderNa
   return undefined;
 }
 
-export function getSavedProviderApiKey(config: AgentConfig, provider: ProviderName): string | undefined {
+export function getSavedProviderApiKey(
+  config: AgentConfig,
+  provider: ProviderName,
+): string | undefined {
   return getSavedProviderApiKeyForHome(resolveAuthHomeDir(config), provider);
 }
 
@@ -366,19 +417,30 @@ export function rebaseWorkspaceConfig(config: AgentConfig, cwd: string): AgentCo
     projectAgentDir,
     workspaceAgentsDir,
     workspacePluginsDir,
-    outputDirectory: rebaseAbsolutePathWithinWorkspace(config.outputDirectory, previousWorkspaceRoot, cwd),
-    uploadsDirectory: rebaseAbsolutePathWithinWorkspace(config.uploadsDirectory, previousWorkspaceRoot, cwd),
+    outputDirectory: rebaseAbsolutePathWithinWorkspace(
+      config.outputDirectory,
+      previousWorkspaceRoot,
+      cwd,
+    ),
+    uploadsDirectory: rebaseAbsolutePathWithinWorkspace(
+      config.uploadsDirectory,
+      previousWorkspaceRoot,
+      cwd,
+    ),
     skillsDirs: [
       path.join(projectAgentDir, "skills"),
-      ...config.skillsDirs.filter((skillsDir) =>
-        skillsDir !== path.join(config.projectAgentDir, "skills")
-        && skillsDir !== builtInSkillsDir
+      ...config.skillsDirs.filter(
+        (skillsDir) =>
+          skillsDir !== path.join(config.projectAgentDir, "skills") &&
+          skillsDir !== builtInSkillsDir,
       ),
       ...(builtInSkillsEnabled ? [builtInSkillsDir] : []),
     ],
     memoryDirs: [
       path.join(projectAgentDir, "memory"),
-      ...config.memoryDirs.filter((memoryDir) => memoryDir !== path.join(config.projectAgentDir, "memory")),
+      ...config.memoryDirs.filter(
+        (memoryDir) => memoryDir !== path.join(config.projectAgentDir, "memory"),
+      ),
     ],
     configDirs: [
       projectAgentDir,
@@ -425,16 +487,27 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const workingDirectory = env.AGENT_WORKING_DIR || cwd;
 
   const providerOptions = isPlainObject((merged as Record<string, unknown>).providerOptions)
-    ? (deepMerge({}, (merged as Record<string, unknown>).providerOptions as Record<string, unknown>) as Record<string, unknown>)
+    ? (deepMerge(
+        {},
+        (merged as Record<string, unknown>).providerOptions as Record<string, unknown>,
+      ) as Record<string, unknown>)
     : undefined;
 
   const configuredModel =
     asNonEmptyString(env.AGENT_MODEL) ||
     asNonEmptyString(projectConfig.model) ||
     asNonEmptyString(userConfig.model) ||
-    (asProviderName(builtInDefaults.provider) === provider && asNonEmptyString(builtInDefaults.model));
+    (asProviderName(builtInDefaults.provider) === provider &&
+      asNonEmptyString(builtInDefaults.model));
   const supportedModel = configuredModel
-    ? await resolveConfiguredModelMetadata(provider, configuredModel, "model", providerOptions, env, homedir)
+    ? await resolveConfiguredModelMetadata(
+        provider,
+        configuredModel,
+        "model",
+        providerOptions,
+        env,
+        homedir,
+      )
     : await resolveDefaultModelMetadata(provider, { providerOptions, env, home: homedir });
 
   const childModelRoutingMode =
@@ -443,9 +516,15 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     resolveChildModelRoutingMode(builtInDefaults.childModelRoutingMode) ||
     "same-provider";
   const rawAllowedChildModelRefs =
-    (Array.isArray(projectConfig.allowedChildModelRefs) ? projectConfig.allowedChildModelRefs : undefined) ||
-    (Array.isArray(userConfig.allowedChildModelRefs) ? userConfig.allowedChildModelRefs : undefined) ||
-    (Array.isArray(builtInDefaults.allowedChildModelRefs) ? builtInDefaults.allowedChildModelRefs : undefined);
+    (Array.isArray(projectConfig.allowedChildModelRefs)
+      ? projectConfig.allowedChildModelRefs
+      : undefined) ||
+    (Array.isArray(userConfig.allowedChildModelRefs)
+      ? userConfig.allowedChildModelRefs
+      : undefined) ||
+    (Array.isArray(builtInDefaults.allowedChildModelRefs)
+      ? builtInDefaults.allowedChildModelRefs
+      : undefined);
   const preferredChildModelRef =
     asNonEmptyString(projectConfig.preferredChildModelRef) ||
     asNonEmptyString(userConfig.preferredChildModelRef) ||
@@ -469,7 +548,9 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
       model: supportedModel.id,
       childModelRoutingMode,
       preferredChildModelRef,
-      allowedChildModelRefs: rawAllowedChildModelRefs?.filter((value): value is string => typeof value === "string"),
+      allowedChildModelRefs: rawAllowedChildModelRefs?.filter(
+        (value): value is string => typeof value === "string",
+      ),
       source: "config",
     });
   } catch (error) {
@@ -477,12 +558,14 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   }
 
   const parsedToolOutputOverflowChars = normalizeNullableNonNegativeInt(
-    (merged as Record<string, unknown>).toolOutputOverflowChars
+    (merged as Record<string, unknown>).toolOutputOverflowChars,
   );
   const inheritedToolOutputOverflowCharsRaw = normalizeNullableNonNegativeInt(
-    (inheritedMerged as Record<string, unknown>).toolOutputOverflowChars
+    (inheritedMerged as Record<string, unknown>).toolOutputOverflowChars,
   );
-  const projectToolOutputOverflowChars = normalizeNullableNonNegativeInt(projectConfig.toolOutputOverflowChars);
+  const projectToolOutputOverflowChars = normalizeNullableNonNegativeInt(
+    projectConfig.toolOutputOverflowChars,
+  );
   const inheritedToolOutputOverflowChars =
     inheritedToolOutputOverflowCharsRaw === undefined
       ? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS
@@ -510,7 +593,10 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     undefined;
   const uploadsDirectory = uploadsDirRaw ? resolveDir(uploadsDirRaw, cwd) : undefined;
 
-  const userName = asTrimmedString(env.AGENT_USER_NAME) ?? asTrimmedString((merged as Record<string, unknown>).userName) ?? "";
+  const userName =
+    asTrimmedString(env.AGENT_USER_NAME) ??
+    asTrimmedString((merged as Record<string, unknown>).userName) ??
+    "";
   const mergedUserProfile = parseLayer(
     userProfileLayerSchema,
     (merged as Record<string, unknown>).userProfile,
@@ -521,11 +607,12 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     work: asString(mergedUserProfile.work) ?? "",
     details: asString(mergedUserProfile.details) ?? "",
   };
-  const mergedFeatureFlagsLayer =
-    isPlainObject((merged as Record<string, unknown>).featureFlags)
-      ? ((merged as Record<string, unknown>).featureFlags as Record<string, unknown>)
-      : undefined;
-  const workspaceFeatureFlagOverrides = normalizeWorkspaceFeatureFlagLayer(mergedFeatureFlagsLayer?.workspace);
+  const mergedFeatureFlagsLayer = isPlainObject((merged as Record<string, unknown>).featureFlags)
+    ? ((merged as Record<string, unknown>).featureFlags as Record<string, unknown>)
+    : undefined;
+  const workspaceFeatureFlagOverrides = normalizeWorkspaceFeatureFlagLayer(
+    mergedFeatureFlagsLayer?.workspace,
+  );
   const legacyA2uiOverride =
     asBoolean(env.AGENT_ENABLE_A2UI) ??
     asBoolean(projectConfig.enableA2ui) ??
@@ -605,14 +692,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
   const mergedHarness = parseLayer(harnessLayerSchema, merged.harness, {});
   const harness = {
-    reportOnly:
-      asBoolean(env.AGENT_HARNESS_REPORT_ONLY) ??
-      mergedHarness.reportOnly ??
-      true,
-    strictMode:
-      asBoolean(env.AGENT_HARNESS_STRICT_MODE) ??
-      mergedHarness.strictMode ??
-      false,
+    reportOnly: asBoolean(env.AGENT_HARNESS_REPORT_ONLY) ?? mergedHarness.reportOnly ?? true,
+    strictMode: asBoolean(env.AGENT_HARNESS_STRICT_MODE) ?? mergedHarness.strictMode ?? false,
   };
 
   const command = parseCommandConfig((merged as Record<string, unknown>).command);
@@ -624,8 +705,13 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     providerOptions as Record<string, any> | undefined,
   );
 
-  const mergedModelSettings = parseLayer(modelSettingsLayerSchema, (merged as Record<string, unknown>).modelSettings, {});
-  const maxRetries = normalizeNonNegativeInt(env.AGENT_MODEL_MAX_RETRIES) ?? mergedModelSettings.maxRetries;
+  const mergedModelSettings = parseLayer(
+    modelSettingsLayerSchema,
+    (merged as Record<string, unknown>).modelSettings,
+    {},
+  );
+  const maxRetries =
+    normalizeNonNegativeInt(env.AGENT_MODEL_MAX_RETRIES) ?? mergedModelSettings.maxRetries;
   const normalizedModelSettings: AgentConfig["modelSettings"] =
     typeof maxRetries === "number" ? { maxRetries } : undefined;
 
@@ -697,7 +783,11 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
 export function getModel(config: AgentConfig, id?: string) {
   const modelId = id || config.model;
-  const normalizedModelId = normalizeModelIdForProvider(config.provider, modelId, id ? "model override" : "model");
+  const normalizedModelId = normalizeModelIdForProvider(
+    config.provider,
+    modelId,
+    id ? "model override" : "model",
+  );
   const savedKey = getSavedProviderApiKey(config, config.provider);
   return getModelForProvider(config, normalizedModelId, savedKey);
 }

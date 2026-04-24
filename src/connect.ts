@@ -1,44 +1,29 @@
 import {
+  type CodexAuthMaterial,
   clearCodexAuthMaterial,
   codexAuthFilePath,
   isTokenExpiring,
   readCodexAuthMaterial,
   refreshCodexAuthMaterial,
-  type CodexAuthMaterial,
   writeCodexAuthMaterial,
 } from "./providers/codex-auth";
+import { isOauthCliProvider, runCodexBrowserOAuth } from "./providers/codex-oauth-flows";
 import {
-  isOauthCliProvider,
-  runCodexBrowserOAuth,
-} from "./providers/codex-oauth-flows";
-import {
-  getAiCoworkerPaths,
-  ensureAiCoworkerHome,
-  readConnectionStore,
-  writeConnectionStore,
-  TOOL_API_KEY_NAMES,
   type AiCoworkerPaths,
   type ConnectionMode,
   type ConnectionStore,
   type ConnectService,
+  ensureAiCoworkerHome,
+  getAiCoworkerPaths,
+  readConnectionStore,
   type StoredConnection,
+  TOOL_API_KEY_NAMES,
   type ToolApiKeyName,
+  writeConnectionStore,
 } from "./store/connections";
 import { maskApiKey, readToolApiKey, writeToolApiKey } from "./tools/api-keys";
-import { openExternalUrl, type UrlOpener } from "./utils/browser";
 import { resolveAuthHomeDir } from "./utils/authHome";
-
-export {
-  getAiCoworkerPaths,
-  ensureAiCoworkerHome,
-  readConnectionStore,
-  writeConnectionStore,
-  TOOL_API_KEY_NAMES,
-  maskApiKey,
-  readToolApiKey,
-  writeToolApiKey,
-  isOauthCliProvider,
-};
+import { openExternalUrl, type UrlOpener } from "./utils/browser";
 
 export type {
   AiCoworkerPaths,
@@ -48,6 +33,17 @@ export type {
   StoredConnection,
   ToolApiKeyName,
   UrlOpener,
+};
+export {
+  ensureAiCoworkerHome,
+  getAiCoworkerPaths,
+  isOauthCliProvider,
+  maskApiKey,
+  readConnectionStore,
+  readToolApiKey,
+  TOOL_API_KEY_NAMES,
+  writeConnectionStore,
+  writeToolApiKey,
 };
 
 const connectOauthDepsDefaults = {
@@ -60,9 +56,7 @@ const connectOauthDeps = {
 };
 
 export const __internal = {
-  setOauthDepsForTests(
-    overrides: Partial<typeof connectOauthDepsDefaults>,
-  ): void {
+  setOauthDepsForTests(overrides: Partial<typeof connectOauthDepsDefaults>): void {
     Object.assign(connectOauthDeps, overrides);
   },
   resetOauthDepsForTests(): void {
@@ -256,7 +250,9 @@ export async function connectProvider(opts: {
         opts.onOauthLine?.(`[auth] existing Codex credentials are stale: ${message}`);
       }
     } else {
-      opts.onOauthLine?.("[auth] existing Codex credentials are expired and missing refresh token.");
+      opts.onOauthLine?.(
+        "[auth] existing Codex credentials are expired and missing refresh token.",
+      );
     }
   }
   if (existing?.accessToken && !isTokenExpiring(existing, 0)) {
@@ -279,10 +275,14 @@ export async function connectProvider(opts: {
 
   try {
     if (methodId !== "oauth_cli") {
-      opts.onOauthLine?.(`[auth] deprecated Codex auth method "${methodId}" requested; using Codex-native browser login.`);
+      opts.onOauthLine?.(
+        `[auth] deprecated Codex auth method "${methodId}" requested; using Codex-native browser login.`,
+      );
     }
     if (opts.code?.trim()) {
-      throw new Error("Codex OAuth is browser-managed by Cowork. Start sign-in without a pasted authorization code.");
+      throw new Error(
+        "Codex OAuth is browser-managed by Cowork. Start sign-in without a pasted authorization code.",
+      );
     }
     const oauthCredentials = await connectOauthDeps.runCodexLogin({
       paths,

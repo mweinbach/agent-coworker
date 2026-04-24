@@ -3,7 +3,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createControlSocketHelpers } from "../apps/desktop/src/app/store.helpers/controlSocket";
 import { __internal as jsonRpcSocketInternal } from "../apps/desktop/src/app/store.helpers/jsonRpcSocket";
 import { JSONRPC_SOCKET_OVERRIDE_KEY } from "../apps/desktop/src/app/store.helpers/jsonRpcSocketOverride";
-import { defaultWorkspaceRuntime, RUNTIME } from "../apps/desktop/src/app/store.helpers/runtimeState";
+import {
+  defaultWorkspaceRuntime,
+  RUNTIME,
+} from "../apps/desktop/src/app/store.helpers/runtimeState";
 
 afterEach(() => {
   jsonRpcSocketInternal.reset();
@@ -34,15 +37,17 @@ describe("desktop control socket config_updated defaults sync", () => {
       async request(method: string) {
         expect(method).toBe("cowork/session/state/read");
         return {
-          events: [{
-            type: "config_updated",
-            sessionId: "session-1",
-            config: {
-              provider: "openai",
-              model: "gpt-5.4",
-              workingDirectory: workspacePath,
+          events: [
+            {
+              type: "config_updated",
+              sessionId: "session-1",
+              config: {
+                provider: "openai",
+                model: "gpt-5.4",
+                workingDirectory: workspacePath,
+              },
             },
-          }],
+          ],
         };
       }
 
@@ -57,10 +62,12 @@ describe("desktop control socket config_updated defaults sync", () => {
       notifications: [],
       threads: [],
       threadRuntimeById: {},
-      workspaces: [{
-        id: workspaceId,
-        path: workspacePath,
-      }],
+      workspaces: [
+        {
+          id: workspaceId,
+          path: workspacePath,
+        },
+      ],
       workspaceRuntimeById: {
         [workspaceId]: {
           ...defaultWorkspaceRuntime(),
@@ -96,12 +103,14 @@ describe("desktop control socket config_updated defaults sync", () => {
     );
 
     expect(ok).toBe(true);
-    expect(state.workspaces).toEqual([{
-      id: workspaceId,
-      path: workspacePath,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.4",
-    }]);
+    expect(state.workspaces).toEqual([
+      {
+        id: workspaceId,
+        path: workspacePath,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      },
+    ]);
     expect(state.workspaceRuntimeById[workspaceId].controlConfig).toEqual({
       provider: "openai",
       model: "gpt-5.4",

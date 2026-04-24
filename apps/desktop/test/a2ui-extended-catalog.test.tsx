@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { A2uiRenderer, type A2uiRenderableComponent } from "../src/ui/chat/a2ui/A2uiRenderer";
+import { type A2uiRenderableComponent, A2uiRenderer } from "../src/ui/chat/a2ui/A2uiRenderer";
 
 function render(root: A2uiRenderableComponent, dataModel: unknown = {}) {
   return renderToStaticMarkup(createElement(A2uiRenderer, { root, dataModel }));
@@ -28,26 +28,24 @@ describe("A2uiRenderer extended catalog (Phase 3)", () => {
   });
 
   test("Select renders every option from props.options", () => {
-    const html = render(
-      {
-        id: "root",
-        type: "Column",
-        children: [
-          {
-            id: "pick",
-            type: "Select",
-            props: {
-              label: "Pick one",
-              options: [
-                { value: "a", label: "Apple" },
-                { value: "b", label: "Banana" },
-              ],
-              value: "b",
-            },
+    const html = render({
+      id: "root",
+      type: "Column",
+      children: [
+        {
+          id: "pick",
+          type: "Select",
+          props: {
+            label: "Pick one",
+            options: [
+              { value: "a", label: "Apple" },
+              { value: "b", label: "Banana" },
+            ],
+            value: "b",
           },
-        ],
-      },
-    );
+        },
+      ],
+    });
     expect(html).toContain("Apple");
     expect(html).toContain("Banana");
     // The `b` value should be the selected default.
@@ -69,7 +67,12 @@ describe("A2uiRenderer extended catalog (Phase 3)", () => {
           },
         ],
       },
-      { opts: [{ value: "x", label: "Xylophone" }, { value: "y", label: "Yak" }] },
+      {
+        opts: [
+          { value: "x", label: "Xylophone" },
+          { value: "y", label: "Yak" },
+        ],
+      },
     );
     expect(html).toContain("Xylophone");
     expect(html).toContain("Yak");
@@ -79,9 +82,7 @@ describe("A2uiRenderer extended catalog (Phase 3)", () => {
     const safe = render({
       id: "root",
       type: "Column",
-      children: [
-        { id: "a", type: "Link", props: { text: "Cowork", href: "https://example.com" } },
-      ],
+      children: [{ id: "a", type: "Link", props: { text: "Cowork", href: "https://example.com" } }],
     });
     expect(safe).toContain("https://example.com");
     expect(safe).toContain("Cowork");
@@ -89,9 +90,7 @@ describe("A2uiRenderer extended catalog (Phase 3)", () => {
     const unsafe = render({
       id: "root",
       type: "Column",
-      children: [
-        { id: "a", type: "Link", props: { text: "bad", href: "javascript:alert(1)" } },
-      ],
+      children: [{ id: "a", type: "Link", props: { text: "bad", href: "javascript:alert(1)" } }],
     });
     expect(unsafe).not.toContain("javascript:alert");
 
@@ -110,7 +109,11 @@ describe("A2uiRenderer extended catalog (Phase 3)", () => {
       id: "root",
       type: "Column",
       children: [
-        { id: "img", type: "Image", props: { src: "data:image/png;base64,ZmFrZQ==", alt: "Inline" } },
+        {
+          id: "img",
+          type: "Image",
+          props: { src: "data:image/png;base64,ZmFrZQ==", alt: "Inline" },
+        },
       ],
     });
     expect(html).toContain("data:image/png;base64,ZmFrZQ==");
@@ -133,9 +136,7 @@ describe("A2uiRenderer extended catalog (Phase 3)", () => {
     const html = render({
       id: "root",
       type: "Column",
-      children: [
-        { id: "b", type: "Badge", props: { text: "new", tone: "success" } },
-      ],
+      children: [{ id: "b", type: "Badge", props: { text: "new", tone: "success" } }],
     });
     expect(html).toContain("new");
     // Tailwind class names we emit
@@ -161,7 +162,12 @@ describe("A2uiRenderer extended catalog (Phase 3)", () => {
           },
         ],
       },
-      { rows: [{ name: "Widget", qty: 3 }, { name: "Gadget", qty: 7 }] },
+      {
+        rows: [
+          { name: "Widget", qty: 3 },
+          { name: "Gadget", qty: 7 },
+        ],
+      },
     );
     expect(html).toContain("Name");
     expect(html).toContain("Qty");
@@ -175,9 +181,7 @@ describe("A2uiRenderer extended catalog (Phase 3)", () => {
     const html = render({
       id: "root",
       type: "Column",
-      children: [
-        { id: "t", type: "Table", props: { rows: [{ name: "Widget" }] } },
-      ],
+      children: [{ id: "t", type: "Table", props: { rows: [{ name: "Widget" }] } }],
     });
     expect(html).toContain("Table requires props.columns");
   });

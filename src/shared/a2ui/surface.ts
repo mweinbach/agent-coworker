@@ -1,10 +1,5 @@
-import {
-  type A2uiComponent,
-  type A2uiEnvelope,
-  envelopeKind,
-  envelopeSurfaceId,
-} from "./protocol";
 import { setByPointer, splitPointer } from "./expressions";
+import { type A2uiComponent, type A2uiEnvelope, envelopeKind, envelopeSurfaceId } from "./protocol";
 
 /**
  * Canonical resolved state for a single A2UI surface. Server + client both
@@ -98,7 +93,10 @@ export function applyEnvelope(
   const existing = surfaces[surfaceId];
 
   if (kind === "createSurface") {
-    const cs = envelope.createSurface!;
+    const cs = envelope.createSurface;
+    if (!cs) {
+      return { surfaces, change: "noop", surfaceId, warning: "Missing createSurface payload" };
+    }
     const state: A2uiSurfaceState = {
       surfaceId,
       catalogId: cs.catalogId,
@@ -126,7 +124,10 @@ export function applyEnvelope(
         warning: `updateComponents targets unknown surface ${JSON.stringify(surfaceId)}`,
       };
     }
-    const uc = envelope.updateComponents!;
+    const uc = envelope.updateComponents;
+    if (!uc) {
+      return { surfaces, change: "noop", surfaceId, warning: "Missing updateComponents payload" };
+    }
     let root: A2uiComponent | undefined = existing.root;
     if (uc.root) {
       root = shallowCloneComponent(uc.root);
@@ -149,8 +150,12 @@ export function applyEnvelope(
     } else if ((uc.components?.length ?? 0) > 0) {
       // No existing root; synthesize one from the first component if the agent
       // forgot the initial createSurface root.
-      const [first, ...rest] = uc.components!;
-      root = shallowCloneComponent(first!);
+      const components = uc.components ?? [];
+      const [first, ...rest] = components;
+      if (!first) {
+        return { surfaces, change: "noop", surfaceId, warning: "Missing update component root" };
+      }
+      root = shallowCloneComponent(first);
       if (rest.length > 0) {
         root.children = [...(root.children ?? []), ...rest.map(shallowCloneComponent)];
       }
@@ -179,7 +184,10 @@ export function applyEnvelope(
         warning: `updateDataModel targets unknown surface ${JSON.stringify(surfaceId)}`,
       };
     }
-    const udm = envelope.updateDataModel!;
+    const udm = envelope.updateDataModel;
+    if (!udm) {
+      return { surfaces, change: "noop", surfaceId, warning: "Missing updateDataModel payload" };
+    }
     const tokens = splitPointer(udm.path);
     const nextModel = setByPointer(
       existing.dataModel ?? {},

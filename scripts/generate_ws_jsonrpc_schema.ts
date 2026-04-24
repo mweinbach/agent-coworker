@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { buildJsonRpcJsonSchemaArtifact, buildJsonRpcTypeScriptArtifact } from "../src/server/jsonrpc/codegen";
+import {
+  buildJsonRpcJsonSchemaArtifact,
+  buildJsonRpcTypeScriptArtifact,
+} from "../src/server/jsonrpc/codegen";
 
 async function main() {
   const outputDir = path.join(process.cwd(), "docs", "generated");

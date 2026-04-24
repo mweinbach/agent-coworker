@@ -1,17 +1,20 @@
 import { describe, expect, test } from "bun:test";
 
 import type { FeedItem } from "../src/app/types";
-import { normalizeFeedForToolCards, parseLegacyToolLogLine } from "../src/ui/chat/toolCards/legacyToolLogs";
+import {
+  normalizeFeedForToolCards,
+  parseLegacyToolLogLine,
+} from "../src/ui/chat/toolCards/legacyToolLogs";
 
 describe("legacy tool log normalization", () => {
   test("parses legacy tool start/end log lines", () => {
-    expect(parseLegacyToolLogLine("tool> bash {\"command\":\"echo hi\"}")).toEqual({
+    expect(parseLegacyToolLogLine('tool> bash {"command":"echo hi"}')).toEqual({
       direction: "start",
       name: "bash",
       payload: { command: "echo hi" },
     });
 
-    expect(parseLegacyToolLogLine("tool< bash {\"stdout\":\"hi\"}")).toEqual({
+    expect(parseLegacyToolLogLine('tool< bash {"stdout":"hi"}')).toEqual({
       direction: "finish",
       name: "bash",
       payload: { stdout: "hi" },
@@ -21,8 +24,13 @@ describe("legacy tool log normalization", () => {
   test("pairs tool start/end logs into a single done tool card item in non-developer mode", () => {
     const feed: FeedItem[] = [
       { id: "m1", kind: "message", role: "user", ts: "2026-01-01T00:00:00.000Z", text: "hi" },
-      { id: "l1", kind: "log", ts: "2026-01-01T00:00:01.000Z", line: "tool> bash {\"command\":\"echo hi\"}" },
-      { id: "l2", kind: "log", ts: "2026-01-01T00:00:02.000Z", line: "tool< bash {\"stdout\":\"hi\"}" },
+      {
+        id: "l1",
+        kind: "log",
+        ts: "2026-01-01T00:00:01.000Z",
+        line: 'tool> bash {"command":"echo hi"}',
+      },
+      { id: "l2", kind: "log", ts: "2026-01-01T00:00:02.000Z", line: 'tool< bash {"stdout":"hi"}' },
     ];
 
     expect(normalizeFeedForToolCards(feed, false)).toEqual([
@@ -41,7 +49,12 @@ describe("legacy tool log normalization", () => {
 
   test("does not normalize logs when developer mode is enabled", () => {
     const feed: FeedItem[] = [
-      { id: "l1", kind: "log", ts: "2026-01-01T00:00:01.000Z", line: "tool> bash {\"command\":\"echo hi\"}" },
+      {
+        id: "l1",
+        kind: "log",
+        ts: "2026-01-01T00:00:01.000Z",
+        line: 'tool> bash {"command":"echo hi"}',
+      },
       { id: "l2", kind: "log", ts: "2026-01-01T00:00:02.000Z", line: "plain line" },
     ];
     expect(normalizeFeedForToolCards(feed, true)).toEqual(feed);
@@ -59,10 +72,20 @@ describe("legacy tool log normalization", () => {
         args: { command: "echo hi" },
         result: { stdout: "hi" },
       },
-      { id: "l1", kind: "log", ts: "2026-01-01T00:00:02.000Z", line: "tool> bash {\"command\":\"echo hi\"}" },
-      { id: "l2", kind: "log", ts: "2026-01-01T00:00:03.000Z", line: "tool< bash {\"stdout\":\"hi\"}" },
-      { id: "l3", kind: "log", ts: "2026-01-01T00:00:04.000Z", line: "tool> read {\"path\":\"README.md\"}" },
-      { id: "l4", kind: "log", ts: "2026-01-01T00:00:05.000Z", line: "tool< read {\"chars\":42}" },
+      {
+        id: "l1",
+        kind: "log",
+        ts: "2026-01-01T00:00:02.000Z",
+        line: 'tool> bash {"command":"echo hi"}',
+      },
+      { id: "l2", kind: "log", ts: "2026-01-01T00:00:03.000Z", line: 'tool< bash {"stdout":"hi"}' },
+      {
+        id: "l3",
+        kind: "log",
+        ts: "2026-01-01T00:00:04.000Z",
+        line: 'tool> read {"path":"README.md"}',
+      },
+      { id: "l4", kind: "log", ts: "2026-01-01T00:00:05.000Z", line: 'tool< read {"chars":42}' },
     ];
 
     expect(normalizeFeedForToolCards(feed, false)).toEqual([
@@ -76,8 +99,13 @@ describe("legacy tool log normalization", () => {
         args: { command: "echo hi" },
         result: { stdout: "hi" },
       },
-      { id: "l1", kind: "log", ts: "2026-01-01T00:00:02.000Z", line: "tool> bash {\"command\":\"echo hi\"}" },
-      { id: "l2", kind: "log", ts: "2026-01-01T00:00:03.000Z", line: "tool< bash {\"stdout\":\"hi\"}" },
+      {
+        id: "l1",
+        kind: "log",
+        ts: "2026-01-01T00:00:02.000Z",
+        line: 'tool> bash {"command":"echo hi"}',
+      },
+      { id: "l2", kind: "log", ts: "2026-01-01T00:00:03.000Z", line: 'tool< bash {"stdout":"hi"}' },
       {
         id: "l3",
         kind: "tool",

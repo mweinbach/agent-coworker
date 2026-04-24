@@ -87,8 +87,14 @@ function probeWebSocket(url: string, timeoutMs = 4000): Promise<void> {
   });
 }
 
-export function ConnectPage({ onConnect, initialError = null, initialServerUrl = null }: ConnectPageProps) {
-  const defaultUrl = normalizeWebServerUrl(initialServerUrl ?? getSavedServerUrl() ?? deriveSameOriginServerUrl());
+export function ConnectPage({
+  onConnect,
+  initialError = null,
+  initialServerUrl = null,
+}: ConnectPageProps) {
+  const defaultUrl = normalizeWebServerUrl(
+    initialServerUrl ?? getSavedServerUrl() ?? deriveSameOriginServerUrl(),
+  );
   const [serverUrl, setServerUrl] = useState(defaultUrl);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -140,7 +146,9 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
         setStatus("Finding workspace…");
         const workspaces = await fetchServerWorkspaces(normalizedUrl);
         if (workspaces.length === 0) {
-          throw new Error("Server is running but reports no workspace. Restart it with --dir <path>.");
+          throw new Error(
+            "Server is running but reports no workspace. Restart it with --dir <path>.",
+          );
         }
         if (workspaces.length > 1) {
           // Surface the picker; don't auto-pick.
@@ -156,7 +164,7 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
         setBusy(false);
       }
     },
-    [connectWithPath],
+    [connectWithPath, onConnect],
   );
 
   // On first mount, try the auto-connect flow (same-origin URL should Just Work behind Vite proxy).
@@ -164,8 +172,7 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
     if (triedAutoConnect.current) return;
     triedAutoConnect.current = true;
     void connectViaDiscovery(serverUrl);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [connectViaDiscovery, serverUrl]);
 
   const handleConnect = () => {
     void connectViaDiscovery(serverUrl);
@@ -218,6 +225,7 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
             <div style={{ marginBottom: 16 }}>
               {discovered.map((ws) => (
                 <button
+                  type="button"
                   key={ws.path}
                   onClick={() => void connectWithPath(serverUrl, ws.path)}
                   disabled={busy}
@@ -252,6 +260,7 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
         ) : null}
 
         <button
+          type="button"
           onClick={handleConnect}
           disabled={busy || !serverUrl}
           style={{
@@ -278,7 +287,9 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
         ) : null}
 
         {error ? (
-          <p style={{ fontSize: 12, color: "var(--danger)", margin: 0, marginBottom: 12 }}>{error}</p>
+          <p style={{ fontSize: 12, color: "var(--danger)", margin: 0, marginBottom: 12 }}>
+            {error}
+          </p>
         ) : null}
 
         <button
@@ -300,6 +311,7 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
         {showAdvanced ? (
           <>
             <label
+              htmlFor="connect-server-url"
               style={{
                 display: "block",
                 fontSize: 12,
@@ -311,6 +323,7 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
               Server URL
             </label>
             <input
+              id="connect-server-url"
               type="text"
               value={serverUrl}
               onChange={(e) => setServerUrl(e.target.value)}
@@ -336,7 +349,8 @@ export function ConnectPage({ onConnect, initialError = null, initialServerUrl =
                 margin: 0,
               }}
             >
-              Defaults to same-origin via the Vite dev proxy. Override to point at a different Cowork server.
+              Defaults to same-origin via the Vite dev proxy. Override to point at a different
+              Cowork server.
             </p>
           </>
         ) : null}

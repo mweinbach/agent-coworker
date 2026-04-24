@@ -1,5 +1,5 @@
-import { z } from "zod";
 import { getModel as getPiModel, getModels as getPiModels } from "@mariozechner/pi-ai";
+import { z } from "zod";
 import type { ProviderName } from "../types";
 import type { RuntimeRunTurnParams } from "./types";
 
@@ -62,7 +62,10 @@ export function pickKnownPiModel(provider: string, modelId: string): PiModel | n
   };
 }
 
-export function providerSectionForPi(provider: ProviderName, providerOptions?: Record<string, any>): Record<string, unknown> {
+export function providerSectionForPi(
+  provider: ProviderName,
+  providerOptions?: Record<string, any>,
+): Record<string, unknown> {
   if (!providerOptions || typeof providerOptions !== "object") return {};
   if (provider === "codex-cli") {
     const codex = asRecord(providerOptions["codex-cli"]);
@@ -75,7 +78,9 @@ export function providerSectionForPi(provider: ProviderName, providerOptions?: R
   return asRecord(providerOptions[provider]) ?? {};
 }
 
-export function toGoogleThinkingLevel(value: unknown): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | undefined {
+export function toGoogleThinkingLevel(
+  value: unknown,
+): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | undefined {
   const text = asNonEmptyString(value)?.toLowerCase();
   if (!text) return undefined;
   if (text === "minimal") return "MINIMAL";
@@ -88,7 +93,7 @@ export function toGoogleThinkingLevel(value: unknown): "MINIMAL" | "LOW" | "MEDI
 export function buildPiStreamOptions(
   params: RuntimeRunTurnParams,
   apiKey?: string,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
 ): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (apiKey) options.apiKey = apiKey;
@@ -128,11 +133,15 @@ export function buildPiStreamOptions(
 
     const location = asRecord(webSearch?.location);
     if (location) {
+      const country = asNonEmptyString(location.country);
+      const region = asNonEmptyString(location.region);
+      const city = asNonEmptyString(location.city);
+      const timezone = asNonEmptyString(location.timezone);
       const webSearchLocation = {
-        ...(asNonEmptyString(location.country) ? { country: asNonEmptyString(location.country)! } : {}),
-        ...(asNonEmptyString(location.region) ? { region: asNonEmptyString(location.region)! } : {}),
-        ...(asNonEmptyString(location.city) ? { city: asNonEmptyString(location.city)! } : {}),
-        ...(asNonEmptyString(location.timezone) ? { timezone: asNonEmptyString(location.timezone)! } : {}),
+        ...(country ? { country } : {}),
+        ...(region ? { region } : {}),
+        ...(city ? { city } : {}),
+        ...(timezone ? { timezone } : {}),
       };
       if (Object.keys(webSearchLocation).length > 0) {
         options.webSearchLocation = webSearchLocation;
@@ -149,7 +158,10 @@ export function buildPiStreamOptions(
     }
     const effort = asNonEmptyString(providerSection.effort);
     if (effort) options.effort = effort;
-    if (providerSection.interleavedThinking === true || providerSection.interleavedThinking === false) {
+    if (
+      providerSection.interleavedThinking === true ||
+      providerSection.interleavedThinking === false
+    ) {
       options.interleavedThinking = providerSection.interleavedThinking;
     }
   }
@@ -169,10 +181,10 @@ export function buildPiStreamOptions(
 
     const toolChoice = providerSection.toolChoice;
     if (
-      toolChoice === "auto"
-      || toolChoice === "any"
-      || toolChoice === "none"
-      || (asRecord(toolChoice)?.type === "tool" && asNonEmptyString(asRecord(toolChoice)?.name))
+      toolChoice === "auto" ||
+      toolChoice === "any" ||
+      toolChoice === "none" ||
+      (asRecord(toolChoice)?.type === "tool" && asNonEmptyString(asRecord(toolChoice)?.name))
     ) {
       options.toolChoice = toolChoice;
     }
@@ -182,18 +194,25 @@ export function buildPiStreamOptions(
 
     const thinkingBudgets = asRecord(providerSection.thinkingBudgets);
     if (thinkingBudgets) {
+      const minimalBudget = asFiniteNumber(thinkingBudgets.minimal);
+      const lowBudget = asFiniteNumber(thinkingBudgets.low);
+      const mediumBudget = asFiniteNumber(thinkingBudgets.medium);
+      const highBudget = asFiniteNumber(thinkingBudgets.high);
       const mappedBudgets = {
-        ...(asFiniteNumber(thinkingBudgets.minimal) !== undefined ? { minimal: asFiniteNumber(thinkingBudgets.minimal)! } : {}),
-        ...(asFiniteNumber(thinkingBudgets.low) !== undefined ? { low: asFiniteNumber(thinkingBudgets.low)! } : {}),
-        ...(asFiniteNumber(thinkingBudgets.medium) !== undefined ? { medium: asFiniteNumber(thinkingBudgets.medium)! } : {}),
-        ...(asFiniteNumber(thinkingBudgets.high) !== undefined ? { high: asFiniteNumber(thinkingBudgets.high)! } : {}),
+        ...(minimalBudget !== undefined ? { minimal: minimalBudget } : {}),
+        ...(lowBudget !== undefined ? { low: lowBudget } : {}),
+        ...(mediumBudget !== undefined ? { medium: mediumBudget } : {}),
+        ...(highBudget !== undefined ? { high: highBudget } : {}),
       };
       if (Object.keys(mappedBudgets).length > 0) {
         options.thinkingBudgets = mappedBudgets;
       }
     }
 
-    if (providerSection.interleavedThinking === true || providerSection.interleavedThinking === false) {
+    if (
+      providerSection.interleavedThinking === true ||
+      providerSection.interleavedThinking === false
+    ) {
       options.interleavedThinking = providerSection.interleavedThinking;
     }
 
@@ -257,11 +276,7 @@ const SCHEMA_SINGLE_KEYS = new Set([
   "unevaluatedProperties",
 ]);
 
-const SCHEMA_ARRAY_KEYS = new Set([
-  "allOf",
-  "anyOf",
-  "oneOf",
-]);
+const SCHEMA_ARRAY_KEYS = new Set(["allOf", "anyOf", "oneOf"]);
 
 const FIREWORKS_UNSUPPORTED_SCHEMA_KEYS = new Set([
   "maxItems",
@@ -364,18 +379,18 @@ function normalizeToolJsonSchema(schema: unknown): ToolJsonSchema | undefined {
     normalized.items = normalizedItems;
   }
   if (
-    tupleItems.length > 0
-    && record.additionalItems === false
-    && typeof normalized.maxItems !== "number"
-    && typeof record.maxItems !== "number"
+    tupleItems.length > 0 &&
+    record.additionalItems === false &&
+    typeof normalized.maxItems !== "number" &&
+    typeof record.maxItems !== "number"
   ) {
     normalized.maxItems = tupleItems.length;
   }
   if (
-    prefixItems.length > 0
-    && record.items === undefined
-    && typeof normalized.maxItems !== "number"
-    && typeof record.maxItems !== "number"
+    prefixItems.length > 0 &&
+    record.items === undefined &&
+    typeof normalized.maxItems !== "number" &&
+    typeof record.maxItems !== "number"
   ) {
     normalized.maxItems = prefixItems.length;
   }
@@ -383,10 +398,7 @@ function normalizeToolJsonSchema(schema: unknown): ToolJsonSchema | undefined {
   return normalized;
 }
 
-function sanitizeProviderSchemaArray(
-  value: unknown,
-  provider?: ProviderName,
-): ToolJsonSchema[] {
+function sanitizeProviderSchemaArray(value: unknown, provider?: ProviderName): ToolJsonSchema[] {
   if (!Array.isArray(value)) return [];
   return value
     .map((entry) => sanitizeProviderToolJsonSchema(entry as ToolJsonSchema, provider))
@@ -431,7 +443,10 @@ function sanitizeProviderToolJsonSchema(
 
       const childSanitized: Record<string, unknown> = {};
       for (const [childKey, childValue] of Object.entries(childRecord)) {
-        const sanitizedChildValue = sanitizeProviderToolJsonSchema(childValue as ToolJsonSchema, provider);
+        const sanitizedChildValue = sanitizeProviderToolJsonSchema(
+          childValue as ToolJsonSchema,
+          provider,
+        );
         if (sanitizedChildValue !== undefined) {
           childSanitized[childKey] = sanitizedChildValue;
         }
@@ -506,21 +521,21 @@ function fitsFireworksSchemaBudget(
   totalBytes: number,
 ): schemaBytes is number {
   return (
-    schemaBytes !== undefined
-    && schemaBytes <= FIREWORKS_TOOL_SCHEMA_MAX_BYTES
-    && totalBytes + schemaBytes <= FIREWORKS_TOTAL_TOOL_SCHEMA_MAX_BYTES
+    schemaBytes !== undefined &&
+    schemaBytes <= FIREWORKS_TOOL_SCHEMA_MAX_BYTES &&
+    totalBytes + schemaBytes <= FIREWORKS_TOTAL_TOOL_SCHEMA_MAX_BYTES
   );
 }
 
-function shapePreservingShallowObjectSchema(schema: Record<string, unknown>): Record<string, unknown> {
+function shapePreservingShallowObjectSchema(
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
   if (schema.type !== "object") return relaxedToolJsonSchema();
 
   const properties = asRecord(schema.properties);
   if (!properties) return relaxedToolJsonSchema();
 
-  const shallowProperties = Object.fromEntries(
-    Object.keys(properties).map((key) => [key, {}]),
-  );
+  const shallowProperties = Object.fromEntries(Object.keys(properties).map((key) => [key, {}]));
   const required = Array.isArray(schema.required)
     ? schema.required.filter((entry): entry is string => typeof entry === "string")
     : undefined;
@@ -541,11 +556,7 @@ export function applyProviderToolSchemaBudget(
   if (provider !== "fireworks") return schema;
 
   const totalBytes = state?.totalBytes ?? 0;
-  const candidates = [
-    schema,
-    shapePreservingShallowObjectSchema(schema),
-    relaxedToolJsonSchema(),
-  ];
+  const candidates = [schema, shapePreservingShallowObjectSchema(schema), relaxedToolJsonSchema()];
 
   for (const candidate of candidates) {
     const candidateBytes = estimateSchemaBytes(candidate);
@@ -572,7 +583,8 @@ export function toolCallFromPartial(event: any): {
   const partialContent = Array.isArray(partial?.content) ? partial.content : [];
   const part = contentIndex >= 0 ? asRecord(partialContent[contentIndex]) : null;
   const fallbackId = contentIndex >= 0 ? `tool_call_${contentIndex}` : `tool_${Date.now()}`;
-  const toolCallId = asNonEmptyString(part?.id) ?? asNonEmptyString(event?.toolCall?.id) ?? fallbackId;
+  const toolCallId =
+    asNonEmptyString(part?.id) ?? asNonEmptyString(event?.toolCall?.id) ?? fallbackId;
   const toolName = asNonEmptyString(part?.name) ?? "tool";
   const input = part?.arguments ?? {};
   return { toolCallId, toolName, input };
@@ -584,7 +596,9 @@ export type PiToolCallLike = {
   arguments: Record<string, unknown>;
 };
 
-export function extractToolCallsFromAssistant(assistant: Record<string, unknown>): PiToolCallLike[] {
+export function extractToolCallsFromAssistant(
+  assistant: Record<string, unknown>,
+): PiToolCallLike[] {
   const rawContent = Array.isArray(assistant.content) ? assistant.content : [];
   const out: PiToolCallLike[] = [];
   for (const rawPart of rawContent) {

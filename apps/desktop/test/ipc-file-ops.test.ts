@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import path from "node:path";
-import os from "node:os";
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
-import { resolveAllowedPath, resolveAllowedDirectoryPath } from "../electron/services/ipcSecurity";
+import { resolveAllowedPath } from "../electron/services/ipcSecurity";
 import { assertValidFileName } from "../electron/services/validation";
 
 describe("IPC file ops validation", () => {
@@ -13,7 +13,7 @@ describe("IPC file ops validation", () => {
     expect(() => assertValidFileName("..", "name")).toThrow();
     expect(() => assertValidFileName(".", "name")).toThrow();
     expect(() => assertValidFileName("foo\0bar", "name")).toThrow();
-    
+
     expect(() => assertValidFileName("valid_name.txt", "name")).not.toThrow();
     expect(() => assertValidFileName(".hidden", "name")).not.toThrow();
   });
@@ -23,11 +23,11 @@ describe("IPC file ops validation", () => {
     const workspaceRoot = await fs.realpath(tempRoot);
     try {
       const targetPath = path.join(workspaceRoot, "some_file.txt");
-      
+
       // Should allow resolving inside root
       const resolved = resolveAllowedPath([workspaceRoot], targetPath);
       expect(resolved).toBe(targetPath);
-      
+
       // Should reject outside
       const outsidePath = path.join(workspaceRoot, "..", "evil.txt");
       expect(() => resolveAllowedPath([workspaceRoot], outsidePath)).toThrow();

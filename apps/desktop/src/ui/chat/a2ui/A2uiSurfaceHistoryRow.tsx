@@ -1,13 +1,11 @@
-import { memo, useMemo } from "react";
-
 import { SparklesIcon, Trash2Icon } from "lucide-react";
-
-import { cn } from "../../../lib/utils";
+import { memo, useMemo } from "react";
 import { useAppStore } from "../../../app/store";
 import type { FeedItem } from "../../../app/types";
+import { cn } from "../../../lib/utils";
 import type { A2uiRenderableComponent } from "./A2uiRenderer";
-import { extractSurfaceTitle } from "./surfaceTitle";
 import { changeKindLabel, changeKindToneClass } from "./changeKind";
+import { extractSurfaceTitle } from "./surfaceTitle";
 
 type UiSurfaceFeedItem = Extract<FeedItem, { kind: "ui_surface" }>;
 
@@ -32,7 +30,9 @@ export const A2uiSurfaceHistoryRow = memo(function A2uiSurfaceHistoryRow({
   const setA2uiDockExpanded = useAppStore((s) => s.setA2uiDockExpanded);
   const threadId = useAppStore((s) => s.selectedThreadId);
   const revisions = useAppStore((s) =>
-    threadId ? s.threadRuntimeById[threadId]?.a2uiDock.revisionsBySurfaceId[item.surfaceId] : undefined,
+    threadId
+      ? s.threadRuntimeById[threadId]?.a2uiDock.revisionsBySurfaceId[item.surfaceId]
+      : undefined,
   );
 
   const title = useMemo(() => {

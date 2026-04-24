@@ -1,8 +1,4 @@
-import {
-  GOOGLE_THINKING_LEVEL_VALUES,
-  isGoogleThinkingLevel,
-  type GoogleThinkingLevel,
-} from "./googleThinking";
+import { type GoogleThinkingLevel, isGoogleThinkingLevel } from "./googleThinking";
 
 export { GOOGLE_THINKING_LEVEL_VALUES } from "./googleThinking";
 
@@ -14,7 +10,8 @@ export const EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES = [
   "google",
   "lmstudio",
 ] as const;
-export type EditableProviderOptionsProviderName = (typeof EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES)[number];
+export type EditableProviderOptionsProviderName =
+  (typeof EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES)[number];
 
 // "none" and "xhigh" are client-side sentinel values used to represent "disable reasoning"
 // and "maximum effort" respectively. They are mapped to API-specific parameters before
@@ -34,7 +31,10 @@ export type CodexWebSearchMode = (typeof CODEX_WEB_SEARCH_MODE_VALUES)[number];
 export const LOCAL_WEB_SEARCH_PROVIDER_VALUES = ["exa", "parallel"] as const;
 export type LocalWebSearchProvider = (typeof LOCAL_WEB_SEARCH_PROVIDER_VALUES)[number];
 
-export const CODEX_WEB_SEARCH_BACKEND_VALUES = ["native", ...LOCAL_WEB_SEARCH_PROVIDER_VALUES] as const;
+export const CODEX_WEB_SEARCH_BACKEND_VALUES = [
+  "native",
+  ...LOCAL_WEB_SEARCH_PROVIDER_VALUES,
+] as const;
 export type CodexWebSearchBackend = (typeof CODEX_WEB_SEARCH_BACKEND_VALUES)[number];
 
 export const CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES = ["low", "medium", "high"] as const;
@@ -84,49 +84,71 @@ export type GoogleProviderOptions = {
   thinkingConfig?: GoogleThinkingConfig;
 };
 
-export type OpenAiCompatibleProviderOptionsByProvider = Partial<
-  {
-    openai: OpenAiProviderOptions;
-    "codex-cli": CodexCliProviderOptions;
-    google: GoogleProviderOptions;
-    lmstudio: LmStudioProviderOptions;
-  }
->;
+export type OpenAiCompatibleProviderOptionsByProvider = Partial<{
+  openai: OpenAiProviderOptions;
+  "codex-cli": CodexCliProviderOptions;
+  google: GoogleProviderOptions;
+  lmstudio: LmStudioProviderOptions;
+}>;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function isOpenAiCompatibleProviderName(value: unknown): value is OpenAiCompatibleProviderName {
-  return typeof value === "string" && (OPENAI_COMPATIBLE_PROVIDER_NAMES as readonly string[]).includes(value);
+export function isOpenAiCompatibleProviderName(
+  value: unknown,
+): value is OpenAiCompatibleProviderName {
+  return (
+    typeof value === "string" &&
+    (OPENAI_COMPATIBLE_PROVIDER_NAMES as readonly string[]).includes(value)
+  );
 }
 
 export function isOpenAiReasoningEffort(value: unknown): value is OpenAiReasoningEffort {
-  return typeof value === "string" && (OPENAI_REASONING_EFFORT_VALUES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (OPENAI_REASONING_EFFORT_VALUES as readonly string[]).includes(value)
+  );
 }
 
 export function isOpenAiReasoningSummary(value: unknown): value is OpenAiReasoningSummary {
-  return typeof value === "string" && (OPENAI_REASONING_SUMMARY_VALUES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (OPENAI_REASONING_SUMMARY_VALUES as readonly string[]).includes(value)
+  );
 }
 
 export function isOpenAiTextVerbosity(value: unknown): value is OpenAiTextVerbosity {
-  return typeof value === "string" && (OPENAI_TEXT_VERBOSITY_VALUES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" && (OPENAI_TEXT_VERBOSITY_VALUES as readonly string[]).includes(value)
+  );
 }
 
 export function isCodexWebSearchMode(value: unknown): value is CodexWebSearchMode {
-  return typeof value === "string" && (CODEX_WEB_SEARCH_MODE_VALUES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" && (CODEX_WEB_SEARCH_MODE_VALUES as readonly string[]).includes(value)
+  );
 }
 
 export function isCodexWebSearchBackend(value: unknown): value is CodexWebSearchBackend {
-  return typeof value === "string" && (CODEX_WEB_SEARCH_BACKEND_VALUES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (CODEX_WEB_SEARCH_BACKEND_VALUES as readonly string[]).includes(value)
+  );
 }
 
 export function isLocalWebSearchProvider(value: unknown): value is LocalWebSearchProvider {
-  return typeof value === "string" && (LOCAL_WEB_SEARCH_PROVIDER_VALUES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (LOCAL_WEB_SEARCH_PROVIDER_VALUES as readonly string[]).includes(value)
+  );
 }
 
 export function isCodexWebSearchContextSize(value: unknown): value is CodexWebSearchContextSize {
-  return typeof value === "string" && (CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES as readonly string[]).includes(value)
+  );
 }
 
 function pickTrimmedString(value: unknown): string | undefined {
@@ -199,7 +221,9 @@ function pickCodexWebSearchOptions(value: unknown): CodexWebSearchOptions | unde
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
-function pickOpenAiCompatibleProviderOptionsSection(value: unknown): OpenAiCompatibleProviderOptions | undefined {
+function pickOpenAiCompatibleProviderOptionsSection(
+  value: unknown,
+): OpenAiCompatibleProviderOptions | undefined {
   if (!isPlainObject(value)) return undefined;
 
   const next: OpenAiCompatibleProviderOptions = {};
@@ -389,23 +413,33 @@ export function mergeEditableOpenAiCompatibleProviderOptions(
     const currentSection = isPlainObject(current[provider]) ? { ...current[provider] } : {};
     if (provider === "codex-cli") {
       const codexPatch = cleanedPatch as CodexCliProviderOptions;
-      const currentWebSearch = isPlainObject(currentSection.webSearch) ? { ...currentSection.webSearch } : {};
+      const currentWebSearch = isPlainObject(currentSection.webSearch)
+        ? { ...currentSection.webSearch }
+        : {};
       const patchWebSearch = isPlainObject(codexPatch.webSearch) ? { ...codexPatch.webSearch } : {};
-      const currentLocation = isPlainObject(currentWebSearch.location) ? { ...currentWebSearch.location } : {};
+      const currentLocation = isPlainObject(currentWebSearch.location)
+        ? { ...currentWebSearch.location }
+        : {};
       const patchHasLocation = "location" in patchWebSearch;
-      const patchLocation = isPlainObject(patchWebSearch.location) ? { ...patchWebSearch.location } : {};
+      const patchLocation = isPlainObject(patchWebSearch.location)
+        ? { ...patchWebSearch.location }
+        : {};
 
       let resolvedLocation: Record<string, unknown> | undefined;
       if (patchHasLocation) {
         // Explicit patch: empty = clear, non-empty = merge
-        resolvedLocation = Object.keys(patchLocation).length > 0
-          ? { ...currentLocation, ...patchLocation }
-          : undefined;
+        resolvedLocation =
+          Object.keys(patchLocation).length > 0
+            ? { ...currentLocation, ...patchLocation }
+            : undefined;
       } else if (Object.keys(currentLocation).length > 0) {
         resolvedLocation = currentLocation;
       }
 
-      const { location: _dropped, ...patchWebSearchRest } = patchWebSearch as Record<string, unknown>;
+      const { location: _dropped, ...patchWebSearchRest } = patchWebSearch as Record<
+        string,
+        unknown
+      >;
       const nextWebSearch = {
         ...currentWebSearch,
         ...patchWebSearchRest,
@@ -418,11 +452,7 @@ export function mergeEditableOpenAiCompatibleProviderOptions(
       current[provider] = {
         ...currentSection,
         ...codexPatch,
-        ...(
-          Object.keys(nextWebSearch).length > 0
-            ? { webSearch: nextWebSearch }
-            : {}
-        ),
+        ...(Object.keys(nextWebSearch).length > 0 ? { webSearch: nextWebSearch } : {}),
       };
       continue;
     }
@@ -430,7 +460,7 @@ export function mergeEditableOpenAiCompatibleProviderOptions(
     if (provider === "google") {
       const googlePatch = cleanedPatch as GoogleProviderOptions;
       const rawPatch = isPlainObject(sectionPatch) ? sectionPatch : {};
-      const patchHasThinkingConfig = Object.prototype.hasOwnProperty.call(rawPatch, "thinkingConfig");
+      const patchHasThinkingConfig = Object.hasOwn(rawPatch, "thinkingConfig");
       const currentThinkingConfig = isPlainObject(currentSection.thinkingConfig)
         ? { ...currentSection.thinkingConfig }
         : {};
@@ -456,7 +486,8 @@ export function mergeEditableOpenAiCompatibleProviderOptions(
           delete nextThinkingConfig.thinkingLevel;
         }
 
-        nextGoogle.thinkingConfig = Object.keys(nextThinkingConfig).length > 0 ? nextThinkingConfig : {};
+        nextGoogle.thinkingConfig =
+          Object.keys(nextThinkingConfig).length > 0 ? nextThinkingConfig : {};
       }
 
       current[provider] = nextGoogle;

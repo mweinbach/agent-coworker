@@ -1,21 +1,18 @@
-import type { ServerEvent } from "../protocol";
 import {
-  clearModelStreamReplayRuntime,
-  createModelStreamReplayRuntime,
-  replayModelStreamRawEvent,
-  shouldIgnoreNormalizedChunkForRawBackedTurn,
-  type ModelStreamReplayRuntime,
-} from "../../shared/modelStreamReplay";
-import {
-  mapModelStreamChunk,
   type ModelStreamChunkEvent,
   type ModelStreamRawEvent,
   type ModelStreamUpdate,
+  mapModelStreamChunk,
 } from "../../shared/modelStream";
-import type {
-  ProjectedItem,
-  ProjectedToolState,
-} from "../../shared/projectedItems";
+import {
+  clearModelStreamReplayRuntime,
+  createModelStreamReplayRuntime,
+  type ModelStreamReplayRuntime,
+  replayModelStreamRawEvent,
+  shouldIgnoreNormalizedChunkForRawBackedTurn,
+} from "../../shared/modelStreamReplay";
+import type { ProjectedItem, ProjectedToolState } from "../../shared/projectedItems";
+import type { ServerEvent } from "../protocol";
 import {
   hasVisibleAssistantText,
   makeItemId,
@@ -23,9 +20,9 @@ import {
   normalizeToolArgsFromInput,
   normalizeTranscriptReplayText,
   occurrenceItemId,
+  type ProjectedReasoningMode,
   readPartString,
   reasoningModeFromPart,
-  type ProjectedReasoningMode,
 } from "./shared";
 
 type BufferedReasoningState = {
@@ -87,7 +84,12 @@ export type ConversationProjectionSink = {
   emitTurnStarted: (turnId: string) => void;
   emitTurnCompleted: (turnId: string, status: "completed" | "interrupted" | "failed") => void;
   emitItemStarted: (turnId: string | null, item: ProjectedItem) => void;
-  emitReasoningDelta: (turnId: string, itemId: string, mode: ProjectedReasoningMode, delta: string) => void;
+  emitReasoningDelta: (
+    turnId: string,
+    itemId: string,
+    mode: ProjectedReasoningMode,
+    delta: string,
+  ) => void;
   emitAgentMessageDelta: (turnId: string, itemId: string, delta: string) => void;
   emitItemCompleted: (turnId: string | null, item: ProjectedItem) => void;
   emitServerRequest?: (request: ProjectionServerRequest) => void;
@@ -118,7 +120,7 @@ function toolNameFromApproval(toolCall: unknown): string {
           : typeof record.functionName === "string"
             ? record.functionName
             : null;
-    if (name && name.trim()) return name.trim();
+    if (name?.trim()) return name.trim();
   }
   return "tool";
 }
@@ -190,7 +192,10 @@ function formatObservabilityDiagnosticLine(evt: {
   health: { status?: unknown; reason?: unknown; message?: unknown };
   config?: unknown;
 }): string {
-  const configured = isRecord(evt.config) && typeof evt.config.configured === "boolean" ? evt.config.configured : false;
+  const configured =
+    isRecord(evt.config) && typeof evt.config.configured === "boolean"
+      ? evt.config.configured
+      : false;
   const healthStatus = typeof evt.health.status === "string" ? evt.health.status : "unknown";
   const healthReason = typeof evt.health.reason === "string" ? evt.health.reason : "unknown";
   const healthMessage = previewValue(evt.health.message);
@@ -199,15 +204,16 @@ function formatObservabilityDiagnosticLine(evt: {
 }
 
 function formatSessionBackupDiagnosticLine(evt: { reason?: unknown; backup?: unknown }): string {
-  const reason = typeof evt.reason === "string" && evt.reason.trim().length > 0
-    ? humanizeUnderscoreLabel(evt.reason)
-    : "update";
-  const status = isRecord(evt.backup) && typeof evt.backup.status === "string"
-    ? evt.backup.status
-    : "unknown";
-  const checkpointCount = isRecord(evt.backup) && Array.isArray(evt.backup.checkpoints)
-    ? evt.backup.checkpoints.length
-    : null;
+  const reason =
+    typeof evt.reason === "string" && evt.reason.trim().length > 0
+      ? humanizeUnderscoreLabel(evt.reason)
+      : "update";
+  const status =
+    isRecord(evt.backup) && typeof evt.backup.status === "string" ? evt.backup.status : "unknown";
+  const checkpointCount =
+    isRecord(evt.backup) && Array.isArray(evt.backup.checkpoints)
+      ? evt.backup.checkpoints.length
+      : null;
   return checkpointCount === null
     ? `Session backup (${reason}): status=${status}`
     : `Session backup (${reason}): status=${status}, checkpoints=${checkpointCount}`;
@@ -243,7 +249,10 @@ function formatHarnessContextDiagnosticLine(evt: { context?: unknown }): string 
 }
 
 function developerDiagnosticSystemLineFromServerEvent(
-  evt: Extract<ServerEvent, { type: "observability_status" | "session_backup_state" | "harness_context" }>,
+  evt: Extract<
+    ServerEvent,
+    { type: "observability_status" | "session_backup_state" | "harness_context" }
+  >,
 ): string {
   switch (evt.type) {
     case "observability_status":
@@ -311,12 +320,14 @@ export function createConversationProjection(opts: CreateConversationProjectionO
       }
     }
 
-    const aggregate = normalizeTranscriptReplayText([
-      ...reasoningTextHistoryInTurn,
-      ...[...reasoningByKey.values()]
-        .map((state) => normalizeReasoningText(state.text))
-        .filter((current): current is string => current !== null),
-    ].join("\n\n"));
+    const aggregate = normalizeTranscriptReplayText(
+      [
+        ...reasoningTextHistoryInTurn,
+        ...[...reasoningByKey.values()]
+          .map((state) => normalizeReasoningText(state.text))
+          .filter((current): current is string => current !== null),
+      ].join("\n\n"),
+    );
     return Boolean(aggregate && aggregate === normalizeTranscriptReplayText(normalized));
   };
 
@@ -427,10 +438,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     const nextOccurrence = (reasoningOccurrenceByKey.get(key) ?? 0) + 1;
     reasoningOccurrenceByKey.set(key, nextOccurrence);
     const next: BufferedReasoningState = {
-      itemId: occurrenceItemId(
-        makeItemId("reasoning", `${turnId}:${streamId}`),
-        nextOccurrence,
-      ),
+      itemId: occurrenceItemId(makeItemId("reasoning", `${turnId}:${streamId}`), nextOccurrence),
       mode: reasoningModeFromPart(part),
       text: "",
       started: false,
@@ -554,10 +562,7 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     const nextOccurrence = (toolOccurrenceByKey.get(fullKey) ?? 0) + 1;
     toolOccurrenceByKey.set(fullKey, nextOccurrence);
     const next: BufferedToolState = {
-      itemId: occurrenceItemId(
-        makeItemId("toolCall", `${turnId}:${key}`),
-        nextOccurrence,
-      ),
+      itemId: occurrenceItemId(makeItemId("toolCall", `${turnId}:${key}`), nextOccurrence),
       name,
       inputText: "",
       started: false,
@@ -726,13 +731,19 @@ export function createConversationProjection(opts: CreateConversationProjectionO
     completeAssistantStateBeforeStep(update.turnId);
 
     if (update.kind === "reasoning_start") {
-      const { state } = ensureBufferedReasoning(update.turnId, { id: update.streamId, mode: update.mode });
+      const { state } = ensureBufferedReasoning(update.turnId, {
+        id: update.streamId,
+        mode: update.mode,
+      });
       startBufferedReasoning(update.turnId, state);
       return;
     }
 
     if (update.kind === "reasoning_delta") {
-      const { state } = ensureBufferedReasoning(update.turnId, { id: update.streamId, mode: update.mode });
+      const { state } = ensureBufferedReasoning(update.turnId, {
+        id: update.streamId,
+        mode: update.mode,
+      });
       startBufferedReasoning(update.turnId, state);
       state.text = `${state.text}${update.text}`;
       if (update.text) {
@@ -856,7 +867,8 @@ export function createConversationProjection(opts: CreateConversationProjectionO
             return;
           }
           lastUserMessageText = event.text;
-          lastUserMessageClientMessageId = typeof event.clientMessageId === "string" ? event.clientMessageId : null;
+          lastUserMessageClientMessageId =
+            typeof event.clientMessageId === "string" ? event.clientMessageId : null;
           return;
         case "session_busy":
           if (event.busy) {
@@ -868,7 +880,11 @@ export function createConversationProjection(opts: CreateConversationProjectionO
             if (!activeTurnId) return;
             opts.sink.emitTurnStarted(activeTurnId);
             if (lastUserMessageText) {
-              emitProjectedUserMessage(activeTurnId, lastUserMessageText, lastUserMessageClientMessageId);
+              emitProjectedUserMessage(
+                activeTurnId,
+                lastUserMessageText,
+                lastUserMessageClientMessageId,
+              );
               lastUserMessageText = null;
               lastUserMessageClientMessageId = null;
             }
@@ -897,7 +913,12 @@ export function createConversationProjection(opts: CreateConversationProjectionO
           return;
         }
         case "model_stream_chunk":
-          if (shouldIgnoreNormalizedChunkForRawBackedTurn(replayRuntime, event as ModelStreamChunkEvent)) {
+          if (
+            shouldIgnoreNormalizedChunkForRawBackedTurn(
+              replayRuntime,
+              event as ModelStreamChunkEvent,
+            )
+          ) {
             return;
           }
           {
@@ -926,7 +947,12 @@ export function createConversationProjection(opts: CreateConversationProjectionO
         case "reasoning":
           if (!activeTurnId) return;
           completeAssistantStateBeforeStep(activeTurnId);
-          emitReasoningItem(activeTurnId, event.kind, event.text, makeItemId("reasoning", `${activeTurnId}:${crypto.randomUUID()}`));
+          emitReasoningItem(
+            activeTurnId,
+            event.kind,
+            event.text,
+            makeItemId("reasoning", `${activeTurnId}:${crypto.randomUUID()}`),
+          );
           return;
         case "ask":
           emitSystemItem(formatAskSystemLine(event));

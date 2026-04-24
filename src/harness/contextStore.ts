@@ -59,4 +59,3 @@ export class HarnessContextStore {
     this.bySessionId.delete(sessionId);
   }
 }
-

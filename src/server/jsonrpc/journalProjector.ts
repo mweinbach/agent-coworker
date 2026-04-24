@@ -1,6 +1,6 @@
+import { createConversationProjection } from "../projection/conversationProjection";
 import type { ServerEvent } from "../protocol";
 import type { PersistedThreadJournalEvent } from "../sessionDb";
-import { createConversationProjection } from "../projection/conversationProjection";
 
 type ThreadJournalEmission = Omit<PersistedThreadJournalEvent, "seq">;
 
@@ -10,11 +10,15 @@ type CreateThreadJournalProjectorOptions = {
 };
 
 export function createThreadJournalProjector(opts: CreateThreadJournalProjectorOptions) {
-  const emit = (eventType: string, payload: unknown, meta?: {
-    turnId?: string | null;
-    itemId?: string | null;
-    requestId?: string | null;
-  }) => {
+  const emit = (
+    eventType: string,
+    payload: unknown,
+    meta?: {
+      turnId?: string | null;
+      itemId?: string | null;
+      requestId?: string | null;
+    },
+  ) => {
     opts.emit({
       threadId: opts.threadId,
       ts: new Date().toISOString(),
@@ -29,64 +33,92 @@ export function createThreadJournalProjector(opts: CreateThreadJournalProjectorO
   const projection = createConversationProjection({
     sink: {
       emitTurnStarted: (turnId) => {
-        emit("turn/started", {
-          threadId: opts.threadId,
-          turn: {
-            id: turnId,
-            status: "inProgress",
-            items: [],
+        emit(
+          "turn/started",
+          {
+            threadId: opts.threadId,
+            turn: {
+              id: turnId,
+              status: "inProgress",
+              items: [],
+            },
           },
-        }, { turnId });
+          { turnId },
+        );
       },
       emitTurnCompleted: (turnId, status) => {
-        emit("turn/completed", {
-          threadId: opts.threadId,
-          turn: {
-            id: turnId,
-            status,
+        emit(
+          "turn/completed",
+          {
+            threadId: opts.threadId,
+            turn: {
+              id: turnId,
+              status,
+            },
           },
-        }, { turnId });
+          { turnId },
+        );
       },
       emitItemStarted: (turnId, item) => {
-        emit("item/started", {
-          threadId: opts.threadId,
-          turnId,
-          item,
-        }, { turnId, itemId: item.id });
+        emit(
+          "item/started",
+          {
+            threadId: opts.threadId,
+            turnId,
+            item,
+          },
+          { turnId, itemId: item.id },
+        );
       },
       emitReasoningDelta: (turnId, itemId, mode, delta) => {
-        emit("item/reasoning/delta", {
-          threadId: opts.threadId,
-          turnId,
-          itemId,
-          mode,
-          delta,
-        }, { turnId, itemId });
+        emit(
+          "item/reasoning/delta",
+          {
+            threadId: opts.threadId,
+            turnId,
+            itemId,
+            mode,
+            delta,
+          },
+          { turnId, itemId },
+        );
       },
       emitAgentMessageDelta: (turnId, itemId, delta) => {
-        emit("item/agentMessage/delta", {
-          threadId: opts.threadId,
-          turnId,
-          itemId,
-          delta,
-        }, { turnId, itemId });
+        emit(
+          "item/agentMessage/delta",
+          {
+            threadId: opts.threadId,
+            turnId,
+            itemId,
+            delta,
+          },
+          { turnId, itemId },
+        );
       },
       emitItemCompleted: (turnId, item) => {
-        emit("item/completed", {
-          threadId: opts.threadId,
-          turnId,
-          item,
-        }, { turnId, itemId: item.id });
+        emit(
+          "item/completed",
+          {
+            threadId: opts.threadId,
+            turnId,
+            item,
+          },
+          { turnId, itemId: item.id },
+        );
       },
       emitServerRequest: (request) => {
-        emit(`request:${request.method}`, {
-          threadId: opts.threadId,
-          ...request.params,
-        }, {
-          turnId: request.params.turnId,
-          requestId: request.params.requestId,
-          itemId: request.params.itemId,
-        });
+        emit(
+          `request:${request.method}`,
+          {
+            threadId: opts.threadId,
+            ...request.params,
+          },
+          {
+            turnId: request.params.turnId,
+            requestId: request.params.requestId,
+            itemId: request.params.itemId,
+          },
+        );
       },
     },
   });

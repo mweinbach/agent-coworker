@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { openExternalUrl, __internal } from "../src/utils/browser";
+import { __internal, openExternalUrl } from "../src/utils/browser";
 
 type SpawnCall = {
   cmd: string;
@@ -42,7 +42,7 @@ function createMockChild(options: { closeCode?: number | null; error?: Error | n
 
 function createMockSpawn(
   options: { closeCode?: number | null; error?: Error | null },
-  calls: SpawnCall[]
+  calls: SpawnCall[],
 ) {
   return (cmd: string, args: string[], opts: Record<string, unknown>) => {
     calls.push({ cmd, args, opts });

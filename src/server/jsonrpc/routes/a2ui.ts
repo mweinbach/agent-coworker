@@ -1,30 +1,30 @@
 import type { ServerEvent } from "../../protocol";
 import { JSONRPC_ERROR_CODES } from "../protocol";
-import { jsonRpcA2uiRequestSchemas, formatA2uiActionDeliveryText } from "../schema.a2ui";
+import { formatA2uiActionDeliveryText, jsonRpcA2uiRequestSchemas } from "../schema.a2ui";
 
-import { captureBindingOutcome, type JsonRpcSessionError, sendSessionMutationError } from "./outcomes";
+import {
+  captureBindingOutcome,
+  type JsonRpcSessionError,
+  sendSessionMutationError,
+} from "./outcomes";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
-type JsonRpcTurnStartOutcome =
-  | Extract<ServerEvent, { type: "session_busy" }>
-  | JsonRpcSessionError;
+type JsonRpcTurnStartOutcome = Extract<ServerEvent, { type: "session_busy" }> | JsonRpcSessionError;
 type JsonRpcTurnSteerOutcome =
   | Extract<ServerEvent, { type: "steer_accepted" }>
   | JsonRpcSessionError;
 
-export function createA2uiRouteHandlers(
-  context: JsonRpcRouteContext,
-): JsonRpcRequestHandlerMap {
+export function createA2uiRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "cowork/session/a2ui/action": async (ws, message) => {
-      const parsed = jsonRpcA2uiRequestSchemas["cowork/session/a2ui/action"].safeParse(message.params);
+      const parsed = jsonRpcA2uiRequestSchemas["cowork/session/a2ui/action"].safeParse(
+        message.params,
+      );
       if (!parsed.success) {
         const detail = parsed.error.issues[0]?.message;
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
-          message: detail
-            ? `${message.method}: ${detail}`
-            : `${message.method}: invalid params`,
+          message: detail ? `${message.method}: ${detail}` : `${message.method}: invalid params`,
         });
         return;
       }
@@ -78,10 +78,10 @@ export function createA2uiRouteHandlers(
           binding,
           () => session.sendSteerMessage(text, activeTurnId, clientMessageId),
           (event): event is JsonRpcTurnSteerOutcome =>
-            (event.type === "steer_accepted"
-              && event.sessionId === session.id
-              && event.turnId === activeTurnId)
-            || context.utils.isSessionError(event),
+            (event.type === "steer_accepted" &&
+              event.sessionId === session.id &&
+              event.turnId === activeTurnId) ||
+            context.utils.isSessionError(event),
         );
         if (outcome.type === "error") {
           sendSessionMutationError(context, ws, message.id, outcome);
@@ -99,12 +99,12 @@ export function createA2uiRouteHandlers(
         binding,
         () => session.sendUserMessage(text, clientMessageId),
         (event): event is JsonRpcTurnStartOutcome =>
-          (event.type === "session_busy"
-            && event.sessionId === session.id
-            && event.busy === true
-            && typeof event.turnId === "string"
-            && event.turnId.trim().length > 0)
-          || context.utils.isSessionError(event),
+          (event.type === "session_busy" &&
+            event.sessionId === session.id &&
+            event.busy === true &&
+            typeof event.turnId === "string" &&
+            event.turnId.trim().length > 0) ||
+          context.utils.isSessionError(event),
       );
       if (outcome.type === "error") {
         sendSessionMutationError(context, ws, message.id, outcome);

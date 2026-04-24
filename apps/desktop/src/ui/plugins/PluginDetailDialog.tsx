@@ -1,10 +1,16 @@
-import { useMemo } from "react";
 import { ExternalLinkIcon, PackageIcon } from "lucide-react";
+import { useMemo } from "react";
 
 import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog";
 import { revealPath } from "../../lib/desktopCommands";
 import { actionPending } from "../skills/utils";
 
@@ -35,8 +41,12 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
     return plugin.marketplace.displayName ?? plugin.marketplace.name;
   }, [plugin]);
   const pluginError = runtime?.pluginsError ?? runtime?.skillMutationError ?? null;
-  const enablePending = plugin ? actionPending(runtime, "plugin:enable", `${plugin.scope}:${plugin.id}`) : false;
-  const disablePending = plugin ? actionPending(runtime, "plugin:disable", `${plugin.scope}:${plugin.id}`) : false;
+  const enablePending = plugin
+    ? actionPending(runtime, "plugin:enable", `${plugin.scope}:${plugin.id}`)
+    : false;
+  const disablePending = plugin
+    ? actionPending(runtime, "plugin:disable", `${plugin.scope}:${plugin.id}`)
+    : false;
 
   const handleOpenChange = (open: boolean) => {
     if (!open) {
@@ -46,13 +56,16 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
 
   if (!pluginId) return null;
 
-  const isLoading = pluginId !== null && pluginScope !== null && plugin === null && pluginError === null;
+  const isLoading =
+    pluginId !== null && pluginScope !== null && plugin === null && pluginError === null;
 
   return (
     <Dialog open={pluginId !== null} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto flex flex-col gap-0 p-0">
         {isLoading ? (
-          <div className="flex items-center justify-center p-12 text-muted-foreground">Loading...</div>
+          <div className="flex items-center justify-center p-12 text-muted-foreground">
+            Loading...
+          </div>
         ) : plugin ? (
           <>
             <div className="border-b border-border/50 p-6 pb-4">
@@ -113,15 +126,21 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
 
               <div className="grid gap-4 md:grid-cols-3">
                 <div className="rounded-lg border border-border/60 bg-muted/15 p-4">
-                  <div className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Skills</div>
+                  <div className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                    Skills
+                  </div>
                   <div className="mt-2 text-2xl font-semibold">{skillCount}</div>
                 </div>
                 <div className="rounded-lg border border-border/60 bg-muted/15 p-4">
-                  <div className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">MCP Servers</div>
+                  <div className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                    MCP Servers
+                  </div>
                   <div className="mt-2 text-2xl font-semibold">{mcpCount}</div>
                 </div>
                 <div className="rounded-lg border border-border/60 bg-muted/15 p-4">
-                  <div className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Apps</div>
+                  <div className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                    Apps
+                  </div>
                   <div className="mt-2 text-2xl font-semibold">{appCount}</div>
                 </div>
               </div>
@@ -168,7 +187,10 @@ export function PluginDetailDialog({ workspaceId }: { workspaceId: string }) {
                   <h3 className="text-sm font-semibold">Bundled Apps</h3>
                   <div className="space-y-2">
                     {plugin.apps.map((app) => (
-                      <div key={app.id} className="rounded-lg border border-border/60 bg-muted/10 px-3 py-2">
+                      <div
+                        key={app.id}
+                        className="rounded-lg border border-border/60 bg-muted/10 px-3 py-2"
+                      >
                         <div className="text-sm font-medium">{app.displayName}</div>
                         <div className="text-xs text-muted-foreground">
                           {app.description ?? app.id}

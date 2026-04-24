@@ -1,11 +1,15 @@
 import { create } from "zustand";
 
 import type { JsonRpcControlRequest } from "../../../../../src/shared/jsonrpcControlSchemas";
-import { callParsedControlMethod, parseWorkspaceControlSnapshot, type WorkspaceControlSnapshot } from "./controlRpc";
+import {
+  callParsedControlMethod,
+  parseWorkspaceControlSnapshot,
+  type WorkspaceControlSnapshot,
+} from "./controlRpc";
 import type { CoworkJsonRpcClient } from "./jsonRpcClient";
-import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
-import type { WorkspaceSummary, WorkspaceListResult, WorkspaceSwitchResult } from "./protocolTypes";
+import type { WorkspaceListResult, WorkspaceSummary, WorkspaceSwitchResult } from "./protocolTypes";
 import { workspaceListResultSchema, workspaceSwitchResultSchema } from "./protocolTypes";
+import { getActiveCoworkJsonRpcClient } from "./runtimeClient";
 
 type WorkspaceStoreState = {
   workspaces: WorkspaceSummary[];
@@ -19,7 +23,9 @@ type WorkspaceStoreState = {
   fetchWorkspaces(): Promise<void>;
   switchWorkspace(workspaceId: string): Promise<WorkspaceSwitchResult>;
   fetchControlState(): Promise<void>;
-  applyWorkspaceDefaults(patch: Omit<JsonRpcControlRequest<"cowork/session/defaults/apply">, "cwd">): Promise<void>;
+  applyWorkspaceDefaults(
+    patch: Omit<JsonRpcControlRequest<"cowork/session/defaults/apply">, "cwd">,
+  ): Promise<void>;
   setActiveFromCwd(cwd: string): void;
   clear(): void;
 };
@@ -48,7 +54,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => ({
       const result = await client.call<WorkspaceListResult>("workspace/list");
       const parsed = workspaceListResultSchema.parse(result);
       const active = parsed.activeWorkspaceId
-        ? parsed.workspaces.find((w) => w.id === parsed.activeWorkspaceId) ?? null
+        ? (parsed.workspaces.find((w) => w.id === parsed.activeWorkspaceId) ?? null)
         : null;
       set({
         workspaces: parsed.workspaces,

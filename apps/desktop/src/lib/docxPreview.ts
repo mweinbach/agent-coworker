@@ -2,9 +2,9 @@ import * as mammothZipfile from "mammoth/lib/zipfile";
 
 const OOXML_WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const OOXML_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-const OOXML_PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
 const OOXML_DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
-const OOXML_WORD_DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+const OOXML_WORD_DRAWING_NS =
+  "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
 
 const DEFAULT_DOCX_LAYOUT = {
   accentColor: "var(--accent)",
@@ -51,8 +51,14 @@ export async function loadDocxPreviewLayout(arrayBuffer: ArrayBuffer): Promise<D
 
   if (stylesXml) {
     const stylesDoc = parseXml(stylesXml);
-    layout.accentColor = readStyleColor(stylesDoc, "Heading1") ?? readStyleColor(stylesDoc, "Subtitle") ?? layout.accentColor;
-    layout.fontFamily = readStyleFont(stylesDoc, "Heading1") ?? readStyleFont(stylesDoc, "Title") ?? layout.fontFamily;
+    layout.accentColor =
+      readStyleColor(stylesDoc, "Heading1") ??
+      readStyleColor(stylesDoc, "Subtitle") ??
+      layout.accentColor;
+    layout.fontFamily =
+      readStyleFont(stylesDoc, "Heading1") ??
+      readStyleFont(stylesDoc, "Title") ??
+      layout.fontFamily;
   }
 
   if (documentXml) {
@@ -103,9 +109,15 @@ export function decorateDocxPreviewHtml(rawHtml: string): string {
     }
   }
 
-  root.querySelectorAll("table").forEach((table) => table.classList.add("docx-table"));
-  root.querySelectorAll("td, th").forEach((cell) => cell.classList.add("docx-cell"));
-  root.querySelectorAll("td p, th p").forEach((paragraph) => paragraph.classList.add("docx-table-paragraph"));
+  root.querySelectorAll("table").forEach((table) => {
+    table.classList.add("docx-table");
+  });
+  root.querySelectorAll("td, th").forEach((cell) => {
+    cell.classList.add("docx-cell");
+  });
+  root.querySelectorAll("td p, th p").forEach((paragraph) => {
+    paragraph.classList.add("docx-table-paragraph");
+  });
 
   return root.innerHTML;
 }
@@ -135,8 +147,9 @@ async function readHeaderImage(
   const relId = blip.getAttributeNS(OOXML_REL_NS, "embed") ?? blip.getAttribute("r:embed");
   if (!relId) return null;
 
-  const relationship = Array.from(relsDoc.getElementsByTagName("Relationship"))
-    .find((node) => node.getAttribute("Id") === relId);
+  const relationship = Array.from(relsDoc.getElementsByTagName("Relationship")).find(
+    (node) => node.getAttribute("Id") === relId,
+  );
   const target = relationship?.getAttribute("Target");
   if (!target) return null;
 
@@ -185,7 +198,9 @@ function readStyleColor(stylesDoc: Document, styleId: string): string | null {
   const style = findStyle(stylesDoc, styleId);
   if (!style) return null;
   const color = style.getElementsByTagNameNS(OOXML_WORD_NS, "color")[0];
-  return normalizeColor(color?.getAttributeNS(OOXML_WORD_NS, "val") ?? color?.getAttribute("w:val"));
+  return normalizeColor(
+    color?.getAttributeNS(OOXML_WORD_NS, "val") ?? color?.getAttribute("w:val"),
+  );
 }
 
 function readStyleFont(stylesDoc: Document, styleId: string): string | null {
@@ -196,16 +211,21 @@ function readStyleFont(stylesDoc: Document, styleId: string): string | null {
 }
 
 function findStyle(stylesDoc: Document, styleId: string): Element | null {
-  return Array.from(stylesDoc.getElementsByTagNameNS(OOXML_WORD_NS, "style"))
-    .find((node) =>
-      node.getAttributeNS(OOXML_WORD_NS, "styleId") === styleId || node.getAttribute("w:styleId") === styleId,
-    ) ?? null;
+  return (
+    Array.from(stylesDoc.getElementsByTagNameNS(OOXML_WORD_NS, "style")).find(
+      (node) =>
+        node.getAttributeNS(OOXML_WORD_NS, "styleId") === styleId ||
+        node.getAttribute("w:styleId") === styleId,
+    ) ?? null
+  );
 }
 
 function readParagraphRunColor(paragraph: Element | undefined): string | null {
   if (!paragraph) return null;
   const color = paragraph.getElementsByTagNameNS(OOXML_WORD_NS, "color")[0];
-  return normalizeColor(color?.getAttributeNS(OOXML_WORD_NS, "val") ?? color?.getAttribute("w:val"));
+  return normalizeColor(
+    color?.getAttributeNS(OOXML_WORD_NS, "val") ?? color?.getAttribute("w:val"),
+  );
 }
 
 function readParagraphRunFont(paragraph: Element | undefined): string | null {
@@ -217,7 +237,9 @@ function readParagraphRunFont(paragraph: Element | undefined): string | null {
 function readParagraphBottomBorderColor(paragraph: Element | undefined): string | null {
   if (!paragraph) return null;
   const border = paragraph.getElementsByTagNameNS(OOXML_WORD_NS, "bottom")[0];
-  return normalizeColor(border?.getAttributeNS(OOXML_WORD_NS, "color") ?? border?.getAttribute("w:color"));
+  return normalizeColor(
+    border?.getAttributeNS(OOXML_WORD_NS, "color") ?? border?.getAttribute("w:color"),
+  );
 }
 
 function normalizeColor(value: string | null | undefined): string | null {

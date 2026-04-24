@@ -1,8 +1,8 @@
-import { memo, useRef, useState, useCallback } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import type { CitationSource } from "../../../../../src/shared/displayCitationMarkers";
-import { Button } from "../ui/button";
-import { cn } from "../../lib/utils";
 import { confirmAction } from "../../lib/desktopCommands";
+import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
 
 function faviconUrl(siteUrl: string): string {
   try {
@@ -72,7 +72,12 @@ function FaviconImage({ url, className }: { url: string; className?: string }) {
 
   if (!src || failed) {
     return (
-      <div className={cn("flex items-center justify-center rounded bg-muted text-[10px] font-bold uppercase text-muted-foreground", className)}>
+      <div
+        className={cn(
+          "flex items-center justify-center rounded bg-muted text-[10px] font-bold uppercase text-muted-foreground",
+          className,
+        )}
+      >
         {displayDomain(url).charAt(0)}
       </div>
     );
@@ -114,7 +119,10 @@ export type SourcesCarouselProps = {
   className?: string;
 };
 
-export const SourcesCarousel = memo(function SourcesCarousel({ sources, className }: SourcesCarouselProps) {
+export const SourcesCarousel = memo(function SourcesCarousel({
+  sources,
+  className,
+}: SourcesCarouselProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -142,9 +150,7 @@ export const SourcesCarousel = memo(function SourcesCarousel({ sources, classNam
         <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
           Sources
         </span>
-        <span className="text-[10px] text-muted-foreground/60">
-          {sources.length}
-        </span>
+        <span className="text-[10px] text-muted-foreground/60">{sources.length}</span>
       </div>
       <div className="relative">
         <div
@@ -170,8 +176,22 @@ export const SourcesCarousel = memo(function SourcesCarousel({ sources, classNam
             className="app-shadow-surface absolute -left-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 transition-opacity group-hover/carousel:opacity-100"
             onClick={() => scrollBy(-180)}
           >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-foreground">
-              <path d="M7.5 2.5L4 6l3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              className="text-foreground"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path
+                d="M7.5 2.5L4 6l3.5 3.5"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
             </svg>
           </Button>
         )}
@@ -183,8 +203,22 @@ export const SourcesCarousel = memo(function SourcesCarousel({ sources, classNam
             className="app-shadow-surface absolute -right-2 top-1/2 z-10 h-6 w-6 min-w-6 -translate-y-1/2 rounded-full border border-border bg-card p-0 opacity-0 transition-opacity group-hover/carousel:opacity-100"
             onClick={() => scrollBy(180)}
           >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-foreground">
-              <path d="M4.5 2.5L8 6l-3.5 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              className="text-foreground"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path
+                d="M4.5 2.5L8 6l-3.5 3.5"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
             </svg>
           </Button>
         )}

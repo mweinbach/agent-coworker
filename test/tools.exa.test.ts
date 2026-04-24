@@ -52,13 +52,17 @@ describe("tools/exa", () => {
         services: {},
         toolApiKeys: { exa: "saved-key" },
       }),
-      "utf-8"
+      "utf-8",
     );
 
     const prev = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "env-key";
     try {
-      const result = await withEnv("HOME", tmp, async () => await resolveExaApiKey(makeCtx(userAgentDir)));
+      const result = await withEnv(
+        "HOME",
+        tmp,
+        async () => await resolveExaApiKey(makeCtx(userAgentDir)),
+      );
       expect(result).toBe("saved-key");
     } finally {
       if (prev === undefined) {
@@ -76,7 +80,11 @@ describe("tools/exa", () => {
     const prev = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "env-key";
     try {
-      const result = await withEnv("HOME", tmp, async () => await resolveExaApiKey(makeCtx(userAgentDir)));
+      const result = await withEnv(
+        "HOME",
+        tmp,
+        async () => await resolveExaApiKey(makeCtx(userAgentDir)),
+      );
       expect(result).toBe("env-key");
     } finally {
       if (prev === undefined) {
@@ -100,12 +108,16 @@ describe("tools/exa", () => {
         services: {},
         toolApiKeys: { exa: "saved-key" },
       }),
-      "utf-8"
+      "utf-8",
     );
 
     delete process.env.EXA_API_KEY;
     try {
-      const result = await withEnv("HOME", tmp, async () => await resolveExaApiKey(makeCtx(userAgentDir)));
+      const result = await withEnv(
+        "HOME",
+        tmp,
+        async () => await resolveExaApiKey(makeCtx(userAgentDir)),
+      );
       expect(result).toBe("saved-key");
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
@@ -126,16 +138,8 @@ describe("tools/exa", () => {
             {
               text: { text: "main text" },
               extras: {
-                links: [
-                  "https://a",
-                  { href: "https://b" },
-                  { link: "https://a" },
-                ],
-                imageLinks: [
-                  "https://img",
-                  { src: "https://img2" },
-                  { src: "https://img" },
-                ],
+                links: ["https://a", { href: "https://b" }, { link: "https://a" }],
+                imageLinks: ["https://img", { src: "https://img2" }, { src: "https://img" }],
               },
               highlights: ["ignored"],
               title: "Title",
@@ -187,7 +191,7 @@ describe("tools/exa", () => {
           text: async () => "",
           json: async () => ({}),
         }),
-      })
+      }),
     ).rejects.toThrow("no result");
 
     await expect(
@@ -209,7 +213,7 @@ describe("tools/exa", () => {
             ],
           }),
         }),
-      })
+      }),
     ).rejects.toThrow("no content");
   });
 });

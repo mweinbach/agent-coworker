@@ -1,8 +1,11 @@
 import { z } from "zod";
 
-import { getLocalWebSearchProviderFromProviderOptions, type LocalWebSearchProvider } from "../shared/openaiCompatibleOptions";
-import { defineTool } from "./defineTool";
+import {
+  getLocalWebSearchProviderFromProviderOptions,
+  type LocalWebSearchProvider,
+} from "../shared/openaiCompatibleOptions";
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 import { EXA_MISSING_KEY_MESSAGE, postExaJson, resolveExaApiKey } from "./exa";
 import { PARALLEL_MISSING_KEY_MESSAGE, postParallelJson, resolveParallelApiKey } from "./parallel";
 
@@ -22,27 +25,35 @@ const exaSearchCategorySchema = z.enum([
   "people",
 ]);
 const exaSearchCategoryInputSchema = z.union([exaSearchCategorySchema, z.literal("news article")]);
-const exaResultSchema = z.object({
-  title: stringSchema.optional(),
-  url: stringSchema.optional(),
-  text: z.unknown().optional(),
-  highlights: exaHighlightsSchema,
-}).passthrough();
-const exaResponseSchema = z.object({
-  results: z.array(exaResultSchema).optional(),
-}).passthrough();
-const parallelResultSchema = z.object({
-  url: stringSchema.optional(),
-  title: z.union([stringSchema, z.null()]).optional(),
-  publish_date: z.union([stringSchema, z.null()]).optional(),
-  excerpts: z.union([z.array(z.string()), z.null()]).optional(),
-}).passthrough();
-const parallelResponseSchema = z.object({
-  search_id: z.string().optional(),
-  results: z.array(parallelResultSchema).optional(),
-  warnings: z.array(z.unknown()).optional(),
-  usage: z.array(z.unknown()).optional(),
-}).passthrough();
+const exaResultSchema = z
+  .object({
+    title: stringSchema.optional(),
+    url: stringSchema.optional(),
+    text: z.unknown().optional(),
+    highlights: exaHighlightsSchema,
+  })
+  .passthrough();
+const exaResponseSchema = z
+  .object({
+    results: z.array(exaResultSchema).optional(),
+  })
+  .passthrough();
+const parallelResultSchema = z
+  .object({
+    url: stringSchema.optional(),
+    title: z.union([stringSchema, z.null()]).optional(),
+    publish_date: z.union([stringSchema, z.null()]).optional(),
+    excerpts: z.union([z.array(z.string()), z.null()]).optional(),
+  })
+  .passthrough();
+const parallelResponseSchema = z
+  .object({
+    search_id: z.string().optional(),
+    results: z.array(parallelResultSchema).optional(),
+    warnings: z.array(z.unknown()).optional(),
+    usage: z.array(z.unknown()).optional(),
+  })
+  .passthrough();
 
 type WebSearchProviderRequest = {
   query: string;
@@ -89,7 +100,8 @@ function sanitizeQuery(raw: string): string {
   const query = raw.replace(/\s+/g, " ").trim();
   if (!query) throw new Error("webSearch requires a non-empty query");
   if (query.length > 1000) throw new Error("webSearch query is too long (max 1000 characters)");
-  if (/[\u0000-\u001f]/.test(query)) throw new Error("webSearch query contains unsupported control characters");
+  if (/[\u0000-\u001f]/.test(query))
+    throw new Error("webSearch query contains unsupported control characters");
   return query;
 }
 
@@ -125,7 +137,9 @@ function getParallelSnippet(result: unknown): string {
     .join("\n\n");
 }
 
-function normalizeExaCategory(value: z.infer<typeof exaSearchCategoryInputSchema> | undefined): z.infer<typeof exaSearchCategorySchema> | undefined {
+function normalizeExaCategory(
+  value: z.infer<typeof exaSearchCategoryInputSchema> | undefined,
+): z.infer<typeof exaSearchCategorySchema> | undefined {
   if (value === undefined) return undefined;
   return value === "news article" ? "news" : value;
 }
@@ -155,7 +169,9 @@ const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefi
       });
       if (!response.ok) {
         const text = await response.text();
-        throw new Error(`Exa search failed: ${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
+        throw new Error(
+          `Exa search failed: ${response.status} ${response.statusText}: ${text.slice(0, 500)}`,
+        );
       }
 
       const data = await response.json();
@@ -206,7 +222,9 @@ const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefi
       });
       if (!response.ok) {
         const text = await response.text();
-        throw new Error(`Parallel search failed: ${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
+        throw new Error(
+          `Parallel search failed: ${response.status} ${response.statusText}: ${text.slice(0, 500)}`,
+        );
       }
 
       const data = await response.json();
@@ -238,21 +256,28 @@ const WEB_SEARCH_PROVIDERS: Record<LocalWebSearchProvider, WebSearchProviderDefi
 };
 
 function createCustomWebSearchTool(ctx: ToolContext) {
-  const webSearchInputSchema = z.object({
-    query: z.string().min(1).optional().describe("Search query"),
-    q: z.string().min(1).optional(),
-    searchQuery: z.string().min(1).optional(),
-    text: z.string().min(1).optional(),
-    prompt: z.string().min(1).optional(),
-    type: exaSearchTypeSchema.optional().describe(
-      "Optional Exa-only search type for more deliberate retrieval. Ignored by other web search providers."
-    ),
-    category: exaSearchCategoryInputSchema.optional().describe(
-      "Optional Exa-only result category for focused search. Ignored by other web search providers."
-    ),
-    maxResults: z.number().int().min(1).max(20).optional().default(10),
-  }).passthrough();
-  const provider = WEB_SEARCH_PROVIDERS[getLocalWebSearchProviderFromProviderOptions(ctx.config.providerOptions)];
+  const webSearchInputSchema = z
+    .object({
+      query: z.string().min(1).optional().describe("Search query"),
+      q: z.string().min(1).optional(),
+      searchQuery: z.string().min(1).optional(),
+      text: z.string().min(1).optional(),
+      prompt: z.string().min(1).optional(),
+      type: exaSearchTypeSchema
+        .optional()
+        .describe(
+          "Optional Exa-only search type for more deliberate retrieval. Ignored by other web search providers.",
+        ),
+      category: exaSearchCategoryInputSchema
+        .optional()
+        .describe(
+          "Optional Exa-only result category for focused search. Ignored by other web search providers.",
+        ),
+      maxResults: z.number().int().min(1).max(20).optional().default(10),
+    })
+    .passthrough();
+  const provider =
+    WEB_SEARCH_PROVIDERS[getLocalWebSearchProviderFromProviderOptions(ctx.config.providerOptions)];
 
   return defineTool({
     description: provider.description,
@@ -265,13 +290,14 @@ function createCustomWebSearchTool(ctx: ToolContext) {
         return out;
       }
 
-      const rawQuery = firstString(
-        parsedInput.data.query,
-        parsedInput.data.q,
-        parsedInput.data.searchQuery,
-        parsedInput.data.text,
-        parsedInput.data.prompt
-      ) ?? firstString(ctx.turnUserPrompt, ctx.getTurnUserPrompt?.());
+      const rawQuery =
+        firstString(
+          parsedInput.data.query,
+          parsedInput.data.q,
+          parsedInput.data.searchQuery,
+          parsedInput.data.text,
+          parsedInput.data.prompt,
+        ) ?? firstString(ctx.turnUserPrompt, ctx.getTurnUserPrompt?.());
       if (rawQuery === undefined) {
         const out = 'webSearch requires a query. Call webSearch with {"query":"..."}';
         ctx.log(`tool< webSearch ${JSON.stringify({ ok: false, reason: "missing_query" })}`);
@@ -294,28 +320,36 @@ function createCustomWebSearchTool(ctx: ToolContext) {
         exaCategory: normalizeExaCategory(parsedInput.data.category),
       };
 
-      ctx.log(`tool> webSearch ${JSON.stringify({
-        provider: provider.label.toLowerCase(),
-        query: request.query,
-        maxResults: request.maxResults,
-        exaType: request.exaType,
-        exaCategory: request.exaCategory,
-      })}`);
+      ctx.log(
+        `tool> webSearch ${JSON.stringify({
+          provider: provider.label.toLowerCase(),
+          query: request.query,
+          maxResults: request.maxResults,
+          exaType: request.exaType,
+          exaCategory: request.exaCategory,
+        })}`,
+      );
 
       const apiKey = await provider.resolveApiKey(ctx);
       if (!apiKey) {
         const out = `webSearch disabled: ${provider.missingKeyMessage}`;
-        ctx.log(`tool< webSearch ${JSON.stringify({ disabled: true, provider: provider.label.toLowerCase() })}`);
+        ctx.log(
+          `tool< webSearch ${JSON.stringify({ disabled: true, provider: provider.label.toLowerCase() })}`,
+        );
         return out;
       }
 
       try {
         const result = await provider.execute({ apiKey, request });
-        ctx.log(`tool< webSearch ${JSON.stringify({ provider: result.provider, count: result.count })}`);
+        ctx.log(
+          `tool< webSearch ${JSON.stringify({ provider: result.provider, count: result.count })}`,
+        );
         return result;
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        ctx.log(`tool< webSearch ${JSON.stringify({ ok: false, provider: provider.label.toLowerCase() })}`);
+        ctx.log(
+          `tool< webSearch ${JSON.stringify({ ok: false, provider: provider.label.toLowerCase() })}`,
+        );
         return msg;
       }
     },

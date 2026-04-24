@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import path from "node:path";
 
 import type { AiCoworkerPaths } from "../connect";
+import type { SessionUsageSnapshot } from "../session/costTracker";
 import type {
   AgentExecutionState,
   AgentMode,
@@ -12,18 +13,22 @@ import type {
   SessionKind,
 } from "../shared/agents";
 import type { ProviderContinuationState } from "../shared/providerContinuation";
-import type { SessionUsageSnapshot } from "../session/costTracker";
-import type { ModelStreamRawFormat } from "./modelStream";
-import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "../types";
-import type { PersistedSessionSummary } from "./sessionStore";
-import type { SessionTitleSource } from "./sessionTitleService";
 import type { SessionSnapshot } from "../shared/sessionSnapshot";
-import { ensurePrivateDirectory, hardenPrivateFile, quarantineCorruptedDb } from "./sessionDb/fileHardening";
+import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "../types";
+import type { ModelStreamRawFormat } from "./modelStream";
+import type { ResearchRecord } from "./research/types";
+import {
+  ensurePrivateDirectory,
+  hardenPrivateFile,
+  quarantineCorruptedDb,
+} from "./sessionDb/fileHardening";
 import { importLegacySnapshots } from "./sessionDb/legacyImport";
 import { bootstrapSessionDb } from "./sessionDb/migrations";
 import { isCorruptionError } from "./sessionDb/normalizers";
 import { SessionDbRepository } from "./sessionDb/repository";
 import { SessionDbWriteCoordinator } from "./sessionDb/writeCoordinator";
+import type { PersistedSessionSummary } from "./sessionStore";
+import type { SessionTitleSource } from "./sessionTitleService";
 
 export type { PersistedSessionSummary } from "./sessionStore";
 
@@ -142,6 +147,8 @@ export type PersistedThreadJournalEvent = {
   payload: unknown;
 };
 
+export type PersistedResearchRecord = ResearchRecord;
+
 type SessionDbOptions = {
   paths: Pick<AiCoworkerPaths, "rootDir" | "sessionsDir">;
   dbPath?: string;
@@ -251,7 +258,11 @@ export class SessionDb {
     );
   }
 
-  getMessages(sessionId: string, offset = 0, limit = 100): { messages: ModelMessage[]; total: number } {
+  getMessages(
+    sessionId: string,
+    offset = 0,
+    limit = 100,
+  ): { messages: ModelMessage[]; total: number } {
     return this.repository.getMessages(sessionId, offset, limit);
   }
 
@@ -293,7 +304,9 @@ export class SessionDb {
     );
   }
 
-  async appendThreadJournalEvents(opts: Array<Omit<PersistedThreadJournalEvent, "seq">>): Promise<number[]> {
+  async appendThreadJournalEvents(
+    opts: Array<Omit<PersistedThreadJournalEvent, "seq">>,
+  ): Promise<number[]> {
     if (opts.length === 0) {
       return [];
     }
@@ -307,8 +320,36 @@ export class SessionDb {
     );
   }
 
-  listThreadJournalEvents(threadId: string, opts?: { afterSeq?: number; limit?: number }): PersistedThreadJournalEvent[] {
+  listThreadJournalEvents(
+    threadId: string,
+    opts?: { afterSeq?: number; limit?: number },
+  ): PersistedThreadJournalEvent[] {
     return this.repository.listThreadJournalEvents(threadId, opts);
+  }
+
+  listResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
+    return this.repository.listResearch(opts);
+  }
+
+  listRunningResearch(opts?: { workspacePath?: string | null }): PersistedResearchRecord[] {
+    return this.repository.listRunningResearch(opts);
+  }
+
+  getResearch(
+    researchId: string,
+    opts?: { workspacePath?: string | null },
+  ): PersistedResearchRecord | null {
+    return this.repository.getResearch(researchId, opts);
+  }
+
+  async upsertResearch(record: PersistedResearchRecord): Promise<void> {
+    await this.writeCoordinator.runExclusive(
+      "upsert_research",
+      async () => {
+        this.repository.upsertResearch(record);
+      },
+      { researchId: record.id, status: record.status },
+    );
   }
 
   async persistSessionSnapshot(sessionId: string, snapshot: SessionSnapshot): Promise<void> {

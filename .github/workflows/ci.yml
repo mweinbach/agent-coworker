@@ -52,39 +52,6 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: ".bun-version"
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            node_modules
-            apps/desktop/node_modules
-            apps/mobile/node_modules
-            ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: ${{ runner.os }}-bun-
-
-      - name: Install dependencies
-        run: bun install
-
-      # Serialize async tests: many desktop tests swap global JSDOM document/window and
-      # cannot run concurrently without clobbering each other on shared globalThis.
-      - name: Unit tests
-        run: bun test --max-concurrency 1
-
-  test-stable:
-    name: Stable per-file tests
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -109,9 +76,9 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      # Re-run each file in isolation to catch order/global-state issues that can hide
-      # inside a single aggregate Bun invocation. Run on main/testing pushes only.
-      - name: Stable per-file unit tests
+      # Run files in isolated Bun processes: the aggregate runner can retain JSDOM/global
+      # state until shutdown and hang after the final desktop test on CI.
+      - name: Unit tests
         run: bun run test:stable -- --max-concurrency 1
 
   remote-mcp-smoke:

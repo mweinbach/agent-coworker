@@ -73,10 +73,7 @@ export function PendingRequestCard({
           >
             {request.command}
           </Text>
-          <Text
-            selectable
-            style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}
-          >
+          <Text selectable style={{ color: theme.textSecondary, fontSize: 14, lineHeight: 21 }}>
             {request.reason}
           </Text>
         </>

@@ -4,9 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Bedrock } from "@aws-sdk/client-bedrock";
-
-import { getAiCoworkerPaths, writeConnectionStore } from "../../src/connect";
 import { getModel, loadConfig } from "../../src/config";
+import { getAiCoworkerPaths, writeConnectionStore } from "../../src/connect";
 import { refreshBedrockDiscoveryCache } from "../../src/providers/bedrockShared";
 
 function repoRoot(): string {
@@ -30,19 +29,22 @@ function mockBedrockDiscovery(modelId = "custom.bedrock-model-v1") {
   const originalListProvisionedModelThroughputs = Bedrock.prototype.listProvisionedModelThroughputs;
   const originalListImportedModels = Bedrock.prototype.listImportedModels;
 
-  Bedrock.prototype.listFoundationModels = async () => ({
-    modelSummaries: [
-      {
-        modelId,
-        modelName: "Custom Bedrock Model",
-        responseStreamingSupported: true,
-        inputModalities: ["TEXT"],
-      } as any,
-    ],
-  }) as any;
+  Bedrock.prototype.listFoundationModels = async () =>
+    ({
+      modelSummaries: [
+        {
+          modelId,
+          modelName: "Custom Bedrock Model",
+          responseStreamingSupported: true,
+          inputModalities: ["TEXT"],
+        } as any,
+      ],
+    }) as any;
   Bedrock.prototype.listInferenceProfiles = async () => ({ inferenceProfileSummaries: [] }) as any;
-  Bedrock.prototype.listCustomModelDeployments = async () => ({ modelDeploymentSummaries: [] }) as any;
-  Bedrock.prototype.listProvisionedModelThroughputs = async () => ({ provisionedModelSummaries: [] }) as any;
+  Bedrock.prototype.listCustomModelDeployments = async () =>
+    ({ modelDeploymentSummaries: [] }) as any;
+  Bedrock.prototype.listProvisionedModelThroughputs = async () =>
+    ({ provisionedModelSummaries: [] }) as any;
   Bedrock.prototype.listImportedModels = async () => ({ modelSummaries: [] }) as any;
 
   return () => {
@@ -112,7 +114,8 @@ describe("bedrock provider", () => {
 
   test("accepts arbitrary Bedrock model IDs and ARNs", async () => {
     const { cwd, home } = await makeTmpDirs();
-    const customModelArn = "arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment/abcd1234efgh";
+    const customModelArn =
+      "arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment/abcd1234efgh";
     const cfg = await loadConfig({
       cwd,
       homedir: home,

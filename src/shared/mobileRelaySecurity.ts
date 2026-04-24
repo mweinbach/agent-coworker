@@ -70,76 +70,109 @@ type DecodeRelaySecureEnvelopeResult =
 const nonEmptyStringSchema = z.string().trim().min(1);
 const jsonRpcIdSchema = z.union([z.string(), z.number().finite()]);
 
-const jsonRpcRequestSchema = z.object({
-  id: jsonRpcIdSchema,
-  method: nonEmptyStringSchema,
-  params: z.unknown().optional(),
-}).strict();
+const jsonRpcRequestSchema = z
+  .object({
+    id: jsonRpcIdSchema,
+    method: nonEmptyStringSchema,
+    params: z.unknown().optional(),
+  })
+  .strict();
 
-const jsonRpcNotificationSchema = z.object({
-  method: nonEmptyStringSchema,
-  params: z.unknown().optional(),
-}).strict();
+const jsonRpcNotificationSchema = z
+  .object({
+    method: nonEmptyStringSchema,
+    params: z.unknown().optional(),
+  })
+  .strict();
 
-const jsonRpcResponseSchema = z.object({
-  id: jsonRpcIdSchema,
-  result: z.unknown().optional(),
-  error: z.object({
-    code: z.number(),
-    message: z.string(),
-    data: z.unknown().optional(),
-  }).optional(),
-}).strict().refine((value) => value.result !== undefined || value.error !== undefined, {
-  message: "Response must include result or error.",
-});
+const jsonRpcResponseSchema = z
+  .object({
+    id: jsonRpcIdSchema,
+    result: z.unknown().optional(),
+    error: z
+      .object({
+        code: z.number(),
+        message: z.string(),
+        data: z.unknown().optional(),
+      })
+      .optional(),
+  })
+  .strict()
+  .refine((value) => value.result !== undefined || value.error !== undefined, {
+    message: "Response must include result or error.",
+  });
 
-const relaySecureEnvelopeSchema = z.object({
-  kind: z.literal("secureEnvelope"),
-  v: z.literal(RELAY_SECURE_ENVELOPE_VERSION),
-  sender: z.enum(["mac", "phone"]),
-  counter: z.number().int().positive(),
-  nonce: nonEmptyStringSchema,
-  ciphertext: nonEmptyStringSchema,
-}).strict();
+const relaySecureEnvelopeSchema = z
+  .object({
+    kind: z.literal("secureEnvelope"),
+    v: z.literal(RELAY_SECURE_ENVELOPE_VERSION),
+    sender: z.enum(["mac", "phone"]),
+    counter: z.number().int().positive(),
+    nonce: nonEmptyStringSchema,
+    ciphertext: nonEmptyStringSchema,
+  })
+  .strict();
 
-const relayMacRegistrationSchema = z.object({
-  kind: z.literal("relayMacRegistration"),
-  registration: z.object({
-    sessionId: z.string().trim().min(1).nullable().optional(),
-    macDeviceId: nonEmptyStringSchema,
-    macIdentityPublicKey: nonEmptyStringSchema,
-    displayName: z.string().trim().min(1).nullable().optional(),
-    trustedPhoneDeviceId: z.string().trim().min(1).nullable().optional(),
-    trustedPhonePublicKey: z.string().trim().min(1).nullable().optional(),
-  }).strict(),
-}).strict();
+const relayMacRegistrationSchema = z
+  .object({
+    kind: z.literal("relayMacRegistration"),
+    registration: z
+      .object({
+        sessionId: z.string().trim().min(1).nullable().optional(),
+        macDeviceId: nonEmptyStringSchema,
+        macIdentityPublicKey: nonEmptyStringSchema,
+        displayName: z.string().trim().min(1).nullable().optional(),
+        trustedPhoneDeviceId: z.string().trim().min(1).nullable().optional(),
+        trustedPhonePublicKey: z.string().trim().min(1).nullable().optional(),
+      })
+      .strict(),
+  })
+  .strict();
 
-const relayClientHelloSchema = z.object({
-  kind: z.literal("clientHello"),
-  phoneDeviceId: nonEmptyStringSchema,
-  phoneIdentityPublicKey: nonEmptyStringSchema,
-  pairingProof: z.string().trim().min(1).optional(),
-}).strict();
+const relayClientHelloSchema = z
+  .object({
+    kind: z.literal("clientHello"),
+    phoneDeviceId: nonEmptyStringSchema,
+    phoneIdentityPublicKey: nonEmptyStringSchema,
+    pairingProof: z.string().trim().min(1).optional(),
+  })
+  .strict();
 
-const relaySecureReadySchema = z.object({
-  kind: z.literal("secureReady"),
-}).strict();
+const relaySecureReadySchema = z
+  .object({
+    kind: z.literal("secureReady"),
+  })
+  .strict();
 
-const relaySecureErrorSchema = z.object({
-  kind: z.literal("secureError"),
-  message: nonEmptyStringSchema,
-}).strict();
+const relaySecureErrorSchema = z
+  .object({
+    kind: z.literal("secureError"),
+    message: nonEmptyStringSchema,
+  })
+  .strict();
 
-const relayPassthroughControlSchema = z.object({
-  kind: z.enum(["serverHello", "clientAuth", "resumeState"]),
-}).strict();
+const relayPassthroughControlSchema = z
+  .object({
+    kind: z.enum(["serverHello", "clientAuth", "resumeState"]),
+  })
+  .strict();
 
-function getBufferCtor():
-  | { from(data: Uint8Array | string, encoding?: string): Uint8Array & { toString(encoding?: string): string } }
-  | null {
-  const candidate = (globalThis as {
-    Buffer?: { from(data: Uint8Array | string, encoding?: string): Uint8Array & { toString(encoding?: string): string } };
-  }).Buffer;
+function getBufferCtor(): {
+  from(
+    data: Uint8Array | string,
+    encoding?: string,
+  ): Uint8Array & { toString(encoding?: string): string };
+} | null {
+  const candidate = (
+    globalThis as {
+      Buffer?: {
+        from(
+          data: Uint8Array | string,
+          encoding?: string,
+        ): Uint8Array & { toString(encoding?: string): string };
+      };
+    }
+  ).Buffer;
   return candidate ?? null;
 }
 
@@ -212,8 +245,8 @@ export function isValidRelayKeyPair(opts: {
   const publicKeyBytes = base64ToBytes(opts.publicKeyBase64);
   const privateKeyBytes = base64ToBytes(opts.privateKeyBase64);
   if (
-    publicKeyBytes?.length !== nacl.box.publicKeyLength
-    || privateKeyBytes?.length !== nacl.box.secretKeyLength
+    publicKeyBytes?.length !== nacl.box.publicKeyLength ||
+    privateKeyBytes?.length !== nacl.box.secretKeyLength
   ) {
     return false;
   }
@@ -307,9 +340,11 @@ export function buildRelayHandshakeProofPayload(): string {
 export function isRelayHandshakeProofPayload(rawMessage: string): boolean {
   try {
     const parsed = JSON.parse(rawMessage) as Record<string, unknown>;
-    return typeof parsed.method === "string"
-      && parsed.method === RELAY_HANDSHAKE_PROOF_METHOD
-      && !("id" in parsed);
+    return (
+      typeof parsed.method === "string" &&
+      parsed.method === RELAY_HANDSHAKE_PROOF_METHOD &&
+      !("id" in parsed)
+    );
   } catch {
     return false;
   }
@@ -333,7 +368,9 @@ export function createRelaySharedKey(
     throw new Error("Invalid relay peer public key.");
   }
   const baseSharedKey = nacl.box.before(peerPublicKeyBytes, privateKeyBytes);
-  const sessionContextBytes = new TextEncoder().encode(`${RELAY_SESSION_KEY_CONTEXT}:${normalizedSessionId}`);
+  const sessionContextBytes = new TextEncoder().encode(
+    `${RELAY_SESSION_KEY_CONTEXT}:${normalizedSessionId}`,
+  );
   const keyMaterial = new Uint8Array(sessionContextBytes.length + 1 + baseSharedKey.length);
   keyMaterial.set(sessionContextBytes, 0);
   keyMaterial[sessionContextBytes.length] = 0;
@@ -445,7 +482,8 @@ export function parseRelayControlMessage(rawMessage: string): RelayControlMessag
         macIdentityPublicKey: macRegistrationResult.data.registration.macIdentityPublicKey,
         displayName: macRegistrationResult.data.registration.displayName ?? null,
         trustedPhoneDeviceId: macRegistrationResult.data.registration.trustedPhoneDeviceId ?? null,
-        trustedPhonePublicKey: macRegistrationResult.data.registration.trustedPhonePublicKey ?? null,
+        trustedPhonePublicKey:
+          macRegistrationResult.data.registration.trustedPhonePublicKey ?? null,
       },
     };
   }
@@ -474,9 +512,11 @@ export function parseRelayControlMessage(rawMessage: string): RelayControlMessag
 export function isCoworkJsonRpcPayload(rawMessage: string): boolean {
   try {
     const parsed = JSON.parse(rawMessage) as unknown;
-    return jsonRpcRequestSchema.safeParse(parsed).success
-      || jsonRpcResponseSchema.safeParse(parsed).success
-      || jsonRpcNotificationSchema.safeParse(parsed).success;
+    return (
+      jsonRpcRequestSchema.safeParse(parsed).success ||
+      jsonRpcResponseSchema.safeParse(parsed).success ||
+      jsonRpcNotificationSchema.safeParse(parsed).success
+    );
   } catch {
     return false;
   }
@@ -495,7 +535,7 @@ export function computeRelayReconnectDelayMs(
   const baseDelayMs = Math.max(1, Math.floor(opts.baseDelayMs ?? 1_000));
   const maxDelayMs = Math.max(baseDelayMs, Math.floor(opts.maxDelayMs ?? 30_000));
   const jitterRatio = Math.max(0, Math.min(1, opts.jitterRatio ?? 0.2));
-  const rawDelayMs = Math.min(maxDelayMs, baseDelayMs * (2 ** (normalizedAttempt - 1)));
+  const rawDelayMs = Math.min(maxDelayMs, baseDelayMs * 2 ** (normalizedAttempt - 1));
   const jitterWindowMs = Math.floor(rawDelayMs * jitterRatio);
   const randomUnit = clampRandomUnit((opts.random ?? Math.random)());
   return Math.max(1, rawDelayMs - jitterWindowMs + Math.round(randomUnit * jitterWindowMs * 2));

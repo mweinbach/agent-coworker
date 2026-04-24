@@ -1,6 +1,5 @@
-import { forwardRef, type HTMLAttributes, type ReactNode } from "react";
-
 import { ArrowDownIcon } from "lucide-react";
+import { forwardRef, type HTMLAttributes, type ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -11,13 +10,25 @@ export const Conversation = forwardRef<HTMLDivElement, ConversationProps>(functi
   { className, ...props },
   ref,
 ) {
-  return <div ref={ref} className={cn("relative flex-1 overflow-y-auto", className)} role="log" {...props} />;
+  return (
+    <div
+      ref={ref}
+      className={cn("relative flex-1 overflow-y-auto", className)}
+      role="log"
+      {...props}
+    />
+  );
 });
 
 export type ConversationContentProps = HTMLAttributes<HTMLDivElement>;
 
 export function ConversationContent({ className, ...props }: ConversationContentProps) {
-  return <div className={cn("mx-auto flex w-full max-w-[56rem] flex-col gap-3.5 px-4 py-5", className)} {...props} />;
+  return (
+    <div
+      className={cn("mx-auto flex w-full max-w-[56rem] flex-col gap-3.5 px-4 py-5", className)}
+      {...props}
+    />
+  );
 }
 
 export type ConversationEmptyStateProps = HTMLAttributes<HTMLDivElement> & {
@@ -36,7 +47,10 @@ export function ConversationEmptyState({
 }: ConversationEmptyStateProps) {
   return (
     <div
-      className={cn("flex min-h-72 w-full flex-col items-center justify-center gap-2.5 rounded-[calc(var(--radius)*2)] border border-dashed border-border/55 bg-background/24 p-10 text-center", className)}
+      className={cn(
+        "flex min-h-72 w-full flex-col items-center justify-center gap-2.5 rounded-[calc(var(--radius)*2)] border border-dashed border-border/55 bg-background/24 p-10 text-center",
+        className,
+      )}
       {...props}
     >
       {children ?? (

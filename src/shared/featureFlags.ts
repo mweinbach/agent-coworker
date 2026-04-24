@@ -33,13 +33,15 @@ export const FEATURE_FLAG_DEFINITIONS: Record<FeatureFlagId, FeatureFlagDefiniti
   workspacePicker: {
     id: "workspacePicker",
     label: "Workspace picker",
-    description: "Show multi-workspace switching UI in desktop settings, onboarding, and sidebar flows.",
+    description:
+      "Show multi-workspace switching UI in desktop settings, onboarding, and sidebar flows.",
     defaultEnabled: true,
   },
   workspaceLifecycle: {
     id: "workspaceLifecycle",
     label: "Workspace lifecycle actions",
-    description: "Allow adding, removing, reordering, and restarting workspaces from the desktop UI.",
+    description:
+      "Allow adding, removing, reordering, and restarting workspaces from the desktop UI.",
     defaultEnabled: true,
   },
   a2ui: {

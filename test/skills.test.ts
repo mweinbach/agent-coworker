@@ -10,7 +10,7 @@ async function makeTmpDir(prefix = "skills-test-"): Promise<string> {
 }
 
 function skillDoc(name: string, description: string, body = "# Body\n"): string {
-  return ["---", `name: \"${name}\"`, `description: \"${description}\"`, "---", "", body].join("\n");
+  return ["---", `name: "${name}"`, `description: "${description}"`, "---", "", body].join("\n");
 }
 
 async function createSkill(parentDir: string, name: string, content: string): Promise<string> {
@@ -47,20 +47,24 @@ describe("discoverSkills (Agent Skills spec compliance)", () => {
     await createSkill(
       tmp,
       "alpha",
-      ["---", "name: \"alpha\"", "description: [unterminated", "---", "", "# Body"].join("\n")
+      ["---", 'name: "alpha"', "description: [unterminated", "---", "", "# Body"].join("\n"),
     );
     const entries = await discoverSkills([tmp]);
     expect(entries).toEqual([]);
   });
 
   test("rejects when required name is missing", async () => {
-    await createSkill(tmp, "alpha", ["---", "description: \"Only description\"", "---", "", "# Body"].join("\n"));
+    await createSkill(
+      tmp,
+      "alpha",
+      ["---", 'description: "Only description"', "---", "", "# Body"].join("\n"),
+    );
     const entries = await discoverSkills([tmp]);
     expect(entries).toEqual([]);
   });
 
   test("rejects when required description is missing", async () => {
-    await createSkill(tmp, "alpha", ["---", "name: \"alpha\"", "---", "", "# Body"].join("\n"));
+    await createSkill(tmp, "alpha", ["---", 'name: "alpha"', "---", "", "# Body"].join("\n"));
     const entries = await discoverSkills([tmp]);
     expect(entries).toEqual([]);
   });
@@ -121,7 +125,7 @@ describe("discoverSkills (Agent Skills spec compliance)", () => {
         "---",
         "",
         "# Body",
-      ].join("\n")
+      ].join("\n"),
     );
 
     const entries = await discoverSkills([tmp]);
@@ -143,7 +147,7 @@ describe("discoverSkills (Agent Skills spec compliance)", () => {
         "---",
         "",
         "# Body",
-      ].join("\n")
+      ].join("\n"),
     );
 
     const entries = await discoverSkills([tmp]);
@@ -163,7 +167,7 @@ describe("discoverSkills (Agent Skills spec compliance)", () => {
         "---",
         "",
         "# Body",
-      ].join("\n")
+      ].join("\n"),
     );
 
     const entries = await discoverSkills([tmp]);
@@ -174,9 +178,15 @@ describe("discoverSkills (Agent Skills spec compliance)", () => {
     await createSkill(
       tmp,
       "alpha",
-      ["---", 'name: "alpha"', 'description: "Alpha description."', 'triggers: "one, two"', "---", "", "# Body"].join(
-        "\n"
-      )
+      [
+        "---",
+        'name: "alpha"',
+        'description: "Alpha description."',
+        'triggers: "one, two"',
+        "---",
+        "",
+        "# Body",
+      ].join("\n"),
     );
 
     const entries = await discoverSkills([tmp]);
@@ -234,9 +244,15 @@ describe("discoverSkills (Agent Skills spec compliance)", () => {
 
 describe("stripSkillFrontMatter", () => {
   test("returns instructions body without YAML frontmatter", () => {
-    const raw = ["---", 'name: "alpha"', 'description: "Alpha description."', "---", "", "# Instructions", "Use this."].join(
-      "\n"
-    );
+    const raw = [
+      "---",
+      'name: "alpha"',
+      'description: "Alpha description."',
+      "---",
+      "",
+      "# Instructions",
+      "Use this.",
+    ].join("\n");
     const stripped = stripSkillFrontMatter(raw);
     expect(stripped).toBe("# Instructions\nUse this.");
   });

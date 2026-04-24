@@ -177,5 +177,4 @@ describe("provider actions", () => {
     expect(harness.state.providerStatusRefreshing).toBe(false);
     expect(harness.state.notifications).toEqual([]);
   });
-
 });

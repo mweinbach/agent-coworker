@@ -14,7 +14,9 @@ import {
 describe("desktop sidecar packaging helpers", () => {
   test("resolves the packaged filename for darwin arm64", () => {
     expect(resolveDesktopTargetTriple("darwin", "arm64")).toBe("aarch64-apple-darwin");
-    expect(resolvePackagedSidecarFilename("darwin", "arm64")).toBe("cowork-server-aarch64-apple-darwin");
+    expect(resolvePackagedSidecarFilename("darwin", "arm64")).toBe(
+      "cowork-server-aarch64-apple-darwin",
+    );
   });
 
   test("builds an executable manifest for supported compiled targets", () => {
@@ -51,7 +53,8 @@ describe("desktop sidecar packaging helpers", () => {
         throw new Error("unexpected read");
       },
       readdirSync: () => [],
-      lstatSync: () => ({ isDirectory: () => false }) as ReturnType<typeof import("node:fs").lstatSync>,
+      lstatSync: () =>
+        ({ isDirectory: () => false }) as ReturnType<typeof import("node:fs").lstatSync>,
     });
 
     expect(launch.command).toBe(explicit);
@@ -75,7 +78,8 @@ describe("desktop sidecar packaging helpers", () => {
     const launch = findPackagedSidecarLaunchCommand([dir], {
       platform: "darwin",
       arch: "arm64",
-      existsSync: (candidate) => candidate === dir || candidate === manifestPath || candidate === binaryPath,
+      existsSync: (candidate) =>
+        candidate === dir || candidate === manifestPath || candidate === binaryPath,
       readFileSync: (candidate) => {
         if (candidate === manifestPath) {
           return JSON.stringify(manifest);
@@ -83,7 +87,8 @@ describe("desktop sidecar packaging helpers", () => {
         throw new Error(`unexpected read: ${candidate}`);
       },
       readdirSync: () => [],
-      lstatSync: () => ({ isDirectory: () => true }) as ReturnType<typeof import("node:fs").lstatSync>,
+      lstatSync: () =>
+        ({ isDirectory: () => true }) as ReturnType<typeof import("node:fs").lstatSync>,
     });
 
     expect(launch).toEqual({
@@ -107,10 +112,10 @@ describe("desktop sidecar packaging helpers", () => {
       platform: "win32",
       arch: "arm64",
       existsSync: (candidate) =>
-        candidate === dir
-        || candidate === manifestPath
-        || candidate === runtimePath
-        || candidate === entrypointPath,
+        candidate === dir ||
+        candidate === manifestPath ||
+        candidate === runtimePath ||
+        candidate === entrypointPath,
       readFileSync: (candidate) => {
         if (candidate === manifestPath) {
           return JSON.stringify(manifest);
@@ -118,7 +123,8 @@ describe("desktop sidecar packaging helpers", () => {
         throw new Error(`unexpected read: ${candidate}`);
       },
       readdirSync: () => [],
-      lstatSync: () => ({ isDirectory: () => true }) as ReturnType<typeof import("node:fs").lstatSync>,
+      lstatSync: () =>
+        ({ isDirectory: () => true }) as ReturnType<typeof import("node:fs").lstatSync>,
     });
 
     expect(launch).toEqual({
@@ -143,7 +149,8 @@ describe("desktop sidecar packaging helpers", () => {
         throw new Error("unexpected read");
       },
       readdirSync: () => [],
-      lstatSync: () => ({ isDirectory: () => true }) as ReturnType<typeof import("node:fs").lstatSync>,
+      lstatSync: () =>
+        ({ isDirectory: () => true }) as ReturnType<typeof import("node:fs").lstatSync>,
     });
 
     expect(launch.command).toBe(binaryPath);
@@ -165,8 +172,9 @@ describe("desktop sidecar packaging helpers", () => {
           "cowork-server-x86_64-pc-windows-msvc.exe",
           "cowork-server-x86_64-apple-darwin",
         ],
-        lstatSync: () => ({ isDirectory: () => true }) as ReturnType<typeof import("node:fs").lstatSync>,
-      })
+        lstatSync: () =>
+          ({ isDirectory: () => true }) as ReturnType<typeof import("node:fs").lstatSync>,
+      }),
     ).toThrow(/Expected cowork-server-aarch64-apple-darwin/);
   });
 });

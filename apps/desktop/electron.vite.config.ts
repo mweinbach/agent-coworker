@@ -1,9 +1,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-import { defineConfig, externalizeDepsPlugin } from "electron-vite";
-import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
+import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(appRoot, "../..");

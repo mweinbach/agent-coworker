@@ -1,7 +1,4 @@
-type BasetenModelId =
-  | "moonshotai/Kimi-K2.5"
-  | "zai-org/GLM-5"
-  | "nvidia/Nemotron-120B-A12B";
+type BasetenModelId = "moonshotai/Kimi-K2.5" | "zai-org/GLM-5" | "nvidia/Nemotron-120B-A12B";
 
 type BasetenModelSpec = {
   id: BasetenModelId;
@@ -61,10 +58,9 @@ export function getBasetenModelSpec(modelId: string): BasetenModelSpec | null {
   return BASETEN_MODEL_SPECS[modelId as BasetenModelId] ?? null;
 }
 
-export function resolveBasetenApiKey(opts: {
-  savedKey?: string;
-  env?: NodeJS.ProcessEnv;
-} = {}): string | undefined {
+export function resolveBasetenApiKey(
+  opts: { savedKey?: string; env?: NodeJS.ProcessEnv } = {},
+): string | undefined {
   const env = opts.env ?? process.env;
   const key = opts.savedKey?.trim() || env.BASETEN_API_KEY?.trim();
   return key || undefined;

@@ -6,13 +6,14 @@ import { createMcpRouteHandlers } from "./mcp";
 import { createMemoryRouteHandlers } from "./memory";
 import { createPluginsRouteHandlers } from "./plugins";
 import { createProviderRouteHandlers } from "./provider";
+import { createResearchRouteHandlers } from "./research";
 import { createSessionRouteHandlers } from "./session";
 import { createSkillsRouteHandlers } from "./skills";
 import { createThreadRouteHandlers } from "./thread";
 import { createTurnRouteHandlers } from "./turn";
-import { createWorkspaceBackupRouteHandlers } from "./workspaceBackups";
-import { createWorkspaceRouteHandlers } from "./workspace";
 import type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
+import { createWorkspaceRouteHandlers } from "./workspace";
+import { createWorkspaceBackupRouteHandlers } from "./workspaceBackups";
 
 export type { JsonRpcRequestHandler, JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
@@ -23,6 +24,7 @@ export function createJsonRpcRequestRouter(context: JsonRpcRouteContext): JsonRp
     ...createSessionRouteHandlers(context),
     ...createAgentRouteHandlers(context),
     ...createProviderRouteHandlers(context),
+    ...createResearchRouteHandlers(context),
     ...createMcpRouteHandlers(context),
     ...createPluginsRouteHandlers(context),
     ...createSkillsRouteHandlers(context),

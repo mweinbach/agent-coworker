@@ -72,7 +72,7 @@ describe("model stream parser provider/model loop coverage", () => {
           raw: {
             type: "response.function_call_arguments.delta",
             item_id: "fc-loop",
-            delta: "{\"question\":\"Proceed?\"}",
+            delta: '{"question":"Proceed?"}',
           },
         },
       });
@@ -80,7 +80,7 @@ describe("model stream parser provider/model loop coverage", () => {
         kind: "tool_input_delta",
         turnId: "turn-loop",
         key: "fc-loop",
-        delta: "{\"question\":\"Proceed?\"}",
+        delta: '{"question":"Proceed?"}',
       });
 
       const completed = mapModelStreamChunk({

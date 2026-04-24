@@ -1,6 +1,12 @@
 import path from "node:path";
 
-import type { AgentConfig, PluginCatalogSnapshot, SkillPluginOwner, SkillScope, SkillScopeDescriptor } from "../types";
+import type {
+  AgentConfig,
+  PluginCatalogSnapshot,
+  SkillPluginOwner,
+  SkillScope,
+  SkillScopeDescriptor,
+} from "../types";
 import { buildPluginCatalogSnapshot } from "./catalog";
 import { isPluginEnabled, isPluginSkillEnabled, readPluginOverrides } from "./overrides";
 
@@ -30,7 +36,7 @@ export async function buildPluginSkillSources(
   config: AgentConfig,
   catalog?: PluginCatalogSnapshot,
 ): Promise<PluginSkillCatalogSource[]> {
-  const snapshot = catalog ?? await buildPluginCatalogSnapshot(config);
+  const snapshot = catalog ?? (await buildPluginCatalogSnapshot(config));
   const overrides = await readPluginOverrides(config);
   const sources: PluginSkillCatalogSource[] = [];
 
@@ -39,8 +45,10 @@ export async function buildPluginSkillSources(
     if (!enabledPlugin) continue;
     if (plugin.skills.length === 0) continue;
     const owner = pluginOwnerForEntry(plugin);
-    const enabledSkills = plugin.skills
-      .filter((skill) => isPluginSkillEnabled(plugin.id, plugin.scope, skill.rawName, overrides) && skill.enabled);
+    const enabledSkills = plugin.skills.filter(
+      (skill) =>
+        isPluginSkillEnabled(plugin.id, plugin.scope, skill.rawName, overrides) && skill.enabled,
+    );
     if (enabledSkills.length === 0) continue;
 
     const skillsByDir = new Map<string, Set<string>>();
@@ -54,7 +62,9 @@ export async function buildPluginSkillSources(
       enabledSkillNames.add(skill.rawName);
     }
 
-    for (const [skillsDir, enabledSkillNames] of [...skillsByDir.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    for (const [skillsDir, enabledSkillNames] of [...skillsByDir.entries()].sort(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
       sources.push({
         descriptor: {
           scope: pluginSkillScope(plugin.scope),

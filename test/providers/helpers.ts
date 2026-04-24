@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { AgentConfig } from "../../src/types";
+
 export { DEFAULT_PROVIDER_OPTIONS } from "../../src/providers";
 
 export function repoRoot(): string {
@@ -19,7 +20,7 @@ export async function writeJson(p: string, obj: unknown) {
 export async function withEnv(
   key: string,
   value: string | undefined,
-  run: () => Promise<void> | void
+  run: () => Promise<void> | void,
 ) {
   const prev = process.env[key];
   if (typeof value === "string") process.env[key] = value;
@@ -45,7 +46,7 @@ export async function makeTmpDirs() {
 export function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const dir = path.join(
     os.tmpdir(),
-    `agent-provider-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    `agent-provider-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
   );
   return {
     provider: "google",

@@ -99,24 +99,19 @@ export function resolveLmStudioProviderOptions(
   const section = asRecord(root?.lmstudio);
   const rawSection = (section ?? {}) as LmStudioProviderOptions;
   const baseUrl = normalizeLmStudioBaseUrl(
-    asNonEmptyString(env.LM_STUDIO_BASE_URL)
-    ?? asNonEmptyString(rawSection.baseUrl),
+    asNonEmptyString(env.LM_STUDIO_BASE_URL) ?? asNonEmptyString(rawSection.baseUrl),
   );
   const apiKey =
-    asNonEmptyString(env.LM_STUDIO_API_KEY)
-    ?? asNonEmptyString(env.LM_STUDIO_API_TOKEN)
-    ?? undefined;
+    asNonEmptyString(env.LM_STUDIO_API_KEY) ??
+    asNonEmptyString(env.LM_STUDIO_API_TOKEN) ??
+    undefined;
   const contextLength =
-    asPositiveInteger(env.LM_STUDIO_CONTEXT_LENGTH)
-    ?? asPositiveInteger(rawSection.contextLength);
-  const autoLoad =
-    asBoolean(env.LM_STUDIO_AUTO_LOAD)
-    ?? asBoolean(rawSection.autoLoad)
-    ?? true;
+    asPositiveInteger(env.LM_STUDIO_CONTEXT_LENGTH) ?? asPositiveInteger(rawSection.contextLength);
+  const autoLoad = asBoolean(env.LM_STUDIO_AUTO_LOAD) ?? asBoolean(rawSection.autoLoad) ?? true;
   const reloadOnContextMismatch =
-    asBoolean(env.LM_STUDIO_RELOAD_ON_CONTEXT_MISMATCH)
-    ?? asBoolean(rawSection.reloadOnContextMismatch)
-    ?? true;
+    asBoolean(env.LM_STUDIO_RELOAD_ON_CONTEXT_MISMATCH) ??
+    asBoolean(rawSection.reloadOnContextMismatch) ??
+    true;
 
   return {
     baseUrl,
@@ -135,7 +130,7 @@ function nativeEndpoint(baseUrl: string, pathname: string): string {
   return `${normalizeLmStudioBaseUrl(baseUrl)}/api/v1${pathname}`;
 }
 
-function requestHeaders(baseUrl: string, apiKey?: string, json = true): HeadersInit {
+function requestHeaders(_baseUrl: string, apiKey?: string, json = true): HeadersInit {
   const headers: Record<string, string> = {};
   if (json) {
     headers.accept = "application/json";

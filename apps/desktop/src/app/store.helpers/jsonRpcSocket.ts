@@ -1,16 +1,16 @@
 import { JsonRpcSocket } from "../../lib/agentSocket";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import type { ThreadRuntime, WorkspaceRecord } from "../types";
+import { JSONRPC_SOCKET_OVERRIDE_KEY } from "./jsonRpcSocketOverride";
 import {
-  RUNTIME,
   bumpWorkspaceJsonRpcSocketGeneration,
   getWorkspaceJsonRpcSocketGeneration,
+  RUNTIME,
 } from "./runtimeState";
-import { JSONRPC_SOCKET_OVERRIDE_KEY } from "./jsonRpcSocketOverride";
 
 type JsonRpcNotification =
-  | { kind: "notification"; method: string; params?: any }
-  | { kind: "request"; id: string | number; method: string; params?: any };
+  | { kind: "notification"; method: string; params?: unknown }
+  | { kind: "request"; id: string | number; method: string; params?: unknown };
 
 type WorkspaceNotificationRouter = (message: JsonRpcNotification) => void;
 type WorkspaceLifecycleListener = {
@@ -26,12 +26,36 @@ const noopSet: StoreSet = () => {};
 const DESKTOP_JSONRPC_OPEN_TIMEOUT_MS = 1_500;
 const DESKTOP_JSONRPC_HANDSHAKE_TIMEOUT_MS = 1_500;
 
-type JsonRpcSocketConstructor = new (...args: any[]) => any;
-type WorkspaceJsonRpcSocket = JsonRpcSocket & {
+export type WorkspaceJsonRpcSocket = JsonRpcSocket & {
+  readyPromise?: Promise<void>;
+  request?: (method: string, params?: unknown, options?: unknown) => Promise<any>;
+  respond?: (requestId: string | number, result: unknown) => boolean;
+  connect: () => void;
+  close?: () => void;
   __coworkOpened?: boolean;
   __coworkUrl?: string;
   __coworkGeneration?: number;
 };
+type JsonRpcSocketConstructor = new (options: Record<string, unknown>) => WorkspaceJsonRpcSocket;
+type JsonRpcSocketMessage = {
+  id?: string | number;
+  method: string;
+  params?: unknown;
+};
+type JsonRpcThreadRecord = {
+  id: string;
+  title?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  modelProvider?: string | null;
+  model?: string | null;
+  cwd?: string | null;
+  status?: { type?: string | null } | null;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 function resolveJsonRpcSocketImpl(): JsonRpcSocketConstructor {
   const override = (globalThis as Record<string, unknown>)[JSONRPC_SOCKET_OVERRIDE_KEY];
@@ -108,10 +132,15 @@ function isActiveWorkspaceJsonRpcSocketGeneration(
   workspaceId: string,
   generation: number | undefined,
 ): boolean {
-  return generation !== undefined && getWorkspaceJsonRpcSocketGeneration(workspaceId) === generation;
+  return (
+    generation !== undefined && getWorkspaceJsonRpcSocketGeneration(workspaceId) === generation
+  );
 }
 
-export function registerWorkspaceJsonRpcRouter(workspaceId: string, router: WorkspaceNotificationRouter): () => void {
+export function registerWorkspaceJsonRpcRouter(
+  workspaceId: string,
+  router: WorkspaceNotificationRouter,
+): () => void {
   if (isWorkspaceDisposed(workspaceId)) {
     return () => {};
   }
@@ -128,11 +157,15 @@ export function registerWorkspaceJsonRpcRouter(workspaceId: string, router: Work
   };
 }
 
-export function registerWorkspaceJsonRpcLifecycle(workspaceId: string, listener: WorkspaceLifecycleListener): () => void {
+export function registerWorkspaceJsonRpcLifecycle(
+  workspaceId: string,
+  listener: WorkspaceLifecycleListener,
+): () => void {
   if (isWorkspaceDisposed(workspaceId)) {
     return () => {};
   }
-  const listeners = workspaceLifecycleListeners.get(workspaceId) ?? new Set<WorkspaceLifecycleListener>();
+  const listeners =
+    workspaceLifecycleListeners.get(workspaceId) ?? new Set<WorkspaceLifecycleListener>();
   listeners.add(listener);
   workspaceLifecycleListeners.set(workspaceId, listeners);
   return () => {
@@ -172,7 +205,7 @@ export function ensureWorkspaceJsonRpcSocket(
   get: StoreGet,
   set: StoreSet | undefined,
   workspaceId: string,
-): any | null {
+): WorkspaceJsonRpcSocket | null {
   if (isWorkspaceDisposed(workspaceId)) {
     return null;
   }
@@ -191,8 +224,9 @@ export function ensureWorkspaceJsonRpcSocket(
         // ignore
       }
     } else {
-      const controlSessionId = (get() as { workspaceRuntimeById?: Record<string, { controlSessionId?: string | null }> })
-        .workspaceRuntimeById?.[workspaceId]?.controlSessionId ?? null;
+      const controlSessionId =
+        (get() as { workspaceRuntimeById?: Record<string, { controlSessionId?: string | null }> })
+          .workspaceRuntimeById?.[workspaceId]?.controlSessionId ?? null;
       if (set && existing.__coworkOpened === true && !controlSessionId) {
         syncWorkspaceSocketState(workspaceId, true);
       }
@@ -215,14 +249,21 @@ export function ensureWorkspaceJsonRpcSocket(
     autoReconnect: true,
     openTimeoutMs: DESKTOP_JSONRPC_OPEN_TIMEOUT_MS,
     handshakeTimeoutMs: DESKTOP_JSONRPC_HANDSHAKE_TIMEOUT_MS,
-    onNotification: (message: any) => {
+    onNotification: (message: JsonRpcSocketMessage) => {
       if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
         return;
       }
-      emitToWorkspaceRouters(workspaceId, { kind: "notification", method: message.method, params: message.params });
+      emitToWorkspaceRouters(workspaceId, {
+        kind: "notification",
+        method: message.method,
+        params: message.params,
+      });
     },
-    onServerRequest: (message: any) => {
+    onServerRequest: (message: JsonRpcSocketMessage) => {
       if (!isActiveWorkspaceJsonRpcSocketGeneration(workspaceId, socket.__coworkGeneration)) {
+        return;
+      }
+      if (message.id === undefined) {
         return;
       }
       emitToWorkspaceRouters(workspaceId, {
@@ -248,15 +289,9 @@ export function ensureWorkspaceJsonRpcSocket(
     },
   }) as WorkspaceJsonRpcSocket;
 
-  if (!("readyPromise" in socket)) {
-    (socket as any).readyPromise = Promise.resolve();
-  }
-  if (typeof (socket as any).request !== "function") {
-    (socket as any).request = async () => ({});
-  }
-  if (typeof (socket as any).respond !== "function") {
-    (socket as any).respond = () => true;
-  }
+  socket.readyPromise ??= Promise.resolve();
+  socket.request ??= async () => ({});
+  socket.respond ??= () => true;
   socket.__coworkOpened = false;
   socket.__coworkUrl = url;
   socket.__coworkGeneration = socketGeneration;
@@ -280,7 +315,11 @@ export async function requestJsonRpc(
   return await socket.request(method, params, { retryable: true });
 }
 
-export async function requestJsonRpcThreadList(get: StoreGet, set: StoreSet | undefined, workspaceId: string): Promise<any[]> {
+export async function requestJsonRpcThreadList(
+  get: StoreGet,
+  set: StoreSet | undefined,
+  workspaceId: string,
+): Promise<any[]> {
   const workspace = getWorkspaceById(get, workspaceId);
   const result = await requestJsonRpc(get, set, workspaceId, "thread/list", {
     cwd: workspace?.path,
@@ -304,7 +343,7 @@ export async function startJsonRpcThread(
   get: StoreGet,
   set: StoreSet | undefined,
   workspaceId: string,
-): Promise<any> {
+): Promise<unknown> {
   const workspace = getWorkspaceById(get, workspaceId);
   return await requestJsonRpc(get, set, workspaceId, "thread/start", {
     cwd: workspace?.path,
@@ -316,7 +355,7 @@ export async function resumeJsonRpcThread(
   set: StoreSet | undefined,
   workspaceId: string,
   threadId: string,
-): Promise<any> {
+): Promise<unknown> {
   return await requestJsonRpc(get, set, workspaceId, "thread/resume", { threadId });
 }
 
@@ -342,7 +381,7 @@ export async function startJsonRpcTurn(
   text: string,
   clientMessageId?: string,
   attachments?: FileAttachmentInput[],
-): Promise<any> {
+): Promise<unknown> {
   const input: Array<Record<string, unknown>> = [];
   if (text) {
     input.push({ type: "text", text });
@@ -350,9 +389,19 @@ export async function startJsonRpcTurn(
   if (attachments && attachments.length > 0) {
     for (const a of attachments) {
       if ("contentBase64" in a) {
-        input.push({ type: "file", filename: a.filename, contentBase64: a.contentBase64, mimeType: a.mimeType });
+        input.push({
+          type: "file",
+          filename: a.filename,
+          contentBase64: a.contentBase64,
+          mimeType: a.mimeType,
+        });
       } else {
-        input.push({ type: "uploadedFile", filename: a.filename, path: a.path, mimeType: a.mimeType });
+        input.push({
+          type: "uploadedFile",
+          filename: a.filename,
+          path: a.path,
+          mimeType: a.mimeType,
+        });
       }
     }
   }
@@ -372,7 +421,7 @@ export async function steerJsonRpcTurn(
   text: string,
   clientMessageId?: string,
   attachments?: FileAttachmentInput[],
-): Promise<any> {
+): Promise<unknown> {
   const input: Array<Record<string, unknown>> = [];
   if (text) {
     input.push({ type: "text", text });
@@ -380,9 +429,19 @@ export async function steerJsonRpcTurn(
   if (attachments && attachments.length > 0) {
     for (const a of attachments) {
       if ("contentBase64" in a) {
-        input.push({ type: "file", filename: a.filename, contentBase64: a.contentBase64, mimeType: a.mimeType });
+        input.push({
+          type: "file",
+          filename: a.filename,
+          contentBase64: a.contentBase64,
+          mimeType: a.mimeType,
+        });
       } else {
-        input.push({ type: "uploadedFile", filename: a.filename, path: a.path, mimeType: a.mimeType });
+        input.push({
+          type: "uploadedFile",
+          filename: a.filename,
+          path: a.path,
+          mimeType: a.mimeType,
+        });
       }
     }
   }
@@ -399,7 +458,7 @@ export async function interruptJsonRpcTurn(
   set: StoreSet | undefined,
   workspaceId: string,
   threadId: string,
-): Promise<any> {
+): Promise<unknown> {
   return await requestJsonRpc(get, set, workspaceId, "turn/interrupt", { threadId });
 }
 
@@ -440,7 +499,7 @@ export async function uploadJsonRpcWorkspaceFile(
     filename,
     contentBase64,
   });
-  const event = (result as any)?.event;
+  const event = isRecord(result) && isRecord(result.event) ? result.event : null;
   return {
     filename: typeof event?.filename === "string" ? event.filename : filename,
     path: typeof event?.path === "string" ? event.path : "",
@@ -452,7 +511,7 @@ export async function unsubscribeJsonRpcThread(
   set: StoreSet | undefined,
   workspaceId: string,
   threadId: string,
-): Promise<any> {
+): Promise<unknown> {
   return await requestJsonRpc(get, set, workspaceId, "thread/unsubscribe", { threadId });
 }
 
@@ -463,7 +522,7 @@ export function respondToJsonRpcRequest(
 ): boolean {
   const socket = RUNTIME.jsonRpcSockets.get(workspaceId);
   if (!socket) return false;
-  return socket.respond(requestId, result);
+  return socket.respond?.(requestId, result) ?? false;
 }
 
 export function findThreadIdForJsonRpcNotification(
@@ -473,17 +532,20 @@ export function findThreadIdForJsonRpcNotification(
 ): string | null {
   if (!threadId) return null;
   const runtimeById = get().threadRuntimeById;
-  const direct = get().threads.find((thread) => thread.workspaceId === workspaceId && thread.id === threadId);
+  const direct = get().threads.find(
+    (thread) => thread.workspaceId === workspaceId && thread.id === threadId,
+  );
   if (direct) return direct.id;
-  const bySession = get().threads.find((thread) =>
-    thread.workspaceId === workspaceId
-    && (thread.sessionId === threadId || runtimeById[thread.id]?.sessionId === threadId),
+  const bySession = get().threads.find(
+    (thread) =>
+      thread.workspaceId === workspaceId &&
+      (thread.sessionId === threadId || runtimeById[thread.id]?.sessionId === threadId),
   );
   return bySession?.id ?? null;
 }
 
 export function buildSyntheticServerHelloFromJsonRpcThread(
-  thread: any,
+  thread: JsonRpcThreadRecord,
   opts?: { isResume?: boolean },
 ) {
   return {
@@ -498,7 +560,7 @@ export function buildSyntheticServerHelloFromJsonRpcThread(
   };
 }
 
-export function buildSyntheticSessionInfoFromJsonRpcThread(thread: any) {
+export function buildSyntheticSessionInfoFromJsonRpcThread(thread: JsonRpcThreadRecord) {
   return {
     type: "session_info" as const,
     sessionId: thread.id,

@@ -4,16 +4,15 @@ import os from "node:os";
 import path from "node:path";
 
 import { z } from "zod";
-
+import {
+  resolveRawLoopHarnessConfig,
+  summarizeRawLoopBudgets,
+} from "../scripts/run_raw_agent_loops";
 import {
   buildPathArtifactAssertions,
   validateFinalContract,
   validateWithOptionalRepair,
 } from "../src/harness/rawLoopValidation";
-import {
-  resolveRawLoopHarnessConfig,
-  summarizeRawLoopBudgets,
-} from "../scripts/run_raw_agent_loops";
 
 async function makeRunDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "raw-loop-validation-"));
@@ -21,20 +20,26 @@ async function makeRunDir(): Promise<string> {
 
 describe("raw-loop harness config resolution", () => {
   test("respects resolved strict mode by default and lets CLI override it", () => {
-    expect(resolveRawLoopHarnessConfig(
-      { reportOnly: true, strictMode: true },
-      { reportOnly: true, strictModeOverride: null },
-    )).toEqual({ reportOnly: true, strictMode: true });
+    expect(
+      resolveRawLoopHarnessConfig(
+        { reportOnly: true, strictMode: true },
+        { reportOnly: true, strictModeOverride: null },
+      ),
+    ).toEqual({ reportOnly: true, strictMode: true });
 
-    expect(resolveRawLoopHarnessConfig(
-      { reportOnly: true, strictMode: false },
-      { reportOnly: true, strictModeOverride: true },
-    )).toEqual({ reportOnly: true, strictMode: true });
+    expect(
+      resolveRawLoopHarnessConfig(
+        { reportOnly: true, strictMode: false },
+        { reportOnly: true, strictModeOverride: true },
+      ),
+    ).toEqual({ reportOnly: true, strictMode: true });
 
-    expect(resolveRawLoopHarnessConfig(
-      { reportOnly: true, strictMode: true },
-      { reportOnly: true, strictModeOverride: false },
-    )).toEqual({ reportOnly: true, strictMode: false });
+    expect(
+      resolveRawLoopHarnessConfig(
+        { reportOnly: true, strictMode: true },
+        { reportOnly: true, strictModeOverride: false },
+      ),
+    ).toEqual({ reportOnly: true, strictMode: false });
   });
 });
 
@@ -150,10 +155,12 @@ describe("raw-loop validation repair policy", () => {
       strictMode: true,
       contract: {
         format: "line_pairs",
-        schema: z.object({
-          report: z.string(),
-          end: z.literal("<<END_RUN>>"),
-        }).strict(),
+        schema: z
+          .object({
+            report: z.string(),
+            end: z.literal("<<END_RUN>>"),
+          })
+          .strict(),
       },
       repairFinalOutput: async () => {
         repairCalls += 1;
@@ -175,10 +182,12 @@ describe("raw-loop validation repair policy", () => {
       strictMode: false,
       contract: {
         format: "line_pairs",
-        schema: z.object({
-          report: z.string(),
-          end: z.literal("<<END_RUN>>"),
-        }).strict(),
+        schema: z
+          .object({
+            report: z.string(),
+            end: z.literal("<<END_RUN>>"),
+          })
+          .strict(),
       },
       repairFinalOutput: async () => {
         repairCalls += 1;
@@ -201,10 +210,12 @@ describe("raw-loop validation repair policy", () => {
       strictMode: false,
       contract: {
         format: "line_pairs",
-        schema: z.object({
-          report: z.string(),
-          end: z.literal("<<END_RUN>>"),
-        }).strict(),
+        schema: z
+          .object({
+            report: z.string(),
+            end: z.literal("<<END_RUN>>"),
+          })
+          .strict(),
       },
       repairFinalOutput: async () => {
         throw new Error("provider unavailable");
@@ -215,7 +226,9 @@ describe("raw-loop validation repair policy", () => {
     expect(result.repairAttempted).toBe(true);
     expect(result.repairSucceeded).toBe(false);
     expect(result.degraded).toBe(true);
-    expect(result.validationResult.issues.some((entry) => entry.code === "repair_failed")).toBe(true);
+    expect(result.validationResult.issues.some((entry) => entry.code === "repair_failed")).toBe(
+      true,
+    );
   });
 
   test("callers can clear stale validation when a later attempt fails before validation", async () => {
@@ -235,14 +248,9 @@ describe("raw-loop validation repair policy", () => {
 
 describe("raw-loop budget summaries", () => {
   test("counts tool categories deterministically", () => {
-    expect(summarizeRawLoopBudgets([
-      "todoWrite",
-      "bash",
-      "webSearch",
-      "webFetch",
-      "spawnAgent",
-      "read",
-    ])).toEqual({
+    expect(
+      summarizeRawLoopBudgets(["todoWrite", "bash", "webSearch", "webFetch", "spawnAgent", "read"]),
+    ).toEqual({
       toolCalls: 6,
       bashCalls: 1,
       webCalls: 2,

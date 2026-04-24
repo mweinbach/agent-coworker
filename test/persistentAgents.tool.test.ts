@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-
+import type { PersistentAgentSummary } from "../src/shared/agents";
+import type { ToolContext } from "../src/tools/context";
 import {
   createCloseAgentTool,
   createInspectAgentTool,
@@ -9,8 +10,6 @@ import {
   createSendAgentInputTool,
   createWaitForAgentTool,
 } from "../src/tools/persistentAgents";
-import type { ToolContext } from "../src/tools/context";
-import type { PersistentAgentSummary } from "../src/shared/agents";
 import type { AgentConfig } from "../src/types";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -80,7 +79,8 @@ describe("persistent agent tools", () => {
     }));
     const inspect = mock(async () => ({
       agent: makeSummary({ executionState: "completed", lastMessagePreview: "done" }),
-      latestAssistantText: 'Summary\n\n<agent_report>{"status":"completed","summary":"Finished"}</agent_report>',
+      latestAssistantText:
+        'Summary\n\n<agent_report>{"status":"completed","summary":"Finished"}</agent_report>',
       parsedReport: {
         status: "completed" as const,
         summary: "Finished",
@@ -111,25 +111,35 @@ describe("persistent agent tools", () => {
     const closeTool: any = createCloseAgentTool(ctx);
 
     expect(await listTool.execute({})).toEqual(listed);
-    await expect(sendTool.execute({ agentId: "child-1", message: "next step", interrupt: true })).resolves.toEqual({
+    await expect(
+      sendTool.execute({ agentId: "child-1", message: "next step", interrupt: true }),
+    ).resolves.toEqual({
       agentId: "child-1",
       queued: true,
     });
-    await expect(waitTool.execute({ agentIds: ["child-1"], timeoutMs: 10, mode: "all" })).resolves.toEqual({
+    await expect(
+      waitTool.execute({ agentIds: ["child-1"], timeoutMs: 10, mode: "all" }),
+    ).resolves.toEqual({
       timedOut: false,
       mode: "all",
       agents: [makeSummary({ executionState: "completed" })],
       readyAgentIds: ["child-1"],
     });
-    await expect(inspectTool.execute({ agentId: "child-1" })).resolves.toEqual(expect.objectContaining({
-      agent: expect.objectContaining({ agentId: "child-1" }),
-      latestAssistantText: expect.stringContaining("<agent_report>"),
-      parsedReport: expect.objectContaining({ status: "completed", summary: "Finished" }),
-    }));
+    await expect(inspectTool.execute({ agentId: "child-1" })).resolves.toEqual(
+      expect.objectContaining({
+        agent: expect.objectContaining({ agentId: "child-1" }),
+        latestAssistantText: expect.stringContaining("<agent_report>"),
+        parsedReport: expect.objectContaining({ status: "completed", summary: "Finished" }),
+      }),
+    );
     await expect(resumeTool.execute({ agentId: "child-1" })).resolves.toEqual(resumed);
     await expect(closeTool.execute({ agentId: "child-1" })).resolves.toEqual(closed);
 
-    expect(sendInput).toHaveBeenCalledWith({ agentId: "child-1", message: "next step", interrupt: true });
+    expect(sendInput).toHaveBeenCalledWith({
+      agentId: "child-1",
+      message: "next step",
+      interrupt: true,
+    });
     expect(wait).toHaveBeenCalledWith({ agentIds: ["child-1"], timeoutMs: 10, mode: "all" });
     expect(inspect).toHaveBeenCalledWith({ agentId: "child-1" });
     expect(resume).toHaveBeenCalledWith({ agentId: "child-1" });

@@ -44,7 +44,14 @@ export function buildDesktopMenuTemplate(
   options: InstallDesktopMenuOptions,
   platform: NodeJS.Platform = process.platform,
 ): MenuItemConstructorOptions[] {
-  const buildUpdatesItem = () => commandItem("Check for Updates…", "openUpdates", options.sendCommand, undefined, sfSymbol("arrow.triangle.2.circlepath"));
+  const buildUpdatesItem = () =>
+    commandItem(
+      "Check for Updates…",
+      "openUpdates",
+      options.sendCommand,
+      undefined,
+      sfSymbol("arrow.triangle.2.circlepath"),
+    );
   const buildSharedMenus = (labels: {
     file: string;
     edit: string;
@@ -55,11 +62,42 @@ export function buildDesktopMenuTemplate(
     const fileMenu: MenuItemConstructorOptions = {
       label: labels.file,
       submenu: [
-        commandItem("New Thread", "newThread", options.sendCommand, "CmdOrCtrl+N", sfSymbol("plus.message")),
-        commandItem("Skills", "openSkills", options.sendCommand, "CmdOrCtrl+Shift+K", sfSymbol("wand.and.stars")),
+        commandItem(
+          "New Thread",
+          "newThread",
+          options.sendCommand,
+          "CmdOrCtrl+N",
+          sfSymbol("plus.message"),
+        ),
+        commandItem(
+          "Research",
+          "openResearch",
+          options.sendCommand,
+          "CmdOrCtrl+Shift+R",
+          sfSymbol("book.pages"),
+        ),
+        commandItem(
+          "Skills",
+          "openSkills",
+          options.sendCommand,
+          "CmdOrCtrl+Shift+K",
+          sfSymbol("wand.and.stars"),
+        ),
         { type: "separator" },
-        commandItem("Settings", "openSettings", options.sendCommand, "CmdOrCtrl+,", sfSymbol("gearshape")),
-        commandItem("Workspace Settings", "openWorkspacesSettings", options.sendCommand, undefined, sfSymbol("folder.badge.gearshape")),
+        commandItem(
+          "Settings",
+          "openSettings",
+          options.sendCommand,
+          "CmdOrCtrl+,",
+          sfSymbol("gearshape"),
+        ),
+        commandItem(
+          "Workspace Settings",
+          "openWorkspacesSettings",
+          options.sendCommand,
+          undefined,
+          sfSymbol("folder.badge.gearshape"),
+        ),
       ],
     };
 
@@ -79,7 +117,13 @@ export function buildDesktopMenuTemplate(
     const viewMenu: MenuItemConstructorOptions = {
       label: labels.view,
       submenu: [
-        commandItem("Toggle Sidebar", "toggleSidebar", options.sendCommand, "CmdOrCtrl+B", sfSymbol("sidebar.left")),
+        commandItem(
+          "Toggle Sidebar",
+          "toggleSidebar",
+          options.sendCommand,
+          "CmdOrCtrl+B",
+          sfSymbol("sidebar.left"),
+        ),
         { type: "separator" },
         { role: "resetZoom" },
         { role: "zoomIn" },
@@ -140,11 +184,42 @@ export function buildDesktopMenuTemplate(
       {
         label: "File",
         submenu: [
-          commandItem("New Thread", "newThread", options.sendCommand, "CmdOrCtrl+N", sfSymbol("plus.message")),
-          commandItem("Skills", "openSkills", options.sendCommand, "CmdOrCtrl+Shift+K", sfSymbol("wand.and.stars")),
+          commandItem(
+            "New Thread",
+            "newThread",
+            options.sendCommand,
+            "CmdOrCtrl+N",
+            sfSymbol("plus.message"),
+          ),
+          commandItem(
+            "Research",
+            "openResearch",
+            options.sendCommand,
+            "CmdOrCtrl+Shift+R",
+            sfSymbol("book.pages"),
+          ),
+          commandItem(
+            "Skills",
+            "openSkills",
+            options.sendCommand,
+            "CmdOrCtrl+Shift+K",
+            sfSymbol("wand.and.stars"),
+          ),
           { type: "separator" },
-          commandItem("Settings", "openSettings", options.sendCommand, "CmdOrCtrl+,", sfSymbol("gearshape")),
-          commandItem("Workspace Settings", "openWorkspacesSettings", options.sendCommand, undefined, sfSymbol("folder.badge.gearshape")),
+          commandItem(
+            "Settings",
+            "openSettings",
+            options.sendCommand,
+            "CmdOrCtrl+,",
+            sfSymbol("gearshape"),
+          ),
+          commandItem(
+            "Workspace Settings",
+            "openWorkspacesSettings",
+            options.sendCommand,
+            undefined,
+            sfSymbol("folder.badge.gearshape"),
+          ),
           { type: "separator" },
           { role: "close" },
         ],
@@ -164,7 +239,13 @@ export function buildDesktopMenuTemplate(
       {
         label: "View",
         submenu: [
-          commandItem("Toggle Sidebar", "toggleSidebar", options.sendCommand, "CmdOrCtrl+B", sfSymbol("sidebar.left")),
+          commandItem(
+            "Toggle Sidebar",
+            "toggleSidebar",
+            options.sendCommand,
+            "CmdOrCtrl+B",
+            sfSymbol("sidebar.left"),
+          ),
           { type: "separator" },
           { role: "resetZoom" },
           { role: "zoomIn" },

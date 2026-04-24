@@ -1,40 +1,40 @@
 import {
+  GOOGLE_DYNAMIC_REASONING_EFFORT,
+  type GoogleReasoningEffort,
+  type GoogleThinkingLevel,
+  googleReasoningEffortFromThinkingLevel,
+  listGoogleReasoningEffortValuesForModel,
+  normalizeGoogleThinkingLevelForModel,
+} from "../../../../src/shared/googleThinking";
+import {
   CODEX_WEB_SEARCH_BACKEND_VALUES,
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
+  type CodexWebSearchBackend,
+  type CodexWebSearchContextSize,
+  type CodexWebSearchLocation,
+  type CodexWebSearchMode,
   getCodexWebSearchBackendFromProviderOptions,
-  getLocalWebSearchProviderFromProviderOptions,
   getGoogleNativeWebSearchFromProviderOptions,
   getGoogleThinkingLevelFromProviderOptions,
+  getLocalWebSearchProviderFromProviderOptions,
   LOCAL_WEB_SEARCH_PROVIDER_VALUES,
+  type LocalWebSearchProvider,
   mergeEditableOpenAiCompatibleProviderOptions,
   OPENAI_COMPATIBLE_PROVIDER_NAMES,
   OPENAI_REASONING_EFFORT_VALUES,
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
-  pickEditableOpenAiCompatibleProviderOptions,
-  type CodexCliProviderOptions as SharedCodexCliProviderOptions,
-  type CodexWebSearchBackend,
-  type CodexWebSearchContextSize,
-  type CodexWebSearchLocation,
-  type CodexWebSearchMode,
-  type GoogleProviderOptions as SharedGoogleProviderOptions,
-  type LocalWebSearchProvider,
-  type OpenAiCompatibleProviderName as SharedOpenAiCompatibleProviderName,
-  type OpenAiCompatibleProviderOptions as SharedOpenAiCompatibleProviderOptions,
   type OpenAiCompatibleProviderOptionsByProvider,
   type OpenAiReasoningEffort,
   type OpenAiReasoningSummary,
   type OpenAiTextVerbosity,
+  pickEditableOpenAiCompatibleProviderOptions,
+  type CodexCliProviderOptions as SharedCodexCliProviderOptions,
+  type GoogleProviderOptions as SharedGoogleProviderOptions,
+  type OpenAiCompatibleProviderName as SharedOpenAiCompatibleProviderName,
+  type OpenAiCompatibleProviderOptions as SharedOpenAiCompatibleProviderOptions,
 } from "../../../../src/shared/openaiCompatibleOptions";
-import {
-  GOOGLE_DYNAMIC_REASONING_EFFORT,
-  normalizeGoogleThinkingLevelForModel,
-  listGoogleReasoningEffortValuesForModel,
-  googleReasoningEffortFromThinkingLevel,
-  type GoogleReasoningEffort,
-  type GoogleThinkingLevel,
-} from "../../../../src/shared/googleThinking";
 
 export const REASONING_EFFORT_VALUES = OPENAI_REASONING_EFFORT_VALUES;
 export const REASONING_SUMMARY_VALUES = OPENAI_REASONING_SUMMARY_VALUES;
@@ -91,7 +91,9 @@ function cloneLocation(location?: CodexWebSearchLocation): CodexWebSearchLocatio
   };
 }
 
-export function normalizeWorkspaceProviderOptions(value: unknown): WorkspaceProviderOptions | undefined {
+export function normalizeWorkspaceProviderOptions(
+  value: unknown,
+): WorkspaceProviderOptions | undefined {
   return pickEditableOpenAiCompatibleProviderOptions(value) as WorkspaceProviderOptions | undefined;
 }
 
@@ -107,21 +109,29 @@ export function getWorkspaceReasoningEffort(
   options: WorkspaceProviderOptions | undefined,
   provider: OpenAICompatibleProviderName,
 ): ReasoningEffortValue {
-  return options?.[provider]?.reasoningEffort ?? DEFAULT_WORKSPACE_PROVIDER_OPTIONS[provider].reasoningEffort;
+  return (
+    options?.[provider]?.reasoningEffort ??
+    DEFAULT_WORKSPACE_PROVIDER_OPTIONS[provider].reasoningEffort
+  );
 }
 
 export function getWorkspaceTextVerbosity(
   options: WorkspaceProviderOptions | undefined,
   provider: OpenAICompatibleProviderName,
 ): TextVerbosityValue {
-  return options?.[provider]?.textVerbosity ?? DEFAULT_WORKSPACE_PROVIDER_OPTIONS[provider].textVerbosity;
+  return (
+    options?.[provider]?.textVerbosity ?? DEFAULT_WORKSPACE_PROVIDER_OPTIONS[provider].textVerbosity
+  );
 }
 
 export function getWorkspaceReasoningSummary(
   options: WorkspaceProviderOptions | undefined,
   provider: OpenAICompatibleProviderName,
 ): ReasoningSummaryValue {
-  return options?.[provider]?.reasoningSummary ?? DEFAULT_WORKSPACE_PROVIDER_OPTIONS[provider].reasoningSummary;
+  return (
+    options?.[provider]?.reasoningSummary ??
+    DEFAULT_WORKSPACE_PROVIDER_OPTIONS[provider].reasoningSummary
+  );
 }
 
 export function getWorkspaceWebSearchMode(
@@ -164,7 +174,9 @@ export function getWorkspaceWebSearchLocation(
   return cloneLocation(options?.["codex-cli"]?.webSearch?.location) ?? {};
 }
 
-export function hasWorkspaceWebSearchLocation(options: WorkspaceProviderOptions | undefined): boolean {
+export function hasWorkspaceWebSearchLocation(
+  options: WorkspaceProviderOptions | undefined,
+): boolean {
   return Object.keys(getWorkspaceWebSearchLocation(options)).length > 0;
 }
 
@@ -180,7 +192,9 @@ export function getWorkspaceGoogleReasoningEffort(
   modelId?: string,
 ): GoogleReasoningEffortValue {
   const rawLevel = getGoogleThinkingLevelFromProviderOptions(options);
-  const normalizedLevel = modelId ? normalizeGoogleThinkingLevelForModel(modelId, rawLevel) : rawLevel;
+  const normalizedLevel = modelId
+    ? normalizeGoogleThinkingLevelForModel(modelId, rawLevel)
+    : rawLevel;
   return googleReasoningEffortFromThinkingLevel(normalizedLevel);
 }
 

@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
-
+import { ASK_SKIP_TOKEN } from "../src/lib/wsProtocol";
 import {
   normalizeAskOptions,
   normalizeAskQuestion,
   shouldRenderAskOptions,
 } from "../src/ui/PromptModal";
-import { ASK_SKIP_TOKEN } from "../src/lib/wsProtocol";
 
 describe("desktop ask prompt helpers", () => {
   test("normalizes and truncates long question text", () => {
@@ -15,7 +14,7 @@ describe("desktop ask prompt helpers", () => {
 
   test("filters raw-like options and keeps readable options", () => {
     const options = normalizeAskOptions([
-      "{\"type\":\"response.completed\"}",
+      '{"type":"response.completed"}',
       "  Keep this option  ",
       "obfuscation: abc123",
       "AddnmoreiDCFtfeaturesrnetbdebt,oshares,eequityevaluexperyshare,tsensitivity(table)ended",
@@ -26,7 +25,11 @@ describe("desktop ask prompt helpers", () => {
   });
 
   test("strips embedded raw-stream tails from question text", () => {
-    expect(normalizeAskQuestion("question: Should we ship?\nraw stream part: {\"type\":\"response.completed\"}")).toBe("Should we ship?");
+    expect(
+      normalizeAskQuestion(
+        'question: Should we ship?\nraw stream part: {"type":"response.completed"}',
+      ),
+    ).toBe("Should we ship?");
   });
 
   test("renders option mode only when 2+ readable options are present", () => {

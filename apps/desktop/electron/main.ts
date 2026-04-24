@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 
 import { app, BrowserWindow, Menu, Notification, shell } from "electron";
 
-import { DESKTOP_EVENT_CHANNELS, type DesktopMenuCommand, type UpdaterState } from "../src/lib/desktopApi";
+import {
+  DESKTOP_EVENT_CHANNELS,
+  type DesktopMenuCommand,
+  type UpdaterState,
+} from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
 import {
   applySystemAppearanceToWindow,
@@ -17,6 +21,7 @@ import { runDesktopSmokePromptLoadCheck } from "./services/desktopSmoke";
 import { installDesktopApplicationMenu } from "./services/menu";
 import { MobileRelayBridge } from "./services/mobileRelayBridge";
 import { PersistenceService } from "./services/persistence";
+import { resolveElectronRemoteDebugConfig } from "./services/remoteDebug";
 import { resolveDesktopRendererUrl } from "./services/rendererUrl";
 import { ServerManager } from "./services/serverManager";
 import { createBeforeQuitHandler } from "./services/shutdown";
@@ -62,9 +67,13 @@ let unregisterAppearanceListener = () => {};
 let mainWindow: BrowserWindow | null = null;
 const WINDOW_SHOW_FALLBACK_TIMEOUT_MS = 2_000;
 
-if (!app.isPackaged && process.env.COWORK_ELECTRON_REMOTE_DEBUG === "1") {
-  const port = process.env.COWORK_ELECTRON_REMOTE_DEBUG_PORT?.trim() || "9222";
-  app.commandLine.appendSwitch("remote-debugging-port", port);
+const electronRemoteDebug = resolveElectronRemoteDebugConfig({
+  isPackaged: app.isPackaged,
+  env: process.env,
+});
+
+if (electronRemoteDebug.enabled) {
+  app.commandLine.appendSwitch("remote-debugging-port", electronRemoteDebug.port);
   app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
 }
 
@@ -89,7 +98,9 @@ function showUpdateReadyNotification(state: UpdaterState): void {
   const isWindows = process.platform === "win32";
   const notification = new Notification({
     title: "Update ready",
-    body: version ? `Cowork ${version} is ready. Restart to install.` : "Cowork update is ready. Restart to install.",
+    body: version
+      ? `Cowork ${version} is ready. Restart to install.`
+      : "Cowork update is ready. Restart to install.",
     silent: false,
     ...(isWindows
       ? {
@@ -132,7 +143,9 @@ function sendMenuCommand(command: DesktopMenuCommand): void {
 function isExternalUrl(rawUrl: string): boolean {
   try {
     const parsed = new URL(rawUrl);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:";
+    return (
+      parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:"
+    );
   } catch {
     return false;
   }
@@ -155,7 +168,7 @@ function isTrustedRendererNavigation(rawUrl: string): boolean {
 
   const { url } = resolveDesktopRendererUrl(
     process.env.ELECTRON_RENDERER_URL,
-    process.env.COWORK_DESKTOP_RENDERER_PORT
+    process.env.COWORK_DESKTOP_RENDERER_PORT,
   );
 
   try {
@@ -231,16 +244,20 @@ async function maybeRunPackagedSmoke(): Promise<boolean> {
     await fs.mkdir(path.dirname(smokeConfig.outputPath), { recursive: true });
     await fs.writeFile(
       smokeConfig.outputPath,
-      `${JSON.stringify({
-        ok: true,
-        type: "server_listening",
-        promptLoaded: true,
-        turnCompleted: true,
-        url: listening.url,
-        platform: process.platform,
-        arch: process.arch,
-      }, null, 2)}\n`,
-      "utf8"
+      `${JSON.stringify(
+        {
+          ok: true,
+          type: "server_listening",
+          promptLoaded: true,
+          turnCompleted: true,
+          url: listening.url,
+          platform: process.platform,
+          arch: process.arch,
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
     );
     await serverManager.stopWorkspaceServer(workspaceId);
     app.exit(0);
@@ -249,13 +266,17 @@ async function maybeRunPackagedSmoke(): Promise<boolean> {
     await fs.mkdir(path.dirname(smokeConfig.outputPath), { recursive: true });
     await fs.writeFile(
       smokeConfig.outputPath,
-      `${JSON.stringify({
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-        platform: process.platform,
-        arch: process.arch,
-      }, null, 2)}\n`,
-      "utf8"
+      `${JSON.stringify(
+        {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          platform: process.platform,
+          arch: process.arch,
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
     );
     try {
       await serverManager.stopWorkspaceServer(workspaceId);
@@ -327,11 +348,7 @@ async function createWindow(): Promise<void> {
         { role: "selectAll" },
       );
     } else if (hasSelection) {
-      menuItems.push(
-        { role: "copy" },
-        { type: "separator" },
-        { role: "selectAll" },
-      );
+      menuItems.push({ role: "copy" }, { type: "separator" }, { role: "selectAll" });
     } else {
       menuItems.push({ role: "selectAll" });
     }
@@ -353,7 +370,7 @@ async function createWindow(): Promise<void> {
   if (!app.isPackaged) {
     const { url, warning } = resolveDesktopRendererUrl(
       process.env.ELECTRON_RENDERER_URL,
-      process.env.COWORK_DESKTOP_RENDERER_PORT
+      process.env.COWORK_DESKTOP_RENDERER_PORT,
     );
     if (warning) {
       console.warn(`[desktop] ${warning}`);
@@ -429,9 +446,11 @@ if (!gotSingleInstanceLock) {
       stopAllServers: () => serverManager.stopAll(),
       quit: () => app.quit(),
       onError: (error) => {
-        console.error(`[desktop] Failed to stop workspace servers during shutdown: ${String(error)}`);
+        console.error(
+          `[desktop] Failed to stop workspace servers during shutdown: ${String(error)}`,
+        );
       },
-    })
+    }),
   );
 
   app.on("window-all-closed", () => {

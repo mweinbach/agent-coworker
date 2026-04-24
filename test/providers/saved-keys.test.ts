@@ -335,7 +335,7 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const headers = await model.config.headers();
       expect(headers.authorization).toBeUndefined();
       await expect(
-        fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")
+        fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
       ).rejects.toThrow();
     });
   });

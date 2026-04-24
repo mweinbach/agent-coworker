@@ -1,15 +1,14 @@
-import { describe, expect, test, mock, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import type { AgentConfig } from "../src/types";
 import type { RunTurnParams } from "../src/agent";
 import { createRunTurn } from "../src/agent";
 import { buildTurnSystemPrompt } from "../src/harness/buildTurnSystemPrompt";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import { SessionCostTracker } from "../src/session/costTracker";
+import type { AgentConfig } from "../src/types";
 import { deriveActiveWorkspaceContext } from "../src/workspace/context";
 
 // ---------------------------------------------------------------------------
@@ -158,8 +157,12 @@ describe("runTurn", () => {
     const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.system).toContain("Custom system prompt");
     expect(callArg.system).toContain("## Active Workspace Context");
-    expect(callArg.system).toContain(`- Workspace root: ${path.dirname(params.config.projectAgentDir)}`);
-    expect(callArg.system).toContain(`- Execution working directory: ${params.config.workingDirectory}`);
+    expect(callArg.system).toContain(
+      `- Workspace root: ${path.dirname(params.config.projectAgentDir)}`,
+    );
+    expect(callArg.system).toContain(
+      `- Execution working directory: ${params.config.workingDirectory}`,
+    );
   });
 
   test("removes MCP namespacing guidance when MCP tools are not active", async () => {
@@ -176,9 +179,11 @@ describe("runTurn", () => {
   });
 
   test("adds MCP namespacing guidance only when MCP tools are active", async () => {
-    mockLoadMCPServers.mockResolvedValue([{ name: "srv", transport: { type: "stdio", command: "x", args: [] } }]);
+    mockLoadMCPServers.mockResolvedValue([
+      { name: "srv", transport: { type: "stdio", command: "x", args: [] } },
+    ]);
     mockLoadMCPTools.mockResolvedValue({
-      tools: { "mcp__srv__doThing": { type: "mcp-tool" } },
+      tools: { mcp__srv__doThing: { type: "mcp-tool" } },
       errors: [],
     });
 
@@ -190,20 +195,15 @@ describe("runTurn", () => {
   });
 
   test("buildTurnSystemPrompt appends harness context when present", () => {
-    const system = buildTurnSystemPrompt(
-      "Base system prompt",
-      makeConfig(),
-      [],
-      {
-        runId: "run-01",
-        taskId: "task-01",
-        objective: "Improve startup reliability",
-        acceptanceCriteria: ["Startup completes in under 800ms"],
-        constraints: ["No API changes"],
-        metadata: { owner: "agent" },
-        updatedAt: "2026-03-20T12:00:00.000Z",
-      },
-    );
+    const system = buildTurnSystemPrompt("Base system prompt", makeConfig(), [], {
+      runId: "run-01",
+      taskId: "task-01",
+      objective: "Improve startup reliability",
+      acceptanceCriteria: ["Startup completes in under 800ms"],
+      constraints: ["No API changes"],
+      metadata: { owner: "agent" },
+      updatedAt: "2026-03-20T12:00:00.000Z",
+    });
 
     expect(system).toContain("Base system prompt");
     expect(system).toContain("## Active Workspace Context");
@@ -228,7 +228,9 @@ describe("runTurn", () => {
     expect(system).toContain(`- Git root: ${workspaceRoot}`);
     expect(system).toContain("- Working directory relation: same as workspace root");
     expect(system).toContain(`- Uploads directory: ${path.resolve(workspaceRoot, "User Uploads")}`);
-    expect(system).toContain(`- Project config, memory, and MCP overrides: ${path.join(workspaceRoot, ".agent")}`);
+    expect(system).toContain(
+      `- Project config, memory, and MCP overrides: ${path.join(workspaceRoot, ".agent")}`,
+    );
     expect(system).toContain(
       "- Path rule: `bash`, `read`, `write`, `glob`, and `grep` default to the execution working directory.",
     );
@@ -254,7 +256,9 @@ describe("runTurn", () => {
 
   test("buildTurnSystemPrompt describes when the working directory is outside the workspace root", async () => {
     const { workspaceRoot } = await makeTempWorkspaceConfig();
-    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "active-workspace-context-outside-"));
+    const outsideRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "active-workspace-context-outside-"),
+    );
     const outsideDir = path.join(outsideRoot, "scratch");
     await fs.mkdir(outsideDir, { recursive: true });
     const config = makeConfig({
@@ -273,7 +277,9 @@ describe("runTurn", () => {
   test("buildTurnSystemPrompt reports the git root for the execution cwd", async () => {
     const { workspaceRoot } = await makeTempWorkspaceConfig();
     await fs.mkdir(path.join(workspaceRoot, ".git"), { recursive: true });
-    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "active-workspace-context-other-git-"));
+    const outsideRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "active-workspace-context-other-git-"),
+    );
     const outsideDir = path.join(outsideRoot, "scratch");
     await fs.mkdir(path.join(outsideRoot, ".git"), { recursive: true });
     await fs.mkdir(outsideDir, { recursive: true });
@@ -312,7 +318,9 @@ describe("runTurn", () => {
     expect(system).not.toContain("current working directory");
     expect(system).toContain(`\`${path.join(workspaceRoot, ".agent", "config.json")}\``);
     expect(system).toContain(`\`${path.join(workspaceRoot, ".agent", "mcp-servers.json")}\``);
-    expect(system).toContain(`\`${path.join(workspaceRoot, ".agent", "skills", "{name}", "SKILL.md")}\``);
+    expect(system).toContain(
+      `\`${path.join(workspaceRoot, ".agent", "skills", "{name}", "SKILL.md")}\``,
+    );
   });
 
   test("deriveActiveWorkspaceContext keeps unresolved macOS case-only path changes outside the workspace", () => {
@@ -336,7 +344,9 @@ describe("runTurn", () => {
       if (normalized === "/Users/max/Repo" || normalized === "/users/max/repo") {
         return "/Users/max/Repo";
       }
-      throw Object.assign(new Error(`ENOENT: no such file or directory, realpath '${target}'`), { code: "ENOENT" });
+      throw Object.assign(new Error(`ENOENT: no such file or directory, realpath '${target}'`), {
+        code: "ENOENT",
+      });
     }) as typeof fsSync.realpathSync;
     const config = makeConfig({
       projectAgentDir: "/Users/max/Repo/.agent",
@@ -370,7 +380,9 @@ describe("runTurn", () => {
 
     const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.system).toContain("## Active Workspace Context");
-    expect(callArg.system).toContain(`- Workspace root: ${path.dirname(params.config.projectAgentDir)}`);
+    expect(callArg.system).toContain(
+      `- Workspace root: ${path.dirname(params.config.projectAgentDir)}`,
+    );
     expect(callArg.system).toContain("## Active Harness Context");
     expect(callArg.system).toContain("- Run ID: run-ctx");
     expect(callArg.system).toContain("- Objective: Verify runtime injection");
@@ -400,11 +412,20 @@ describe("runTurn", () => {
       { role: "user", content: [{ type: "text", text: "hello" }] },
       {
         role: "assistant",
-        content: [{ type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } }],
+        content: [
+          { type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } },
+        ],
       },
       {
         role: "tool",
-        content: [{ type: "tool-result", toolCallId: "call-1", toolName: "bash", output: { type: "json", value: {} } }],
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call-1",
+            toolName: "bash",
+            output: { type: "json", value: {} },
+          },
+        ],
       },
     ] as any[];
 
@@ -413,8 +434,8 @@ describe("runTurn", () => {
     const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.messages).toBe(msgs);
     const serialized = JSON.stringify(callArg.messages);
-    expect(serialized).toContain("\"type\":\"tool-call\"");
-    expect(serialized).toContain("\"type\":\"tool-result\"");
+    expect(serialized).toContain('"type":"tool-call"');
+    expect(serialized).toContain('"type":"tool-result"');
   });
 
   test("keeps google includeThoughts enabled and repairs replay signatures in prepareStep", async () => {
@@ -451,7 +472,7 @@ describe("runTurn", () => {
     expect(prepareResult).toBeDefined();
     expect(prepareResult.providerOptions).toBeUndefined();
     const serialized = JSON.stringify(prepareResult.messages);
-    expect(serialized).toContain("\"thoughtSignature\":\"sig-1\"");
+    expect(serialized).toContain('"thoughtSignature":"sig-1"');
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Repaired 1 Gemini tool call"));
   });
 
@@ -470,7 +491,9 @@ describe("runTurn", () => {
     const replayMessages = [
       {
         role: "assistant",
-        content: [{ type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } }],
+        content: [
+          { type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } },
+        ],
       },
     ] as any[];
     const prepareResult = await callArg.prepareStep({ stepNumber: 1, messages: replayMessages });
@@ -499,17 +522,21 @@ describe("runTurn", () => {
       },
     }));
 
-    await runTurn(makeParams({
-      config: makeConfig({ providerOptions }),
-      prepareStep: sessionPrepareStep,
-      log,
-    }));
+    await runTurn(
+      makeParams({
+        config: makeConfig({ providerOptions }),
+        prepareStep: sessionPrepareStep,
+        log,
+      }),
+    );
 
     const callArg = mockStreamText.mock.calls[0][0] as any;
     const replayMessages = [
       {
         role: "assistant",
-        content: [{ type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } }],
+        content: [
+          { type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } },
+        ],
       },
     ] as any[];
 
@@ -536,11 +563,15 @@ describe("runTurn", () => {
       { role: "user", content: [{ type: "text", text: "hello" }] },
       {
         role: "assistant",
-        content: [{ type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } }],
+        content: [
+          { type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } },
+        ],
       },
     ] as any[];
 
-    await runTurn(makeParams({ config: makeConfig({ provider: "openai", providerOptions }), messages: msgs }));
+    await runTurn(
+      makeParams({ config: makeConfig({ provider: "openai", providerOptions }), messages: msgs }),
+    );
 
     const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.providerOptions).toBe(providerOptions);
@@ -685,10 +716,12 @@ describe("runTurn", () => {
     const costTracker = new SessionCostTracker("session-1");
     const onSessionUsageBudgetUpdated = mock(() => {});
 
-    await runTurn(makeParams({
-      costTracker,
-      onSessionUsageBudgetUpdated,
-    }));
+    await runTurn(
+      makeParams({
+        costTracker,
+        onSessionUsageBudgetUpdated,
+      }),
+    );
 
     const toolCtx = mockCreateTools.mock.calls[0]?.[0] as any;
     expect(toolCtx.costTracker).toBe(costTracker);
@@ -772,13 +805,15 @@ describe("runTurn", () => {
       },
     });
 
-    await runTurn(makeParams({
-      config,
-      telemetryContext: {
-        functionId: "session.turn",
-        metadata: { sessionId: "session-123" },
-      },
-    }));
+    await runTurn(
+      makeParams({
+        config,
+        telemetryContext: {
+          functionId: "session.turn",
+          metadata: { sessionId: "session-123" },
+        },
+      }),
+    );
 
     const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.experimental_telemetry).toBeDefined();
@@ -829,7 +864,7 @@ describe("runTurn", () => {
         onModelStreamPart: async (part) => {
           seen.push(part);
         },
-      })
+      }),
     );
 
     expect(seen).toEqual(parts);
@@ -855,7 +890,7 @@ describe("runTurn", () => {
           onModelStreamPart: async (part) => {
             seen.push(part);
           },
-        })
+        }),
       ),
       new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 2000)),
     ]);
@@ -904,7 +939,7 @@ describe("runTurn", () => {
           { role: "assistant", content: "hello" },
           { role: "user", content: "find the latest filing" },
         ] as any,
-      })
+      }),
     );
 
     const ctx = mockCreateTools.mock.calls[0][0] as any;
@@ -939,7 +974,9 @@ describe("runTurn", () => {
   });
 
   test("loads MCP servers and tools when enableMcp is true", async () => {
-    const mcpServers = [{ name: "test-server", transport: { type: "stdio", command: "echo", args: [] } }];
+    const mcpServers = [
+      { name: "test-server", transport: { type: "stdio", command: "echo", args: [] } },
+    ];
     mockLoadMCPServers.mockResolvedValue(mcpServers);
     mockLoadMCPTools.mockResolvedValue({
       tools: { "mcp__test-server__foo": { type: "mcp" } },
@@ -955,9 +992,11 @@ describe("runTurn", () => {
 
   test("MCP tools are merged into tools passed to streamText", async () => {
     mockCreateTools.mockReturnValue({ bash: { type: "builtin" } });
-    mockLoadMCPServers.mockResolvedValue([{ name: "s", transport: { type: "stdio", command: "x", args: [] } }]);
+    mockLoadMCPServers.mockResolvedValue([
+      { name: "s", transport: { type: "stdio", command: "x", args: [] } },
+    ]);
     mockLoadMCPTools.mockResolvedValue({
-      tools: { "mcp__s__doThing": { type: "mcp-tool" } },
+      tools: { mcp__s__doThing: { type: "mcp-tool" } },
       errors: [],
     });
 
@@ -973,11 +1012,13 @@ describe("runTurn", () => {
       read: { type: "builtin-read" },
       write: { type: "builtin-write" },
     });
-    mockLoadMCPServers.mockResolvedValue([{ name: "s", transport: { type: "stdio", command: "x", args: [] } }]);
+    mockLoadMCPServers.mockResolvedValue([
+      { name: "s", transport: { type: "stdio", command: "x", args: [] } },
+    ]);
     mockLoadMCPTools.mockResolvedValue({
       tools: {
-        "mcp__s__search": { type: "mcp-read", annotations: { readOnlyHint: true } },
-        "mcp__s__mutate": { type: "mcp-write", annotations: { destructiveHint: true } },
+        mcp__s__search: { type: "mcp-read", annotations: { readOnlyHint: true } },
+        mcp__s__mutate: { type: "mcp-write", annotations: { destructiveHint: true } },
       },
       errors: [],
     });
@@ -987,14 +1028,16 @@ describe("runTurn", () => {
     const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.tools).toEqual({
       read: { type: "builtin-read" },
-      "mcp__s__search": { type: "mcp-read", annotations: { readOnlyHint: true } },
+      mcp__s__search: { type: "mcp-read", annotations: { readOnlyHint: true } },
     });
   });
 
   test("MCP tool name collisions are remapped to a safe alias", async () => {
     const log = mock(() => {});
     mockCreateTools.mockReturnValue({ bash: { type: "builtin-bash" } });
-    mockLoadMCPServers.mockResolvedValue([{ name: "s", transport: { type: "stdio", command: "x", args: [] } }]);
+    mockLoadMCPServers.mockResolvedValue([
+      { name: "s", transport: { type: "stdio", command: "x", args: [] } },
+    ]);
     mockLoadMCPTools.mockResolvedValue({
       tools: { bash: { type: "mcp-bash" } },
       errors: [],
@@ -1053,7 +1096,9 @@ describe("runTurn", () => {
 
   test("passes log function to loadMCPTools opts", async () => {
     const logFn = mock(() => {});
-    mockLoadMCPServers.mockResolvedValue([{ name: "a", transport: { type: "stdio", command: "x", args: [] } }]);
+    mockLoadMCPServers.mockResolvedValue([
+      { name: "a", transport: { type: "stdio", command: "x", args: [] } },
+    ]);
     mockLoadMCPTools.mockResolvedValue({ tools: {}, errors: [] });
 
     await runTurn(makeParams({ enableMcp: true, log: logFn }));
@@ -1075,14 +1120,20 @@ describe("runTurn", () => {
   test("propagates errors from loadMCPServers", async () => {
     mockLoadMCPServers.mockRejectedValue(new Error("MCP server config error"));
 
-    await expect(runTurn(makeParams({ enableMcp: true }))).rejects.toThrow("MCP server config error");
+    await expect(runTurn(makeParams({ enableMcp: true }))).rejects.toThrow(
+      "MCP server config error",
+    );
   });
 
   test("propagates errors from loadMCPTools", async () => {
-    mockLoadMCPServers.mockResolvedValue([{ name: "x", transport: { type: "stdio", command: "y", args: [] } }]);
+    mockLoadMCPServers.mockResolvedValue([
+      { name: "x", transport: { type: "stdio", command: "y", args: [] } },
+    ]);
     mockLoadMCPTools.mockRejectedValue(new Error("Required MCP server failed"));
 
-    await expect(runTurn(makeParams({ enableMcp: true }))).rejects.toThrow("Required MCP server failed");
+    await expect(runTurn(makeParams({ enableMcp: true }))).rejects.toThrow(
+      "Required MCP server failed",
+    );
   });
 
   test("propagates errors from createTools", async () => {

@@ -1,26 +1,30 @@
 import { useState } from "react";
-import { Button } from "../../components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
-import { Textarea } from "../../components/ui/textarea";
 import { useAppStore } from "../../app/store";
+import { Button } from "../../components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog";
+import { Textarea } from "../../components/ui/textarea";
 import type { SkillMutationTargetScope } from "../../lib/wsProtocol";
 
-export function InstallSkillDialog({
-  workspaceId,
-}: {
-  workspaceId: string;
-}) {
+export function InstallSkillDialog({ workspaceId }: { workspaceId: string }) {
   const [open, setOpen] = useState(false);
   const [sourceInput, setSourceInput] = useState("");
-  
+
   const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
   const previewSkillInstall = useAppStore((s) => s.previewSkillInstall);
   const installSkills = useAppStore((s) => s.installSkills);
-  
+
   const rt = wsRtById[workspaceId];
   const mutationBlocked = rt?.skillsMutationBlocked ?? false;
   const mutationBlockedReason = rt?.skillsMutationBlockedReason ?? null;
-  const skillInstallInFlight = Object.keys(rt?.skillMutationPendingKeys ?? {}).some((k) => k.startsWith("install:"));
+  const skillInstallInFlight = Object.keys(rt?.skillMutationPendingKeys ?? {}).some((k) =>
+    k.startsWith("install:"),
+  );
 
   const handlePreview = async (targetScope: SkillMutationTargetScope) => {
     if (!sourceInput.trim()) return;
@@ -60,10 +64,20 @@ export function InstallSkillDialog({
             />
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap gap-2">
-                <Button variant="outline" size="sm" onClick={() => void handlePreview("project")} type="button">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handlePreview("project")}
+                  type="button"
+                >
                   Preview in Workspace
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => void handlePreview("global")} type="button">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handlePreview("global")}
+                  type="button"
+                >
                   Preview in Library
                 </Button>
               </div>

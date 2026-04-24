@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import type { AgentConfig } from "./types";
-import { discoverSkillsForConfig } from "./skills";
-import { getResolvedModelMetadataSync, resolveModelMetadata } from "./models/metadata";
-import type { ResolvedModelMetadata } from "./models/metadataTypes";
+import { MemoryStore } from "./memoryStore";
 import { getChildAgentModelInfo, listChildAgentModelsWithInfo } from "./models/childAgentModelInfo";
 import { parseChildModelRef } from "./models/childModelRouting";
-import { MemoryStore } from "./memoryStore";
+import { getResolvedModelMetadataSync, resolveModelMetadata } from "./models/metadata";
+import type { ResolvedModelMetadata } from "./models/metadataTypes";
+import { loadProjectInstructionsSection } from "./projectInstructions";
+import { isUserFacingProviderEnabled } from "./providers/catalog";
+import type { AgentRoleDefinition } from "./server/agents/roles";
 import {
   AGENT_ROLE_DEFINITIONS,
   buildSpawnAgentRolePromptLines,
@@ -17,19 +17,17 @@ import {
   SPAWN_AGENT_PROMPT_OVERVIEW,
   SPAWN_AGENT_WHEN_TO_USE,
 } from "./server/agents/roles";
-import type { AgentRoleDefinition } from "./server/agents/roles";
 import type { AgentRole } from "./shared/agents";
 import {
   getCodexWebSearchBackendFromProviderOptions,
-  getLocalWebSearchProviderFromProviderOptions,
   getGoogleNativeWebSearchFromProviderOptions,
+  getLocalWebSearchProviderFromProviderOptions,
   isCodexWebSearchMode,
 } from "./shared/openaiCompatibleOptions";
-import { isUserFacingProviderEnabled } from "./providers/catalog";
-import type { ProviderName } from "./types";
-import { buildWorkspaceMapSection } from "./workspace/map";
-import { loadProjectInstructionsSection } from "./projectInstructions";
+import { discoverSkillsForConfig } from "./skills";
+import type { AgentConfig, ProviderName } from "./types";
 import { sameWorkspacePath } from "./utils/workspacePath";
+import { buildWorkspaceMapSection } from "./workspace/map";
 
 function buildProjectInstructionsSection(config: AgentConfig): string {
   const text = (config.userProfile?.instructions ?? "").trim();
@@ -46,10 +44,10 @@ function resolveProjectInstructionsTargetDir(config: AgentConfig): string {
 
   const relativeToWorkspace = path.relative(workspaceRoot, executionCwd);
   if (
-    relativeToWorkspace
-    && relativeToWorkspace !== ".."
-    && !relativeToWorkspace.startsWith(`..${path.sep}`)
-    && !path.isAbsolute(relativeToWorkspace)
+    relativeToWorkspace &&
+    relativeToWorkspace !== ".." &&
+    !relativeToWorkspace.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativeToWorkspace)
   ) {
     return executionCwd;
   }
@@ -64,7 +62,9 @@ async function appendWorkspaceContextBlocks(
 ): Promise<string> {
   const blocks: string[] = [prompt];
 
-  const agentsHierarchySection = await loadProjectInstructionsSection(resolveProjectInstructionsTargetDir(config));
+  const agentsHierarchySection = await loadProjectInstructionsSection(
+    resolveProjectInstructionsTargetDir(config),
+  );
   if (agentsHierarchySection) {
     blocks.push(agentsHierarchySection);
   }
@@ -118,7 +118,10 @@ function countOccurrences(haystack: string, needle: string): number {
   }
 }
 
-function parsePromptTemplateOverlaySpec(raw: string, templatePath: string): PromptTemplateOverlaySpec {
+function parsePromptTemplateOverlaySpec(
+  raw: string,
+  templatePath: string,
+): PromptTemplateOverlaySpec {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -130,18 +133,24 @@ function parsePromptTemplateOverlaySpec(raw: string, templatePath: string): Prom
   }
   const overlay = parsed as { extends?: unknown; replacements?: unknown };
   if (typeof overlay.extends !== "string" || overlay.extends.trim().length === 0) {
-    throw new Error(`Prompt template overlay must include a non-empty string \"extends\": ${templatePath}`);
+    throw new Error(
+      `Prompt template overlay must include a non-empty string "extends": ${templatePath}`,
+    );
   }
   if (overlay.replacements !== undefined && !Array.isArray(overlay.replacements)) {
     throw new Error(`Prompt template overlay replacements must be an array: ${templatePath}`);
   }
   const replacements = (overlay.replacements ?? []).map((replacement, index) => {
     if (!replacement || typeof replacement !== "object" || Array.isArray(replacement)) {
-      throw new Error(`Prompt template overlay replacement ${index} must be an object: ${templatePath}`);
+      throw new Error(
+        `Prompt template overlay replacement ${index} must be an object: ${templatePath}`,
+      );
     }
     const candidate = replacement as { old?: unknown; new?: unknown };
     if (typeof candidate.old !== "string" || typeof candidate.new !== "string") {
-      throw new Error(`Prompt template overlay replacement ${index} must include string old/new values: ${templatePath}`);
+      throw new Error(
+        `Prompt template overlay replacement ${index} must include string old/new values: ${templatePath}`,
+      );
     }
     return { old: candidate.old, new: candidate.new };
   });
@@ -151,7 +160,10 @@ function parsePromptTemplateOverlaySpec(raw: string, templatePath: string): Prom
   };
 }
 
-async function loadPromptTemplate(templatePath: string, ancestors = new Set<string>()): Promise<string> {
+async function loadPromptTemplate(
+  templatePath: string,
+  ancestors = new Set<string>(),
+): Promise<string> {
   const resolvedTemplatePath = path.resolve(templatePath);
   if (ancestors.has(resolvedTemplatePath)) {
     throw new Error(`Prompt template overlay cycle detected at ${resolvedTemplatePath}`);
@@ -165,7 +177,10 @@ async function loadPromptTemplate(templatePath: string, ancestors = new Set<stri
   const overlay = parsePromptTemplateOverlaySpec(raw, resolvedTemplatePath);
   const nextAncestors = new Set(ancestors);
   nextAncestors.add(resolvedTemplatePath);
-  let prompt = await loadPromptTemplate(path.resolve(path.dirname(resolvedTemplatePath), overlay.extends), nextAncestors);
+  let prompt = await loadPromptTemplate(
+    path.resolve(path.dirname(resolvedTemplatePath), overlay.extends),
+    nextAncestors,
+  );
 
   for (const replacement of overlay.replacements ?? []) {
     const occurrences = countOccurrences(prompt, replacement.old);
@@ -203,16 +218,25 @@ function renderTemplateVariables(prompt: string, vars: Record<string, string>): 
   return out.replace(/\{\{([A-Za-z0-9_]+)\}\}/g, (match, key: string) => vars[key] ?? match);
 }
 
-function renderCapabilitySpecificPrompt(prompt: string, modelMetadata: ResolvedModelMetadata): string {
+function renderCapabilitySpecificPrompt(
+  prompt: string,
+  modelMetadata: ResolvedModelMetadata,
+): string {
   if (modelMetadata.supportsImageInput) return prompt;
 
   let out = prompt;
   const replacements: Array<[RegExp, string]> = [
     [/(text,\s*CSV,\s*)images(,\s*PDFs)/gi, "$1PDFs"],
     [/(text,\s*images,\s*and\s*)PDFs/gi, "text and PDFs"],
-    [/(text files,\s*)images\s*\(returned as visual content if the model supports it\),\s*and\s*PDFs/gi, "text files and PDFs"],
+    [
+      /(text files,\s*)images\s*\(returned as visual content if the model supports it\),\s*and\s*PDFs/gi,
+      "text files and PDFs",
+    ],
     [/(Supports\s*)text,\s*images,\s*and\s*PDFs/gi, "$1text and PDFs"],
-    [/(supports\s*)text files,\s*images\s*\(visual content\),\s*and\s*PDFs/gi, "$1text files and PDFs"],
+    [
+      /(supports\s*)text files,\s*images\s*\(visual content\),\s*and\s*PDFs/gi,
+      "$1text files and PDFs",
+    ],
     [/(creating a PDF from uploaded )images/gi, "$1files"],
   ];
 
@@ -288,11 +312,15 @@ function isA2uiEnabled(config: Pick<AgentConfig, "enableA2ui" | "featureFlags">)
   return config.enableA2ui ?? false;
 }
 
-function configuredCodexWebSearchMode(config: AgentConfig): "disabled" | "cached" | "live" | undefined {
+function configuredCodexWebSearchMode(
+  config: AgentConfig,
+): "disabled" | "cached" | "live" | undefined {
   const providerOptions = config.providerOptions;
-  if (!providerOptions || typeof providerOptions !== "object" || Array.isArray(providerOptions)) return undefined;
+  if (!providerOptions || typeof providerOptions !== "object" || Array.isArray(providerOptions))
+    return undefined;
   const codexOptions = providerOptions["codex-cli"];
-  if (!codexOptions || typeof codexOptions !== "object" || Array.isArray(codexOptions)) return undefined;
+  if (!codexOptions || typeof codexOptions !== "object" || Array.isArray(codexOptions))
+    return undefined;
   return isCodexWebSearchMode(codexOptions.webSearchMode) ? codexOptions.webSearchMode : undefined;
 }
 
@@ -312,7 +340,7 @@ function renderCodexNativeWebSearchPrompt(prompt: string, config: AgentConfig): 
     return `${prompt}\n\n## Codex Web Search Disabled\n\nThis Codex CLI session is configured for the native web-search backend, but web search is currently disabled.\n\n- Do not call local webSearch for ordinary lookup.\n- Do not expect provider-native web search to be available until the workspace setting changes.\n- Only use local webFetch when the task explicitly requires downloading or saving a direct file into the local workspace.`;
   }
 
-  return `${prompt}\n\n## Codex Native Web Search\n\nThis Codex CLI session is configured to use provider-native web search for anything beyond your knowledge cutoff.\n\n- Use provider-native web search for general web lookup, opening specific pages, and finding within a page.\n- Prefer provider-native citations and sources when they are available. Do not add a manual \"Sources:\" section just to compensate for native citations.\n- Do not use local webFetch for ordinary HTML page reading in native-web-search sessions.\n- Only use local webFetch when the task explicitly requires downloading or saving a direct file into the local workspace and provider-native web search cannot satisfy that requirement.`;
+  return `${prompt}\n\n## Codex Native Web Search\n\nThis Codex CLI session is configured to use provider-native web search for anything beyond your knowledge cutoff.\n\n- Use provider-native web search for general web lookup, opening specific pages, and finding within a page.\n- Prefer provider-native citations and sources when they are available. Do not add a manual "Sources:" section just to compensate for native citations.\n- Do not use local webFetch for ordinary HTML page reading in native-web-search sessions.\n- Only use local webFetch when the task explicitly requires downloading or saving a direct file into the local workspace and provider-native web search cannot satisfy that requirement.`;
 }
 
 function renderGoogleNativeToolsPrompt(prompt: string, config: AgentConfig): string {
@@ -334,7 +362,7 @@ function renderGoogleNativeToolsPrompt(prompt: string, config: AgentConfig): str
     "",
     "- Use Gemini's built-in web search for current web lookup instead of the local `webSearch` tool.",
     "- Use Gemini's built-in URL Context instead of local `webFetch` for ordinary page reading.",
-    "- Prefer provider-native citations and sources when they are available. Do not add a manual \"Sources:\" section just to compensate for native citations.",
+    '- Prefer provider-native citations and sources when they are available. Do not add a manual "Sources:" section just to compensate for native citations.',
     "- Only use local file tools when the task explicitly requires saving content into the workspace.",
   ];
 
@@ -365,7 +393,9 @@ export function buildSpawnAgentPromptBody(config: AgentConfig): string {
   const providerLabel = PROVIDER_DISPLAY_NAMES[config.provider] ?? config.provider;
   const currentModel = getResolvedModelMetadataSync(config.provider, config.model, "model");
   const roleLines = buildSpawnAgentRolePromptLines().join("\n");
-  const whenToUseLines = SPAWN_AGENT_WHEN_TO_USE.map((item) => `- **${item.label}**: ${item.description}`);
+  const whenToUseLines = SPAWN_AGENT_WHEN_TO_USE.map(
+    (item) => `- **${item.label}**: ${item.description}`,
+  );
   const orchestrationRuleLines = SPAWN_AGENT_ORCHESTRATION_RULES.map((rule) => `- ${rule}`);
   const coordinationRuleLines = SPAWN_AGENT_COORDINATION_RULES.map((rule) => `- ${rule}`);
   const modelOverrideGuidanceLines = SPAWN_AGENT_MODEL_OVERRIDE_GUIDANCE.map((rule) => `- ${rule}`);
@@ -374,8 +404,14 @@ export function buildSpawnAgentPromptBody(config: AgentConfig): string {
     .map((ref) => {
       try {
         const parsed = parseChildModelRef(ref, config.provider, "child target");
-        const supported = getResolvedModelMetadataSync(parsed.provider, parsed.modelId, "child target");
-        const bestFor = getChildAgentModelInfo(parsed.provider, parsed.modelId)?.bestFor ?? "general-purpose work on this provider";
+        const supported = getResolvedModelMetadataSync(
+          parsed.provider,
+          parsed.modelId,
+          "child target",
+        );
+        const bestFor =
+          getChildAgentModelInfo(parsed.provider, parsed.modelId)?.bestFor ??
+          "general-purpose work on this provider";
         const displayProvider = PROVIDER_DISPLAY_NAMES[parsed.provider] ?? parsed.provider;
         return `- **${displayProvider} / ${supported.displayName}** (\`${parsed.ref}\`): ${bestFor}.`;
       } catch {
@@ -384,15 +420,19 @@ export function buildSpawnAgentPromptBody(config: AgentConfig): string {
     })
     .filter((line): line is string => Boolean(line));
   const providerSupportsUserFacingModels = isUserFacingProviderEnabled(config.provider);
-  const modelLines = config.childModelRoutingMode === "cross-provider-allowlist" && crossProviderRefs.length > 0
-    ? crossProviderRefs.join("\n")
-    : config.provider === "lmstudio"
-      ? "- Any LM Studio LLM key discovered at runtime is allowed. Use either the bare key or `lmstudio:<modelKey>`."
-    : !providerSupportsUserFacingModels
-      ? "- No user-facing child model overrides are available for this provider."
-      : listChildAgentModelsWithInfo(config.provider)
-          .map((model) => `- **${model.displayName}** (\`${model.id}\`): ${model.bestFor ?? "general-purpose work on this provider"}.`)
-          .join("\n");
+  const modelLines =
+    config.childModelRoutingMode === "cross-provider-allowlist" && crossProviderRefs.length > 0
+      ? crossProviderRefs.join("\n")
+      : config.provider === "lmstudio"
+        ? "- Any LM Studio LLM key discovered at runtime is allowed. Use either the bare key or `lmstudio:<modelKey>`."
+        : !providerSupportsUserFacingModels
+          ? "- No user-facing child model overrides are available for this provider."
+          : listChildAgentModelsWithInfo(config.provider)
+              .map(
+                (model) =>
+                  `- **${model.displayName}** (\`${model.id}\`): ${model.bestFor ?? "general-purpose work on this provider"}.`,
+              )
+              .join("\n");
 
   return [
     SPAWN_AGENT_PROMPT_OVERVIEW,
@@ -467,8 +507,8 @@ function renderSpawnAgentSpecificPrompt(prompt: string, config: AgentConfig): st
 
 function normalizeLegacySpawnAgentGuidance(prompt: string): string {
   return prompt
-    .replaceAll("spawnAgent (explore type)", "spawnAgent with `role: \"explorer\"`")
-    .replaceAll("spawnAgent (general type)", "spawnAgent with `role: \"worker\"`");
+    .replaceAll("spawnAgent (explore type)", 'spawnAgent with `role: "explorer"`')
+    .replaceAll("spawnAgent (general type)", 'spawnAgent with `role: "worker"`');
 }
 
 function buildSkillSearchOrder(config: AgentConfig): string {
@@ -478,7 +518,13 @@ function buildSkillSearchOrder(config: AgentConfig): string {
     .join(" -> ");
 }
 
-function buildEnabledPluginSummary(skills: Array<{ name: string; description: string; plugin?: { displayName: string; name: string } }>): string[] {
+function buildEnabledPluginSummary(
+  skills: Array<{
+    name: string;
+    description: string;
+    plugin?: { displayName: string; name: string };
+  }>,
+): string[] {
   const seen = new Map<string, { displayName: string; namespacedSkills: string[] }>();
   for (const skill of skills) {
     if (!skill.plugin) continue;
@@ -493,7 +539,9 @@ function buildEnabledPluginSummary(skills: Array<{ name: string; description: st
   return [...seen.entries()]
     .sort((left, right) => left[0].localeCompare(right[0]))
     .map(([pluginName, entry]) => {
-      const skillsList = entry.namespacedSkills.sort((left, right) => left.localeCompare(right)).join(", ");
+      const skillsList = entry.namespacedSkills
+        .sort((left, right) => left.localeCompare(right))
+        .join(", ");
       return `- **${entry.displayName}** (\`${pluginName}\`): ${skillsList}`;
     });
 }
@@ -544,11 +592,12 @@ function resolveDefaultSubagentRoleIds(): {
     preferredIds: ["worker", "default"],
     requireReadOnly: false,
   });
-  const verification = selectRoleByCapabilities(roles, {
-    preferredIds: ["reviewer", "research", "explorer"],
-    requireReadOnly: true,
-    excludeId: discovery?.id,
-  }) ?? discovery;
+  const verification =
+    selectRoleByCapabilities(roles, {
+      preferredIds: ["reviewer", "research", "explorer"],
+      requireReadOnly: true,
+      excludeId: discovery?.id,
+    }) ?? discovery;
 
   return {
     discoveryRoleId: discovery?.id ?? "explorer",
@@ -557,7 +606,11 @@ function resolveDefaultSubagentRoleIds(): {
   };
 }
 
-function buildSkillPolicySection(skillNames: string, skillExamples: string, config: AgentConfig): string {
+function buildSkillPolicySection(
+  skillNames: string,
+  skillExamples: string,
+  config: AgentConfig,
+): string {
   return [
     "## Skill Loading Policy (Strict)",
     "",
@@ -585,13 +638,13 @@ function buildShellExecutionPolicySection(): string {
     "## Shell Execution Policy",
     "",
     "- On Windows, the `bash` tool actually runs PowerShell. Prefer `pwsh` semantics when available and assume a fallback to `powershell.exe`.",
-    "- On Windows, do not rely on `&&`, `export`, or `source`. Use PowerShell-safe sequencing such as `;`, separate tool calls, and `$env:NAME = \"value\"`.",
+    '- On Windows, do not rely on `&&`, `export`, or `source`. Use PowerShell-safe sequencing such as `;`, separate tool calls, and `$env:NAME = "value"`.',
     "- On Windows, prefer `py -3` or `python` for Python commands.",
     "- When commands depend on each other, use platform-appropriate sequencing instead of assuming Unix shell chaining works everywhere.",
   ].join("\n");
 }
 
-async function loadHotCache(config: AgentConfig): Promise<string> {
+async function _loadHotCache(config: AgentConfig): Promise<string> {
   const candidates = [
     path.join(config.projectAgentDir, "AGENT.md"),
     path.join(config.userAgentDir, "AGENT.md"),
@@ -671,10 +724,10 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
     skillExamples:
       skillExamples ||
       [
-        "- Creating a presentation → load the \"slides\" skill before starting",
-        "- Creating a spreadsheet → load the \"spreadsheet\" skill before starting",
-        "- Creating a Word document → load the \"doc\" skill before starting",
-        "- Creating a PDF → load the \"pdf\" skill before starting",
+        '- Creating a presentation → load the "slides" skill before starting',
+        '- Creating a spreadsheet → load the "spreadsheet" skill before starting',
+        '- Creating a Word document → load the "doc" skill before starting',
+        '- Creating a PDF → load the "pdf" skill before starting',
       ].join("\n"),
   };
 
@@ -689,7 +742,9 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
 
   // User profile instructions render via {{userProfileInstructions}} in system templates; do not duplicate.
   // Hierarchical AGENTS.md / AGENTS.override.md are appended separately from memory (.agent/AGENT.md).
-  prompt = await appendWorkspaceContextBlocks(prompt, config, { includeProjectInstructions: false });
+  prompt = await appendWorkspaceContextBlocks(prompt, config, {
+    includeProjectInstructions: false,
+  });
 
   prompt += `\n\n${buildSkillPolicySection(vars.skillNames, vars.skillExamples, config)}`;
   prompt += `\n\n${buildShellExecutionPolicySection()}`;
@@ -697,15 +752,15 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   const enabledPluginLines = buildEnabledPluginSummary(skills);
   if (enabledPluginLines.length > 0) {
     prompt +=
-      "\n\n## Enabled Plugin Bundles\n\nInstalled plugin bundles can contribute read-only skills and MCP servers. Plugin skills use namespaced runtime names and should be loaded exactly as listed.\n\n"
-      + enabledPluginLines.join("\n");
+      "\n\n## Enabled Plugin Bundles\n\nInstalled plugin bundles can contribute read-only skills and MCP servers. Plugin skills use namespaced runtime names and should be loaded exactly as listed.\n\n" +
+      enabledPluginLines.join("\n");
   }
 
   if (skills.length > 0) {
     const list = skills
       .map(
         (s) =>
-          `- **${s.name}**: ${s.description} (location: ${s.path}; source: ${s.source}${s.plugin ? `; plugin: ${s.plugin.displayName}` : ""}; triggers: ${s.triggers.join(", ")})`
+          `- **${s.name}**: ${s.description} (location: ${s.path}; source: ${s.source}${s.plugin ? `; plugin: ${s.plugin.displayName}` : ""}; triggers: ${s.triggers.join(", ")})`,
       )
       .join("\n");
     prompt +=
@@ -716,7 +771,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   if (config.enableMemory ?? true) {
     const memoryStore = new MemoryStore(
       path.join(config.projectAgentDir, "memory.sqlite"),
-      path.join(config.userAgentDir, "memory.sqlite")
+      path.join(config.userAgentDir, "memory.sqlite"),
     );
     try {
       const memorySection = await memoryStore.renderPromptSection();
@@ -742,7 +797,7 @@ export async function loadSystemPrompt(config: AgentConfig): Promise<string> {
 
 export async function loadSubAgentPrompt(
   config: AgentConfig,
-  role: "explore" | "explorer" | "research" | "general"
+  role: "explore" | "explorer" | "research" | "general",
 ): Promise<string> {
   const mappedRole: AgentRole =
     role === "general"

@@ -1,13 +1,12 @@
 import { Database } from "bun:sqlite";
+import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { describe, expect, test } from "bun:test";
-
 import { MemoryStore } from "../src/memoryStore";
 import { AgentControl } from "../src/server/agents/AgentControl";
-import { startAgentServer } from "../src/server/startServer";
 import { AgentSession } from "../src/server/session/AgentSession";
+import { startAgentServer } from "../src/server/startServer";
 import { WorkspaceBackupService } from "../src/server/workspaceBackups";
 import { makeTmpProject, serverOpts, stopTestServer } from "./helpers/wsHarness";
 
@@ -34,7 +33,10 @@ async function connectJsonRpc(url: string) {
   };
 
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Timed out waiting for websocket open")), 5_000);
+    const timer = setTimeout(
+      () => reject(new Error("Timed out waiting for websocket open")),
+      5_000,
+    );
     ws.onopen = () => {
       clearTimeout(timer);
       resolve();
@@ -110,13 +112,17 @@ describe("server JSON-RPC control methods", () => {
     await fs.mkdir(`${pluginRoot}/skills/import-frame`, { recursive: true });
     await fs.writeFile(
       `${pluginRoot}/.codex-plugin/plugin.json`,
-      `${JSON.stringify({
-        name: "figma-toolkit",
-        description: "Figma helpers",
-        interface: {
-          displayName: "Figma Toolkit",
+      `${JSON.stringify(
+        {
+          name: "figma-toolkit",
+          description: "Figma helpers",
+          interface: {
+            displayName: "Figma Toolkit",
+          },
         },
-      }, null, 2)}\n`,
+        null,
+        2,
+      )}\n`,
     );
     await fs.writeFile(
       `${pluginRoot}/skills/import-frame/SKILL.md`,
@@ -131,14 +137,18 @@ describe("server JSON-RPC control methods", () => {
     );
     await fs.writeFile(
       `${pluginRoot}/.mcp.json`,
-      `${JSON.stringify({
-        mcpServers: {
-          figma: {
-            type: "stdio",
-            command: "figma-mcp",
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            figma: {
+              type: "stdio",
+              command: "figma-mcp",
+            },
           },
         },
-      }, null, 2)}\n`,
+        null,
+        2,
+      )}\n`,
     );
 
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -192,7 +202,9 @@ describe("server JSON-RPC control methods", () => {
     const countPersistedSessions = () => {
       const db = new Database(dbPath);
       try {
-        return Number((db.query("select count(*) as count from sessions").get() as { count: number }).count);
+        return Number(
+          (db.query("select count(*) as count from sessions").get() as { count: number }).count,
+        );
       } finally {
         db.close();
       }
@@ -219,31 +231,41 @@ describe("server JSON-RPC control methods", () => {
     await fs.mkdir(`${workspacePluginRoot}/.codex-plugin`, { recursive: true });
     await fs.writeFile(
       `${workspacePluginRoot}/.codex-plugin/plugin.json`,
-      `${JSON.stringify({
-        name: "figma-toolkit",
-        description: "Workspace Figma helpers",
-        interface: {
-          displayName: "Workspace Figma Toolkit",
+      `${JSON.stringify(
+        {
+          name: "figma-toolkit",
+          description: "Workspace Figma helpers",
+          interface: {
+            displayName: "Workspace Figma Toolkit",
+          },
         },
-      }, null, 2)}\n`,
+        null,
+        2,
+      )}\n`,
     );
 
-      const homePluginRoot = `${tmpDir}/.cowork-home/.agents/plugins/figma-toolkit`;
+    const homePluginRoot = `${tmpDir}/.cowork-home/.agents/plugins/figma-toolkit`;
     await fs.mkdir(`${homePluginRoot}/.codex-plugin`, { recursive: true });
     await fs.writeFile(
       `${homePluginRoot}/.codex-plugin/plugin.json`,
-      `${JSON.stringify({
-        name: "figma-toolkit",
-        description: "User Figma helpers",
-        interface: {
-          displayName: "User Figma Toolkit",
+      `${JSON.stringify(
+        {
+          name: "figma-toolkit",
+          description: "User Figma helpers",
+          interface: {
+            displayName: "User Figma Toolkit",
+          },
         },
-      }, null, 2)}\n`,
+        null,
+        2,
+      )}\n`,
     );
 
-      const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
         homedir: `${tmpDir}/.cowork-home`,
-      }));
+      }),
+    );
 
     try {
       const rpc = await connectJsonRpc(url);
@@ -260,7 +282,9 @@ describe("server JSON-RPC control methods", () => {
         pluginId: "missing-plugin",
         scope: "workspace",
       });
-      expect(missingResponse.error?.message).toContain('Plugin "missing-plugin" was not found in the workspace scope.');
+      expect(missingResponse.error?.message).toContain(
+        'Plugin "missing-plugin" was not found in the workspace scope.',
+      );
       expect(missingResponse.result).toBeUndefined();
 
       const scopedResponse = await rpc.request("cowork/plugins/read", {
@@ -292,13 +316,17 @@ describe("server JSON-RPC control methods", () => {
     await fs.mkdir(`${sourceRoot}/skills/import-frame`, { recursive: true });
     await fs.writeFile(
       `${sourceRoot}/.codex-plugin/plugin.json`,
-      `${JSON.stringify({
-        name: "figma-toolkit",
-        description: "Figma helpers",
-        interface: {
-          displayName: "Figma Toolkit",
+      `${JSON.stringify(
+        {
+          name: "figma-toolkit",
+          description: "Figma helpers",
+          interface: {
+            displayName: "Figma Toolkit",
+          },
         },
-      }, null, 2)}\n`,
+        null,
+        2,
+      )}\n`,
     );
     await fs.writeFile(
       `${sourceRoot}/skills/import-frame/SKILL.md`,
@@ -410,22 +438,34 @@ describe("server JSON-RPC control methods", () => {
         scope: "workspace",
       });
       expect(Array.isArray(disableResponse.result.events)).toBe(true);
-      const disableSkillsList = disableResponse.result.events.find((event: any) => event.type === "skills_list");
-      const disabledSkill = disableSkillsList?.skills.find((skill: any) => skill.name === "figma-toolkit:import-frame");
+      const disableSkillsList = disableResponse.result.events.find(
+        (event: any) => event.type === "skills_list",
+      );
+      const disabledSkill = disableSkillsList?.skills.find(
+        (skill: any) => skill.name === "figma-toolkit:import-frame",
+      );
       expect(disabledSkill).toBeDefined();
       expect(disabledSkill.enabled).toBe(false);
-      const disableSkillsCatalog = disableResponse.result.events.find((event: any) => event.type === "skills_catalog");
+      const disableSkillsCatalog = disableResponse.result.events.find(
+        (event: any) => event.type === "skills_catalog",
+      );
       const disabledInstallation = disableSkillsCatalog?.catalog.installations.find(
         (installation: any) => installation.name === "figma-toolkit:import-frame",
       );
       expect(disabledInstallation).toBeDefined();
       expect(disabledInstallation.enabled).toBe(false);
-      const disablePluginsCatalog = disableResponse.result.events.find((event: any) => event.type === "plugins_catalog");
+      const disablePluginsCatalog = disableResponse.result.events.find(
+        (event: any) => event.type === "plugins_catalog",
+      );
       expect(
         disablePluginsCatalog?.catalog.plugins.find((plugin: any) => plugin.id === "figma-toolkit"),
       ).toEqual(expect.objectContaining({ enabled: false, scope: "workspace" }));
-      const disableMcpServers = disableResponse.result.events.find((event: any) => event.type === "mcp_servers");
-      expect(disableMcpServers?.servers.find((server: any) => server.name === "figma")).toBeUndefined();
+      const disableMcpServers = disableResponse.result.events.find(
+        (event: any) => event.type === "mcp_servers",
+      );
+      expect(
+        disableMcpServers?.servers.find((server: any) => server.name === "figma"),
+      ).toBeUndefined();
 
       rpc.close();
     } finally {
@@ -439,17 +479,24 @@ describe("server JSON-RPC control methods", () => {
     await fs.mkdir(`${sourceRoot}/.codex-plugin`, { recursive: true });
     await fs.writeFile(
       `${sourceRoot}/.codex-plugin/plugin.json`,
-      `${JSON.stringify({
-        name: "figma-toolkit",
-        description: "Figma helpers",
-        interface: {
-          displayName: "Figma Toolkit",
+      `${JSON.stringify(
+        {
+          name: "figma-toolkit",
+          description: "Figma helpers",
+          interface: {
+            displayName: "Figma Toolkit",
+          },
         },
-      }, null, 2)}\n`,
+        null,
+        2,
+      )}\n`,
     );
 
     const originalInstallPlugins = AgentSession.prototype.installPlugins;
-    AgentSession.prototype.installPlugins = async function (sourceInput: string, targetScope: "workspace" | "user") {
+    AgentSession.prototype.installPlugins = async function (
+      sourceInput: string,
+      targetScope: "workspace" | "user",
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 5_250));
       await originalInstallPlugins.call(this, sourceInput, targetScope);
     };
@@ -458,11 +505,15 @@ describe("server JSON-RPC control methods", () => {
 
     try {
       const rpc = await connectJsonRpc(url);
-      const installResponse = await rpc.request("cowork/plugins/install", {
-        cwd: tmpDir,
-        sourceInput: sourceRoot,
-        targetScope: "workspace",
-      }, 15_000);
+      const installResponse = await rpc.request(
+        "cowork/plugins/install",
+        {
+          cwd: tmpDir,
+          sourceInput: sourceRoot,
+          targetScope: "workspace",
+        },
+        15_000,
+      );
 
       expect(Array.isArray(installResponse.result.events)).toBe(true);
       expect(installResponse.result.events).toEqual(
@@ -490,13 +541,17 @@ describe("server JSON-RPC control methods", () => {
     await fs.mkdir(`${sourceRoot}/.codex-plugin`, { recursive: true });
     await fs.writeFile(
       `${sourceRoot}/.codex-plugin/plugin.json`,
-      `${JSON.stringify({
-        name: "figma-toolkit",
-        description: "Figma helpers",
-        interface: {
-          displayName: "Figma Toolkit",
+      `${JSON.stringify(
+        {
+          name: "figma-toolkit",
+          description: "Figma helpers",
+          interface: {
+            displayName: "Figma Toolkit",
+          },
         },
-      }, null, 2)}\n`,
+        null,
+        2,
+      )}\n`,
     );
 
     const { server, url } = await startAgentServer(serverOpts(serverRoot));
@@ -510,8 +565,12 @@ describe("server JSON-RPC control methods", () => {
       });
 
       expect(Array.isArray(installResponse.result.events)).toBe(true);
-      await expect(fs.stat(`${targetWorkspace}/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json`)).resolves.toBeDefined();
-      await expect(fs.stat(`${serverRoot}/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json`)).rejects.toBeDefined();
+      await expect(
+        fs.stat(`${targetWorkspace}/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json`),
+      ).resolves.toBeDefined();
+      await expect(
+        fs.stat(`${serverRoot}/.agents/plugins/figma-toolkit/.codex-plugin/plugin.json`),
+      ).rejects.toBeDefined();
 
       const catalogResponse = await rpc.request("cowork/plugins/catalog/read", {
         cwd: targetWorkspace,
@@ -568,7 +627,8 @@ describe("server JSON-RPC control methods", () => {
       );
 
       const notification = await subscriber.waitFor(
-        (message) => message.method === "cowork/control/event" && message.params?.type === "skills_catalog",
+        (message) =>
+          message.method === "cowork/control/event" && message.params?.type === "skills_catalog",
       );
       expect(notification.params.cwd).toBe(tmpDir);
       expect(notification.params.catalog.installations).toEqual(
@@ -620,21 +680,27 @@ describe("server JSON-RPC control methods", () => {
     const targetWorkspace = await makeTmpProject("agent-harness-target-config-");
     await fs.writeFile(
       `${targetWorkspace}/.agent/config.json`,
-      `${JSON.stringify({
-        provider: "openai",
-        model: "gpt-5.4",
-        preferredChildModel: "gpt-5.4",
-        enableMcp: false,
-        enableA2ui: false,
-        enableMemory: false,
-      }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          preferredChildModel: "gpt-5.4",
+          enableMcp: false,
+          enableA2ui: false,
+          enableMemory: false,
+        },
+        null,
+        2,
+      )}\n`,
     );
 
-    const { server, url } = await startAgentServer(serverOpts(serverRoot, {
-      env: {
-        AGENT_PROVIDER: undefined,
-      },
-    }));
+    const { server, url } = await startAgentServer(
+      serverOpts(serverRoot, {
+        env: {
+          AGENT_PROVIDER: undefined,
+        },
+      }),
+    );
 
     try {
       const rpc = await connectJsonRpc(url);
@@ -662,7 +728,9 @@ describe("server JSON-RPC control methods", () => {
       });
       expect(defaultsResponse.result.event.type).toBe("session_config");
 
-      const targetConfig = JSON.parse(await fs.readFile(`${targetWorkspace}/.agent/config.json`, "utf-8"));
+      const targetConfig = JSON.parse(
+        await fs.readFile(`${targetWorkspace}/.agent/config.json`, "utf-8"),
+      );
       expect(targetConfig.featureFlags?.workspace?.a2ui).toBe(true);
       expect(targetConfig.enableMemory).toBe(true);
       await expect(fs.readFile(`${serverRoot}/.agent/config.json`, "utf-8")).rejects.toBeDefined();
@@ -677,13 +745,17 @@ describe("server JSON-RPC control methods", () => {
     const workspace = await makeTmpProject("agent-harness-feature-flags-");
     await fs.writeFile(
       `${workspace}/.agent/config.json`,
-      `${JSON.stringify({
-        featureFlags: {
-          workspace: {
-            a2ui: false,
+      `${JSON.stringify(
+        {
+          featureFlags: {
+            workspace: {
+              a2ui: false,
+            },
           },
         },
-      }, null, 2)}\n`,
+        null,
+        2,
+      )}\n`,
     );
 
     const { server, url } = await startAgentServer(serverOpts(workspace));
@@ -761,18 +833,18 @@ describe("server JSON-RPC control methods", () => {
 
       const workspaceBNotification = await subscriber.waitFor(
         (message) =>
-          message.method === "cowork/control/event"
-          && message.params?.type === "skills_catalog"
-          && message.params?.cwd === workspaceB,
+          message.method === "cowork/control/event" &&
+          message.params?.type === "skills_catalog" &&
+          message.params?.cwd === workspaceB,
       );
       expect(workspaceBNotification.params.cwd).toBe(workspaceB);
 
       await expect(
         subscriber.waitFor(
           (message) =>
-            message.method === "cowork/control/event"
-            && message.params?.type === "skills_catalog"
-            && message.params?.cwd === workspaceA,
+            message.method === "cowork/control/event" &&
+            message.params?.type === "skills_catalog" &&
+            message.params?.cwd === workspaceA,
           200,
         ),
       ).rejects.toThrow("Timed out waiting for JSON-RPC message");
@@ -824,8 +896,12 @@ describe("server JSON-RPC control methods", () => {
           }),
         }),
       );
-      await expect(fs.stat(`${targetWorkspace}/.agent/skills/example-skill/SKILL.md`)).resolves.toBeDefined();
-      await expect(fs.stat(`${serverRoot}/.agent/skills/example-skill/SKILL.md`)).rejects.toBeDefined();
+      await expect(
+        fs.stat(`${targetWorkspace}/.agent/skills/example-skill/SKILL.md`),
+      ).resolves.toBeDefined();
+      await expect(
+        fs.stat(`${serverRoot}/.agent/skills/example-skill/SKILL.md`),
+      ).rejects.toBeDefined();
 
       rpc.close();
     } finally {
@@ -1022,12 +1098,14 @@ describe("server JSON-RPC control methods", () => {
         installationId: "missing-installation",
       });
 
-      expect(response.error.message).toContain('Skill installation "missing-installation" was not found');
+      expect(response.error.message).toContain(
+        'Skill installation "missing-installation" was not found',
+      );
       expect(response.result).toBeUndefined();
       rpc.close();
-      } finally {
-        await stopTestServer(server);
-      }
+    } finally {
+      await stopTestServer(server);
+    }
   });
 
   test("cowork/skills/installation/read returns the emitted validation error instead of timing out", async () => {
@@ -1066,7 +1144,9 @@ describe("server JSON-RPC control methods", () => {
           installationId: "missing-installation",
         });
 
-        expect(response.error.message).toContain('Skill installation "missing-installation" was not found');
+        expect(response.error.message).toContain(
+          'Skill installation "missing-installation" was not found',
+        );
         expect(response.result).toBeUndefined();
         rpc.close();
       } finally {
@@ -1100,7 +1180,7 @@ describe("server JSON-RPC control methods", () => {
   ] as const) {
     test(`${scenario.method} returns the emitted memory error instead of timing out`, async () => {
       const original = MemoryStore.prototype[scenario.patch];
-      (MemoryStore.prototype as any)[scenario.patch] = async function (...args: unknown[]) {
+      (MemoryStore.prototype as any)[scenario.patch] = async (...args: unknown[]) => {
         throw new Error(scenario.expectedMessage);
       };
 
@@ -1146,7 +1226,7 @@ describe("server JSON-RPC control methods", () => {
   ] as const) {
     test(`${scenario.method} returns the emitted backup error instead of timing out`, async () => {
       const original = WorkspaceBackupService.prototype[scenario.patch];
-      (WorkspaceBackupService.prototype as any)[scenario.patch] = async function (...args: unknown[]) {
+      (WorkspaceBackupService.prototype as any)[scenario.patch] = async (...args: unknown[]) => {
         throw new Error(scenario.expectedMessage);
       };
 
@@ -1222,7 +1302,8 @@ describe("server JSON-RPC control methods", () => {
           busy: false,
           lastMessagePreview: "done",
         },
-        latestAssistantText: "done\n\n<agent_report>{\"status\":\"completed\",\"summary\":\"Task done\"}</agent_report>",
+        latestAssistantText:
+          'done\n\n<agent_report>{"status":"completed","summary":"Task done"}</agent_report>',
         parsedReport: {
           status: "completed",
           summary: "Task done",
@@ -1351,7 +1432,9 @@ describe("server JSON-RPC control methods", () => {
         stopAtUsd: 1,
       });
 
-      expect(response.error.message).toContain("Warning threshold must be less than the hard-stop threshold");
+      expect(response.error.message).toContain(
+        "Warning threshold must be less than the hard-stop threshold",
+      );
       expect(response.result).toBeUndefined();
       rpc.close();
     } finally {

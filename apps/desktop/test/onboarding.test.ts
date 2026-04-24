@@ -195,42 +195,46 @@ const MOCK_UPDATE_STATE = {
 
 let lastSavedState: any = null;
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async (state: any) => { lastSavedState = state; },
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async (state: any) => {
+      lastSavedState = state;
+    },
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
@@ -282,7 +286,11 @@ describe("onboarding store actions", () => {
     useAppStore.setState({
       onboardingVisible: false,
       onboardingStep: "defaults",
-      onboardingState: { status: "completed", completedAt: "2026-03-10T00:00:00Z", dismissedAt: null },
+      onboardingState: {
+        status: "completed",
+        completedAt: "2026-03-10T00:00:00Z",
+        dismissedAt: null,
+      },
     });
 
     const state = useAppStore.getState();
@@ -380,7 +388,11 @@ describe("rerun preserves existing state", () => {
   test("startOnboarding does not clear workspaces or threads", () => {
     useAppStore.setState({
       onboardingVisible: false,
-      onboardingState: { status: "completed", completedAt: "2026-03-10T00:00:00Z", dismissedAt: null },
+      onboardingState: {
+        status: "completed",
+        completedAt: "2026-03-10T00:00:00Z",
+        dismissedAt: null,
+      },
       workspaces: [
         {
           id: "ws-1",
@@ -428,7 +440,11 @@ describe("init error path does not force onboarding", () => {
     // who hit a transient error.
     useAppStore.setState({
       onboardingVisible: false,
-      onboardingState: { status: "completed", completedAt: "2026-03-10T00:00:00Z", dismissedAt: null },
+      onboardingState: {
+        status: "completed",
+        completedAt: "2026-03-10T00:00:00Z",
+        dismissedAt: null,
+      },
     });
 
     // The error path now sets onboardingVisible: false
@@ -477,14 +493,16 @@ describe("shared provider display utilities", () => {
   });
 
   test("visibleAuthMethods hides Exa for Google and raw API key fallback for codex-cli", async () => {
-    const { fallbackAuthMethods, visibleAuthMethods } = await import("../src/lib/providerDisplayNames");
+    const { fallbackAuthMethods, visibleAuthMethods } = await import(
+      "../src/lib/providerDisplayNames"
+    );
 
-    expect(visibleAuthMethods("google", fallbackAuthMethods("google")).map((method) => method.id)).toEqual([
-      "api_key",
-    ]);
-    expect(visibleAuthMethods("codex-cli", fallbackAuthMethods("codex-cli")).map((method) => method.id)).toEqual([
-      "oauth_cli",
-    ]);
+    expect(
+      visibleAuthMethods("google", fallbackAuthMethods("google")).map((method) => method.id),
+    ).toEqual(["api_key"]);
+    expect(
+      visibleAuthMethods("codex-cli", fallbackAuthMethods("codex-cli")).map((method) => method.id),
+    ).toEqual(["oauth_cli"]);
   });
 });
 

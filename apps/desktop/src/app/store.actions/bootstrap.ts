@@ -1,78 +1,62 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 import { z } from "zod";
-
 import {
-  checkForUpdates as runUpdateCheck,
-  getUpdateState,
-  getDesktopFeatureFlags,
-  isPackagedDesktopApp,
-  quitAndInstallUpdate as runQuitAndInstallUpdate,
-  deleteTranscript,
-  listDirectory,
-  loadState,
-  pickWorkspaceDirectory,
-  readTranscript,
-  stopMobileRelay,
-  stopWorkspaceServer,
-  openPath,
-  revealPath,
-  copyPath,
-  createDirectory,
-  renamePath,
-  trashPath,
-} from "../../lib/desktopCommands";
-import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
-import { safeParseServerEvent, type ProviderName } from "../../lib/wsProtocol";
-import {
+  type DesktopFeatureFlags,
   FEATURE_FLAG_DEFINITIONS,
   normalizeDesktopFeatureFlagOverrides,
-  type DesktopFeatureFlags,
 } from "../../../../../src/shared/featureFlags";
-
 import {
-  type AppStoreDataState,
+  getDesktopFeatureFlags,
+  getUpdateState,
+  isPackagedDesktopApp,
+  loadState,
+  quitAndInstallUpdate as runQuitAndInstallUpdate,
+  checkForUpdates as runUpdateCheck,
+  stopMobileRelay,
+} from "../../lib/desktopCommands";
+import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
+import { type ProviderName, safeParseServerEvent } from "../../lib/wsProtocol";
+import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
+import {
+  deriveConnectedProviders,
+  normalizePersistedProviderState,
+} from "../persistedProviderState";
+import {
+  resolvePluginCatalogWorkspaceSelection,
+  resolvePluginManagementWorkspaceId,
+} from "../pluginManagement";
+import {
+  deriveDefaultLmStudioUiEnabled,
+  normalizePersistedProviderUiState,
+} from "../providerUiState";
+import {
   type AppStoreActions,
-  type StoreGet,
-  type StoreSet,
-  RUNTIME,
-  appendThreadTranscript,
-  basename,
-  buildContextPreamble,
+  type AppStoreDataState,
+  defaultThreadRuntime,
   ensureControlSocket,
   ensureServerRunning,
-  defaultThreadRuntime,
-  ensureThreadRuntime,
-  ensureThreadSocket,
   ensureWorkspaceRuntime,
   isProviderName,
   makeId,
-  mapTranscriptToFeed,
+  normalizeThreadTitleSource,
   nowIso,
   persistNow,
-  providerAuthMethodsFor,
   pushNotification,
-  queuePendingThreadMessage,
+  RUNTIME,
   requestJsonRpcControlEvent,
-  sendThread,
-  sendUserMessageToThread,
-  normalizeThreadTitleSource,
+  type StoreGet,
+  type StoreSet,
   syncDesktopStateCache,
   syncDesktopStateCacheNow,
-  truncateTitle,
 } from "../store.helpers";
-import { deriveConnectedProviders, normalizePersistedProviderState } from "../persistedProviderState";
-import { deriveDefaultLmStudioUiEnabled, normalizePersistedProviderUiState } from "../providerUiState";
-import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
-import { resolvePluginCatalogWorkspaceSelection, resolvePluginManagementWorkspaceId } from "../pluginManagement";
 import {
+  type CachedDesktopUiState,
   type CachedSessionSnapshot,
   normalizeWorkspaceUserProfile,
-  type CachedDesktopUiState,
   type PersistedOnboardingState,
   type PersistedProviderState,
   type SettingsPageId,
   type ThreadRecord,
-  type ViewId,
   type WorkspaceRecord,
 } from "../types";
 import {
@@ -83,35 +67,39 @@ import {
 
 const optionalStringWithContentSchema = z.preprocess(
   (value) => (typeof value === "string" && value.trim() ? value : undefined),
-  z.string().optional()
+  z.string().optional(),
 );
 const optionalStringSchema = z.preprocess(
   (value) => (typeof value === "string" ? value : undefined),
-  z.string().optional()
+  z.string().optional(),
 );
 
 const normalizedProviderSchema = z.preprocess(
   (value) => (isProviderName(value) ? value : "google"),
-  z.custom<ProviderName>((value): value is ProviderName => isProviderName(value))
+  z.custom<ProviderName>((value): value is ProviderName => isProviderName(value)),
 );
 
 const normalizedThreadStatusSchema = z.preprocess(
   (value) => (value === "active" || value === "disconnected" ? value : "disconnected"),
-  z.enum(["active", "disconnected"])
+  z.enum(["active", "disconnected"]),
 );
 
 const normalizedSessionIdSchema = z.preprocess(
   (value) => (typeof value === "string" && value.trim() ? value : null),
-  z.string().nullable()
+  z.string().nullable(),
 );
 
 const normalizedLastEventSeqSchema = z.preprocess(
-  (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0),
-  z.number().int().nonnegative()
+  (value) =>
+    typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0,
+  z.number().int().nonnegative(),
 );
 const normalizedViewSchema = z.preprocess(
-  (value) => (value === "chat" || value === "skills" || value === "settings" ? value : "chat"),
-  z.enum(["chat", "skills", "settings"])
+  (value) =>
+    value === "chat" || value === "skills" || value === "research" || value === "settings"
+      ? value
+      : "chat",
+  z.enum(["chat", "skills", "research", "settings"]),
 );
 
 function normalizeSettingsPageId(
@@ -128,202 +116,267 @@ function normalizeSettingsPageId(
 }
 
 function normalizeKnownSettingsPageId(value: unknown): SettingsPageId {
-  return value === "providers"
-    || value === "usage"
-    || value === "workspaces"
-    || value === "remoteAccess"
-    || value === "backup"
-    || value === "mcp"
-    || value === "memory"
-    || value === "featureFlags"
-    || value === "updates"
-    || value === "developer"
+  return value === "providers" ||
+    value === "usage" ||
+    value === "workspaces" ||
+    value === "remoteAccess" ||
+    value === "backup" ||
+    value === "mcp" ||
+    value === "memory" ||
+    value === "featureFlags" ||
+    value === "updates" ||
+    value === "developer"
     ? value
     : "providers";
 }
 
 const normalizedSettingsPageSchema = z.preprocess(
   (value) => normalizeKnownSettingsPageId(value),
-  z.enum(["providers", "usage", "workspaces", "remoteAccess", "backup", "mcp", "memory", "featureFlags", "updates", "developer"])
+  z.enum([
+    "providers",
+    "usage",
+    "workspaces",
+    "remoteAccess",
+    "backup",
+    "mcp",
+    "memory",
+    "featureFlags",
+    "updates",
+    "developer",
+  ]),
 );
 const normalizedNullableSelectionSchema = z.preprocess(
   (value) => (typeof value === "string" && value.trim() ? value : null),
-  z.string().nullable()
+  z.string().nullable(),
 );
-const normalizedUiWidthSchema = (min: number, max: number, fallback: number) => z.preprocess(
-  (value) => (
-    typeof value === "number" && Number.isFinite(value)
-      ? Math.max(min, Math.min(max, Math.floor(value)))
-      : fallback
-  ),
-  z.number().int()
-);
+const normalizedUiWidthSchema = (min: number, max: number, fallback: number) =>
+  z.preprocess(
+    (value) =>
+      typeof value === "number" && Number.isFinite(value)
+        ? Math.max(min, Math.min(max, Math.floor(value)))
+        : fallback,
+    z.number().int(),
+  );
 
-const persistedWorkspaceSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  path: z.string(),
-  createdAt: z.string(),
-  lastOpenedAt: z.string(),
-  wsProtocol: z.preprocess(() => "jsonrpc", z.literal("jsonrpc")),
-  defaultProvider: normalizedProviderSchema,
-  defaultModel: optionalStringWithContentSchema,
-  defaultPreferredChildModel: optionalStringWithContentSchema,
-  defaultChildModelRoutingMode: z.enum(["same-provider", "cross-provider-allowlist"]).optional(),
-  defaultPreferredChildModelRef: optionalStringWithContentSchema,
-  defaultAllowedChildModelRefs: z.array(z.string().trim().min(1)).optional(),
-  defaultToolOutputOverflowChars: z.preprocess((value) => {
-    if (value === undefined) return undefined;
-    if (value === null) return null;
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return Math.max(0, Math.floor(value));
-    }
-    return undefined;
-  }, z.number().int().nonnegative().nullable().optional()),
-  providerOptions: z.unknown().optional(),
-  userName: optionalStringSchema,
-  userProfile: z.object({
-    instructions: optionalStringSchema,
-    work: optionalStringSchema,
-    details: optionalStringSchema,
-  }).passthrough().optional(),
-  defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
-  defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
-  yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
-}).passthrough().transform((workspace): WorkspaceRecord => {
-  const legacySubAgentModel = (() => {
-    const asRecord = workspace as Record<string, unknown>;
-    const legacy = typeof asRecord.defaultSubAgentModel === "string" ? asRecord.defaultSubAgentModel.trim() : "";
-    return legacy.length > 0 ? legacy : undefined;
-  })();
-  const model = workspace.defaultModel ?? (defaultModelForProvider(workspace.defaultProvider) || "");
-  const childModelRoutingMode = (workspace.defaultChildModelRoutingMode ?? "same-provider") as ChildModelRoutingMode;
-  const legacyPreferredValue = workspace.defaultPreferredChildModel ?? legacySubAgentModel ?? model;
-  const preferredChildModelRef =
-    workspace.defaultPreferredChildModelRef
-    ?? (legacyPreferredValue
-      ? (legacyPreferredValue.includes(":") ? legacyPreferredValue : `${workspace.defaultProvider}:${legacyPreferredValue}`)
-      : "");
-  return {
-    id: workspace.id,
-    name: workspace.name,
-    path: workspace.path,
-    createdAt: workspace.createdAt,
-    lastOpenedAt: workspace.lastOpenedAt,
-    wsProtocol: "jsonrpc",
-    defaultProvider: workspace.defaultProvider,
-    defaultModel: model,
-    defaultPreferredChildModel: legacyPreferredValue,
-    defaultChildModelRoutingMode: childModelRoutingMode,
-    defaultPreferredChildModelRef: preferredChildModelRef,
-    defaultAllowedChildModelRefs: workspace.defaultAllowedChildModelRefs ?? [],
-    defaultToolOutputOverflowChars: workspace.defaultToolOutputOverflowChars,
-    providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
-    userName: workspace.userName,
-    userProfile: workspace.userProfile ? normalizeWorkspaceUserProfile(workspace.userProfile) : undefined,
-    defaultEnableMcp: workspace.defaultEnableMcp,
-    defaultBackupsEnabled: workspace.defaultBackupsEnabled,
-    yolo: workspace.yolo,
-  };
-});
-
-const persistedThreadSchema = z.object({
-  id: z.string(),
-  workspaceId: z.string(),
-  title: z.string(),
-  titleSource: z.unknown().optional(),
-  createdAt: z.string(),
-  lastMessageAt: z.string(),
-  status: normalizedThreadStatusSchema,
-  sessionId: normalizedSessionIdSchema,
-  messageCount: normalizedLastEventSeqSchema,
-  lastEventSeq: normalizedLastEventSeqSchema,
-  legacyTranscriptId: normalizedSessionIdSchema.optional(),
-  draft: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
-}).passthrough().transform((thread): ThreadRecord => {
-  const id = thread.sessionId ?? thread.id;
-  return {
-    id,
-    workspaceId: thread.workspaceId,
-    title: thread.title,
-    titleSource: normalizeThreadTitleSource(thread.titleSource, thread.title),
-    createdAt: thread.createdAt,
-    lastMessageAt: thread.lastMessageAt,
-    status: thread.status,
-    sessionId: thread.sessionId,
-    messageCount: thread.messageCount,
-    lastEventSeq: thread.lastEventSeq,
-    legacyTranscriptId:
-      thread.legacyTranscriptId
-      ?? (thread.id !== id ? thread.id : null),
-    draft: thread.draft ?? false,
-  };
-});
-
-const persistedUiSchema = z.object({
-  selectedWorkspaceId: normalizedNullableSelectionSchema.optional(),
-  selectedThreadId: normalizedNullableSelectionSchema.optional(),
-  pluginManagementWorkspaceId: normalizedNullableSelectionSchema.optional(),
-  pluginManagementMode: z.enum(["auto", "global", "workspace"]).optional(),
-  view: normalizedViewSchema.optional(),
-  settingsPage: normalizedSettingsPageSchema.optional(),
-  lastNonSettingsView: normalizedViewSchema.optional(),
-  sidebarCollapsed: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
-  sidebarWidth: normalizedUiWidthSchema(160, 440, 248).optional(),
-  contextSidebarCollapsed: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
-  contextSidebarWidth: normalizedUiWidthSchema(200, 600, 300).optional(),
-  messageBarHeight: normalizedUiWidthSchema(80, 500, 96).optional(),
-}).passthrough().transform((ui): CachedDesktopUiState => ({
-  selectedWorkspaceId: ui.selectedWorkspaceId ?? null,
-  selectedThreadId: ui.selectedThreadId ?? null,
-  pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId ?? null,
-  pluginManagementMode: ui.pluginManagementMode ?? "auto",
-  view: ui.view ?? "chat",
-  settingsPage: ui.settingsPage ?? "providers",
-  lastNonSettingsView: ui.lastNonSettingsView ?? "chat",
-  sidebarCollapsed: ui.sidebarCollapsed ?? false,
-  sidebarWidth: ui.sidebarWidth ?? 248,
-  contextSidebarCollapsed: ui.contextSidebarCollapsed ?? false,
-  contextSidebarWidth: ui.contextSidebarWidth ?? 300,
-  messageBarHeight: ui.messageBarHeight ?? 96,
-}));
-
-const persistedStateSchema = z.object({
-  workspaces: z.preprocess((value) => value ?? [], z.array(persistedWorkspaceSchema)),
-  threads: z.preprocess((value) => value ?? [], z.array(persistedThreadSchema)),
-  developerMode: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
-  showHiddenFiles: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
-  perWorkspaceSettings: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
-  desktopFeatureFlagOverrides: z.preprocess(
-    (value) => normalizeDesktopFeatureFlagOverrides(value),
-    z.object({
-      remoteAccess: z.boolean().optional(),
-      workspacePicker: z.boolean().optional(),
-      workspaceLifecycle: z.boolean().optional(),
-      a2ui: z.boolean().optional(),
-    }).passthrough().optional(),
-  ),
-}).passthrough().transform((state) => {
-  const providerState = normalizePersistedProviderState((state as { providerState?: unknown }).providerState);
-  const providerUiState = normalizePersistedProviderUiState((state as { providerUiState?: unknown }).providerUiState, {
-    defaultLmStudioEnabled: deriveDefaultLmStudioUiEnabled({
-      providerState,
-      workspaces: state.workspaces,
-    }),
+const persistedWorkspaceSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    path: z.string(),
+    createdAt: z.string(),
+    lastOpenedAt: z.string(),
+    wsProtocol: z.preprocess(() => "jsonrpc", z.literal("jsonrpc")),
+    defaultProvider: normalizedProviderSchema,
+    defaultModel: optionalStringWithContentSchema,
+    defaultPreferredChildModel: optionalStringWithContentSchema,
+    defaultChildModelRoutingMode: z.enum(["same-provider", "cross-provider-allowlist"]).optional(),
+    defaultPreferredChildModelRef: optionalStringWithContentSchema,
+    defaultAllowedChildModelRefs: z.array(z.string().trim().min(1)).optional(),
+    defaultToolOutputOverflowChars: z.preprocess((value) => {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return Math.max(0, Math.floor(value));
+      }
+      return undefined;
+    }, z.number().int().nonnegative().nullable().optional()),
+    providerOptions: z.unknown().optional(),
+    userName: optionalStringSchema,
+    userProfile: z
+      .object({
+        instructions: optionalStringSchema,
+        work: optionalStringSchema,
+        details: optionalStringSchema,
+      })
+      .passthrough()
+      .optional(),
+    defaultEnableMcp: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : true),
+      z.boolean(),
+    ),
+    defaultBackupsEnabled: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : true),
+      z.boolean(),
+    ),
+    yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+  })
+  .passthrough()
+  .transform((workspace): WorkspaceRecord => {
+    const legacySubAgentModel = (() => {
+      const asRecord = workspace as Record<string, unknown>;
+      const legacy =
+        typeof asRecord.defaultSubAgentModel === "string"
+          ? asRecord.defaultSubAgentModel.trim()
+          : "";
+      return legacy.length > 0 ? legacy : undefined;
+    })();
+    const model =
+      workspace.defaultModel ?? (defaultModelForProvider(workspace.defaultProvider) || "");
+    const childModelRoutingMode = (workspace.defaultChildModelRoutingMode ??
+      "same-provider") as ChildModelRoutingMode;
+    const legacyPreferredValue =
+      workspace.defaultPreferredChildModel ?? legacySubAgentModel ?? model;
+    const preferredChildModelRef =
+      workspace.defaultPreferredChildModelRef ??
+      (legacyPreferredValue
+        ? legacyPreferredValue.includes(":")
+          ? legacyPreferredValue
+          : `${workspace.defaultProvider}:${legacyPreferredValue}`
+        : "");
+    return {
+      id: workspace.id,
+      name: workspace.name,
+      path: workspace.path,
+      createdAt: workspace.createdAt,
+      lastOpenedAt: workspace.lastOpenedAt,
+      wsProtocol: "jsonrpc",
+      defaultProvider: workspace.defaultProvider,
+      defaultModel: model,
+      defaultPreferredChildModel: legacyPreferredValue,
+      defaultChildModelRoutingMode: childModelRoutingMode,
+      defaultPreferredChildModelRef: preferredChildModelRef,
+      defaultAllowedChildModelRefs: workspace.defaultAllowedChildModelRefs ?? [],
+      defaultToolOutputOverflowChars: workspace.defaultToolOutputOverflowChars,
+      providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
+      userName: workspace.userName,
+      userProfile: workspace.userProfile
+        ? normalizeWorkspaceUserProfile(workspace.userProfile)
+        : undefined,
+      defaultEnableMcp: workspace.defaultEnableMcp,
+      defaultBackupsEnabled: workspace.defaultBackupsEnabled,
+      yolo: workspace.yolo,
+    };
   });
-  const onboarding = (state as { onboarding?: PersistedOnboardingState }).onboarding;
-  return {
-    workspaces: state.workspaces,
-    threads: state.threads,
-    developerMode: state.developerMode,
-    showHiddenFiles: state.showHiddenFiles,
-    perWorkspaceSettings: state.perWorkspaceSettings,
-    desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides,
-    providerState,
-    providerUiState,
-    onboarding,
-  };
-});
+
+const persistedThreadSchema = z
+  .object({
+    id: z.string(),
+    workspaceId: z.string(),
+    title: z.string(),
+    titleSource: z.unknown().optional(),
+    createdAt: z.string(),
+    lastMessageAt: z.string(),
+    status: normalizedThreadStatusSchema,
+    sessionId: normalizedSessionIdSchema,
+    messageCount: normalizedLastEventSeqSchema,
+    lastEventSeq: normalizedLastEventSeqSchema,
+    legacyTranscriptId: normalizedSessionIdSchema.optional(),
+    draft: z
+      .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
+      .optional(),
+  })
+  .passthrough()
+  .transform((thread): ThreadRecord => {
+    const id = thread.sessionId ?? thread.id;
+    return {
+      id,
+      workspaceId: thread.workspaceId,
+      title: thread.title,
+      titleSource: normalizeThreadTitleSource(thread.titleSource, thread.title),
+      createdAt: thread.createdAt,
+      lastMessageAt: thread.lastMessageAt,
+      status: thread.status,
+      sessionId: thread.sessionId,
+      messageCount: thread.messageCount,
+      lastEventSeq: thread.lastEventSeq,
+      legacyTranscriptId: thread.legacyTranscriptId ?? (thread.id !== id ? thread.id : null),
+      draft: thread.draft ?? false,
+    };
+  });
+
+const persistedUiSchema = z
+  .object({
+    selectedWorkspaceId: normalizedNullableSelectionSchema.optional(),
+    selectedThreadId: normalizedNullableSelectionSchema.optional(),
+    pluginManagementWorkspaceId: normalizedNullableSelectionSchema.optional(),
+    pluginManagementMode: z.enum(["auto", "global", "workspace"]).optional(),
+    view: normalizedViewSchema.optional(),
+    settingsPage: normalizedSettingsPageSchema.optional(),
+    lastNonSettingsView: normalizedViewSchema.optional(),
+    sidebarCollapsed: z
+      .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
+      .optional(),
+    sidebarWidth: normalizedUiWidthSchema(160, 440, 248).optional(),
+    contextSidebarCollapsed: z
+      .preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean())
+      .optional(),
+    contextSidebarWidth: normalizedUiWidthSchema(200, 600, 300).optional(),
+    messageBarHeight: normalizedUiWidthSchema(80, 500, 96).optional(),
+  })
+  .passthrough()
+  .transform(
+    (ui): CachedDesktopUiState => ({
+      selectedWorkspaceId: ui.selectedWorkspaceId ?? null,
+      selectedThreadId: ui.selectedThreadId ?? null,
+      pluginManagementWorkspaceId: ui.pluginManagementWorkspaceId ?? null,
+      pluginManagementMode: ui.pluginManagementMode ?? "auto",
+      view: ui.view ?? "chat",
+      settingsPage: ui.settingsPage ?? "providers",
+      lastNonSettingsView: ui.lastNonSettingsView ?? "chat",
+      sidebarCollapsed: ui.sidebarCollapsed ?? false,
+      sidebarWidth: ui.sidebarWidth ?? 248,
+      contextSidebarCollapsed: ui.contextSidebarCollapsed ?? false,
+      contextSidebarWidth: ui.contextSidebarWidth ?? 300,
+      messageBarHeight: ui.messageBarHeight ?? 96,
+    }),
+  );
+
+const persistedStateSchema = z
+  .object({
+    workspaces: z.preprocess((value) => value ?? [], z.array(persistedWorkspaceSchema)),
+    threads: z.preprocess((value) => value ?? [], z.array(persistedThreadSchema)),
+    developerMode: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : false),
+      z.boolean(),
+    ),
+    showHiddenFiles: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : false),
+      z.boolean(),
+    ),
+    perWorkspaceSettings: z.preprocess(
+      (value) => (typeof value === "boolean" ? value : false),
+      z.boolean(),
+    ),
+    desktopFeatureFlagOverrides: z.preprocess(
+      (value) => normalizeDesktopFeatureFlagOverrides(value),
+      z
+        .object({
+          remoteAccess: z.boolean().optional(),
+          workspacePicker: z.boolean().optional(),
+          workspaceLifecycle: z.boolean().optional(),
+          a2ui: z.boolean().optional(),
+        })
+        .passthrough()
+        .optional(),
+    ),
+  })
+  .passthrough()
+  .transform((state) => {
+    const providerState = normalizePersistedProviderState(
+      (state as { providerState?: unknown }).providerState,
+    );
+    const providerUiState = normalizePersistedProviderUiState(
+      (state as { providerUiState?: unknown }).providerUiState,
+      {
+        defaultLmStudioEnabled: deriveDefaultLmStudioUiEnabled({
+          providerState,
+          workspaces: state.workspaces,
+        }),
+      },
+    );
+    const onboarding = (state as { onboarding?: PersistedOnboardingState }).onboarding;
+    return {
+      workspaces: state.workspaces,
+      threads: state.threads,
+      developerMode: state.developerMode,
+      showHiddenFiles: state.showHiddenFiles,
+      perWorkspaceSettings: state.perWorkspaceSettings,
+      desktopFeatureFlagOverrides: state.desktopFeatureFlagOverrides,
+      providerState,
+      providerUiState,
+      onboarding,
+    };
+  });
 
 type HydratedPersistedDesktopState = z.infer<typeof persistedStateSchema>;
 
@@ -340,21 +393,17 @@ function hasLegacyA2uiEnabled(value: unknown): boolean {
       return true;
     }
     const featureFlags = ws.defaultFeatureFlags;
-    if (
-      featureFlags
-      && typeof featureFlags === "object"
-      && !Array.isArray(featureFlags)
-    ) {
+    if (featureFlags && typeof featureFlags === "object" && !Array.isArray(featureFlags)) {
       const flagsRecord = featureFlags as Record<string, unknown>;
       if (flagsRecord.a2ui === true) {
         return true;
       }
       const workspaceFlags = flagsRecord.workspace;
       if (
-        workspaceFlags
-        && typeof workspaceFlags === "object"
-        && !Array.isArray(workspaceFlags)
-        && (workspaceFlags as Record<string, unknown>).a2ui === true
+        workspaceFlags &&
+        typeof workspaceFlags === "object" &&
+        !Array.isArray(workspaceFlags) &&
+        (workspaceFlags as Record<string, unknown>).a2ui === true
       ) {
         return true;
       }
@@ -384,12 +433,15 @@ function buildResolvedDesktopUiState(
   ui?: CachedDesktopUiState | null,
 ) {
   const normalizedUi = persistedUiSchema.parse(ui ?? {});
-  const workspaceByRecency = [...workspaces].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
+  const workspaceByRecency = [...workspaces].sort((a, b) =>
+    b.lastOpenedAt.localeCompare(a.lastOpenedAt),
+  );
   const fallbackSelectedWorkspaceId = workspaceByRecency[0]?.id ?? null;
   const selection = resolvePluginCatalogWorkspaceSelection({
     workspaces,
     selectedWorkspaceId:
-      normalizedUi.selectedWorkspaceId && workspaces.some((workspace) => workspace.id === normalizedUi.selectedWorkspaceId)
+      normalizedUi.selectedWorkspaceId &&
+      workspaces.some((workspace) => workspace.id === normalizedUi.selectedWorkspaceId)
         ? normalizedUi.selectedWorkspaceId
         : fallbackSelectedWorkspaceId,
     pluginManagementWorkspaceId: normalizedUi.pluginManagementWorkspaceId,
@@ -408,15 +460,16 @@ function buildResolvedDesktopUiState(
     workspaceThreads[0]?.id ??
     null;
   const migratedSelectedThreadId = normalizedUi.selectedThreadId
-    ? workspaceThreads.find((thread) => thread.id === normalizedUi.selectedThreadId)?.id
-      ?? workspaceThreads.find((thread) => thread.legacyTranscriptId === normalizedUi.selectedThreadId)?.id
-      ?? null
+    ? (workspaceThreads.find((thread) => thread.id === normalizedUi.selectedThreadId)?.id ??
+      workspaceThreads.find((thread) => thread.legacyTranscriptId === normalizedUi.selectedThreadId)
+        ?.id ??
+      null)
     : null;
-  const selectedThreadId =
-    migratedSelectedThreadId
-      ? migratedSelectedThreadId
-      : fallbackSelectedThreadId;
-  const fallbackLastNonSettingsView = normalizedUi.view === "settings" ? "chat" : normalizedUi.view ?? "chat";
+  const selectedThreadId = migratedSelectedThreadId
+    ? migratedSelectedThreadId
+    : fallbackSelectedThreadId;
+  const fallbackLastNonSettingsView =
+    normalizedUi.view === "settings" ? "chat" : (normalizedUi.view ?? "chat");
   const lastNonSettingsView =
     normalizedUi.lastNonSettingsView && normalizedUi.lastNonSettingsView !== "settings"
       ? normalizedUi.lastNonSettingsView
@@ -463,7 +516,10 @@ function extractCachedDesktopState(value: unknown): {
   };
 }
 
-function normalizeCachedSessionSnapshot(sessionId: string, value: unknown): CachedSessionSnapshot | null {
+function normalizeCachedSessionSnapshot(
+  sessionId: string,
+  value: unknown,
+): CachedSessionSnapshot | null {
   if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
     return null;
   }
@@ -498,9 +554,10 @@ function runAfterInitialPaint(task: () => void): void {
     return;
   }
 
-  const schedule = typeof window.requestAnimationFrame === "function"
-    ? window.requestAnimationFrame.bind(window)
-    : (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0);
+  const schedule =
+    typeof window.requestAnimationFrame === "function"
+      ? window.requestAnimationFrame.bind(window)
+      : (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0);
 
   schedule(() => {
     setTimeout(task, 0);
@@ -517,8 +574,14 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
     const state = hydratePersistedDesktopState(cached.persistedState);
     const desktopFeatureFlags = getDesktopFeatureFlags(state.desktopFeatureFlagOverrides);
     RUNTIME.sessionSnapshots.clear();
-    if (cached.sessionSnapshots && typeof cached.sessionSnapshots === "object" && !Array.isArray(cached.sessionSnapshots)) {
-      for (const [sessionId, entry] of Object.entries(cached.sessionSnapshots as Record<string, unknown>)) {
+    if (
+      cached.sessionSnapshots &&
+      typeof cached.sessionSnapshots === "object" &&
+      !Array.isArray(cached.sessionSnapshots)
+    ) {
+      for (const [sessionId, entry] of Object.entries(
+        cached.sessionSnapshots as Record<string, unknown>,
+      )) {
         const normalized = normalizeCachedSessionSnapshot(sessionId, entry);
         if (!normalized) continue;
         RUNTIME.sessionSnapshots.set(sessionId, normalized);
@@ -530,7 +593,9 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       desktopFeatureFlags,
       cached.ui as CachedDesktopUiState | undefined,
     );
-    const connectedProviders = deriveConnectedProviders(state.providerState as PersistedProviderState | undefined);
+    const connectedProviders = deriveConnectedProviders(
+      state.providerState as PersistedProviderState | undefined,
+    );
     return {
       ready: true,
       bootstrapPending: true,
@@ -553,14 +618,15 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
       onboardingState: state.onboarding ?? DEFAULT_ONBOARDING_STATE,
       onboardingVisible: false,
       onboardingStep: "welcome",
-      threadRuntimeById: ui.selectedThreadId && ui.view === "chat"
-        ? {
-            [ui.selectedThreadId]: {
-              ...defaultThreadRuntime(),
-              hydrating: true,
-            },
-          }
-        : {},
+      threadRuntimeById:
+        ui.selectedThreadId && ui.view === "chat"
+          ? {
+              [ui.selectedThreadId]: {
+                ...defaultThreadRuntime(),
+                hydrating: true,
+              },
+            }
+          : {},
       view: ui.view,
       settingsPage: ui.settingsPage,
       lastNonSettingsView: ui.lastNonSettingsView,
@@ -575,7 +641,28 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
   }
 }
 
-export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "init" | "openSettings" | "closeSettings" | "setSettingsPage" | "setDeveloperMode" | "setShowHiddenFiles" | "setPerWorkspaceSettings" | "setDesktopFeatureFlagOverride" | "setUpdateState" | "checkForUpdates" | "quitAndInstallUpdate" | "toggleSidebar" | "toggleContextSidebar" | "setSidebarWidth" | "setContextSidebarWidth" | "setMessageBarHeight"> {
+export function createBootstrapActions(
+  set: StoreSet,
+  get: StoreGet,
+): Pick<
+  AppStoreActions,
+  | "init"
+  | "openSettings"
+  | "closeSettings"
+  | "setSettingsPage"
+  | "setDeveloperMode"
+  | "setShowHiddenFiles"
+  | "setPerWorkspaceSettings"
+  | "setDesktopFeatureFlagOverride"
+  | "setUpdateState"
+  | "checkForUpdates"
+  | "quitAndInstallUpdate"
+  | "toggleSidebar"
+  | "toggleContextSidebar"
+  | "setSidebarWidth"
+  | "setContextSidebarWidth"
+  | "setMessageBarHeight"
+> {
   return {
     init: async () => {
       set({ startupError: null, bootstrapPending: true });
@@ -588,21 +675,28 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
         } catch (error) {
           console.warn("Desktop updater state load failed:", error);
         }
-        const ui = buildResolvedDesktopUiState(state.workspaces, state.threads, desktopFeatureFlags, {
-          selectedWorkspaceId: get().selectedWorkspaceId,
-          selectedThreadId: get().selectedThreadId,
-          pluginManagementWorkspaceId: get().pluginManagementWorkspaceId,
-          pluginManagementMode: get().pluginManagementMode,
-          view: get().view,
-          settingsPage: get().settingsPage,
-          lastNonSettingsView: get().lastNonSettingsView,
-          sidebarCollapsed: get().sidebarCollapsed,
-          sidebarWidth: get().sidebarWidth,
-          contextSidebarCollapsed: get().contextSidebarCollapsed,
-          contextSidebarWidth: get().contextSidebarWidth,
-          messageBarHeight: get().messageBarHeight,
-        });
-        const connectedProviders = deriveConnectedProviders(state.providerState as PersistedProviderState | undefined);
+        const ui = buildResolvedDesktopUiState(
+          state.workspaces,
+          state.threads,
+          desktopFeatureFlags,
+          {
+            selectedWorkspaceId: get().selectedWorkspaceId,
+            selectedThreadId: get().selectedThreadId,
+            pluginManagementWorkspaceId: get().pluginManagementWorkspaceId,
+            pluginManagementMode: get().pluginManagementMode,
+            view: get().view,
+            settingsPage: get().settingsPage,
+            lastNonSettingsView: get().lastNonSettingsView,
+            sidebarCollapsed: get().sidebarCollapsed,
+            sidebarWidth: get().sidebarWidth,
+            contextSidebarCollapsed: get().contextSidebarCollapsed,
+            contextSidebarWidth: get().contextSidebarWidth,
+            messageBarHeight: get().messageBarHeight,
+          },
+        );
+        const connectedProviders = deriveConnectedProviders(
+          state.providerState as PersistedProviderState | undefined,
+        );
         const onboardingOpts = {
           onboarding: state.onboarding,
           workspaceCount: state.workspaces.length,
@@ -686,17 +780,16 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
             void current.selectWorkspace(selectedWorkspaceId);
           });
         } else if (ui.selectedWorkspaceId && ui.view === "skills") {
-          const startupWorkspaceId = resolvePluginManagementWorkspaceId(
-            state.workspaces,
-            ui.pluginManagementWorkspaceId,
-          ) ?? ui.selectedWorkspaceId;
+          const startupWorkspaceId =
+            resolvePluginManagementWorkspaceId(state.workspaces, ui.pluginManagementWorkspaceId) ??
+            ui.selectedWorkspaceId;
           runAfterInitialPaint(() => {
             const current = get();
             if (
-              current.selectedWorkspaceId !== ui.selectedWorkspaceId
-              || current.pluginManagementWorkspaceId !== ui.pluginManagementWorkspaceId
-              || current.pluginManagementMode !== ui.pluginManagementMode
-              || current.view !== "skills"
+              current.selectedWorkspaceId !== ui.selectedWorkspaceId ||
+              current.pluginManagementWorkspaceId !== ui.pluginManagementWorkspaceId ||
+              current.pluginManagementMode !== ui.pluginManagementMode ||
+              current.view !== "skills"
             ) {
               return;
             }
@@ -754,7 +847,6 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
         return;
       }
     },
-  
 
     openSettings: (page) => {
       set((s) => ({
@@ -764,7 +856,6 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
       }));
       syncDesktopStateCache(get);
     },
-  
 
     closeSettings: () => {
       set((s) => ({
@@ -772,7 +863,6 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
       }));
       syncDesktopStateCache(get);
     },
-  
 
     setSettingsPage: (page) => {
       set((state) => ({
@@ -780,7 +870,6 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
       }));
       syncDesktopStateCache(get);
     },
-  
 
     setDeveloperMode: (v) => {
       set({ developerMode: v });
@@ -800,7 +889,8 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
       set({ perWorkspaceSettings: enabled });
       if (!enabled) {
         const state = get();
-        const source = state.workspaces.find((w) => w.id === state.selectedWorkspaceId) ?? state.workspaces[0];
+        const source =
+          state.workspaces.find((w) => w.id === state.selectedWorkspaceId) ?? state.workspaces[0];
         if (source && state.workspaces.length > 1) {
           const settingsFields: (keyof typeof source)[] = [
             "defaultProvider",
@@ -845,8 +935,8 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
     setDesktopFeatureFlagOverride: async (flagId, enabled) => {
       const definition = FEATURE_FLAG_DEFINITIONS[flagId];
       if (
-        definition.packagedAvailability === "forced-off"
-        && (isPackagedDesktopApp() || get().updateState.packaged)
+        definition.packagedAvailability === "forced-off" &&
+        (isPackagedDesktopApp() || get().updateState.packaged)
       ) {
         return;
       }
@@ -866,30 +956,38 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
       if (flagId === "a2ui") {
         const state = get();
         const activeControlWorkspaces = state.workspaces.filter((workspace) =>
-          Boolean(state.workspaceRuntimeById[workspace.id]?.controlSessionId)
+          Boolean(state.workspaceRuntimeById[workspace.id]?.controlSessionId),
         );
 
-        const fanoutResults = await Promise.all(activeControlWorkspaces.map(async (workspace) => {
-          try {
-            await requestJsonRpcControlEvent(get, set, workspace.id, "cowork/session/defaults/apply", {
-              cwd: workspace.path,
-              config: {
-                featureFlags: {
-                  workspace: {
-                    a2ui: enabled,
+        const fanoutResults = await Promise.all(
+          activeControlWorkspaces.map(async (workspace) => {
+            try {
+              await requestJsonRpcControlEvent(
+                get,
+                set,
+                workspace.id,
+                "cowork/session/defaults/apply",
+                {
+                  cwd: workspace.path,
+                  config: {
+                    featureFlags: {
+                      workspace: {
+                        a2ui: enabled,
+                      },
+                    },
                   },
                 },
-              },
-            });
-            return { workspaceId: workspace.id, ok: true as const };
-          } catch (error) {
-            return {
-              workspaceId: workspace.id,
-              ok: false as const,
-              detail: error instanceof Error ? error.message : String(error),
-            };
-          }
-        }));
+              );
+              return { workspaceId: workspace.id, ok: true as const };
+            } catch (error) {
+              return {
+                workspaceId: workspace.id,
+                ok: false as const,
+                detail: error instanceof Error ? error.message : String(error),
+              };
+            }
+          }),
+        );
 
         const failedWorkspaceIds = new Set(
           fanoutResults.filter((r) => !r.ok).map((r) => r.workspaceId),
@@ -915,14 +1013,18 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
             .filter((w) => !failedWorkspaceIds.has(w.id))
             .map((workspace) => workspace.id),
         );
-        const activeThreadIds = get().threads
-          .filter((thread) => activeWorkspaceIds.has(thread.workspaceId))
+        const activeThreadIds = get()
+          .threads.filter((thread) => activeWorkspaceIds.has(thread.workspaceId))
           .map((thread) => thread.id);
         for (const threadId of activeThreadIds) {
           void get().applyWorkspaceDefaultsToThread(threadId, "explicit");
         }
       }
-      if (flagId === "remoteAccess" && currentFeatureFlags.remoteAccess === true && enabled === false) {
+      if (
+        flagId === "remoteAccess" &&
+        currentFeatureFlags.remoteAccess === true &&
+        enabled === false
+      ) {
         await stopMobileRelay().catch(() => {
           // Best-effort teardown: disabling the flag should not fail if the relay is already gone.
         });
@@ -932,7 +1034,10 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
     setUpdateState: (updateState) => {
       let settingsPageChanged = false;
       set((state) => {
-        const nextSettingsPage = normalizeSettingsPageId(state.settingsPage, state.desktopFeatureFlags);
+        const nextSettingsPage = normalizeSettingsPageId(
+          state.settingsPage,
+          state.desktopFeatureFlags,
+        );
         settingsPageChanged = nextSettingsPage !== state.settingsPage;
         return {
           updateState,
@@ -951,7 +1056,6 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
     quitAndInstallUpdate: async () => {
       await runQuitAndInstallUpdate();
     },
-  
 
     toggleSidebar: () => {
       set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed }));
@@ -962,7 +1066,6 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
       set((s) => ({ contextSidebarCollapsed: !s.contextSidebarCollapsed }));
       syncDesktopStateCache(get);
     },
-  
 
     setSidebarWidth: (width: number) => {
       set({ sidebarWidth: Math.max(160, Math.min(440, width)) });
@@ -978,6 +1081,5 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
       set({ messageBarHeight: Math.max(80, Math.min(500, height)) });
       syncDesktopStateCache(get);
     },
-  
   };
 }

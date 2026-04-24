@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
-import { defaultRemarkPlugins, Streamdown } from "streamdown";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { ExternalLinkIcon } from "lucide-react";
-import { CodeFilePreview } from "./CodeFilePreview";
-
+import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
+import { defaultRemarkPlugins, Streamdown } from "streamdown";
 import { useAppStore } from "../app/store";
+import {
+  DesktopMessageLink,
+  defaultDesktopRehypePlugins,
+  remarkRewriteDesktopFileLinks,
+} from "../components/ai-elements/message";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
@@ -19,13 +22,18 @@ import {
 } from "../components/ui/dialog";
 import { getPreferredFileApp, openPath, readFileForPreview } from "../lib/desktopCommands";
 import {
-  DesktopMessageLink,
-  defaultDesktopRehypePlugins,
-  remarkRewriteDesktopFileLinks,
-} from "../components/ai-elements/message";
+  type DocxPreviewLayout,
+  decorateDocxPreviewHtml,
+  loadDocxPreviewLayout,
+} from "../lib/docxPreview";
+import {
+  type FilePreviewKind,
+  getExtensionLower,
+  getFilePreviewKind,
+  mimeForPreviewKind,
+} from "../lib/filePreviewKind";
 import { cn } from "../lib/utils";
-import { getExtensionLower, getFilePreviewKind, mimeForPreviewKind, type FilePreviewKind } from "../lib/filePreviewKind";
-import { decorateDocxPreviewHtml, loadDocxPreviewLayout, type DocxPreviewLayout } from "../lib/docxPreview";
+import { CodeFilePreview } from "./CodeFilePreview";
 
 const XLSX_MAX_ROWS = 200;
 const XLSX_MAX_COLS = 40;
@@ -41,7 +49,8 @@ function looksMostlyText(bytes: Uint8Array): boolean {
   let suspicious = 0;
   const sample = Math.min(bytes.length, 8000);
   for (let i = 0; i < sample; i++) {
-    const b = bytes[i]!;
+    const b = bytes[i];
+    if (b === undefined) continue;
     if (b === 9 || b === 10 || b === 13) continue;
     if (b < 32 || b === 127) suspicious++;
   }
@@ -82,7 +91,7 @@ function resolveRelativePath(base: string, relative: string): string {
     else if (segment !== ".") parts.push(segment);
   }
   const joined = parts.join("/");
-  return dir.startsWith("/") ? "/" + joined : joined;
+  return dir.startsWith("/") ? `/${joined}` : joined;
 }
 
 const previewStreamdownPlugins = { cjk, code, math, mermaid };
@@ -112,7 +121,9 @@ function createRemarkResolveRelativeLinks(previewFilePath: string) {
           const pathname = decodeURIComponent(parsed.pathname);
           if (/^\/[a-zA-Z]:/.test(pathname)) localPath = pathname.slice(1).replace(/\//g, "\\");
           else localPath = pathname;
-        } catch { /* not a valid URL, skip */ }
+        } catch {
+          /* not a valid URL, skip */
+        }
       } else if (!isAbsolutePath(href)) {
         const decodedHref = decodeURIComponent(href.split("#")[0]?.split("?")[0] ?? href);
         localPath = resolveRelativePath(previewFilePath, decodedHref);
@@ -245,11 +256,11 @@ export function FilePreviewModal() {
           const wb = XLSX.read(bytes, { type: "array" });
           const firstName = wb.SheetNames[0];
           if (!firstName) {
-            setXlsxHtml("<p class=\"text-muted-foreground\">Empty workbook.</p>");
+            setXlsxHtml('<p class="text-muted-foreground">Empty workbook.</p>');
           } else {
             const sheet = wb.Sheets[firstName];
             if (!sheet) {
-              setXlsxHtml("<p class=\"text-muted-foreground\">Could not read sheet.</p>");
+              setXlsxHtml('<p class="text-muted-foreground">Could not read sheet.</p>');
             } else {
               const range = XLSX.utils.decode_range(sheet["!ref"] ?? "A1");
               const cappedRange = {
@@ -263,7 +274,8 @@ export function FilePreviewModal() {
               const cappedSheet = { ...sheet, "!ref": cappedRef };
               const html = XLSX.utils.sheet_to_html(cappedSheet, { id: "preview-sheet" });
               const note =
-                range.e.r - range.s.r + 1 > XLSX_MAX_ROWS || range.e.c - range.s.c + 1 > XLSX_MAX_COLS
+                range.e.r - range.s.r + 1 > XLSX_MAX_ROWS ||
+                range.e.c - range.s.c + 1 > XLSX_MAX_COLS
                   ? `<p class="text-xs text-muted-foreground mb-2">Showing up to ${XLSX_MAX_ROWS} rows and ${XLSX_MAX_COLS} columns.</p>`
                   : "";
               const sanitized = await sanitizePreviewHtml(note + html);
@@ -368,7 +380,12 @@ export function FilePreviewModal() {
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className={cn("app-surface-opaque flex flex-col gap-0 overflow-hidden p-0", kind === "pdf" ? "h-[96vh] max-w-6xl" : "max-h-[90vh] max-w-5xl")}>
+      <DialogContent
+        className={cn(
+          "app-surface-opaque flex flex-col gap-0 overflow-hidden p-0",
+          kind === "pdf" ? "h-[96vh] max-w-6xl" : "max-h-[90vh] max-w-5xl",
+        )}
+      >
         <DialogHeader className="shrink-0 space-y-3 border-b border-border/60 px-5 py-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -387,7 +404,8 @@ export function FilePreviewModal() {
           {truncated ? (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
               <span>
-                Preview truncated — only the first portion of this file is shown. Open the file in its default app for the full contents.
+                Preview truncated — only the first portion of this file is shown. Open the file in
+                its default app for the full contents.
               </span>
               <Button type="button" size="sm" variant="outline" onClick={openExternal}>
                 <ExternalLinkIcon className="mr-1 size-3.5" />
@@ -408,11 +426,22 @@ export function FilePreviewModal() {
           {loading ? (
             <div className="py-16 text-center text-sm text-muted-foreground">Loading preview…</div>
           ) : error ? (
-            <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+              {error}
+            </div>
           ) : kind === "pdf" && blobUrl ? (
-            <embed src={blobUrl} type="application/pdf" className="h-full w-full" title={titleName} />
+            <embed
+              src={blobUrl}
+              type="application/pdf"
+              className="h-full w-full"
+              title={titleName}
+            />
           ) : kind === "image" && blobUrl ? (
-            <img src={blobUrl} alt={titleName} className="mx-auto block max-h-[min(72vh,720px)] max-w-full object-contain" />
+            <img
+              src={blobUrl}
+              alt={titleName}
+              className="mx-auto block max-h-[min(72vh,720px)] max-w-full object-contain"
+            />
           ) : (kind === "markdown" || kind === "text") && textContent !== null ? (
             kind === "markdown" ? (
               <div data-file-preview-markdown-shell="true" className="mx-auto w-full max-w-[78ch]">
@@ -460,7 +489,11 @@ export function FilePreviewModal() {
                     src={docxLayout.headerImageSrc}
                     alt="Document header"
                     className="block h-auto max-w-full"
-                    style={docxLayout.headerImageWidthPx ? { width: `${docxLayout.headerImageWidthPx}px` } : undefined}
+                    style={
+                      docxLayout.headerImageWidthPx
+                        ? { width: `${docxLayout.headerImageWidthPx}px` }
+                        : undefined
+                    }
                   />
                 </div>
               ) : null}

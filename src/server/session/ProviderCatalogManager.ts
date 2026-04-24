@@ -1,7 +1,7 @@
-import { listProviderAuthMethods } from "../../providers/authRegistry";
 import type { getAiCoworkerPaths } from "../../connect";
-import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import type { getProviderStatuses } from "../../providerStatus";
+import { listProviderAuthMethods } from "../../providers/authRegistry";
+import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
 import type { ServerEvent } from "../protocol";
 
@@ -21,10 +21,10 @@ export class ProviderCatalogManager {
         name: string,
         status: "ok" | "error",
         attributes?: Record<string, string | number | boolean>,
-        durationMs?: number
+        durationMs?: number,
       ) => void;
       formatError: (err: unknown) => string;
-    }
+    },
   ) {}
 
   async emitProviderCatalog() {
@@ -43,7 +43,11 @@ export class ProviderCatalogManager {
         connected: payload.connected,
       });
     } catch (err) {
-      this.opts.emitError("provider_error", "provider", `Failed to load provider catalog: ${String(err)}`);
+      this.opts.emitError(
+        "provider_error",
+        "provider",
+        `Failed to load provider catalog: ${String(err)}`,
+      );
     }
   }
 
@@ -55,7 +59,11 @@ export class ProviderCatalogManager {
         methods: listProviderAuthMethods(),
       });
     } catch (err) {
-      this.opts.emitError("provider_error", "provider", `Failed to load provider auth methods: ${String(err)}`);
+      this.opts.emitError(
+        "provider_error",
+        "provider",
+        `Failed to load provider auth methods: ${String(err)}`,
+      );
     }
   }
 
@@ -78,15 +86,19 @@ export class ProviderCatalogManager {
           providers: providers.length,
           refreshBedrockDiscovery: opts.refreshBedrockDiscovery ?? false,
         },
-        Date.now() - startedAt
+        Date.now() - startedAt,
       );
     } catch (err) {
-      this.opts.emitError("provider_error", "provider", `Failed to refresh provider status: ${String(err)}`);
+      this.opts.emitError(
+        "provider_error",
+        "provider",
+        `Failed to refresh provider status: ${String(err)}`,
+      );
       this.opts.emitTelemetry(
         "provider.status.refresh",
         "error",
         { sessionId: this.opts.sessionId, error: this.opts.formatError(err) },
-        Date.now() - startedAt
+        Date.now() - startedAt,
       );
     } finally {
       this.refreshingProviderStatus = false;

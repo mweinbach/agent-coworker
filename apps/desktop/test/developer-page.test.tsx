@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
@@ -26,42 +25,44 @@ const MOCK_UPDATE_STATE = {
   error: null,
 };
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
@@ -170,7 +171,9 @@ describe("desktop developer page", () => {
         root.render(createElement(DeveloperPage));
       });
 
-      const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.includes("Inherit default"));
+      const button = [...container.querySelectorAll("button")].find((entry) =>
+        entry.textContent?.includes("Inherit default"),
+      );
       if (!button) throw new Error("missing inherit default button");
 
       await act(async () => {
@@ -228,11 +231,19 @@ describe("desktop developer page", () => {
         root.render(createElement(DeveloperPage));
       });
 
-      const checkbox = container.querySelector('[aria-label="Save oversized tool output to scratch files"]');
-      if (!(checkbox instanceof harness.dom.window.HTMLElement)) throw new Error("missing overflow checkbox");
-      const thresholdInput = container.querySelector('[aria-label="Spill after this many characters"]');
-      if (!(thresholdInput instanceof harness.dom.window.HTMLInputElement)) throw new Error("missing threshold input");
-      const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.includes("Inherit default"));
+      const checkbox = container.querySelector(
+        '[aria-label="Save oversized tool output to scratch files"]',
+      );
+      if (!(checkbox instanceof harness.dom.window.HTMLElement))
+        throw new Error("missing overflow checkbox");
+      const thresholdInput = container.querySelector(
+        '[aria-label="Spill after this many characters"]',
+      );
+      if (!(thresholdInput instanceof harness.dom.window.HTMLInputElement))
+        throw new Error("missing threshold input");
+      const button = [...container.querySelectorAll("button")].find((entry) =>
+        entry.textContent?.includes("Inherit default"),
+      );
       if (!button) throw new Error("missing inherit default button");
 
       expect(checkbox.hasAttribute("aria-label")).toBe(true);
@@ -283,7 +294,9 @@ describe("desktop developer page", () => {
         root.render(createElement(DeveloperPage));
       });
 
-      const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.includes("Enable default"));
+      const button = [...container.querySelectorAll("button")].find((entry) =>
+        entry.textContent?.includes("Enable default"),
+      );
       if (!button) throw new Error("missing enable default button");
 
       await act(async () => {
@@ -343,11 +356,19 @@ describe("desktop developer page", () => {
         root.render(createElement(DeveloperPage));
       });
 
-      const checkbox = container.querySelector('[aria-label="Save oversized tool output to scratch files"]');
-      if (!(checkbox instanceof harness.dom.window.HTMLElement)) throw new Error("missing overflow checkbox");
-      const thresholdInput = container.querySelector('[aria-label="Spill after this many characters"]');
-      if (!(thresholdInput instanceof harness.dom.window.HTMLInputElement)) throw new Error("missing threshold input");
-      const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.includes("Enable default"));
+      const checkbox = container.querySelector(
+        '[aria-label="Save oversized tool output to scratch files"]',
+      );
+      if (!(checkbox instanceof harness.dom.window.HTMLElement))
+        throw new Error("missing overflow checkbox");
+      const thresholdInput = container.querySelector(
+        '[aria-label="Spill after this many characters"]',
+      );
+      if (!(thresholdInput instanceof harness.dom.window.HTMLInputElement))
+        throw new Error("missing threshold input");
+      const button = [...container.querySelectorAll("button")].find((entry) =>
+        entry.textContent?.includes("Enable default"),
+      );
       if (!button) throw new Error("missing enable default button");
 
       expect(checkbox.hasAttribute("aria-label")).toBe(true);

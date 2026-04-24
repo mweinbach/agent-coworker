@@ -1,10 +1,14 @@
 import { create } from "zustand";
-
-import { createAppActions } from "./store.actions";
-import { buildCachedDesktopStateSeed } from "./store.actions/bootstrap";
 import { loadDesktopStateCacheRaw } from "./localStateCache";
 import { DEFAULT_PROVIDER_UI_STATE } from "./providerUiState";
-import { createDefaultUpdaterState, type AppStoreDataState, type AppStoreState } from "./store.helpers";
+import { createAppActions } from "./store.actions";
+import { buildCachedDesktopStateSeed } from "./store.actions/bootstrap";
+import {
+  type AppStoreDataState,
+  type AppStoreState,
+  createDefaultUpdaterState,
+} from "./store.helpers";
+import { DEFAULT_RESEARCH_SETTINGS } from "./types";
 
 const initialState: AppStoreDataState = {
   ready: false,
@@ -63,6 +67,16 @@ const initialState: AppStoreDataState = {
   onboardingStep: "welcome" as const,
   onboardingState: { status: "pending" as const, completedAt: null, dismissedAt: null },
 
+  researchTransportWorkspaceId: null,
+  researchById: {},
+  researchOrder: [],
+  selectedResearchId: null,
+  researchListLoading: false,
+  researchListError: null,
+  researchDraftSettings: DEFAULT_RESEARCH_SETTINGS,
+  researchSubscribedIds: [],
+  researchExportPendingIds: [],
+
   sidebarCollapsed: false,
   contextSidebarCollapsed: false,
   contextSidebarWidth: 300,
@@ -75,7 +89,7 @@ const cachedStateSeed = buildCachedDesktopStateSeed(loadDesktopStateCacheRaw());
 export const useAppStore = create<AppStoreState>((set, get) => ({
   ...initialState,
   ...cachedStateSeed,
-  ...createAppActions((partial) => set(partial as any), get),
+  ...createAppActions((partial) => set(partial as Parameters<typeof set>[0]), get),
 }));
 
 export type { AppStoreState } from "./store.helpers";

@@ -3,6 +3,7 @@ import {
   enrichSessionSnapshotCitationsFromCache,
   primeSessionSnapshotCitationCache,
 } from "../../citationMetadata";
+import type { PersistedSessionRecord } from "../../sessionDb";
 import { JSONRPC_ERROR_CODES } from "../protocol";
 import { jsonRpcThreadTurnRequestSchemas } from "../schema.threadTurn";
 import { createThreadTurnProjector } from "../threadReadProjector";
@@ -12,33 +13,35 @@ import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
 const THREAD_READ_JOURNAL_BATCH_SIZE = 250;
 
-export function createThreadRouteHandlers(
-  context: JsonRpcRouteContext,
-): JsonRpcRequestHandlerMap {
+export function createThreadRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "thread/start": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
-      const provider = typeof params.provider === "string"
-        ? params.provider as AgentConfig["provider"]
-        : undefined;
+      const provider =
+        typeof params.provider === "string"
+          ? (params.provider as AgentConfig["provider"])
+          : undefined;
       const model = typeof params.model === "string" ? params.model : undefined;
-      const cwd = typeof params.cwd === "string" && params.cwd.trim()
-        ? params.cwd.trim()
-        : context.getConfig().workingDirectory;
+      const cwd =
+        typeof params.cwd === "string" && params.cwd.trim()
+          ? params.cwd.trim()
+          : context.getConfig().workingDirectory;
       const session = context.threads.create({ cwd, provider, model });
       context.threads.subscribe(ws, session.id);
       const thread = context.utils.buildThreadFromSession(session);
-      void context.journal.enqueue({
-        threadId: session.id,
-        ts: new Date().toISOString(),
-        eventType: "thread/started",
-        turnId: null,
-        itemId: null,
-        requestId: null,
-        payload: { thread },
-      }).catch(() => {
-        // Best-effort journal persistence.
-      });
+      void context.journal
+        .enqueue({
+          threadId: session.id,
+          ts: new Date().toISOString(),
+          eventType: "thread/started",
+          turnId: null,
+          itemId: null,
+          requestId: null,
+          payload: { thread },
+        })
+        .catch(() => {
+          // Best-effort journal persistence.
+        });
       context.jsonrpc.sendResult(ws, message.id, { thread });
       context.jsonrpc.send(ws, { method: "thread/started", params: { thread } });
     },
@@ -46,9 +49,10 @@ export function createThreadRouteHandlers(
     "thread/resume": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
-      const afterSeq = typeof params.afterSeq === "number" && Number.isFinite(params.afterSeq)
-        ? Math.max(0, Math.floor(params.afterSeq))
-        : 0;
+      const afterSeq =
+        typeof params.afterSeq === "number" && Number.isFinite(params.afterSeq)
+          ? Math.max(0, Math.floor(params.afterSeq))
+          : 0;
       if (!threadId) {
         context.jsonrpc.sendError(ws, message.id, {
           code: JSONRPC_ERROR_CODES.invalidParams,
@@ -72,21 +76,17 @@ export function createThreadRouteHandlers(
         replayedRequestIds = context.journal.replay(ws, threadId, afterSeq);
       }
       const pendingPromptEvents = binding.session.getPendingPromptEventsForReplay();
-      context.threads.subscribe(
-        ws,
-        threadId,
-        {
-          ...(binding.session.activeTurnId
-            ? {
-                initialActiveTurnId: binding.session.activeTurnId,
-                initialAgentText: binding.session.getLatestAssistantText() ?? "",
-              }
-            : {}),
-          ...(afterSeq > 0 ? { drainDisconnectedReplayBuffer: true } : {}),
-          pendingPromptEvents,
-          ...(replayedRequestIds?.size ? { skipPendingPromptRequestIds: replayedRequestIds } : {}),
-        },
-      );
+      context.threads.subscribe(ws, threadId, {
+        ...(binding.session.activeTurnId
+          ? {
+              initialActiveTurnId: binding.session.activeTurnId,
+              initialAgentText: binding.session.getLatestAssistantText() ?? "",
+            }
+          : {}),
+        ...(afterSeq > 0 ? { drainDisconnectedReplayBuffer: true } : {}),
+        pendingPromptEvents,
+        ...(replayedRequestIds?.size ? { skipPendingPromptRequestIds: replayedRequestIds } : {}),
+      });
       context.jsonrpc.sendResult(ws, message.id, { thread });
       context.jsonrpc.send(ws, { method: "thread/started", params: { thread } });
     },
@@ -94,15 +94,20 @@ export function createThreadRouteHandlers(
     "thread/list": (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      const threads = new Map<string, ReturnType<JsonRpcRouteContext["utils"]["buildThreadFromRecord"]>>();
+      const threads = new Map<
+        string,
+        ReturnType<JsonRpcRouteContext["utils"]["buildThreadFromRecord"]>
+      >();
       for (const record of context.threads.listPersisted({ cwd })) {
-        if (!context.utils.shouldIncludeThreadSummary({
-          titleSource: record.titleSource,
-          messageCount: record.messageCount,
-          hasPendingAsk: record.hasPendingAsk,
-          hasPendingApproval: record.hasPendingApproval,
-          executionState: record.executionState ?? null,
-        })) {
+        if (
+          !context.utils.shouldIncludeThreadSummary({
+            titleSource: record.titleSource,
+            messageCount: record.messageCount,
+            hasPendingAsk: record.hasPendingAsk,
+            hasPendingApproval: record.hasPendingApproval,
+            executionState: record.executionState ?? null,
+          })
+        ) {
           continue;
         }
         threads.set(record.sessionId, context.utils.buildThreadFromRecord(record));
@@ -111,7 +116,9 @@ export function createThreadRouteHandlers(
         threads.set(session.id, context.utils.buildThreadFromSession(session));
       }
       context.jsonrpc.sendResult(ws, message.id, {
-        threads: [...threads.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+        threads: [...threads.values()].sort((left, right) =>
+          right.updatedAt.localeCompare(left.updatedAt),
+        ),
       });
     },
 
@@ -134,9 +141,17 @@ export function createThreadRouteHandlers(
         return;
       }
       const binding = context.threads.getLive(threadId);
+      const persistedThread = context.threads.getPersisted(threadId);
+      if (!binding?.session && !persistedThread) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `Unknown thread: ${threadId}`,
+        });
+        return;
+      }
       const thread = binding?.session
         ? context.utils.buildThreadFromSession(binding.session)
-        : context.utils.buildThreadFromRecord(context.threads.getPersisted(threadId)!);
+        : context.utils.buildThreadFromRecord(persistedThread as PersistedSessionRecord);
       await context.journal.waitForIdle(threadId);
       // Synchronous cache-only rewrite; network resolution runs in primeSessionSnapshotCitationCache (microtask).
       const enrichedSnapshot = enrichSessionSnapshotCitationsFromCache(snapshot);
@@ -170,9 +185,7 @@ export function createThreadRouteHandlers(
           ...(turns ? { turns } : {}),
         },
         coworkSnapshot: enrichedSnapshot,
-        ...(params.includeTurns === true
-          ? { journalTailSeq }
-          : {}),
+        ...(params.includeTurns === true ? { journalTailSeq } : {}),
       });
       queueMicrotask(() => {
         primeSessionSnapshotCitationCache(enrichedSnapshot);
@@ -199,9 +212,17 @@ export function createThreadRouteHandlers(
         return;
       }
       const liveBinding = context.threads.getLive(threadId);
+      const persistedThread = context.threads.getPersisted(threadId);
+      if (!liveBinding?.session && !persistedThread) {
+        context.jsonrpc.sendError(ws, message.id, {
+          code: JSONRPC_ERROR_CODES.invalidParams,
+          message: `Unknown thread: ${threadId}`,
+        });
+        return;
+      }
       const thread = liveBinding?.session
         ? context.utils.buildThreadFromSession(liveBinding.session)
-        : context.utils.buildThreadFromRecord(context.threads.getPersisted(threadId)!);
+        : context.utils.buildThreadFromRecord(persistedThread as PersistedSessionRecord);
       await context.journal.waitForIdle(threadId);
       const enrichedSnapshot = enrichSessionSnapshotCitationsFromCache(snapshot);
       let journalTailSeq = afterSeq;

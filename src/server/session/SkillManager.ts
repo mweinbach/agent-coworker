@@ -1,16 +1,13 @@
 import fs from "node:fs/promises";
-
-import type {
-  PluginCatalogEntry,
-  PluginInstallTargetScope,
-  SkillInstallationEntry,
-  SkillMutationTargetScope,
-} from "../../types";
-import { getEffectiveInstallationByName } from "../../skills/catalog";
-import { discoverSkillsForConfig, stripSkillFrontMatter } from "../../skills";
 import {
-  buildSkillInstallPreview,
-} from "../../skills/sourceResolver";
+  buildPluginCatalogSnapshot,
+  buildPluginInstallPreview,
+  installPluginsFromSource,
+  resolvePluginCatalogEntry,
+} from "../../plugins";
+import { setPluginEnabled } from "../../plugins/overrides";
+import { discoverSkillsForConfig, stripSkillFrontMatter } from "../../skills";
+import { getEffectiveInstallationByName } from "../../skills/catalog";
 import {
   checkSkillInstallationUpdate,
   copySkillInstallationToScope,
@@ -22,23 +19,32 @@ import {
   installSkillsFromSource,
   updateSkillInstallation,
 } from "../../skills/operations";
-import {
-  buildPluginCatalogSnapshot,
-  buildPluginInstallPreview,
-  installPluginsFromSource,
-  resolvePluginCatalogEntry,
-} from "../../plugins";
-import { setPluginEnabled } from "../../plugins/overrides";
+import { buildSkillInstallPreview } from "../../skills/sourceResolver";
 import { createTools } from "../../tools";
-import { expandCommandTemplate, listCommands as listServerCommands, resolveCommand } from "../commands";
+import type {
+  PluginCatalogEntry,
+  PluginInstallTargetScope,
+  SkillInstallationEntry,
+  SkillMutationTargetScope,
+} from "../../types";
+import {
+  expandCommandTemplate,
+  listCommands as listServerCommands,
+  resolveCommand,
+} from "../commands";
 import type { SessionContext } from "./SessionContext";
 
 export class SkillManager {
   constructor(
     private readonly context: SessionContext,
     private readonly handlers: {
-      sendUserMessage: (text: string, clientMessageId?: string, displayText?: string, attachments?: import("../jsonrpc/routes/shared").FileAttachment[]) => Promise<void>;
-    }
+      sendUserMessage: (
+        text: string,
+        clientMessageId?: string,
+        displayText?: string,
+        attachments?: import("../jsonrpc/routes/shared").FileAttachment[],
+      ) => Promise<void>;
+    },
   ) {}
 
   private skillMutationPendingKey(action: string, id?: string): string {
@@ -50,7 +56,9 @@ export class SkillManager {
   }
 
   private async emitLegacySkillsList() {
-    const skills = await discoverSkillsForConfig(this.context.state.config, { includeDisabled: true });
+    const skills = await discoverSkillsForConfig(this.context.state.config, {
+      includeDisabled: true,
+    });
     this.context.state.discoveredSkills = skills
       .filter((skill) => skill.enabled)
       .map((skill) => ({ name: skill.name, description: skill.description }));
@@ -125,7 +133,9 @@ export class SkillManager {
     });
   }
 
-  private async readInstallationContent(installation: SkillInstallationEntry): Promise<string | null> {
+  private async readInstallationContent(
+    installation: SkillInstallationEntry,
+  ): Promise<string | null> {
     if (!installation.skillPath) {
       return null;
     }
@@ -148,7 +158,9 @@ export class SkillManager {
       return;
     }
 
-    const content = installation.skillPath ? await this.readInstallationContent(installation) : null;
+    const content = installation.skillPath
+      ? await this.readInstallationContent(installation)
+      : null;
     this.context.emit({
       type: "skill_installation",
       sessionId: this.context.id,
@@ -166,7 +178,9 @@ export class SkillManager {
     clearedMutationPendingKeys?: string[];
     refreshAllWorkspaces?: boolean;
   } = {}) {
-    await this.context.refreshSkillsAcrossWorkspaceSessions({ allWorkspaces: refreshAllWorkspaces });
+    await this.context.refreshSkillsAcrossWorkspaceSessions({
+      allWorkspaces: refreshAllWorkspaces,
+    });
     await this.emitLegacySkillsList();
     await this.listCommands();
     await this.emitSkillsCatalog(clearedMutationPendingKeys);
@@ -177,7 +191,7 @@ export class SkillManager {
     }
   }
 
-  private async withSkillMutationLock<T>(task: () => Promise<T>): Promise<T | void> {
+  private async withSkillMutationLock<T>(task: () => Promise<T>): Promise<T | undefined> {
     if (this.context.state.running) {
       this.context.emitError("busy", "session", "Agent is busy");
       return;
@@ -190,11 +204,15 @@ export class SkillManager {
     return await task();
   }
 
-  private isSharedSkillMutationScope(scope: SkillMutationTargetScope | SkillInstallationEntry["scope"]): boolean {
+  private isSharedSkillMutationScope(
+    scope: SkillMutationTargetScope | SkillInstallationEntry["scope"],
+  ): boolean {
     return scope === "global" || scope === "user";
   }
 
-  private isSharedPluginMutationScope(scope: PluginInstallTargetScope | PluginCatalogEntry["scope"]): boolean {
+  private isSharedPluginMutationScope(
+    scope: PluginInstallTargetScope | PluginCatalogEntry["scope"],
+  ): boolean {
     return scope === "user";
   }
 
@@ -223,7 +241,11 @@ export class SkillManager {
       const commands = await listServerCommands(this.context.state.config);
       this.context.emit({ type: "commands", sessionId: this.context.id, commands });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to list commands: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to list commands: ${String(err)}`,
+      );
     }
   }
 
@@ -242,7 +264,11 @@ export class SkillManager {
 
     const expanded = expandCommandTemplate(resolved.template, argumentsText);
     if (!expanded.trim()) {
-      this.context.emitError("validation_failed", "session", `Command "${name}" expanded to empty prompt`);
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        `Command "${name}" expanded to empty prompt`,
+      );
       return;
     }
 
@@ -267,7 +293,9 @@ export class SkillManager {
     }
 
     try {
-      const skills = await discoverSkillsForConfig(this.context.state.config, { includeDisabled: true });
+      const skills = await discoverSkillsForConfig(this.context.state.config, {
+        includeDisabled: true,
+      });
       const skill = skills.find((s) => s.name === skillName);
       if (!skill) {
         this.context.emitError("validation_failed", "session", `Skill "${skillName}" not found.`);
@@ -275,7 +303,12 @@ export class SkillManager {
       }
 
       const content = await fs.readFile(skill.path, "utf-8");
-      this.context.emit({ type: "skill_content", sessionId: this.context.id, skill, content: stripSkillFrontMatter(content) });
+      this.context.emit({
+        type: "skill_content",
+        sessionId: this.context.id,
+        skill,
+        content: stripSkillFrontMatter(content),
+      });
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to read skill: ${String(err)}`);
     }
@@ -291,8 +324,8 @@ export class SkillManager {
       try {
         const catalog = await getSkillCatalog(this.context.state.config);
         const installation =
-          catalog.installations.find((entry) => entry.name === skillName && entry.enabled)
-          ?? catalog.installations.find((entry) => entry.name === skillName);
+          catalog.installations.find((entry) => entry.name === skillName && entry.enabled) ??
+          catalog.installations.find((entry) => entry.name === skillName);
         if (!installation) {
           this.context.emitError("validation_failed", "session", `Skill "${skillName}" not found.`);
           return;
@@ -309,15 +342,20 @@ export class SkillManager {
           config: this.context.state.config,
           installation,
         });
-        const nextInstallation = getEffectiveInstallationByName(nextCatalog, installation.name)
-          ?? nextCatalog.installations.find((entry) => entry.name === installation.name)
-          ?? null;
+        const nextInstallation =
+          getEffectiveInstallationByName(nextCatalog, installation.name) ??
+          nextCatalog.installations.find((entry) => entry.name === installation.name) ??
+          null;
         await this.afterSuccessfulMutation({
           selectedInstallationId: nextInstallation?.installationId,
           refreshAllWorkspaces: this.isSharedSkillMutationScope(installation.scope),
         });
       } catch (err) {
-        this.context.emitError("internal_error", "session", `Failed to disable skill: ${String(err)}`);
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to disable skill: ${String(err)}`,
+        );
       }
     });
   }
@@ -332,8 +370,8 @@ export class SkillManager {
       try {
         const catalog = await getSkillCatalog(this.context.state.config);
         const installation =
-          catalog.installations.find((entry) => entry.name === skillName && !entry.enabled)
-          ?? catalog.installations.find((entry) => entry.name === skillName);
+          catalog.installations.find((entry) => entry.name === skillName && !entry.enabled) ??
+          catalog.installations.find((entry) => entry.name === skillName);
         if (!installation) {
           this.context.emitError("validation_failed", "session", `Skill "${skillName}" not found.`);
           return;
@@ -350,15 +388,20 @@ export class SkillManager {
           config: this.context.state.config,
           installation,
         });
-        const nextInstallation = getEffectiveInstallationByName(nextCatalog, installation.name)
-          ?? nextCatalog.installations.find((entry) => entry.name === installation.name)
-          ?? null;
+        const nextInstallation =
+          getEffectiveInstallationByName(nextCatalog, installation.name) ??
+          nextCatalog.installations.find((entry) => entry.name === installation.name) ??
+          null;
         await this.afterSuccessfulMutation({
           selectedInstallationId: nextInstallation?.installationId,
           refreshAllWorkspaces: this.isSharedSkillMutationScope(installation.scope),
         });
       } catch (err) {
-        this.context.emitError("internal_error", "session", `Failed to enable skill: ${String(err)}`);
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to enable skill: ${String(err)}`,
+        );
       }
     });
   }
@@ -393,7 +436,11 @@ export class SkillManager {
           refreshAllWorkspaces: this.isSharedSkillMutationScope(installation.scope),
         });
       } catch (err) {
-        this.context.emitError("internal_error", "session", `Failed to delete skill: ${String(err)}`);
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to delete skill: ${String(err)}`,
+        );
       }
     });
   }
@@ -402,7 +449,11 @@ export class SkillManager {
     try {
       await this.emitSkillsCatalog();
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to get skill catalog: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to get skill catalog: ${String(err)}`,
+      );
     }
   }
 
@@ -410,7 +461,11 @@ export class SkillManager {
     try {
       await this.emitPluginsCatalog();
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to get plugin catalog: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to get plugin catalog: ${String(err)}`,
+      );
     }
   }
 
@@ -423,7 +478,11 @@ export class SkillManager {
     try {
       await this.emitPluginDetail(pluginId, scope);
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to read plugin detail: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to read plugin detail: ${String(err)}`,
+      );
     }
   }
 
@@ -437,7 +496,11 @@ export class SkillManager {
       });
       await this.emitPluginInstallPreview(preview, true);
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to preview plugin install: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to preview plugin install: ${String(err)}`,
+      );
     }
   }
 
@@ -451,12 +514,18 @@ export class SkillManager {
         });
         await this.emitPluginInstallPreview(result.preview, false);
         await this.afterSuccessfulMutation({
-          clearedMutationPendingKeys: [this.skillMutationPendingKey(`plugin:install:${targetScope}`)],
+          clearedMutationPendingKeys: [
+            this.skillMutationPendingKey(`plugin:install:${targetScope}`),
+          ],
           refreshAllWorkspaces: this.isSharedPluginMutationScope(targetScope),
         });
         await this.emitPluginDetail(result.pluginIds[0] ?? "", targetScope);
       } catch (err) {
-        this.context.emitError("internal_error", "session", `Failed to install plugins: ${String(err)}`);
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to install plugins: ${String(err)}`,
+        );
       }
     });
   }
@@ -485,7 +554,11 @@ export class SkillManager {
           refreshAllWorkspaces: this.isSharedPluginMutationScope(plugin.scope),
         });
       } catch (err) {
-        this.context.emitError("internal_error", "session", `Failed to enable plugin: ${String(err)}`);
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to enable plugin: ${String(err)}`,
+        );
       }
     });
   }
@@ -514,7 +587,11 @@ export class SkillManager {
           refreshAllWorkspaces: this.isSharedPluginMutationScope(plugin.scope),
         });
       } catch (err) {
-        this.context.emitError("internal_error", "session", `Failed to disable plugin: ${String(err)}`);
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to disable plugin: ${String(err)}`,
+        );
       }
     });
   }
@@ -529,7 +606,11 @@ export class SkillManager {
     try {
       await this.emitInstallationDetail(normalizedInstallationId);
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to read skill installation: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to read skill installation: ${String(err)}`,
+      );
     }
   }
 
@@ -548,7 +629,11 @@ export class SkillManager {
         fromUserPreviewRequest: true,
       });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to preview skill install: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to preview skill install: ${String(err)}`,
+      );
     }
   }
 
@@ -572,7 +657,11 @@ export class SkillManager {
           refreshAllWorkspaces: this.isSharedSkillMutationScope(targetScope),
         });
       } catch (err) {
-        this.context.emitError("internal_error", "session", `Failed to install skills: ${String(err)}`);
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to install skills: ${String(err)}`,
+        );
       }
     });
   }
@@ -585,7 +674,11 @@ export class SkillManager {
           installationId,
         });
         if (!installation) {
-          this.context.emitError("validation_failed", "session", `Skill installation "${installationId}" was not found`);
+          this.context.emitError(
+            "validation_failed",
+            "session",
+            `Skill installation "${installationId}" was not found`,
+          );
           return;
         }
         await enableSkillInstallation({
@@ -598,7 +691,11 @@ export class SkillManager {
           refreshAllWorkspaces: this.isSharedSkillMutationScope(installation.scope),
         });
       } catch (err) {
-        this.context.emitError("internal_error", "session", `Failed to enable skill installation: ${String(err)}`);
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to enable skill installation: ${String(err)}`,
+        );
       }
     });
   }
@@ -611,7 +708,11 @@ export class SkillManager {
           installationId,
         });
         if (!installation) {
-          this.context.emitError("validation_failed", "session", `Skill installation "${installationId}" was not found`);
+          this.context.emitError(
+            "validation_failed",
+            "session",
+            `Skill installation "${installationId}" was not found`,
+          );
           return;
         }
         await disableSkillInstallation({
@@ -624,7 +725,11 @@ export class SkillManager {
           refreshAllWorkspaces: this.isSharedSkillMutationScope(installation.scope),
         });
       } catch (err) {
-        this.context.emitError("internal_error", "session", `Failed to disable skill installation: ${String(err)}`);
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to disable skill installation: ${String(err)}`,
+        );
       }
     });
   }
@@ -637,7 +742,11 @@ export class SkillManager {
           installationId,
         });
         if (!installation) {
-          this.context.emitError("validation_failed", "session", `Skill installation "${installationId}" was not found`);
+          this.context.emitError(
+            "validation_failed",
+            "session",
+            `Skill installation "${installationId}" was not found`,
+          );
           return;
         }
         await deleteSkillInstallation({
@@ -649,7 +758,11 @@ export class SkillManager {
           refreshAllWorkspaces: this.isSharedSkillMutationScope(installation.scope),
         });
       } catch (err) {
-        this.context.emitError("internal_error", "session", `Failed to delete skill installation: ${String(err)}`);
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to delete skill installation: ${String(err)}`,
+        );
       }
     });
   }
@@ -662,7 +775,11 @@ export class SkillManager {
           installationId,
         });
         if (!installation) {
-          this.context.emitError("validation_failed", "session", `Skill installation "${installationId}" was not found`);
+          this.context.emitError(
+            "validation_failed",
+            "session",
+            `Skill installation "${installationId}" was not found`,
+          );
           return;
         }
         const result = await copySkillInstallationToScope({
@@ -672,11 +789,17 @@ export class SkillManager {
         });
         await this.afterSuccessfulMutation({
           selectedInstallationId: result.installationId,
-          clearedMutationPendingKeys: [this.skillMutationPendingKey(`copy:${targetScope}`, installationId)],
+          clearedMutationPendingKeys: [
+            this.skillMutationPendingKey(`copy:${targetScope}`, installationId),
+          ],
           refreshAllWorkspaces: this.isSharedSkillMutationScope(targetScope),
         });
       } catch (err) {
-        this.context.emitError("internal_error", "session", `Failed to copy skill installation: ${String(err)}`);
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to copy skill installation: ${String(err)}`,
+        );
       }
     });
   }
@@ -688,7 +811,11 @@ export class SkillManager {
         installationId,
       });
       if (!installation) {
-        this.context.emitError("validation_failed", "session", `Skill installation "${installationId}" was not found`);
+        this.context.emitError(
+          "validation_failed",
+          "session",
+          `Skill installation "${installationId}" was not found`,
+        );
         return;
       }
       const result = await checkSkillInstallationUpdate({
@@ -701,7 +828,11 @@ export class SkillManager {
         result,
       });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to check for skill update: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to check for skill update: ${String(err)}`,
+      );
     }
   }
 
@@ -713,7 +844,11 @@ export class SkillManager {
           installationId,
         });
         if (!installation) {
-          this.context.emitError("validation_failed", "session", `Skill installation "${installationId}" was not found`);
+          this.context.emitError(
+            "validation_failed",
+            "session",
+            `Skill installation "${installationId}" was not found`,
+          );
           return;
         }
         const result = await updateSkillInstallation({
@@ -732,7 +867,11 @@ export class SkillManager {
           refreshAllWorkspaces: this.isSharedSkillMutationScope(installation.scope),
         });
       } catch (err) {
-        this.context.emitError("internal_error", "session", `Failed to update skill installation: ${String(err)}`);
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to update skill installation: ${String(err)}`,
+        );
       }
     });
   }

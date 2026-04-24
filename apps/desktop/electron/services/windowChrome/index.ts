@@ -31,8 +31,7 @@ function resolveWindowChromeContext(
 ): WindowChromeContext {
   return {
     useDarkColors: options.useDarkColors ?? false,
-    useMacosNativeGlass:
-      options.useMacosNativeGlass ?? shouldUseMacosNativeGlass(platform),
+    useMacosNativeGlass: options.useMacosNativeGlass ?? shouldUseMacosNativeGlass(platform),
   };
 }
 

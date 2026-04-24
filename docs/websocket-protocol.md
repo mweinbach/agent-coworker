@@ -258,6 +258,105 @@ The desktop JSON-RPC path now uses this namespace so one workspace connection ca
 
 `cowork/session/agent/inspect` is a thread-scoped, root-only read for child agents. It returns the same detailed inspection payload as the root `inspectAgent` tool: the latest child summary, the full latest assistant text, a parsed structured child report when the final assistant text includes a recognized JSON footer, and compact session/last-turn usage snapshots for the child.
 
+### Research JSON-RPC methods
+
+Research traffic is scoped to the active workspace and separate from chat threads. The desktop `Research` tab reaches the service through that workspace's JSON-RPC connection. Export artifacts and staged uploads live under `~/.cowork/research/*`; canonical metadata rows live in the shared SQLite database with a workspace discriminator.
+
+Requests:
+
+- `research/start`
+  - params: `{ input, title?, settings?, attachedFileIds? }`
+  - result: `{ research }`
+  - starts a new Deep Research interaction and begins background streaming
+- `research/list`
+  - params: `{}`
+  - result: `{ research: ResearchRecord[] }`
+  - lists persisted research rows for the active workspace ordered by `updatedAt DESC`
+- `research/get`
+  - params: `{ researchId }`
+  - result: `{ research: ResearchRecord | null }`
+- `research/cancel`
+  - params: `{ researchId }`
+  - result: `{ research: ResearchRecord | null }`
+  - best-effort cancels the upstream Google interaction, then marks the local row `cancelled`
+- `research/rename`
+  - params: `{ researchId, title }`
+  - result: `{ research: ResearchRecord | null }`
+  - updates the stored `title` on a research row, persists, and broadcasts `research/updated`
+- `research/followup`
+  - params: `{ parentResearchId, input, title?, settings?, attachedFileIds? }`
+  - result: `{ research }`
+  - starts a child research row using `previous_interaction_id`
+- `research/uploadFile`
+  - params: `{ filename, mimeType, contentBase64 }`
+  - result: `{ file }`
+  - stages a pending upload under `~/.cowork/research/uploads`; payloads are capped at 20 MiB decoded size
+- `research/discardUploads`
+  - params: `{ fileIds }`
+  - result: `{ status: "discarded" }`
+  - best-effort deletes staged uploads that were never consumed by `research/start` or `research/followup`
+- `research/attachFile`
+  - params: `{ researchId, fileId }`
+  - result: `{ research: ResearchRecord | null }`
+  - attaches a previously staged upload to an existing row
+- `research/subscribe`
+  - params: `{ researchId, afterEventId? }`
+  - result: `{ research: ResearchRecord | null }`
+  - registers the socket for live `research/*` notifications and optionally replays buffered notifications after `afterEventId`
+- `research/unsubscribe`
+  - params: `{ researchId }`
+  - result: `{ status: "unsubscribed" }`
+- `research/export`
+  - params: `{ researchId, format: "markdown" | "pdf" | "docx" }`
+  - result: `{ path, sizeBytes }`
+  - writes `report.md`, `report.pdf`, or `report.docx` under `~/.cowork/research/<id>/`
+
+`ResearchRecord` currently persists:
+
+- `id`
+- `workspacePath`
+- `parentResearchId`
+- `title`
+- `prompt`
+- `status` (`pending | running | completed | cancelled | failed`)
+- `interactionId`
+- `lastEventId`
+- `inputs` (`fileSearchStoreName?`, attached files)
+- `settings` including plan-approval preference
+- `outputsMarkdown`
+- `thoughtSummaries`
+- `sources`
+- `createdAt`
+- `updatedAt`
+- `error`
+
+Current Google Deep Research wiring notes:
+
+- `background: true` is always used
+- `google_search` and `url_context` remain effectively always on
+- attached files are forwarded through `file_search`
+
+### Research notifications
+
+Sockets subscribed with `research/subscribe` can receive:
+
+- `research/updated`
+  - params: `{ research }`
+  - emitted for lifecycle/status/input changes
+- `research/textDelta`
+  - params: `{ researchId, delta, eventId? }`
+  - append-only markdown stream
+- `research/thoughtDelta`
+  - params: `{ researchId, thought, eventId? }`
+  - thought summaries extracted from Deep Research events
+- `research/sourceFound`
+  - params: `{ researchId, source, eventId? }`
+  - deduped citations discovered in text/file/place annotations
+- `research/completed`
+  - params: `{ researchId, research }`
+- `research/failed`
+  - params: `{ researchId, status: "failed" | "cancelled", error }`
+
 `cowork/session/a2ui/action` forwards a user interaction on an A2UI surface (Phase 2) to the running agent. Clients dispatch it when a user clicks a `Button`, submits a `TextField`, or toggles a `Checkbox` inside an A2UI surface.
 
 Request params:

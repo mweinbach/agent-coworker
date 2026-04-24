@@ -99,7 +99,7 @@ export function createSessionEventCapture({
           }
           removeBindingSink(binding, sinkId);
           reject(error instanceof Error ? error : new Error(String(error)));
-      });
+        });
     });
   };
 

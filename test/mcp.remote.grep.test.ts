@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-
-import type { MCPServerConfig } from "../src/types";
 import { loadMCPTools } from "../src/mcp";
+import type { MCPServerConfig } from "../src/types";
 
 const RUN_REMOTE_SMOKE =
   process.env.RUN_REMOTE_MCP_TESTS === "1" ||
@@ -44,7 +43,8 @@ async function retryRemoteMcpOperation<T>(
   } = {},
 ): Promise<T> {
   const attempts = Math.max(1, opts.attempts ?? 3);
-  const sleep = opts.sleep ?? (async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms)));
+  const sleep =
+    opts.sleep ?? (async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms)));
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -65,17 +65,22 @@ describe("remote MCP retry helper", () => {
     let attempts = 0;
     const sleepCalls: number[] = [];
 
-    const result = await retryRemoteMcpOperation(async () => {
-      attempts += 1;
-      if (attempts < 3) {
-        throw new Error("Streamable HTTP error: Error POSTing to endpoint: 500 Internal Server Error");
-      }
-      return "ok";
-    }, {
-      sleep: async (ms) => {
-        sleepCalls.push(ms);
+    const result = await retryRemoteMcpOperation(
+      async () => {
+        attempts += 1;
+        if (attempts < 3) {
+          throw new Error(
+            "Streamable HTTP error: Error POSTing to endpoint: 500 Internal Server Error",
+          );
+        }
+        return "ok";
       },
-    });
+      {
+        sleep: async (ms) => {
+          sleepCalls.push(ms);
+        },
+      },
+    );
 
     expect(result).toBe("ok");
     expect(attempts).toBe(3);
@@ -85,12 +90,17 @@ describe("remote MCP retry helper", () => {
   test("does not retry non-transient failures", async () => {
     let attempts = 0;
 
-    await expect(retryRemoteMcpOperation(async () => {
-      attempts += 1;
-      throw new Error("401 Unauthorized");
-    }, {
-      sleep: async () => {},
-    })).rejects.toThrow("401 Unauthorized");
+    await expect(
+      retryRemoteMcpOperation(
+        async () => {
+          attempts += 1;
+          throw new Error("401 Unauthorized");
+        },
+        {
+          sleep: async () => {},
+        },
+      ),
+    ).rejects.toThrow("401 Unauthorized");
 
     expect(attempts).toBe(1);
   });
@@ -113,7 +123,7 @@ describe("remote MCP (mcp.grep.app)", () => {
         await loaded.close();
       }
     },
-    30_000
+    30_000,
   );
 
   deep(
@@ -129,10 +139,13 @@ describe("remote MCP (mcp.grep.app)", () => {
         const tool: any = (loaded.tools as any)[toolName];
         expect(typeof tool.execute).toBe("function");
 
-        const res = await retryRemoteMcpOperation(async () => await tool.execute({
-          query: "createMCPClient(",
-          language: ["TypeScript", "JavaScript"],
-        }));
+        const res = await retryRemoteMcpOperation(
+          async () =>
+            await tool.execute({
+              query: "createMCPClient(",
+              language: ["TypeScript", "JavaScript"],
+            }),
+        );
 
         expect(res).toBeDefined();
         expect(Array.isArray(res.content)).toBe(true);
@@ -145,6 +158,6 @@ describe("remote MCP (mcp.grep.app)", () => {
         await loaded.close();
       }
     },
-    30_000
+    30_000,
   );
 });

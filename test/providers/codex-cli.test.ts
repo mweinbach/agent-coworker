@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
-import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot, withEnv, writeJson } from "./helpers";
+import {
+  DEFAULT_PROVIDER_OPTIONS,
+  makeConfig,
+  makeTmpDirs,
+  repoRoot,
+  withEnv,
+  writeJson,
+} from "./helpers";
 
 const DEFAULT_CODEX_MODEL = "gpt-5.4";
 

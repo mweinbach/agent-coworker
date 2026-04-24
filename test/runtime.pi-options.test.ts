@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
-
-import * as __internal from "../src/runtime/piRuntimeOptions";
 import { __internal as piRuntimeInternal } from "../src/runtime/piRuntime";
+import * as __internal from "../src/runtime/piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import type { AgentConfig, ModelMessage } from "../src/types";
 
@@ -40,17 +39,19 @@ function makeParams(config: AgentConfig): RuntimeRunTurnParams {
 
 describe("pi runtime provider option mapping", () => {
   test("maps openai reasoning options", () => {
-    const params = makeParams(makeConfig({
-      provider: "openai",
-      providerOptions: {
-        openai: {
-          reasoningEffort: "high",
-          reasoningSummary: "detailed",
-          textVerbosity: "low",
-          temperature: 0.2,
+    const params = makeParams(
+      makeConfig({
+        provider: "openai",
+        providerOptions: {
+          openai: {
+            reasoningEffort: "high",
+            reasoningSummary: "detailed",
+            textVerbosity: "low",
+            temperature: 0.2,
+          },
         },
-      },
-    }));
+      }),
+    );
     const mapped = __internal.buildPiStreamOptions(params);
     expect(mapped.reasoningEffort).toBe("high");
     expect(mapped.reasoningSummary).toBe("detailed");
@@ -59,16 +60,18 @@ describe("pi runtime provider option mapping", () => {
   });
 
   test("maps anthropic thinking options", () => {
-    const params = makeParams(makeConfig({
-      provider: "anthropic",
-      providerOptions: {
-        anthropic: {
-          thinking: { type: "enabled", budgetTokens: 4096 },
-          effort: "high",
-          interleavedThinking: true,
+    const params = makeParams(
+      makeConfig({
+        provider: "anthropic",
+        providerOptions: {
+          anthropic: {
+            thinking: { type: "enabled", budgetTokens: 4096 },
+            effort: "high",
+            interleavedThinking: true,
+          },
         },
-      },
-    }));
+      }),
+    );
     const mapped = __internal.buildPiStreamOptions(params);
     expect(mapped.thinkingEnabled).toBe(true);
     expect(mapped.thinkingBudgetTokens).toBe(4096);
@@ -77,20 +80,22 @@ describe("pi runtime provider option mapping", () => {
   });
 
   test("google provider options are not mapped in PI runtime (handled by Google Interactions runtime)", () => {
-    const params = makeParams(makeConfig({
-      provider: "google",
-      providerOptions: {
-        google: {
-          thinkingConfig: {
-            includeThoughts: true,
-            thinkingLevel: "high",
-            thinkingBudget: 123,
+    const params = makeParams(
+      makeConfig({
+        provider: "google",
+        providerOptions: {
+          google: {
+            thinkingConfig: {
+              includeThoughts: true,
+              thinkingLevel: "high",
+              thinkingBudget: 123,
+            },
+            temperature: 0.6,
+            toolChoice: "auto",
           },
-          temperature: 0.6,
-          toolChoice: "auto",
         },
-      },
-    }));
+      }),
+    );
     const mapped = __internal.buildPiStreamOptions(params);
     // Google-specific options are no longer mapped through PI runtime
     expect(mapped.thinking).toBeUndefined();
@@ -99,18 +104,20 @@ describe("pi runtime provider option mapping", () => {
   });
 
   test("ignores baseten providerOptions until they are exposed through the shared editable contract", () => {
-    const params = makeParams(makeConfig({
-      provider: "baseten",
-      model: "moonshotai/Kimi-K2.5",
-      preferredChildModel: "moonshotai/Kimi-K2.5",
-      providerOptions: {
-        baseten: {
-          reasoningEffort: "high",
-          temperature: 0.4,
-          toolChoice: "auto",
+    const params = makeParams(
+      makeConfig({
+        provider: "baseten",
+        model: "moonshotai/Kimi-K2.5",
+        preferredChildModel: "moonshotai/Kimi-K2.5",
+        providerOptions: {
+          baseten: {
+            reasoningEffort: "high",
+            temperature: 0.4,
+            toolChoice: "auto",
+          },
         },
-      },
-    }));
+      }),
+    );
     const mapped = __internal.buildPiStreamOptions(params);
     expect(mapped.reasoningEffort).toBeUndefined();
     expect(mapped.temperature).toBeUndefined();
@@ -118,18 +125,20 @@ describe("pi runtime provider option mapping", () => {
   });
 
   test("ignores together providerOptions until they are exposed through the shared editable contract", () => {
-    const params = makeParams(makeConfig({
-      provider: "together",
-      model: "moonshotai/Kimi-K2.5",
-      preferredChildModel: "moonshotai/Kimi-K2.5",
-      providerOptions: {
-        together: {
-          reasoningEffort: "high",
-          temperature: 0.4,
-          toolChoice: "auto",
+    const params = makeParams(
+      makeConfig({
+        provider: "together",
+        model: "moonshotai/Kimi-K2.5",
+        preferredChildModel: "moonshotai/Kimi-K2.5",
+        providerOptions: {
+          together: {
+            reasoningEffort: "high",
+            temperature: 0.4,
+            toolChoice: "auto",
+          },
         },
-      },
-    }));
+      }),
+    );
     const mapped = __internal.buildPiStreamOptions(params);
     expect(mapped.reasoningEffort).toBeUndefined();
     expect(mapped.temperature).toBeUndefined();
@@ -137,18 +146,20 @@ describe("pi runtime provider option mapping", () => {
   });
 
   test("forces NVIDIA reasoning on and ignores manual providerOptions", () => {
-    const params = makeParams(makeConfig({
-      provider: "nvidia",
-      model: "nvidia/nemotron-3-super-120b-a12b",
-      preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
-      providerOptions: {
-        nvidia: {
-          reasoningEffort: "none",
-          temperature: 0.1,
-          maxTokens: 1024,
+    const params = makeParams(
+      makeConfig({
+        provider: "nvidia",
+        model: "nvidia/nemotron-3-super-120b-a12b",
+        preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
+        providerOptions: {
+          nvidia: {
+            reasoningEffort: "none",
+            temperature: 0.1,
+            maxTokens: 1024,
+          },
         },
-      },
-    }));
+      }),
+    );
     const mapped = __internal.buildPiStreamOptions(params);
     expect(mapped.reasoningEffort).toBe("high");
     expect(mapped.temperature).toBeUndefined();
@@ -156,30 +167,32 @@ describe("pi runtime provider option mapping", () => {
   });
 
   test("maps Bedrock provider options into PI stream options", () => {
-    const params = makeParams(makeConfig({
-      provider: "bedrock",
-      model: "amazon.nova-lite-v1:0",
-      preferredChildModel: "amazon.nova-lite-v1:0",
-      providerOptions: {
-        bedrock: {
-          region: "us-west-2",
-          profile: "sandbox",
-          toolChoice: { type: "tool", name: "webSearch" },
-          reasoning: "medium",
-          thinkingBudgets: {
-            low: 1024,
-            medium: 4096,
+    const params = makeParams(
+      makeConfig({
+        provider: "bedrock",
+        model: "amazon.nova-lite-v1:0",
+        preferredChildModel: "amazon.nova-lite-v1:0",
+        providerOptions: {
+          bedrock: {
+            region: "us-west-2",
+            profile: "sandbox",
+            toolChoice: { type: "tool", name: "webSearch" },
+            reasoning: "medium",
+            thinkingBudgets: {
+              low: 1024,
+              medium: 4096,
+            },
+            interleavedThinking: false,
+            requestMetadata: {
+              environment: "dev",
+              team: "core",
+            },
+            temperature: 0.3,
+            maxTokens: 2048,
           },
-          interleavedThinking: false,
-          requestMetadata: {
-            environment: "dev",
-            team: "core",
-          },
-          temperature: 0.3,
-          maxTokens: 2048,
         },
-      },
-    }));
+      }),
+    );
 
     const mapped = __internal.buildPiStreamOptions(params) as any;
     expect(mapped.region).toBe("us-west-2");
@@ -194,47 +207,53 @@ describe("pi runtime provider option mapping", () => {
   });
 
   test("uses codex-cli options with openai fallback", () => {
-    const codexParams = makeParams(makeConfig({
-      provider: "codex-cli",
-      providerOptions: {
-        "codex-cli": { reasoningEffort: "xhigh" },
-      },
-    }));
+    const codexParams = makeParams(
+      makeConfig({
+        provider: "codex-cli",
+        providerOptions: {
+          "codex-cli": { reasoningEffort: "xhigh" },
+        },
+      }),
+    );
     expect(__internal.providerSectionForPi("codex-cli", codexParams.providerOptions)).toEqual({
       reasoningEffort: "xhigh",
     });
 
-    const fallbackParams = makeParams(makeConfig({
-      provider: "codex-cli",
-      providerOptions: {
-        openai: { reasoningEffort: "low" },
-      },
-    }));
+    const fallbackParams = makeParams(
+      makeConfig({
+        provider: "codex-cli",
+        providerOptions: {
+          openai: { reasoningEffort: "low" },
+        },
+      }),
+    );
     expect(__internal.providerSectionForPi("codex-cli", fallbackParams.providerOptions)).toEqual({
       reasoningEffort: "low",
     });
   });
 
   test("maps codex native web search options into PI stream options", () => {
-    const params = makeParams(makeConfig({
-      provider: "codex-cli",
-      providerOptions: {
-        "codex-cli": {
-          reasoningEffort: "high",
-          webSearchBackend: "native",
-          webSearchMode: "live",
-          webSearch: {
-            contextSize: "medium",
-            allowedDomains: ["openai.com", "example.com"],
-            location: {
-              country: "US",
-              city: "New York",
-              timezone: "America/New_York",
+    const params = makeParams(
+      makeConfig({
+        provider: "codex-cli",
+        providerOptions: {
+          "codex-cli": {
+            reasoningEffort: "high",
+            webSearchBackend: "native",
+            webSearchMode: "live",
+            webSearch: {
+              contextSize: "medium",
+              allowedDomains: ["openai.com", "example.com"],
+              location: {
+                country: "US",
+                city: "New York",
+                timezone: "America/New_York",
+              },
             },
           },
         },
-      },
-    }));
+      }),
+    );
 
     const mapped = __internal.buildPiStreamOptions(params) as any;
     expect(mapped.reasoningEffort).toBe("high");
@@ -251,11 +270,9 @@ describe("pi runtime provider option mapping", () => {
 
   test("includes explicit stream headers when provided", () => {
     const params = makeParams(makeConfig({ provider: "codex-cli" }));
-    const mapped = __internal.buildPiStreamOptions(
-      params,
-      "token-123",
-      { "ChatGPT-Account-ID": "acct_123" }
-    ) as any;
+    const mapped = __internal.buildPiStreamOptions(params, "token-123", {
+      "ChatGPT-Account-ID": "acct_123",
+    }) as any;
 
     expect(mapped.apiKey).toBe("token-123");
     expect(mapped.headers).toEqual({ "ChatGPT-Account-ID": "acct_123" });
@@ -288,10 +305,7 @@ describe("pi runtime provider option mapping", () => {
       properties: {
         position: {
           type: "array",
-          items: [
-            { type: "number" },
-            { type: "number" },
-          ],
+          items: [{ type: "number" }, { type: "number" }],
           additionalItems: false,
         },
       },
@@ -314,36 +328,36 @@ describe("pi runtime provider option mapping", () => {
     expect(jsonSchema.properties.filePath.minLength).toBeUndefined();
     expect(jsonSchema.properties.content.maxLength).toBeUndefined();
 
-    const patterned = __internal.toPiJsonSchema({
-      type: "object",
-      properties: {
-        color: {
-          type: "string",
-          pattern: "^#[0-9a-fA-F]{6}$",
+    const patterned = __internal.toPiJsonSchema(
+      {
+        type: "object",
+        properties: {
+          color: {
+            type: "string",
+            pattern: "^#[0-9a-fA-F]{6}$",
+          },
         },
       },
-    }, "fireworks") as any;
+      "fireworks",
+    ) as any;
     expect(patterned.properties.color.pattern).toBeUndefined();
   });
 
   test("rewrites Fireworks oneOf schemas to anyOf", () => {
-    const jsonSchema = __internal.toPiJsonSchema({
-      type: "object",
-      properties: {
-        value: {
-          oneOf: [
-            { type: "string" },
-            { type: "number" },
-          ],
+    const jsonSchema = __internal.toPiJsonSchema(
+      {
+        type: "object",
+        properties: {
+          value: {
+            oneOf: [{ type: "string" }, { type: "number" }],
+          },
         },
       },
-    }, "fireworks") as any;
+      "fireworks",
+    ) as any;
 
     expect(jsonSchema.properties.value.oneOf).toBeUndefined();
-    expect(jsonSchema.properties.value.anyOf).toEqual([
-      { type: "string" },
-      { type: "number" },
-    ]);
+    expect(jsonSchema.properties.value.anyOf).toEqual([{ type: "string" }, { type: "number" }]);
   });
 
   test("keeps small Fireworks tool schemas intact when they fit the provider budget", () => {
@@ -405,7 +419,10 @@ describe("pi runtime provider option mapping", () => {
         key,
         {
           type: "string",
-          enum: Array.from({ length: 24 }, (__unused, enumIndex) => `value-${enumIndex}-${"y".repeat(24)}`),
+          enum: Array.from(
+            { length: 24 },
+            (__unused, enumIndex) => `value-${enumIndex}-${"y".repeat(24)}`,
+          ),
         },
       ] as const;
     });

@@ -34,7 +34,9 @@ function extractHints(template: string): string[] {
   const result: string[] = [];
   const numbered = template.match(/\$[1-9]\d*/g);
   if (numbered) {
-    for (const hint of [...new Set(numbered)].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)))) {
+    for (const hint of [...new Set(numbered)].sort(
+      (a, b) => Number(a.slice(1)) - Number(b.slice(1)),
+    )) {
       result.push(hint);
     }
   }
@@ -47,17 +49,21 @@ function extractHints(template: string): string[] {
 function tokenizeArguments(argumentsText: string): string[] {
   const tokens: string[] = [];
   const re = /(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi;
-  let match: RegExpExecArray | null = null;
-
-  while ((match = re.exec(argumentsText)) !== null) {
+  let match = re.exec(argumentsText);
+  while (match !== null) {
     const token = (match[0] ?? "").replace(/^["']|["']$/g, "");
     tokens.push(token);
+    match = re.exec(argumentsText);
   }
 
   return tokens;
 }
 
-async function loadBuiltinTemplate(config: AgentConfig, name: string, filename: string): Promise<string> {
+async function loadBuiltinTemplate(
+  config: AgentConfig,
+  name: string,
+  filename: string,
+): Promise<string> {
   const templatePath = path.join(config.builtInDir, "prompts", "commands", filename);
   try {
     const raw = await fs.readFile(templatePath, "utf-8");
@@ -73,7 +79,7 @@ function commandInfo(
   name: string,
   description: string | undefined,
   source: CommandSource,
-  template: string
+  template: string,
 ): CommandDefinition {
   return {
     name,
@@ -91,7 +97,7 @@ async function buildCommandMap(config: AgentConfig): Promise<Map<string, Command
     const template = await loadBuiltinTemplate(config, builtin.name, builtin.filename);
     map.set(
       normalizeName(builtin.name),
-      commandInfo(builtin.name, builtin.description, "command", template)
+      commandInfo(builtin.name, builtin.description, "command", template),
     );
   }
 
@@ -100,7 +106,10 @@ async function buildCommandMap(config: AgentConfig): Promise<Map<string, Command
     if (!normalized) continue;
     const template = command.template.trim();
     if (!template) continue;
-    map.set(normalized, commandInfo(name, command.description, command.source ?? "command", template));
+    map.set(
+      normalized,
+      commandInfo(name, command.description, command.source ?? "command", template),
+    );
   }
 
   const skills = await discoverSkillsForConfig(config);
@@ -134,7 +143,10 @@ export async function listCommands(config: AgentConfig): Promise<CommandInfo[]> 
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export async function resolveCommand(config: AgentConfig, name: string): Promise<CommandDefinition | null> {
+export async function resolveCommand(
+  config: AgentConfig,
+  name: string,
+): Promise<CommandDefinition | null> {
   const map = await buildCommandMap(config);
   return map.get(normalizeName(name)) ?? null;
 }

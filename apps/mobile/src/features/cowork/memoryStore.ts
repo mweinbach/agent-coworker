@@ -26,7 +26,7 @@ function getClientAndCwd() {
   return { client, cwd };
 }
 
-export const useMemoryStore = create<MemoryStoreState>((set, get) => ({
+export const useMemoryStore = create<MemoryStoreState>((set, _get) => ({
   entries: [],
   loading: false,
   error: null,
@@ -64,7 +64,11 @@ export const useMemoryStore = create<MemoryStoreState>((set, get) => ({
   async deleteMemory(scope: "workspace" | "user", id: string) {
     const { client, cwd } = getClientAndCwd();
     try {
-      const result = await callParsedControlMethod(client, "cowork/memory/delete", { cwd, scope, id });
+      const result = await callParsedControlMethod(client, "cowork/memory/delete", {
+        cwd,
+        scope,
+        id,
+      });
       set({ entries: result.event.memories });
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error) });

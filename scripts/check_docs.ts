@@ -16,13 +16,7 @@ const REPO_PATH_PREFIXES = [
   "prompts/",
   "test/",
 ];
-const TOP_LEVEL_DOCS = [
-  "README.md",
-  "AGENTS.md",
-  "CLAUDE.md",
-  "GEMINI.md",
-  "CONTRIBUTING.md",
-];
+const TOP_LEVEL_DOCS = ["README.md", "AGENTS.md", "CLAUDE.md", "GEMINI.md", "CONTRIBUTING.md"];
 const CURATED_DOCS_WITH_PATH_CHECKS = [
   ...TOP_LEVEL_DOCS,
   "docs/harness/index.md",
@@ -72,7 +66,11 @@ function normalizeDocReference(reference: string): string {
 function isPlainRelativeDocLink(reference: string): boolean {
   const normalized = normalizeDocReference(reference);
   if (!normalized || normalized.includes(" ")) return false;
-  if (normalized.startsWith("http://") || normalized.startsWith("https://") || normalized.startsWith("mailto:")) {
+  if (
+    normalized.startsWith("http://") ||
+    normalized.startsWith("https://") ||
+    normalized.startsWith("mailto:")
+  ) {
     return false;
   }
   if (normalized.startsWith("./") || normalized.startsWith("../")) return false;
@@ -84,12 +82,22 @@ function isPlainRelativeDocLink(reference: string): boolean {
 
 function looksLikeInlineRepoPath(reference: string): boolean {
   const normalized = normalizeDocReference(reference);
-  if (!normalized || normalized.startsWith("http://") || normalized.startsWith("https://") || normalized.startsWith("mailto:")) {
+  if (
+    !normalized ||
+    normalized.startsWith("http://") ||
+    normalized.startsWith("https://") ||
+    normalized.startsWith("mailto:")
+  ) {
     return false;
   }
   if (normalized.startsWith("~/.agent") || normalized.startsWith("~/.cowork")) return false;
   if (normalized.includes("<") || normalized.includes(">")) return false;
-  if (normalized.includes("myTool") || normalized.includes("myProvider") || normalized.includes("my-skill")) return false;
+  if (
+    normalized.includes("myTool") ||
+    normalized.includes("myProvider") ||
+    normalized.includes("my-skill")
+  )
+    return false;
   if (normalized.startsWith("./")) {
     const stripped = normalized.slice(2);
     if (stripped.startsWith(".")) return false;
@@ -98,7 +106,10 @@ function looksLikeInlineRepoPath(reference: string): boolean {
   if (normalized.startsWith("../")) {
     const stripped = normalized.replace(/^(\.\.\/)+/, "");
     if (stripped.startsWith(".")) return false;
-    return TOP_LEVEL_DOCS.includes(stripped) || REPO_PATH_PREFIXES.some((prefix) => stripped.startsWith(prefix));
+    return (
+      TOP_LEVEL_DOCS.includes(stripped) ||
+      REPO_PATH_PREFIXES.some((prefix) => stripped.startsWith(prefix))
+    );
   }
   if (TOP_LEVEL_DOCS.includes(normalized)) return true;
   return REPO_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix));
@@ -137,7 +148,11 @@ export function resolveDocReferencePath(
   const docDir = path.dirname(path.join(cwd, docPath));
 
   if (kind === "markdown") {
-    if (isPlainRelativeDocLink(normalized) || normalized.startsWith("./") || normalized.startsWith("../")) {
+    if (
+      isPlainRelativeDocLink(normalized) ||
+      normalized.startsWith("./") ||
+      normalized.startsWith("../")
+    ) {
       return path.resolve(docDir, normalized);
     }
     return path.resolve(cwd, normalized);
@@ -224,7 +239,7 @@ async function main() {
 
   for (const docPath of CURATED_DOCS_WITH_PATH_CHECKS) {
     const text = await readText(path.join(cwd, docPath));
-    checks.push(...await validateReferencedPaths(cwd, docPath, text));
+    checks.push(...(await validateReferencedPaths(cwd, docPath, text)));
   }
 
   const failures = checks.filter((check): check is { ok: false; message: string } => !check.ok);

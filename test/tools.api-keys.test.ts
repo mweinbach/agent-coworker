@@ -2,13 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import {
-  maskApiKey,
-  readToolApiKey,
-  writeToolApiKey,
-} from "../src/tools/api-keys";
 import type { AiCoworkerPaths, ConnectionStore } from "../src/store/connections";
+import { maskApiKey, readToolApiKey, writeToolApiKey } from "../src/tools/api-keys";
 
 describe("api-keys tool", () => {
   let tmpDir: string;
@@ -216,7 +211,7 @@ describe("api-keys tool", () => {
           name: "exa",
           apiKey: "   ",
           paths: mockPaths,
-        })
+        }),
       ).rejects.toThrow("API key is required.");
     });
 

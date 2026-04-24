@@ -64,7 +64,7 @@ function truncateString(value: string): string {
 
 function sanitizeAttributeValue(
   key: string,
-  value: string | number | boolean
+  value: string | number | boolean,
 ): AttributeValue | undefined {
   if (isSecretLikeKey(key)) return "[REDACTED]";
 
@@ -81,7 +81,7 @@ function sanitizeAttributeValue(
 }
 
 function sanitizeAttributes(
-  attributes: Record<string, string | number | boolean> | undefined
+  attributes: Record<string, string | number | boolean> | undefined,
 ): Record<string, AttributeValue> {
   if (!attributes) return {};
 
@@ -94,11 +94,16 @@ function sanitizeAttributes(
   return out;
 }
 
-function computeSpanWindow(atIso: string, durationMs: number | undefined): { startTime: Date; endTime: Date } {
+function computeSpanWindow(
+  atIso: string,
+  durationMs: number | undefined,
+): { startTime: Date; endTime: Date } {
   const parsedMs = Date.parse(atIso);
   const endMs = Number.isFinite(parsedMs) ? parsedMs : Date.now();
   const spanDurationMs =
-    typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 1;
+    typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0
+      ? durationMs
+      : 1;
   const startMs = Math.max(0, endMs - spanDurationMs);
   return {
     startTime: new Date(startMs),
@@ -107,17 +112,13 @@ function computeSpanWindow(atIso: string, durationMs: number | undefined): { sta
 }
 
 function sameHealth(a: ObservabilityHealth, b: ObservabilityHealth): boolean {
-  return (
-    a.status === b.status &&
-    a.reason === b.reason &&
-    (a.message ?? "") === (b.message ?? "")
-  );
+  return a.status === b.status && a.reason === b.reason && (a.message ?? "") === (b.message ?? "");
 }
 
 export async function emitObservabilityEvent(
   config: AgentConfig,
   event: ObservabilityEvent,
-  deps?: EmitObservabilityDeps
+  deps?: EmitObservabilityDeps,
 ): Promise<EmitObservabilityResult> {
   const runtime: RuntimeDeps = {
     ensure: deps?.runtime?.ensure ?? ensureObservabilityRuntime,

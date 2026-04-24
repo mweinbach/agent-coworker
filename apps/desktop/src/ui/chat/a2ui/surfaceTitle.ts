@@ -16,11 +16,12 @@ export function extractSurfaceTitle(
   let bestHeading: { text: string; level: number } | null = null;
   let fallbackText: string | null = null;
   while (queue.length > 0) {
-    const current = queue.shift()!;
+    const current = queue.shift();
+    if (!current) continue;
     if (
-      (current.type === "Heading" || current.type === "Text" || current.type === "Paragraph")
-      && current.props
-      && typeof current.props === "object"
+      (current.type === "Heading" || current.type === "Text" || current.type === "Paragraph") &&
+      current.props &&
+      typeof current.props === "object"
     ) {
       const props = current.props as Record<string, unknown>;
       const text = stringifyDynamic(

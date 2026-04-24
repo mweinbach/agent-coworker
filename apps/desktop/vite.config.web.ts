@@ -1,9 +1,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
 
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(appRoot, "../..");
@@ -29,7 +28,8 @@ function resolveHttpServerTarget(value: string | undefined): string {
   if (!trimmed) return defaultHttpServerTarget;
   try {
     const parsed = new URL(trimmed);
-    const proto = parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
+    const proto =
+      parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
     return `${proto}//${parsed.host}`;
   } catch {
     return defaultHttpServerTarget;
@@ -41,7 +41,8 @@ function resolveWsServerTarget(value: string | undefined): string {
   if (!trimmed) return defaultWsServerTarget;
   try {
     const parsed = new URL(trimmed);
-    const proto = parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+    const proto =
+      parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
     return `${proto}//${parsed.host}`;
   } catch {
     return defaultWsServerTarget;

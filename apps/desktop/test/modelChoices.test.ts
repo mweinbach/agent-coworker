@@ -7,8 +7,8 @@ import {
   MODEL_CHOICES,
   modelChoicesFromCatalog,
   modelDisplayNamesFromCatalog,
-  modelOptionsFromCatalog,
   modelOptionsForProvider,
+  modelOptionsFromCatalog,
   resolveModelDisplayLabel,
 } from "../src/lib/modelChoices";
 import type { ProviderName } from "../src/lib/wsProtocol";
@@ -45,7 +45,9 @@ describe("modelDisplayNamesFromCatalog", () => {
         defaultModel: "accounts/fireworks/models/glm-5",
       },
     ]);
-    expect(resolveModelDisplayLabel("fireworks", "accounts/fireworks/models/glm-5", map)).toBe("GLM-5");
+    expect(resolveModelDisplayLabel("fireworks", "accounts/fireworks/models/glm-5", map)).toBe(
+      "GLM-5",
+    );
   });
 });
 
@@ -74,20 +76,36 @@ describe("modelOptionsForProvider", () => {
 
   test("omits baseten from user-facing choices", () => {
     expect(MODEL_CHOICES.baseten).toEqual([]);
-    expect(modelChoicesFromCatalog([
-      {
-        id: "baseten",
-        name: "Baseten",
-        models: [{ id: "moonshotai/Kimi-K2.5", displayName: "Kimi K2.5", knowledgeCutoff: "Unknown", supportsImageInput: false }],
-        defaultModel: "moonshotai/Kimi-K2.5",
-      },
-      {
-        id: "openai",
-        name: "OpenAI",
-        models: [{ id: "gpt-5.4", displayName: "GPT-5.4", knowledgeCutoff: "Unknown", supportsImageInput: true }],
-        defaultModel: "gpt-5.4",
-      },
-    ]).baseten).toBeUndefined();
+    expect(
+      modelChoicesFromCatalog([
+        {
+          id: "baseten",
+          name: "Baseten",
+          models: [
+            {
+              id: "moonshotai/Kimi-K2.5",
+              displayName: "Kimi K2.5",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
+          ],
+          defaultModel: "moonshotai/Kimi-K2.5",
+        },
+        {
+          id: "openai",
+          name: "OpenAI",
+          models: [
+            {
+              id: "gpt-5.4",
+              displayName: "GPT-5.4",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+            },
+          ],
+          defaultModel: "gpt-5.4",
+        },
+      ]).baseten,
+    ).toBeUndefined();
   });
 
   test("filters provider options down to connected user-facing providers", () => {
@@ -147,7 +165,14 @@ describe("modelOptionsForProvider", () => {
         {
           id: "google",
           name: "Google",
-          models: [{ id: "gemini-3-pro", displayName: "Gemini 3 Pro", knowledgeCutoff: "Unknown", supportsImageInput: true }],
+          models: [
+            {
+              id: "gemini-3-pro",
+              displayName: "Gemini 3 Pro",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+            },
+          ],
           defaultModel: "gemini-3-pro",
         },
       ],
@@ -188,8 +213,18 @@ describe("modelOptionsForProvider", () => {
           id: "lmstudio",
           name: "LM Studio",
           models: [
-            { id: "model-a", displayName: "Model A", knowledgeCutoff: "Unknown", supportsImageInput: false },
-            { id: "model-b", displayName: "Model B", knowledgeCutoff: "Unknown", supportsImageInput: false },
+            {
+              id: "model-a",
+              displayName: "Model A",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
+            {
+              id: "model-b",
+              displayName: "Model B",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
           ],
           defaultModel: "model-a",
         },
@@ -211,8 +246,18 @@ describe("modelOptionsForProvider", () => {
           id: "lmstudio",
           name: "LM Studio",
           models: [
-            { id: "model-a", displayName: "Model A", knowledgeCutoff: "Unknown", supportsImageInput: false },
-            { id: "model-b", displayName: "Model B", knowledgeCutoff: "Unknown", supportsImageInput: false },
+            {
+              id: "model-a",
+              displayName: "Model A",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
+            {
+              id: "model-b",
+              displayName: "Model B",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
           ],
           defaultModel: "model-a",
         },
@@ -235,13 +280,27 @@ describe("modelOptionsForProvider", () => {
         {
           id: "lmstudio",
           name: "LM Studio",
-          models: [{ id: "model-a", displayName: "Model A", knowledgeCutoff: "Unknown", supportsImageInput: false }],
+          models: [
+            {
+              id: "model-a",
+              displayName: "Model A",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: false,
+            },
+          ],
           defaultModel: "model-a",
         },
         {
           id: "openai",
           name: "OpenAI",
-          models: [{ id: "gpt-5.4", displayName: "GPT-5.4", knowledgeCutoff: "Unknown", supportsImageInput: true }],
+          models: [
+            {
+              id: "gpt-5.4",
+              displayName: "GPT-5.4",
+              knowledgeCutoff: "Unknown",
+              supportsImageInput: true,
+            },
+          ],
           defaultModel: "gpt-5.4",
         },
       ],

@@ -2,9 +2,15 @@ export const MAX_TURN_ATTACHMENT_COUNT = 8;
 export const MAX_ATTACHMENT_INLINE_BYTE_SIZE = 25 * 1024 * 1024;
 export const MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE = 25 * 1024 * 1024;
 export const MAX_ATTACHMENT_UPLOAD_BYTE_SIZE = 100 * 1024 * 1024;
-export const MAX_ATTACHMENT_BASE64_SIZE = getBase64SizeFromByteLength(MAX_ATTACHMENT_INLINE_BYTE_SIZE);
-export const MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE = getBase64SizeFromByteLength(MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE);
-export const MAX_ATTACHMENT_UPLOAD_BASE64_SIZE = getBase64SizeFromByteLength(MAX_ATTACHMENT_UPLOAD_BYTE_SIZE);
+export const MAX_ATTACHMENT_BASE64_SIZE = getBase64SizeFromByteLength(
+  MAX_ATTACHMENT_INLINE_BYTE_SIZE,
+);
+export const MAX_TURN_ATTACHMENT_TOTAL_BASE64_SIZE = getBase64SizeFromByteLength(
+  MAX_TURN_ATTACHMENT_TOTAL_INLINE_BYTE_SIZE,
+);
+export const MAX_ATTACHMENT_UPLOAD_BASE64_SIZE = getBase64SizeFromByteLength(
+  MAX_ATTACHMENT_UPLOAD_BYTE_SIZE,
+);
 const BASE64_BODY_PATTERN = /^[A-Za-z0-9+/]*$/;
 
 export function getBase64SizeFromByteLength(byteLength: number): number {
@@ -12,7 +18,7 @@ export function getBase64SizeFromByteLength(byteLength: number): number {
 }
 
 export function decodeBase64Strict(value: string): Buffer | null {
-  if (value.length === 0 || value.includes("=") && !/=+$/.test(value)) {
+  if (value.length === 0 || (value.includes("=") && !/=+$/.test(value))) {
     return null;
   }
 
@@ -131,9 +137,7 @@ export function getAttachmentValidationMessage(
 }
 
 export function formatAttachmentDisplayText(fileNames: readonly string[]): string {
-  const visibleNames = fileNames
-    .map((name) => name.trim())
-    .filter((name) => name.length > 0);
+  const visibleNames = fileNames.map((name) => name.trim()).filter((name) => name.length > 0);
   if (visibleNames.length === 0) {
     return "";
   }

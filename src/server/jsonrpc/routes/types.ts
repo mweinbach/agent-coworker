@@ -1,5 +1,6 @@
 import type { AgentConfig } from "../../../types";
 import type { ServerEvent } from "../../protocol";
+import type { ResearchService } from "../../research/ResearchService";
 import type { AgentSession } from "../../session/AgentSession";
 import type { PersistedSessionRecord, PersistedThreadJournalEvent } from "../../sessionDb";
 import type { SessionBinding, StartServerSocket } from "../../startServer/types";
@@ -50,6 +51,7 @@ export type JsonRpcRequestHandlerMap = Record<string, JsonRpcRequestHandler>;
 
 export interface JsonRpcRouteContext {
   getConfig(): AgentConfig;
+  research: ResearchService;
   threads: {
     create(options: {
       cwd: string;
@@ -83,8 +85,16 @@ export interface JsonRpcRouteContext {
   journal: {
     enqueue(event: Omit<PersistedThreadJournalEvent, "seq">): Promise<unknown>;
     waitForIdle(threadId: string): Promise<void>;
-    list(threadId: string, opts?: { afterSeq?: number; limit?: number }): PersistedThreadJournalEvent[];
-    replay(ws: StartServerSocket, threadId: string, afterSeq?: number, limit?: number): ReadonlySet<string>;
+    list(
+      threadId: string,
+      opts?: { afterSeq?: number; limit?: number },
+    ): PersistedThreadJournalEvent[];
+    replay(
+      ws: StartServerSocket,
+      threadId: string,
+      afterSeq?: number,
+      limit?: number,
+    ): ReadonlySet<string>;
   };
   events: {
     capture<T extends ServerEvent>(

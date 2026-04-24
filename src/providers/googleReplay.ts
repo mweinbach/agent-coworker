@@ -10,16 +10,20 @@ type GooglePrepareStepPayload = {
 };
 
 const recordSchema = z.record(z.string(), z.unknown());
-const assistantMessageWithContentSchema = z.object({
-  role: z.literal("assistant"),
-  content: z.array(z.unknown()),
-}).passthrough();
+const assistantMessageWithContentSchema = z
+  .object({
+    role: z.literal("assistant"),
+    content: z.array(z.unknown()),
+  })
+  .passthrough();
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return recordSchema.safeParse(v).success;
 }
 
-function getGoogleProviderKey(providerOptions: Record<string, unknown>): GoogleProviderKey | undefined {
+function getGoogleProviderKey(
+  providerOptions: Record<string, unknown>,
+): GoogleProviderKey | undefined {
   if (isRecord(providerOptions.google)) return "google";
   if (isRecord(providerOptions.vertex)) return "vertex";
   return undefined;
@@ -27,8 +31,12 @@ function getGoogleProviderKey(providerOptions: Record<string, unknown>): GoogleP
 
 function getGoogleThoughtSignatureFromPart(part: Record<string, unknown>): string | undefined {
   const directSignature =
-    (typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0 ? part.thoughtSignature : undefined) ??
-    (typeof part.thinkingSignature === "string" && part.thinkingSignature.length > 0 ? part.thinkingSignature : undefined);
+    (typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0
+      ? part.thoughtSignature
+      : undefined) ??
+    (typeof part.thinkingSignature === "string" && part.thinkingSignature.length > 0
+      ? part.thinkingSignature
+      : undefined);
   if (directSignature) return directSignature;
 
   const providerOptions = part.providerOptions;
@@ -43,9 +51,9 @@ function getGoogleThoughtSignatureFromPart(part: Record<string, unknown>): strin
 }
 
 function withGoogleIncludeThoughts(
-  providerOptions: Record<string, any> | undefined,
-  includeThoughts: boolean
-): Record<string, any> | undefined {
+  providerOptions: Record<string, unknown> | undefined,
+  includeThoughts: boolean,
+): Record<string, unknown> | undefined {
   if (!isRecord(providerOptions)) return providerOptions;
   const providerKey = getGoogleProviderKey(providerOptions) ?? "google";
   const googleOptions = isRecord(providerOptions[providerKey]) ? providerOptions[providerKey] : {};
@@ -95,7 +103,9 @@ function repairGoogleToolCallSignatures(messages: ModelMessage[]): {
 
       const providerOptions = isRecord(part.providerOptions) ? part.providerOptions : {};
       const providerKey: GoogleProviderKey = isRecord(providerOptions.vertex) ? "vertex" : "google";
-      const providerValue = isRecord(providerOptions[providerKey]) ? providerOptions[providerKey] : {};
+      const providerValue = isRecord(providerOptions[providerKey])
+        ? providerOptions[providerKey]
+        : {};
 
       repairedToolCalls += 1;
       messageChanged = true;
@@ -112,7 +122,9 @@ function repairGoogleToolCallSignatures(messages: ModelMessage[]): {
       };
     });
 
-    return messageChanged ? ({ ...parsedMessage.data, content: repairedContent } as ModelMessage) : message;
+    return messageChanged
+      ? ({ ...parsedMessage.data, content: repairedContent } as ModelMessage)
+      : message;
   });
 
   return {
@@ -124,7 +136,7 @@ function repairGoogleToolCallSignatures(messages: ModelMessage[]): {
 
 export function buildGooglePrepareStep(
   providerOptions: Record<string, any> | undefined,
-  log: (line: string) => void
+  log: (line: string) => void,
 ): ((step: GooglePrepareStepPayload) => Promise<Record<string, unknown> | undefined>) | undefined {
   if (!isRecord(providerOptions)) return undefined;
   const providerKey = getGoogleProviderKey(providerOptions);
@@ -132,7 +144,9 @@ export function buildGooglePrepareStep(
 
   const googleOptions = providerOptions[providerKey];
   if (!isRecord(googleOptions)) return undefined;
-  const thinkingConfig = isRecord(googleOptions.thinkingConfig) ? googleOptions.thinkingConfig : undefined;
+  const thinkingConfig = isRecord(googleOptions.thinkingConfig)
+    ? googleOptions.thinkingConfig
+    : undefined;
   if (thinkingConfig?.includeThoughts !== true) return undefined;
 
   return async ({ stepNumber, messages }: GooglePrepareStepPayload) => {
@@ -140,13 +154,15 @@ export function buildGooglePrepareStep(
 
     const repaired = repairGoogleToolCallSignatures(messages);
     if (repaired.repairedToolCalls > 0) {
-      log(`[info] Repaired ${repaired.repairedToolCalls} Gemini tool call(s) with replay thought signatures.`);
+      log(
+        `[info] Repaired ${repaired.repairedToolCalls} Gemini tool call(s) with replay thought signatures.`,
+      );
     }
 
     if (repaired.unresolvedToolCalls > 0) {
       log(
         `[warn] Gemini replay has ${repaired.unresolvedToolCalls} tool call(s) without thought signatures; ` +
-          "disabling thoughts for this step."
+          "disabling thoughts for this step.",
       );
       return {
         messages: repaired.messages,

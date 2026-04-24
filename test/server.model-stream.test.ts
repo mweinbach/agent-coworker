@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  normalizeModelStreamPart,
-  reasoningModeForProvider,
-} from "../src/server/modelStream";
+import { normalizeModelStreamPart, reasoningModeForProvider } from "../src/server/modelStream";
 
 const defaultOpts = { provider: "google" as const };
 
@@ -11,7 +8,7 @@ describe("server model stream normalization", () => {
   test("keeps stepNumber on start-step and finish-step parts", () => {
     const start = normalizeModelStreamPart(
       { type: "start-step", stepNumber: 3, request: { id: "rq-1" }, warnings: ["slow"] },
-      { provider: "google" }
+      { provider: "google" },
     );
     expect(start).toEqual({
       partType: "start_step",
@@ -30,7 +27,7 @@ describe("server model stream normalization", () => {
         usage: { inputTokens: 10, outputTokens: 5 },
         finishReason: "tool-calls",
       },
-      { provider: "google" }
+      { provider: "google" },
     );
     expect(finish).toEqual({
       partType: "finish_step",
@@ -97,10 +94,7 @@ describe("normalizeModelStreamPart branches", () => {
     });
 
     test("ignores extra fields", () => {
-      const result = normalizeModelStreamPart(
-        { type: "start", extra: "ignored" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "start", extra: "ignored" }, defaultOpts);
       expect(result).toEqual({ partType: "start", part: {} });
     });
   });
@@ -115,7 +109,7 @@ describe("normalizeModelStreamPart branches", () => {
           rawFinishReason: "end_turn",
           totalUsage: { inputTokens: 100, outputTokens: 50 },
         },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "finish",
@@ -142,10 +136,7 @@ describe("normalizeModelStreamPart branches", () => {
   // 3. abort
   describe("abort", () => {
     test("extracts reason", () => {
-      const result = normalizeModelStreamPart(
-        { type: "abort", reason: "timeout" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "abort", reason: "timeout" }, defaultOpts);
       expect(result).toEqual({
         partType: "abort",
         part: { reason: "timeout" },
@@ -163,7 +154,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("extracts error field", () => {
       const result = normalizeModelStreamPart(
         { type: "error", error: "something broke" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "error",
@@ -173,10 +164,7 @@ describe("normalizeModelStreamPart branches", () => {
 
     test("sanitizes Error objects", () => {
       const err = new Error("boom");
-      const result = normalizeModelStreamPart(
-        { type: "error", error: err },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "error", error: err }, defaultOpts);
       expect(result.partType).toBe("error");
       expect((result.part.error as Record<string, unknown>).name).toBe("Error");
       expect((result.part.error as Record<string, unknown>).message).toBe("boom");
@@ -194,7 +182,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("extracts id and providerMetadata", () => {
       const result = normalizeModelStreamPart(
         { type: "text-start", id: "t-1", providerMetadata: { key: "val" } },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "text_start",
@@ -203,18 +191,12 @@ describe("normalizeModelStreamPart branches", () => {
     });
 
     test("defaults id to anonymous id when missing", () => {
-      const result = normalizeModelStreamPart(
-        { type: "text-start" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "text-start" }, defaultOpts);
       expect(result.part.id).toBe("anon:unseeded:id");
     });
 
     test("omits providerMetadata when absent", () => {
-      const result = normalizeModelStreamPart(
-        { type: "text-start", id: "t-1" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "text-start", id: "t-1" }, defaultOpts);
       expect(result.part).not.toHaveProperty("providerMetadata");
     });
   });
@@ -229,7 +211,7 @@ describe("normalizeModelStreamPart branches", () => {
           text: "Hello world",
           providerMetadata: { model: "gpt-4" },
         },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "text_delta",
@@ -242,17 +224,14 @@ describe("normalizeModelStreamPart branches", () => {
     });
 
     test("defaults id to anonymous id when missing", () => {
-      const result = normalizeModelStreamPart(
-        { type: "text-delta", text: "chunk" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "text-delta", text: "chunk" }, defaultOpts);
       expect(result.part.id).toBe("anon:unseeded:id");
     });
 
     test("handles empty text", () => {
       const result = normalizeModelStreamPart(
         { type: "text-delta", id: "td-2", text: "" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.text).toBe("");
     });
@@ -260,7 +239,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("converts non-string text to string via asSafeString", () => {
       const result = normalizeModelStreamPart(
         { type: "text-delta", id: "td-3", text: 42 },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.text).toBe("42");
     });
@@ -268,23 +247,20 @@ describe("normalizeModelStreamPart branches", () => {
     test("converts object text to JSON string via asSafeString", () => {
       const result = normalizeModelStreamPart(
         { type: "text-delta", id: "td-4", text: { nested: true } },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.text).toBe('{"nested":true}');
     });
 
     test("handles undefined text as empty string", () => {
-      const result = normalizeModelStreamPart(
-        { type: "text-delta", id: "td-5" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "text-delta", id: "td-5" }, defaultOpts);
       expect(result.part.text).toBe("");
     });
 
     test("omits providerMetadata when absent", () => {
       const result = normalizeModelStreamPart(
         { type: "text-delta", id: "td-6", text: "hi" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part).not.toHaveProperty("providerMetadata");
     });
@@ -295,7 +271,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("extracts id and providerMetadata", () => {
       const result = normalizeModelStreamPart(
         { type: "text-end", id: "te-1", providerMetadata: { foo: 1 } },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "text_end",
@@ -304,10 +280,7 @@ describe("normalizeModelStreamPart branches", () => {
     });
 
     test("defaults id to anonymous id when missing", () => {
-      const result = normalizeModelStreamPart(
-        { type: "text-end" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "text-end" }, defaultOpts);
       expect(result.part.id).toBe("anon:unseeded:id");
     });
   });
@@ -317,7 +290,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("extracts id, mode, and providerMetadata for google (reasoning mode)", () => {
       const result = normalizeModelStreamPart(
         { type: "reasoning-start", id: "rs-1", providerMetadata: { pm: true } },
-        { provider: "google" }
+        { provider: "google" },
       );
       expect(result).toEqual({
         partType: "reasoning_start",
@@ -328,7 +301,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("extracts id, mode, and providerMetadata for anthropic (reasoning mode)", () => {
       const result = normalizeModelStreamPart(
         { type: "reasoning-start", id: "rs-2" },
-        { provider: "anthropic" }
+        { provider: "anthropic" },
       );
       expect(result.part.mode).toBe("reasoning");
     });
@@ -336,7 +309,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("uses summary mode for openai", () => {
       const result = normalizeModelStreamPart(
         { type: "reasoning-start", id: "rs-3" },
-        { provider: "openai" }
+        { provider: "openai" },
       );
       expect(result.part.mode).toBe("summary");
     });
@@ -344,16 +317,13 @@ describe("normalizeModelStreamPart branches", () => {
     test("uses summary mode for codex-cli", () => {
       const result = normalizeModelStreamPart(
         { type: "reasoning-start", id: "rs-4" },
-        { provider: "codex-cli" }
+        { provider: "codex-cli" },
       );
       expect(result.part.mode).toBe("summary");
     });
 
     test("defaults id to anonymous id", () => {
-      const result = normalizeModelStreamPart(
-        { type: "reasoning-start" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "reasoning-start" }, defaultOpts);
       expect(result.part.id).toBe("anon:unseeded:id");
     });
   });
@@ -368,7 +338,7 @@ describe("normalizeModelStreamPart branches", () => {
           text: "thinking...",
           providerMetadata: { step: 1 },
         },
-        { provider: "anthropic" }
+        { provider: "anthropic" },
       );
       expect(result).toEqual({
         partType: "reasoning_delta",
@@ -384,7 +354,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("uses summary mode for openai", () => {
       const result = normalizeModelStreamPart(
         { type: "reasoning-delta", id: "rd-2", text: "step" },
-        { provider: "openai" }
+        { provider: "openai" },
       );
       expect(result.part.mode).toBe("summary");
     });
@@ -392,16 +362,13 @@ describe("normalizeModelStreamPart branches", () => {
     test("converts non-string text via asSafeString", () => {
       const result = normalizeModelStreamPart(
         { type: "reasoning-delta", id: "rd-3", text: 123 },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.text).toBe("123");
     });
 
     test("handles undefined text as empty string", () => {
-      const result = normalizeModelStreamPart(
-        { type: "reasoning-delta", id: "rd-4" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "reasoning-delta", id: "rd-4" }, defaultOpts);
       expect(result.part.text).toBe("");
     });
   });
@@ -411,7 +378,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("extracts id, mode, and providerMetadata", () => {
       const result = normalizeModelStreamPart(
         { type: "reasoning-end", id: "re-1", providerMetadata: { done: true } },
-        { provider: "google" }
+        { provider: "google" },
       );
       expect(result).toEqual({
         partType: "reasoning_end",
@@ -422,7 +389,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("uses summary mode for codex-cli", () => {
       const result = normalizeModelStreamPart(
         { type: "reasoning-end", id: "re-2" },
-        { provider: "codex-cli" }
+        { provider: "codex-cli" },
       );
       expect(result.part.mode).toBe("summary");
     });
@@ -441,7 +408,7 @@ describe("normalizeModelStreamPart branches", () => {
           title: "Running command",
           providerMetadata: { k: "v" },
         },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "tool_input_start",
@@ -457,10 +424,7 @@ describe("normalizeModelStreamPart branches", () => {
     });
 
     test("defaults id to anonymous id and toolName to 'tool'", () => {
-      const result = normalizeModelStreamPart(
-        { type: "tool-input-start" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "tool-input-start" }, defaultOpts);
       expect(result.part.id).toBe("anon:unseeded:tool");
       expect(result.part.toolName).toBe("tool");
     });
@@ -468,7 +432,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("omits optional booleans and title when not provided", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-input-start", id: "tis-2", toolName: "grep" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part).not.toHaveProperty("providerExecuted");
       expect(result.part).not.toHaveProperty("dynamic");
@@ -478,7 +442,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("ignores non-boolean providerExecuted", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-input-start", id: "tis-3", toolName: "read", providerExecuted: "yes" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part).not.toHaveProperty("providerExecuted");
     });
@@ -494,7 +458,7 @@ describe("normalizeModelStreamPart branches", () => {
           delta: '{"file":',
           providerMetadata: { chunk: 1 },
         },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "tool_input_delta",
@@ -509,7 +473,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("converts non-string delta via asSafeString", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-input-delta", id: "tid-2", delta: 42 },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.delta).toBe("42");
     });
@@ -517,7 +481,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("defaults id to anonymous id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-input-delta", delta: "d" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.id).toBe("anon:unseeded:tool");
     });
@@ -528,7 +492,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("extracts id and providerMetadata", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-input-end", id: "tie-1", providerMetadata: { ok: true } },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "tool_input_end",
@@ -537,10 +501,7 @@ describe("normalizeModelStreamPart branches", () => {
     });
 
     test("defaults id to anonymous id", () => {
-      const result = normalizeModelStreamPart(
-        { type: "tool-input-end" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "tool-input-end" }, defaultOpts);
       expect(result.part.id).toBe("anon:unseeded:tool");
     });
   });
@@ -559,7 +520,7 @@ describe("normalizeModelStreamPart branches", () => {
           error: null,
           providerMetadata: { region: "us" },
         },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "tool_call",
@@ -578,7 +539,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("falls back from toolCallId to id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-call", id: "fallback-id", toolName: "read", input: {} },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.toolCallId).toBe("fallback-id");
     });
@@ -586,7 +547,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("falls back to anonymous id when neither toolCallId nor id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-call", toolName: "read", input: {} },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.toolCallId).toBe("anon:unseeded:tool");
     });
@@ -594,7 +555,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("coerces numeric toolCallId values", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-call", toolCallId: 42, toolName: "read", input: {} },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.toolCallId).toBe("42");
     });
@@ -602,23 +563,20 @@ describe("normalizeModelStreamPart branches", () => {
     test("uses fallbackIdSeed for anonymous tool ids", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-call", toolName: "read", input: {} },
-        { ...defaultOpts, fallbackIdSeed: "turn-1:9" }
+        { ...defaultOpts, fallbackIdSeed: "turn-1:9" },
       );
       expect(result.part.toolCallId).toBe("anon:turn-1:9:tool");
     });
 
     test("defaults toolName to 'tool' when missing", () => {
-      const result = normalizeModelStreamPart(
-        { type: "tool-call", input: {} },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "tool-call", input: {} }, defaultOpts);
       expect(result.part.toolName).toBe("tool");
     });
 
     test("defaults input to {} when undefined", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-call", toolCallId: "tc-2", toolName: "bash" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.input).toEqual({});
     });
@@ -626,7 +584,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("sanitizes input values", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-call", toolCallId: "tc-3", toolName: "test", input: { a: 1, b: "str" } },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.input).toEqual({ a: 1, b: "str" });
     });
@@ -634,7 +592,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("omits optional boolean fields when not present", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-call", toolCallId: "tc-4", toolName: "test", input: {} },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part).not.toHaveProperty("dynamic");
       expect(result.part).not.toHaveProperty("invalid");
@@ -643,7 +601,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("omits error when undefined", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-call", toolCallId: "tc-5", toolName: "test", input: {} },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part).not.toHaveProperty("error");
     });
@@ -661,7 +619,7 @@ describe("normalizeModelStreamPart branches", () => {
           dynamic: true,
           providerMetadata: { p: 1 },
         },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "tool_result",
@@ -678,7 +636,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("falls back from toolCallId to id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-result", id: "id-1", toolName: "read", output: "ok" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.toolCallId).toBe("id-1");
     });
@@ -686,7 +644,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("falls back to anonymous id when neither toolCallId nor id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-result", toolName: "read", output: "ok" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.toolCallId).toBe("anon:unseeded:tool");
     });
@@ -694,7 +652,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("defaults output to null when undefined", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-result", toolCallId: "tr-2", toolName: "bash" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.output).toBeNull();
     });
@@ -707,7 +665,7 @@ describe("normalizeModelStreamPart branches", () => {
           toolName: "test",
           output: { nested: { deep: true } },
         },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.output).toEqual({ nested: { deep: true } });
     });
@@ -727,7 +685,7 @@ describe("normalizeModelStreamPart branches", () => {
             preview: "preview",
           },
         },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.output).toEqual({
         type: "text",
@@ -752,7 +710,7 @@ describe("normalizeModelStreamPart branches", () => {
           dynamic: true,
           providerMetadata: { x: 1 },
         },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "tool_error",
@@ -769,7 +727,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("falls back from toolCallId to id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-error", id: "id-err", toolName: "bash", error: "fail" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.toolCallId).toBe("id-err");
     });
@@ -777,7 +735,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("falls back to anonymous id when neither toolCallId nor id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-error", toolName: "bash", error: "fail" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.toolCallId).toBe("anon:unseeded:tool");
     });
@@ -785,7 +743,7 @@ describe("normalizeModelStreamPart branches", () => {
     test('defaults error to "unknown_error" when undefined', () => {
       const result = normalizeModelStreamPart(
         { type: "tool-error", toolCallId: "te-2", toolName: "bash" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.error).toBe("unknown_error");
     });
@@ -794,7 +752,7 @@ describe("normalizeModelStreamPart branches", () => {
       const err = new Error("oops");
       const result = normalizeModelStreamPart(
         { type: "tool-error", toolCallId: "te-3", toolName: "test", error: err },
-        defaultOpts
+        defaultOpts,
       );
       expect((result.part.error as Record<string, unknown>).name).toBe("Error");
       expect((result.part.error as Record<string, unknown>).message).toBe("oops");
@@ -812,7 +770,7 @@ describe("normalizeModelStreamPart branches", () => {
           reason: "user declined",
           providerMetadata: { r: 1 },
         },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "tool_output_denied",
@@ -828,7 +786,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("falls back from toolCallId to id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-output-denied", id: "id-d", toolName: "bash", reason: "no" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.toolCallId).toBe("id-d");
     });
@@ -836,7 +794,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("falls back to anonymous id when neither toolCallId nor id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-output-denied", toolName: "bash" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.toolCallId).toBe("anon:unseeded:tool");
     });
@@ -844,7 +802,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("omits reason when not provided", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-output-denied", toolCallId: "tod-2", toolName: "bash" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part).not.toHaveProperty("reason");
     });
@@ -856,7 +814,7 @@ describe("normalizeModelStreamPart branches", () => {
       const toolCall = { name: "bash", args: { cmd: "rm -rf /" } };
       const result = normalizeModelStreamPart(
         { type: "tool-approval-request", approvalId: "apr-1", toolCall },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "tool_approval_request",
@@ -870,7 +828,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("defaults approvalId to anonymous id when missing", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-approval-request", toolCall: { name: "test" } },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.approvalId).toBe("anon:unseeded:approval");
     });
@@ -878,7 +836,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("defaults toolCall to {} when undefined", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-approval-request", approvalId: "apr-2" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.toolCall).toEqual({});
     });
@@ -889,7 +847,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("extracts source payload minus type field", () => {
       const result = normalizeModelStreamPart(
         { type: "source", url: "https://example.com", title: "Example" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.partType).toBe("source");
       const src = result.part.source as Record<string, unknown>;
@@ -900,10 +858,7 @@ describe("normalizeModelStreamPart branches", () => {
     });
 
     test("handles source with no extra fields", () => {
-      const result = normalizeModelStreamPart(
-        { type: "source" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "source" }, defaultOpts);
       expect(result.partType).toBe("source");
       expect(result.part.source).toBeDefined();
     });
@@ -913,10 +868,7 @@ describe("normalizeModelStreamPart branches", () => {
   describe("file", () => {
     test("extracts file payload", () => {
       const fileData = { name: "test.txt", content: "hello", mimeType: "text/plain" };
-      const result = normalizeModelStreamPart(
-        { type: "file", file: fileData },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "file", file: fileData }, defaultOpts);
       expect(result).toEqual({
         partType: "file",
         part: { file: { name: "test.txt", content: "hello", mimeType: "text/plain" } },
@@ -924,10 +876,7 @@ describe("normalizeModelStreamPart branches", () => {
     });
 
     test("defaults file to null when undefined", () => {
-      const result = normalizeModelStreamPart(
-        { type: "file" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "file" }, defaultOpts);
       expect(result.part.file).toBeNull();
     });
   });
@@ -937,7 +886,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("uses rawValue field when present", () => {
       const result = normalizeModelStreamPart(
         { type: "raw", rawValue: { data: "payload" } },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "raw",
@@ -948,7 +897,7 @@ describe("normalizeModelStreamPart branches", () => {
     test("falls back to raw field when rawValue not present", () => {
       const result = normalizeModelStreamPart(
         { type: "raw", raw: { fallback: true } },
-        defaultOpts
+        defaultOpts,
       );
       expect(result).toEqual({
         partType: "raw",
@@ -957,17 +906,14 @@ describe("normalizeModelStreamPart branches", () => {
     });
 
     test("defaults to null when neither rawValue nor raw present", () => {
-      const result = normalizeModelStreamPart(
-        { type: "raw" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "raw" }, defaultOpts);
       expect(result.part.raw).toBeNull();
     });
 
     test("prefers rawValue over raw when both present", () => {
       const result = normalizeModelStreamPart(
         { type: "raw", rawValue: "primary", raw: "secondary" },
-        defaultOpts
+        defaultOpts,
       );
       expect(result.part.raw).toBe("primary");
     });
@@ -976,20 +922,14 @@ describe("normalizeModelStreamPart branches", () => {
   // 22. default (unknown type)
   describe("default (unknown type)", () => {
     test("returns unknown partType with sdkType and raw", () => {
-      const result = normalizeModelStreamPart(
-        { type: "some-future-type", data: 42 },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "some-future-type", data: 42 }, defaultOpts);
       expect(result.partType).toBe("unknown");
       expect(result.part.sdkType).toBe("some-future-type");
       expect(result.part.raw).toBeDefined();
     });
 
     test("preserves the original type string as sdkType", () => {
-      const result = normalizeModelStreamPart(
-        { type: "new-feature" },
-        defaultOpts
-      );
+      const result = normalizeModelStreamPart({ type: "new-feature" }, defaultOpts);
       expect(result.part.sdkType).toBe("new-feature");
     });
   });
@@ -1055,23 +995,20 @@ describe("includeRawPart option", () => {
   test("does not include rawPart when includeRawPart is false", () => {
     const result = normalizeModelStreamPart(
       { type: "start" },
-      { provider: "google", includeRawPart: false }
+      { provider: "google", includeRawPart: false },
     );
     expect(result).not.toHaveProperty("rawPart");
   });
 
   test("does not include rawPart when includeRawPart is omitted (defaults false)", () => {
-    const result = normalizeModelStreamPart(
-      { type: "start" },
-      { provider: "google" }
-    );
+    const result = normalizeModelStreamPart({ type: "start" }, { provider: "google" });
     expect(result).not.toHaveProperty("rawPart");
   });
 
   test("includes rawPart when includeRawPart is true on start", () => {
     const result = normalizeModelStreamPart(
       { type: "start" },
-      { provider: "google", includeRawPart: true }
+      { provider: "google", includeRawPart: true },
     );
     expect(result).toHaveProperty("rawPart");
     expect(result.rawPart).toEqual({ type: "start" });
@@ -1129,7 +1066,7 @@ describe("sanitizeUnknown via normalizeModelStreamPart", () => {
     const longString = "x".repeat(5000);
     const result = normalizeModelStreamPart(
       { type: "tool-call", toolCallId: "tc-s1", toolName: "test", input: { data: longString } },
-      defaultOpts
+      defaultOpts,
     );
     const input = result.part.input as Record<string, unknown>;
     const data = input.data as string;
@@ -1141,7 +1078,7 @@ describe("sanitizeUnknown via normalizeModelStreamPart", () => {
     const longString = "x".repeat(5000);
     const result = normalizeModelStreamPart(
       { type: "tool-call", toolCallId: "tc-s1", toolName: "test", input: { data: longString } },
-      { ...defaultOpts, rawPartMode: "full" }
+      { ...defaultOpts, rawPartMode: "full" },
     );
     const input = result.part.input as Record<string, unknown>;
     const data = input.data as string;
@@ -1154,7 +1091,7 @@ describe("sanitizeUnknown via normalizeModelStreamPart", () => {
     obj.self = obj;
     const result = normalizeModelStreamPart(
       { type: "tool-call", toolCallId: "tc-s2", toolName: "test", input: obj },
-      defaultOpts
+      defaultOpts,
     );
     const input = result.part.input as Record<string, unknown>;
     expect(input.a).toBe(1);
@@ -1163,10 +1100,7 @@ describe("sanitizeUnknown via normalizeModelStreamPart", () => {
 
   test("handles Error objects in error field", () => {
     const err = new TypeError("type mismatch");
-    const result = normalizeModelStreamPart(
-      { type: "error", error: err },
-      defaultOpts
-    );
+    const result = normalizeModelStreamPart({ type: "error", error: err }, defaultOpts);
     const sanitizedErr = result.part.error as Record<string, unknown>;
     expect(sanitizedErr.name).toBe("TypeError");
     expect(sanitizedErr.message).toBe("type mismatch");
@@ -1176,7 +1110,7 @@ describe("sanitizeUnknown via normalizeModelStreamPart", () => {
     const date = new Date("2024-01-01T00:00:00.000Z");
     const result = normalizeModelStreamPart(
       { type: "tool-call", toolCallId: "tc-s3", toolName: "test", input: { ts: date } },
-      defaultOpts
+      defaultOpts,
     );
     const input = result.part.input as Record<string, unknown>;
     expect(input.ts).toBe("2024-01-01T00:00:00.000Z");
@@ -1190,7 +1124,7 @@ describe("sanitizeUnknown via normalizeModelStreamPart", () => {
         toolName: "test",
         input: { inf: Infinity, nan: NaN, neg: -Infinity },
       },
-      defaultOpts
+      defaultOpts,
     );
     const input = result.part.input as Record<string, unknown>;
     expect(input.inf).toBe("Infinity");
@@ -1206,7 +1140,7 @@ describe("sanitizeUnknown via normalizeModelStreamPart", () => {
         toolName: "test",
         input: { big: BigInt(12345678901234) },
       },
-      defaultOpts
+      defaultOpts,
     );
     const input = result.part.input as Record<string, unknown>;
     expect(input.big).toBe("12345678901234");
@@ -1223,16 +1157,33 @@ describe("toolCallId fallback chain", () => {
     describe(type, () => {
       test("prefers toolCallId over id", () => {
         const result = normalizeModelStreamPart(
-          { type, toolCallId: "preferred", id: "fallback", toolName: "test", input: {}, output: "ok", error: "err", reason: "r" },
-          defaultOpts
+          {
+            type,
+            toolCallId: "preferred",
+            id: "fallback",
+            toolName: "test",
+            input: {},
+            output: "ok",
+            error: "err",
+            reason: "r",
+          },
+          defaultOpts,
         );
         expect(result.part.toolCallId).toBe("preferred");
       });
 
       test("falls back to id when toolCallId is absent", () => {
         const result = normalizeModelStreamPart(
-          { type, id: "only-id", toolName: "test", input: {}, output: "ok", error: "err", reason: "r" },
-          defaultOpts
+          {
+            type,
+            id: "only-id",
+            toolName: "test",
+            input: {},
+            output: "ok",
+            error: "err",
+            reason: "r",
+          },
+          defaultOpts,
         );
         expect(result.part.toolCallId).toBe("only-id");
       });
@@ -1240,7 +1191,7 @@ describe("toolCallId fallback chain", () => {
       test("falls back to anonymous id when both are absent", () => {
         const result = normalizeModelStreamPart(
           { type, toolName: "test", input: {}, output: "ok", error: "err", reason: "r" },
-          defaultOpts
+          defaultOpts,
         );
         expect(result.part.toolCallId).toBe("anon:unseeded:tool");
       });

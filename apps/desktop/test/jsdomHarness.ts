@@ -110,15 +110,18 @@ export function setupJsdom(options: SetupJsdomOptions = {}): JsdomHarness {
 
   if (options.includeAnimationFrame) {
     const requestAnimationFrame =
-      typeof options.includeAnimationFrame === "object" && options.includeAnimationFrame.requestAnimationFrame
+      typeof options.includeAnimationFrame === "object" &&
+      options.includeAnimationFrame.requestAnimationFrame
         ? options.includeAnimationFrame.requestAnimationFrame
-        : dom.window.requestAnimationFrame?.bind(dom.window) ??
-          ((callback: FrameRequestCallback) => dom.window.setTimeout(() => callback(Date.now()), 0));
+        : (dom.window.requestAnimationFrame?.bind(dom.window) ??
+          ((callback: FrameRequestCallback) =>
+            dom.window.setTimeout(() => callback(Date.now()), 0)));
     const cancelAnimationFrame =
-      typeof options.includeAnimationFrame === "object" && options.includeAnimationFrame.cancelAnimationFrame
+      typeof options.includeAnimationFrame === "object" &&
+      options.includeAnimationFrame.cancelAnimationFrame
         ? options.includeAnimationFrame.cancelAnimationFrame
-        : dom.window.cancelAnimationFrame?.bind(dom.window) ??
-          ((handle: number) => dom.window.clearTimeout(handle));
+        : (dom.window.cancelAnimationFrame?.bind(dom.window) ??
+          ((handle: number) => dom.window.clearTimeout(handle)));
 
     saved.push(
       {

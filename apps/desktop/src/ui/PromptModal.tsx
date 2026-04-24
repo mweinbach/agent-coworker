@@ -1,14 +1,12 @@
-import { useState } from "react";
-import { MessageSquareIcon, SparklesIcon } from "lucide-react";
-
-import { useAppStore } from "../app/store";
-import type { PromptModalState } from "../app/types";
-import { ASK_SKIP_TOKEN } from "../lib/wsProtocol";
 import {
   normalizeAskOptions as normalizeAskOptionsShared,
   normalizeAskQuestion as normalizeAskQuestionShared,
   shouldRenderAskOptions as shouldRenderAskOptionsShared,
 } from "@cowork/shared/askPrompt";
+import { MessageSquareIcon, SparklesIcon } from "lucide-react";
+import { useState } from "react";
+import { useAppStore } from "../app/store";
+import type { PromptModalState } from "../app/types";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
@@ -20,6 +18,7 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 import { Input } from "../components/ui/input";
+import { ASK_SKIP_TOKEN } from "../lib/wsProtocol";
 
 export const normalizeAskQuestion = normalizeAskQuestionShared;
 export const normalizeAskOptions = normalizeAskOptionsShared;
@@ -48,7 +47,10 @@ function AskPromptContent(props: {
   return (
     <>
       <DialogHeader className="gap-3 border-b border-border/60 bg-gradient-to-br from-primary/8 via-background to-background px-5 py-4">
-        <Badge variant="secondary" className="w-fit border-border/60 bg-background/80 text-foreground shadow-none">
+        <Badge
+          variant="secondary"
+          className="w-fit border-border/60 bg-background/80 text-foreground shadow-none"
+        >
           <SparklesIcon className="mr-1 size-3.5" />
           Need your input
         </Badge>
@@ -81,7 +83,9 @@ function AskPromptContent(props: {
                   variant="outline"
                   className="h-auto w-full justify-start rounded-2xl border-border/60 bg-background/80 px-4 py-3 text-left text-sm leading-5 whitespace-normal shadow-none hover:bg-muted/45"
                   type="button"
-                  onClick={() => props.answerAsk(props.modal.threadId, props.modal.prompt.requestId, option)}
+                  onClick={() =>
+                    props.answerAsk(props.modal.threadId, props.modal.prompt.requestId, option)
+                  }
                 >
                   {option}
                 </Button>
@@ -147,16 +151,19 @@ export function PromptModal() {
   const isAsk = modal?.kind === "ask";
 
   return (
-    <Dialog open={Boolean(modal)} onOpenChange={(open) => {
-      // For ask modals, always send a response so the server-side deferred
-      // promise resolves.  Dismissing without answering would leave the agent
-      // hanging forever.
-      if (!open && isAsk) {
-        answerAsk(modal.threadId, modal.prompt.requestId, ASK_SKIP_TOKEN);
-        return;
-      }
-      if (!open) dismiss();
-    }}>
+    <Dialog
+      open={Boolean(modal)}
+      onOpenChange={(open) => {
+        // For ask modals, always send a response so the server-side deferred
+        // promise resolves.  Dismissing without answering would leave the agent
+        // hanging forever.
+        if (!open && isAsk) {
+          answerAsk(modal.threadId, modal.prompt.requestId, ASK_SKIP_TOKEN);
+          return;
+        }
+        if (!open) dismiss();
+      }}
+    >
       {modal ? (
         <DialogContent
           className={
@@ -164,20 +171,24 @@ export function PromptModal() {
               ? "w-[min(96vw,50rem)] max-h-[88vh] gap-0 overflow-hidden p-0"
               : "flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0"
           }
-          onEscapeKeyDown={isAsk ? () => {
-            // Let the onOpenChange handler deal with it so a response is sent.
-          } : undefined}
-          onInteractOutside={isAsk ? (e) => {
-            // Prevent click-outside from closing without a response.
-            e.preventDefault();
-          } : undefined}
+          onEscapeKeyDown={
+            isAsk
+              ? () => {
+                  // Let the onOpenChange handler deal with it so a response is sent.
+                }
+              : undefined
+          }
+          onInteractOutside={
+            isAsk
+              ? (e) => {
+                  // Prevent click-outside from closing without a response.
+                  e.preventDefault();
+                }
+              : undefined
+          }
         >
           {modal.kind === "ask" ? (
-            <AskPromptContent
-              key={modal.prompt.requestId}
-              modal={modal}
-              answerAsk={answerAsk}
-            />
+            <AskPromptContent key={modal.prompt.requestId} modal={modal} answerAsk={answerAsk} />
           ) : (
             <>
               <DialogHeader className="shrink-0 border-b border-border/60 px-5 py-4">
@@ -195,7 +206,9 @@ export function PromptModal() {
                   <code className="block whitespace-pre-wrap break-words rounded-md border border-border/70 bg-muted/45 px-2.5 py-2 text-xs">
                     {modal.prompt.command}
                   </code>
-                  <div className="text-xs text-muted-foreground">Risk: {modal.prompt.reasonCode}</div>
+                  <div className="text-xs text-muted-foreground">
+                    Risk: {modal.prompt.reasonCode}
+                  </div>
                 </div>
               </div>
 

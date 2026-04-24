@@ -1,43 +1,49 @@
-import type { AgentConfig, ProviderName } from "../types";
 import { normalizeModelIdForProvider } from "../models/metadata";
+import type { AgentConfig, ProviderName } from "../types";
 
 import { anthropicProvider } from "./anthropic";
-import { bedrockProvider } from "./bedrock";
 import { basetenProvider } from "./baseten";
+import { bedrockProvider } from "./bedrock";
 import { PROVIDER_MODEL_CATALOG } from "./catalog";
 import { codexCliProvider } from "./codex-cli";
 import { fireworksProvider } from "./fireworks";
 import { googleProvider } from "./google";
 import { lmstudioProvider } from "./lmstudio";
 import { nvidiaProvider } from "./nvidia";
+import { openaiProvider } from "./openai";
 import { opencodeGoProvider } from "./opencode-go";
 import { opencodeZenProvider } from "./opencode-zen";
-import { openaiProvider } from "./openai";
 import { togetherProvider } from "./together";
-export { DEFAULT_PROVIDER_OPTIONS } from "./providerOptions";
+
 export {
   authorizeProviderAuth,
   callbackProviderAuth,
   listProviderAuthMethods,
-  requiresProviderAuthCode,
-  resolveProviderAuthMethod,
-  setProviderConfig,
-  setProviderApiKey,
   type ProviderAuthChallenge,
   type ProviderAuthMethod,
+  requiresProviderAuthCode,
+  resolveProviderAuthMethod,
+  setProviderApiKey,
+  setProviderConfig,
 } from "./authRegistry";
 export {
-  PROVIDER_MODEL_CATALOG,
-  PROVIDER_MODEL_CHOICES,
   availableModelsForProvider,
   defaultModelForProvider,
   isUserFacingProviderEnabled,
   modelChoicesByProvider,
+  PROVIDER_MODEL_CATALOG,
+  PROVIDER_MODEL_CHOICES,
   USER_FACING_DISABLED_PROVIDERS,
   userFacingAvailableModelsForProvider,
   userFacingProviders,
 } from "./catalog";
-export { getProviderCatalog, listProviderCatalogEntries, type ProviderCatalogEntry, type ProviderCatalogPayload } from "./connectionCatalog";
+export {
+  getProviderCatalog,
+  listProviderCatalogEntries,
+  type ProviderCatalogEntry,
+  type ProviderCatalogPayload,
+} from "./connectionCatalog";
+export { DEFAULT_PROVIDER_OPTIONS } from "./providerOptions";
 
 export type ProviderRuntimeDefinition = {
   keyCandidates: readonly ProviderName[];
@@ -73,7 +79,10 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   nvidia: { ...PROVIDER_RUNTIMES.nvidia, ...PROVIDER_MODEL_CATALOG.nvidia },
   lmstudio: { ...PROVIDER_RUNTIMES.lmstudio, ...PROVIDER_MODEL_CATALOG.lmstudio },
   "opencode-go": { ...PROVIDER_RUNTIMES["opencode-go"], ...PROVIDER_MODEL_CATALOG["opencode-go"] },
-  "opencode-zen": { ...PROVIDER_RUNTIMES["opencode-zen"], ...PROVIDER_MODEL_CATALOG["opencode-zen"] },
+  "opencode-zen": {
+    ...PROVIDER_RUNTIMES["opencode-zen"],
+    ...PROVIDER_MODEL_CATALOG["opencode-zen"],
+  },
   "codex-cli": { ...PROVIDER_RUNTIMES["codex-cli"], ...PROVIDER_MODEL_CATALOG["codex-cli"] },
   google: { ...PROVIDER_RUNTIMES.google, ...PROVIDER_MODEL_CATALOG.google },
   openai: { ...PROVIDER_RUNTIMES.openai, ...PROVIDER_MODEL_CATALOG.openai },

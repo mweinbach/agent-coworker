@@ -8,23 +8,27 @@ import { writeTextFileAtomic } from "../utils/atomicFile";
 
 export const SKILL_INSTALL_MANIFEST_FILENAME = ".cowork-skill.json";
 
-const skillInstallOriginSchema = z.object({
-  kind: z.enum(["github", "skills.sh", "local", "manual", "bootstrap", "unknown"]),
-  url: z.string().optional(),
-  repo: z.string().optional(),
-  ref: z.string().optional(),
-  subdir: z.string().optional(),
-  sourcePath: z.string().optional(),
-  sourceHash: z.string().optional(),
-}).strict();
+const skillInstallOriginSchema = z
+  .object({
+    kind: z.enum(["github", "skills.sh", "local", "manual", "bootstrap", "unknown"]),
+    url: z.string().optional(),
+    repo: z.string().optional(),
+    ref: z.string().optional(),
+    subdir: z.string().optional(),
+    sourcePath: z.string().optional(),
+    sourceHash: z.string().optional(),
+  })
+  .strict();
 
-const skillInstallManifestSchema = z.object({
-  version: z.literal(1),
-  installationId: z.string().trim().min(1),
-  installedAt: z.string().trim().min(1),
-  updatedAt: z.string().trim().min(1),
-  origin: skillInstallOriginSchema.optional(),
-}).strict();
+const skillInstallManifestSchema = z
+  .object({
+    version: z.literal(1),
+    installationId: z.string().trim().min(1),
+    installedAt: z.string().trim().min(1),
+    updatedAt: z.string().trim().min(1),
+    origin: skillInstallOriginSchema.optional(),
+  })
+  .strict();
 
 export function manifestPathForSkillRoot(skillRoot: string): string {
   return path.join(skillRoot, SKILL_INSTALL_MANIFEST_FILENAME);
@@ -34,13 +38,19 @@ export function createManagedInstallationId(): string {
   return crypto.randomUUID();
 }
 
-export function deriveFallbackInstallationId(scope: SkillScope, scopeAnchorDir: string, skillName: string): string {
+export function deriveFallbackInstallationId(
+  scope: SkillScope,
+  scopeAnchorDir: string,
+  skillName: string,
+): string {
   const seed = `${scope}\u0000${path.resolve(scopeAnchorDir)}\u0000${skillName.trim().toLowerCase()}`;
   const digest = crypto.createHash("sha256").update(seed).digest("hex");
   return `adopted-${digest.slice(0, 24)}`;
 }
 
-export async function readSkillInstallManifest(skillRoot: string): Promise<SkillInstallManifest | null> {
+export async function readSkillInstallManifest(
+  skillRoot: string,
+): Promise<SkillInstallManifest | null> {
   try {
     const raw = await fs.readFile(manifestPathForSkillRoot(skillRoot), "utf-8");
     const parsed = JSON.parse(raw);

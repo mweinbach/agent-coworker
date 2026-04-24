@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-
-import type { SessionSnapshot } from "../src/shared/sessionSnapshot";
 import { SessionSnapshotProjector } from "../src/server/session/SessionSnapshotProjector";
+import type { SessionSnapshot } from "../src/shared/sessionSnapshot";
 
 function makeSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
   return {
@@ -86,7 +85,9 @@ describe("SessionSnapshotProjector", () => {
   test("reset_done clears pending prompt flags along with other transient snapshot state", () => {
     const projector = new SessionSnapshotProjector(
       makeSnapshot({
-        feed: [{ id: "existing-feed", kind: "system", ts: "2026-03-20T00:00:00.000Z", line: "existing" }],
+        feed: [
+          { id: "existing-feed", kind: "system", ts: "2026-03-20T00:00:00.000Z", line: "existing" },
+        ],
         agents: [
           {
             agentId: "agent-1",
@@ -154,7 +155,10 @@ describe("SessionSnapshotProjector", () => {
       }),
     );
 
-    projector.applyEvent({ type: "reset_done", sessionId: "session-1" }, "2026-03-20T00:00:03.000Z");
+    projector.applyEvent(
+      { type: "reset_done", sessionId: "session-1" },
+      "2026-03-20T00:00:03.000Z",
+    );
 
     expect(projector.getSnapshot()).toMatchObject({
       feed: [],
@@ -168,10 +172,12 @@ describe("SessionSnapshotProjector", () => {
   });
 
   test("dedupes aggregate late reasoning after normalized streamed steps", () => {
-    const projector = new SessionSnapshotProjector(makeSnapshot({
-      provider: "opencode-zen",
-      model: "minimax-m2.5-free",
-    }));
+    const projector = new SessionSnapshotProjector(
+      makeSnapshot({
+        provider: "opencode-zen",
+        model: "minimax-m2.5-free",
+      }),
+    );
 
     projector.applyEvent(
       {
@@ -275,7 +281,12 @@ describe("SessionSnapshotProjector", () => {
     );
 
     const snapshot = projector.getSnapshot();
-    expect(snapshot.feed.map((item) => item.kind)).toEqual(["message", "reasoning", "reasoning", "message"]);
+    expect(snapshot.feed.map((item) => item.kind)).toEqual([
+      "message",
+      "reasoning",
+      "reasoning",
+      "message",
+    ]);
     const reasoning = snapshot.feed.filter((item) => item.kind === "reasoning");
     expect(reasoning.map((item) => item.text)).toEqual(["First check.", "Second check."]);
   });

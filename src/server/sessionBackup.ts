@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 
 import { ensureAiCoworkerHome, getAiCoworkerPaths } from "../connect";
-import { workspaceFingerprint } from "./sessionBackup/fingerprint";
 import {
   copyDirectoryContents,
   emptyDirectory,
@@ -11,13 +10,18 @@ import {
   ensureWorkingDirectory,
   isPathWithin,
 } from "./sessionBackup/fileSystem";
+import { workspaceFingerprint } from "./sessionBackup/fingerprint";
 import {
   readMetadata,
   type SessionBackupMetadata,
   type SessionBackupMetadataCheckpoint,
   writeJson,
 } from "./sessionBackup/metadata";
-import { createSnapshotWithTarFallback, restoreSnapshot, snapshotByteSize } from "./sessionBackup/snapshot";
+import {
+  createSnapshotWithTarFallback,
+  restoreSnapshot,
+  snapshotByteSize,
+} from "./sessionBackup/snapshot";
 
 export type SessionBackupCheckpointTrigger = "initial" | "auto" | "manual";
 
@@ -118,9 +122,14 @@ export function getSessionBackupsRootDirs(opts: { homedir?: string } = {}): stri
   ];
 }
 
-function resolveSessionBackupsRootDir(workingDirectory: string, opts: { homedir?: string } = {}): string {
+function resolveSessionBackupsRootDir(
+  workingDirectory: string,
+  opts: { homedir?: string } = {},
+): string {
   const [defaultBackupsRootDir, fallbackBackupsRootDir] = getSessionBackupsRootDirs(opts);
-  return isPathWithin(workingDirectory, defaultBackupsRootDir) ? fallbackBackupsRootDir : defaultBackupsRootDir;
+  return isPathWithin(workingDirectory, defaultBackupsRootDir)
+    ? fallbackBackupsRootDir
+    : defaultBackupsRootDir;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +183,10 @@ function withInitialCheckpoint(
   };
 }
 
-async function fingerprintSnapshot(sessionDir: string, snapshot: { kind: "directory" | "tar_gz"; path: string }): Promise<string> {
+async function fingerprintSnapshot(
+  sessionDir: string,
+  snapshot: { kind: "directory" | "tar_gz"; path: string },
+): Promise<string> {
   const fingerprintStageDir = await fs.mkdtemp(path.join(sessionDir, ".fingerprint-stage-"));
   try {
     await restoreSnapshot({
@@ -193,8 +205,9 @@ async function normalizeMetadataOnLoad(
   sessionDir: string,
   metadataPath: string,
 ): Promise<{ metadata: SessionBackupMetadata; originalFingerprint: string }> {
-  const originalFingerprint = metadata.originalFingerprint
-    ?? await fingerprintSnapshot(sessionDir, metadata.originalSnapshot);
+  const originalFingerprint =
+    metadata.originalFingerprint ??
+    (await fingerprintSnapshot(sessionDir, metadata.originalSnapshot));
   const fingerprintNormalizedMetadata = metadata.originalFingerprint
     ? metadata
     : { ...metadata, originalFingerprint };
@@ -215,11 +228,17 @@ async function normalizeMetadataOnLoad(
 export class SessionBackupManager implements SessionBackupHandle {
   static async pruneClosedSessions(
     backupsRootDir: string,
-    opts?: { maxClosedSessions?: number; maxClosedAgeDays?: number; skipSessionId?: string }
+    opts?: { maxClosedSessions?: number; maxClosedAgeDays?: number; skipSessionId?: string },
   ): Promise<void> {
     await ensureSecureDirectory(backupsRootDir);
-    const maxClosedSessions = Math.max(1, Math.floor(opts?.maxClosedSessions ?? DEFAULT_MAX_CLOSED_SESSIONS));
-    const maxClosedAgeDays = Math.max(1, Math.floor(opts?.maxClosedAgeDays ?? DEFAULT_MAX_CLOSED_AGE_DAYS));
+    const maxClosedSessions = Math.max(
+      1,
+      Math.floor(opts?.maxClosedSessions ?? DEFAULT_MAX_CLOSED_SESSIONS),
+    );
+    const maxClosedAgeDays = Math.max(
+      1,
+      Math.floor(opts?.maxClosedAgeDays ?? DEFAULT_MAX_CLOSED_AGE_DAYS),
+    );
     const maxClosedAgeMs = maxClosedAgeDays * 24 * 60 * 60 * 1000;
     const now = Date.now();
 
@@ -257,12 +276,16 @@ export class SessionBackupManager implements SessionBackupHandle {
 
     await ensureAiCoworkerHome(paths);
 
-    const backupsRootDir = resolveSessionBackupsRootDir(workingDirectory, { homedir: opts.homedir });
+    const backupsRootDir = resolveSessionBackupsRootDir(workingDirectory, {
+      homedir: opts.homedir,
+    });
     const sessionDir = path.join(backupsRootDir, opts.sessionId);
     const metadataPath = path.join(sessionDir, METADATA_FILE);
 
     if (isPathWithin(workingDirectory, sessionDir)) {
-      throw new Error(`Refusing to create session backup inside working directory: ${workingDirectory}`);
+      throw new Error(
+        `Refusing to create session backup inside working directory: ${workingDirectory}`,
+      );
     }
 
     await ensureSecureDirectory(backupsRootDir);
@@ -274,7 +297,9 @@ export class SessionBackupManager implements SessionBackupHandle {
         throw new Error(`Refusing to reuse backup with mismatched session id at ${metadataPath}`);
       }
       if (path.resolve(existing.workingDirectory) !== workingDirectory) {
-        throw new Error(`Refusing to reuse backup with mismatched working directory at ${metadataPath}`);
+        throw new Error(
+          `Refusing to reuse backup with mismatched working directory at ${metadataPath}`,
+        );
       }
       return await SessionBackupManager.openExisting({ sessionDir, reopen: true });
     }
@@ -310,7 +335,10 @@ export class SessionBackupManager implements SessionBackupHandle {
     return new SessionBackupManager({ metadata, originalFingerprint, sessionDir, metadataPath });
   }
 
-  static async openExisting(opts: { sessionDir: string; reopen?: boolean }): Promise<SessionBackupManager> {
+  static async openExisting(opts: {
+    sessionDir: string;
+    reopen?: boolean;
+  }): Promise<SessionBackupManager> {
     const sessionDir = path.resolve(opts.sessionDir);
     const metadataPath = path.join(sessionDir, METADATA_FILE);
     const metadata = await readMetadata(metadataPath);
@@ -319,7 +347,10 @@ export class SessionBackupManager implements SessionBackupHandle {
     }
     const normalized = await normalizeMetadataOnLoad(metadata, sessionDir, metadataPath);
     let resolvedMetadata = normalized.metadata;
-    if (opts.reopen && (resolvedMetadata.state !== "active" || resolvedMetadata.closedAt !== undefined)) {
+    if (
+      opts.reopen &&
+      (resolvedMetadata.state !== "active" || resolvedMetadata.closedAt !== undefined)
+    ) {
       const { closedAt: _closedAt, ...activeMetadata } = resolvedMetadata;
       resolvedMetadata = {
         ...activeMetadata,
@@ -371,7 +402,9 @@ export class SessionBackupManager implements SessionBackupHandle {
     };
   }
 
-  async createCheckpoint(trigger: SessionBackupCheckpointTrigger): Promise<SessionBackupPublicCheckpoint> {
+  async createCheckpoint(
+    trigger: SessionBackupCheckpointTrigger,
+  ): Promise<SessionBackupPublicCheckpoint> {
     await ensureWorkingDirectory(this.metadata.workingDirectory);
     const index = this.metadata.checkpoints.length + 1;
     const id = makeCheckpointId(index);
@@ -444,12 +477,17 @@ export class SessionBackupManager implements SessionBackupHandle {
     this.metadata.checkpoints.splice(idx, 1);
     const snapshotStillReferenced =
       this.metadata.checkpoints.some(
-        (cp) => cp.snapshot.kind === checkpoint.snapshot.kind && cp.snapshot.path === checkpoint.snapshot.path
+        (cp) =>
+          cp.snapshot.kind === checkpoint.snapshot.kind &&
+          cp.snapshot.path === checkpoint.snapshot.path,
       ) ||
       (this.metadata.originalSnapshot.kind === checkpoint.snapshot.kind &&
         this.metadata.originalSnapshot.path === checkpoint.snapshot.path);
     if (!snapshotStillReferenced) {
-      await fs.rm(path.join(this.sessionDir, checkpoint.snapshot.path), { recursive: true, force: true });
+      await fs.rm(path.join(this.sessionDir, checkpoint.snapshot.path), {
+        recursive: true,
+        force: true,
+      });
     }
     await this.persistMetadata();
     return true;

@@ -1,6 +1,3 @@
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import type { CSSProperties } from "react";
-
 import {
   ChevronDownIcon,
   ChevronLeftIcon,
@@ -9,15 +6,21 @@ import {
   SparklesIcon,
   Trash2Icon,
 } from "lucide-react";
+import type { CSSProperties } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 import { isBasicCatalogId } from "../../../../../../src/shared/a2ui/component";
+import { useAppStore } from "../../../app/store";
+import type { A2uiSurfaceRevision, A2uiThreadDock } from "../../../app/types";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { cn } from "../../../lib/utils";
-import { useAppStore } from "../../../app/store";
-import type { A2uiChangeKind, A2uiSurfaceRevision, A2uiThreadDock } from "../../../app/types";
-import { A2uiRenderer, type A2uiActionDispatcher, type A2uiRenderableComponent } from "./A2uiRenderer";
-import { extractSurfaceTitle } from "./surfaceTitle";
+import {
+  type A2uiActionDispatcher,
+  type A2uiRenderableComponent,
+  A2uiRenderer,
+} from "./A2uiRenderer";
 import { changeKindLabel, changeKindToneClass } from "./changeKind";
+import { extractSurfaceTitle } from "./surfaceTitle";
 
 function buildThemeStyle(theme?: Record<string, unknown>): CSSProperties | undefined {
   if (!theme) return undefined;
@@ -79,11 +82,13 @@ export function selectDockView(dock: A2uiThreadDock): A2uiSurfaceDockView | null
   if (!focusedId) return null;
   const revisions = dock.revisionsBySurfaceId[focusedId];
   if (!revisions || revisions.length === 0) return null;
-  const activeRevNumber = dock.activeRevisionBySurfaceId[focusedId] ?? revisions[revisions.length - 1]!.revision;
+  const activeRevNumber =
+    dock.activeRevisionBySurfaceId[focusedId] ?? revisions[revisions.length - 1]?.revision;
   const activeIndex = revisions.findIndex((r) => r.revision === activeRevNumber);
   const resolvedIndex = activeIndex >= 0 ? activeIndex : revisions.length - 1;
-  const activeRevision = revisions[resolvedIndex]!;
-  const latestRevision = revisions[revisions.length - 1]!;
+  const activeRevision = revisions[resolvedIndex];
+  const latestRevision = revisions[revisions.length - 1];
+  if (!activeRevision || !latestRevision) return null;
   const root = toRenderable(activeRevision.root);
   const title = extractSurfaceTitle(root, activeRevision.dataModel) ?? focusedId;
   const lastSeen = dock.lastSeenRevisionBySurfaceId[focusedId] ?? -1;
@@ -111,13 +116,14 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
 
   const [poppedOut, setPoppedOut] = useState(false);
 
-  const view = useMemo(() => (dock && dock.focusedSurfaceId ? selectDockView(dock) : null), [dock]);
+  const view = useMemo(() => (dock?.focusedSurfaceId ? selectDockView(dock) : null), [dock]);
   const expanded = dock?.expanded ?? false;
 
   // When the dock opens, mark the latest revision as seen so the pulse fades.
   useEffect(() => {
     if (!view || !dock || !expanded) return;
-    const latest = view.revisions[view.revisions.length - 1]!;
+    const latest = view.revisions[view.revisions.length - 1];
+    if (!latest) return;
     markSeen(threadId, view.surfaceId, latest.revision);
   }, [dock, expanded, markSeen, threadId, view]);
 
@@ -146,9 +152,12 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
   const stepRevision = useCallback(
     (direction: -1 | 1) => {
       if (!view) return;
-      const nextIndex = Math.max(0, Math.min(view.revisions.length - 1, view.activeIndex + direction));
+      const nextIndex = Math.max(
+        0,
+        Math.min(view.revisions.length - 1, view.activeIndex + direction),
+      );
       if (nextIndex === view.activeIndex) return;
-      setActiveRevision(threadId, view.surfaceId, view.revisions[nextIndex]!.revision);
+      setActiveRevision(threadId, view.surfaceId, view.revisions[nextIndex]?.revision);
     },
     [setActiveRevision, threadId, view],
   );
@@ -220,9 +229,8 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
             </span>
             <span className="flex flex-none items-center gap-1 text-muted-foreground">
               {expanded ? (
-                <span
-                  role="button"
-                  tabIndex={0}
+                <button
+                  type="button"
                   aria-label="Open in larger view"
                   title="Open in larger view"
                   onClick={(event) => {
@@ -233,7 +241,7 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
                   className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted/30 hover:text-foreground"
                 >
                   <ExpandIcon className="size-3.5" />
-                </span>
+                </button>
               ) : null}
               <ChevronDownIcon
                 className={cn(
@@ -252,7 +260,10 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
             aria-hidden={!expanded}
           >
             <div className="min-h-0">
-              <div className="max-h-[70vh] overflow-y-auto border-t border-border/40 bg-background/60 px-4 py-3" style={themeStyle}>
+              <div
+                className="max-h-[70vh] overflow-y-auto border-t border-border/40 bg-background/60 px-4 py-3"
+                style={themeStyle}
+              >
                 {view.revisions.length > 1 ? (
                   <RevisionControls
                     revisions={view.revisions}
@@ -264,7 +275,7 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
                       setActiveRevision(
                         threadId,
                         view.surfaceId,
-                        view.revisions[view.revisions.length - 1]!.revision,
+                        view.revisions[view.revisions.length - 1]?.revision,
                       )
                     }
                   />
@@ -274,15 +285,19 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
                   <div className="flex items-center gap-2 rounded-md border border-dashed border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
                     <Trash2Icon className="size-3.5" />
                     <span>
-                      Surface <code className="font-mono">{view.surfaceId}</code> was deleted at revision {view.activeRevision.revision}.
+                      Surface <code className="font-mono">{view.surfaceId}</code> was deleted at
+                      revision {view.activeRevision.revision}.
                     </span>
                   </div>
                 ) : (
                   <>
                     {unsupportedCatalog ? (
                       <div className="mb-3 rounded-md border border-warning/35 bg-warning/[0.08] px-3 py-2 text-xs text-warning">
-                        This surface uses an unsupported catalog. Rendering with best-effort basic primitives — some components may be skipped.
-                        <div className="mt-1 font-mono text-[10px] text-warning/80">{view.activeRevision.catalogId}</div>
+                        This surface uses an unsupported catalog. Rendering with best-effort basic
+                        primitives — some components may be skipped.
+                        <div className="mt-1 font-mono text-[10px] text-warning/80">
+                          {view.activeRevision.catalogId}
+                        </div>
                       </div>
                     ) : null}
                     <A2uiRenderer
@@ -312,7 +327,8 @@ export const A2uiSurfaceDock = memo(function A2uiSurfaceDock({ threadId }: A2uiS
           <div className="max-h-[70vh] overflow-y-auto px-1" style={themeStyle}>
             {isDeleted ? (
               <div className="rounded-md border border-dashed border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                Surface <code className="font-mono">{view.surfaceId}</code> was deleted at revision {view.activeRevision.revision}.
+                Surface <code className="font-mono">{view.surfaceId}</code> was deleted at revision{" "}
+                {view.activeRevision.revision}.
               </div>
             ) : (
               <A2uiRenderer
@@ -343,7 +359,8 @@ function RevisionControls({
   onStep: (direction: -1 | 1) => void;
   onJumpLatest: () => void;
 }) {
-  const active = revisions[activeIndex]!;
+  const active = revisions[activeIndex];
+  if (!active) return null;
   const relAge = formatRelativeAge(Date.now(), active.ts);
   const kindLabel = changeKindLabel(active.changeKind);
   return (
@@ -380,7 +397,8 @@ function RevisionControls({
           </span>
         </div>
         <span className="tabular-nums">
-          rev <span className="font-semibold text-foreground/85">{active.revision}</span> · {activeIndex + 1}/{revisions.length}
+          rev <span className="font-semibold text-foreground/85">{active.revision}</span> ·{" "}
+          {activeIndex + 1}/{revisions.length}
           {relAge ? <span className="ml-2">{relAge}</span> : null}
         </span>
         {canGoNext ? (

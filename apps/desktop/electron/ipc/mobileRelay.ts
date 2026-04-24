@@ -1,5 +1,5 @@
 import { app, BrowserWindow } from "electron";
-
+import { resolveDesktopFeatureFlags } from "../../../../src/shared/featureFlags";
 import {
   DESKTOP_EVENT_CHANNELS,
   DESKTOP_IPC_CHANNELS,
@@ -9,7 +9,6 @@ import {
   mobileRelayBridgeStateSchema,
   mobileRelayStartInputSchema,
 } from "../../src/lib/desktopSchemas";
-import { resolveDesktopFeatureFlags } from "../../../../src/shared/featureFlags";
 import type { DesktopIpcModuleContext } from "./types";
 
 const REMOTE_ACCESS_DISABLED_MESSAGE = "Remote access is disabled.";
@@ -24,7 +23,9 @@ function emitStateToAllWindows(windows: BrowserWindow[], payload: unknown) {
 }
 
 function toBridgeWorkspaceRecords(
-  workspaces: Awaited<ReturnType<DesktopIpcModuleContext["deps"]["persistence"]["loadState"]>>["workspaces"],
+  workspaces: Awaited<
+    ReturnType<DesktopIpcModuleContext["deps"]["persistence"]["loadState"]>
+  >["workspaces"],
 ) {
   return workspaces.map((w) => ({
     id: w.id,
@@ -42,22 +43,23 @@ function toBridgeWorkspaceRecords(
 export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
   const { deps, handleDesktopInvoke, parseWithSchema, workspaceRoots } = context;
 
-  const disabledState = () => mobileRelayBridgeStateSchema.parse({
-    status: "idle",
-    workspaceId: null,
-    workspacePath: null,
-    relaySource: "unavailable",
-    relaySourceMessage: REMOTE_ACCESS_DISABLED_MESSAGE,
-    relayServiceStatus: "unavailable",
-    relayServiceMessage: REMOTE_ACCESS_DISABLED_MESSAGE,
-    relayServiceUpdatedAt: null,
-    relayUrl: null,
-    sessionId: null,
-    pairingPayload: null,
-    trustedPhoneDeviceId: null,
-    trustedPhoneFingerprint: null,
-    lastError: REMOTE_ACCESS_DISABLED_MESSAGE,
-  });
+  const disabledState = () =>
+    mobileRelayBridgeStateSchema.parse({
+      status: "idle",
+      workspaceId: null,
+      workspacePath: null,
+      relaySource: "unavailable",
+      relaySourceMessage: REMOTE_ACCESS_DISABLED_MESSAGE,
+      relayServiceStatus: "unavailable",
+      relayServiceMessage: REMOTE_ACCESS_DISABLED_MESSAGE,
+      relayServiceUpdatedAt: null,
+      relayUrl: null,
+      sessionId: null,
+      pairingPayload: null,
+      trustedPhoneDeviceId: null,
+      trustedPhoneFingerprint: null,
+      lastError: REMOTE_ACCESS_DISABLED_MESSAGE,
+    });
 
   const isRemoteAccessEnabled = async () => {
     const persistedState = await deps.persistence.loadState().catch(() => null);
@@ -71,7 +73,7 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
   };
 
   const assertRemoteAccessEnabled = async () => {
-    if (!await isRemoteAccessEnabled()) {
+    if (!(await isRemoteAccessEnabled())) {
       throw new Error(REMOTE_ACCESS_DISABLED_MESSAGE);
     }
   };
@@ -94,7 +96,8 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
     if (refreshPromise) {
       return refreshPromise;
     }
-    refreshPromise = deps.persistence.loadState()
+    refreshPromise = deps.persistence
+      .loadState()
       .then((state) => {
         cachedWorkspaces = state.workspaces;
         cacheTimestamp = Date.now();
@@ -103,7 +106,9 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         if (message !== lastWorkspaceCacheError) {
-          console.warn(`[desktop] Failed to refresh mobile relay workspace cache during ${reason}: ${message}`);
+          console.warn(
+            `[desktop] Failed to refresh mobile relay workspace cache during ${reason}: ${message}`,
+          );
           lastWorkspaceCacheError = message;
         }
       })
@@ -132,18 +137,23 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
     emitStateToAllWindows(BrowserWindow.getAllWindows(), state);
   });
 
-  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayStart, async (_event, args: MobileRelayStartInput) => {
-    await assertRemoteAccessEnabled();
-    const input = parseWithSchema(mobileRelayStartInputSchema, args, "mobileRelay.start options");
-    const workspacePath = await workspaceRoots.assertApprovedWorkspacePath(input.workspacePath);
-    return mobileRelayBridgeStateSchema.parse(await deps.mobileRelayBridge.start({
-      ...input,
-      workspacePath,
-    }));
-  });
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.mobileRelayStart,
+    async (_event, args: MobileRelayStartInput) => {
+      await assertRemoteAccessEnabled();
+      const input = parseWithSchema(mobileRelayStartInputSchema, args, "mobileRelay.start options");
+      const workspacePath = await workspaceRoots.assertApprovedWorkspacePath(input.workspacePath);
+      return mobileRelayBridgeStateSchema.parse(
+        await deps.mobileRelayBridge.start({
+          ...input,
+          workspacePath,
+        }),
+      );
+    },
+  );
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayStop, async () => {
-    if (!await isRemoteAccessEnabled()) {
+    if (!(await isRemoteAccessEnabled())) {
       await deps.mobileRelayBridge.stop().catch(() => {
         // best effort while toggling feature flags at runtime
       });
@@ -153,7 +163,7 @@ export function registerMobileRelayIpc(context: DesktopIpcModuleContext): void {
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.mobileRelayGetState, async () => {
-    if (!await isRemoteAccessEnabled()) {
+    if (!(await isRemoteAccessEnabled())) {
       await deps.mobileRelayBridge.stop().catch(() => {
         // best effort while toggling feature flags at runtime
       });

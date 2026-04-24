@@ -1,10 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
 import { QrCodeIcon, RefreshCwIcon, SmartphoneIcon, Trash2Icon, WifiIcon } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { Button } from "../../../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../../../components/ui/card";
 import {
   forgetMobileRelayTrustedPhone,
   getMobileRelayState,
@@ -14,7 +20,9 @@ import {
   stopMobileRelay,
 } from "../../../lib/desktopCommands";
 
-export function describeRelaySource(source: Awaited<ReturnType<typeof getMobileRelayState>>["relaySource"]): string {
+export function describeRelaySource(
+  source: Awaited<ReturnType<typeof getMobileRelayState>>["relaySource"],
+): string {
   switch (source) {
     case "remodex":
       return "Remodex";
@@ -22,7 +30,6 @@ export function describeRelaySource(source: Awaited<ReturnType<typeof getMobileR
       return "Cowork-managed";
     case "override":
       return "Custom override";
-    case "unavailable":
     default:
       return "Unavailable";
   }
@@ -40,15 +47,15 @@ export function describeRelayServiceStatus(
       return "disconnected";
     case "unavailable":
       return "unavailable";
-    case "unknown":
     default:
       return "unknown";
   }
 }
 
 export function RemoteAccessPage() {
-  const selectedWorkspace = useAppStore((state) =>
-    state.workspaces.find((workspace) => workspace.id === state.selectedWorkspaceId) ?? null,
+  const selectedWorkspace = useAppStore(
+    (state) =>
+      state.workspaces.find((workspace) => workspace.id === state.selectedWorkspaceId) ?? null,
   );
   const [state, setState] = useState<Awaited<ReturnType<typeof getMobileRelayState>> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,9 +88,10 @@ export function RemoteAccessPage() {
     };
   }, []);
 
-  const qrValue = useMemo(() => (
-    state?.pairingPayload ? JSON.stringify(state.pairingPayload) : null
-  ), [state?.pairingPayload]);
+  const qrValue = useMemo(
+    () => (state?.pairingPayload ? JSON.stringify(state.pairingPayload) : null),
+    [state?.pairingPayload],
+  );
 
   async function runAction(action: string, runner: () => Promise<unknown>) {
     setBusyAction(action);
@@ -116,13 +124,16 @@ export function RemoteAccessPage() {
             <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
-                onClick={() => selectedWorkspace && runAction("start", async () => {
-                  await startMobileRelay({
-                    workspaceId: selectedWorkspace.id,
-                    workspacePath: selectedWorkspace.path,
-                    yolo: selectedWorkspace.yolo,
-                  });
-                })}
+                onClick={() =>
+                  selectedWorkspace &&
+                  runAction("start", async () => {
+                    await startMobileRelay({
+                      workspaceId: selectedWorkspace.id,
+                      workspacePath: selectedWorkspace.path,
+                      yolo: selectedWorkspace.yolo,
+                    });
+                  })
+                }
                 disabled={!selectedWorkspace || busyAction !== null}
               >
                 <WifiIcon data-icon />
@@ -131,9 +142,11 @@ export function RemoteAccessPage() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => runAction("stop", async () => {
-                  await stopMobileRelay();
-                })}
+                onClick={() =>
+                  runAction("stop", async () => {
+                    await stopMobileRelay();
+                  })
+                }
                 disabled={!state || state.status === "idle" || busyAction !== null}
               >
                 Stop
@@ -144,7 +157,7 @@ export function RemoteAccessPage() {
           <div className="rounded-lg border border-border/60 bg-background/40 px-3 py-2 text-sm">
             <div className="font-medium text-foreground">Status</div>
             <div className="mt-1 text-muted-foreground">
-              {loading ? "Loading…" : state?.status ?? "idle"}
+              {loading ? "Loading…" : (state?.status ?? "idle")}
             </div>
             <div className="mt-2 text-xs text-muted-foreground">
               Relay source: {describeRelaySource(state?.relaySource ?? "unavailable")}
@@ -153,9 +166,7 @@ export function RemoteAccessPage() {
               Relay service: {describeRelayServiceStatus(state?.relayServiceStatus ?? "unknown")}
             </div>
             {state?.relayUrl ? (
-              <div className="mt-1 text-xs text-muted-foreground">
-                Relay URL: {state.relayUrl}
-              </div>
+              <div className="mt-1 text-xs text-muted-foreground">Relay URL: {state.relayUrl}</div>
             ) : null}
             {state?.relayServiceUpdatedAt ? (
               <div className="mt-1 text-xs text-muted-foreground">
@@ -190,7 +201,8 @@ export function RemoteAccessPage() {
                 <div className="space-y-1 text-center text-xs text-muted-foreground">
                   <div>Session: {state?.pairingPayload?.sessionId}</div>
                   <div>
-                    Expires: {state?.pairingPayload?.expiresAt
+                    Expires:{" "}
+                    {state?.pairingPayload?.expiresAt
                       ? new Date(state.pairingPayload.expiresAt).toISOString()
                       : "—"}
                   </div>
@@ -207,9 +219,11 @@ export function RemoteAccessPage() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => runAction("rotate", async () => {
-                  await rotateMobileRelaySession();
-                })}
+                onClick={() =>
+                  runAction("rotate", async () => {
+                    await rotateMobileRelaySession();
+                  })
+                }
                 disabled={!state?.pairingPayload || busyAction !== null}
               >
                 <RefreshCwIcon data-icon />
@@ -223,7 +237,8 @@ export function RemoteAccessPage() {
           <CardHeader>
             <CardTitle>Trusted phone</CardTitle>
             <CardDescription>
-              Cowork Desktop keeps trust state and relay secrets in `~/.cowork/mobile-relay`, outside the renderer.
+              Cowork Desktop keeps trust state and relay secrets in `~/.cowork/mobile-relay`,
+              outside the renderer.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -240,9 +255,11 @@ export function RemoteAccessPage() {
                 <Button
                   type="button"
                   variant="destructive"
-                  onClick={() => runAction("forget", async () => {
-                    await forgetMobileRelayTrustedPhone();
-                  })}
+                  onClick={() =>
+                    runAction("forget", async () => {
+                      await forgetMobileRelayTrustedPhone();
+                    })
+                  }
                   disabled={busyAction !== null}
                 >
                   <Trash2Icon data-icon />

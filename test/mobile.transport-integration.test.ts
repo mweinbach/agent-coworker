@@ -73,22 +73,42 @@ describe("mobile transport integration", () => {
 
       const reread = await client.readThread(threadId);
       const feed = reread.coworkSnapshot?.feed ?? [];
-      expect(feed.some((item) => item.kind === "message" && item.role === "user" && item.text.includes("Hello from mobile"))).toBe(true);
-      expect(feed.some((item) => item.kind === "message" && item.role === "assistant" && item.text.includes("Mock remote reply"))).toBe(true);
-      expect(notifications).toEqual(expect.arrayContaining([
-        "thread/started",
-        "turn/started",
-        "item/started",
-        "item/agentMessage/delta",
-        "item/completed",
-        "turn/completed",
-      ]));
+      expect(
+        feed.some(
+          (item) =>
+            item.kind === "message" &&
+            item.role === "user" &&
+            item.text.includes("Hello from mobile"),
+        ),
+      ).toBe(true);
+      expect(
+        feed.some(
+          (item) =>
+            item.kind === "message" &&
+            item.role === "assistant" &&
+            item.text.includes("Mock remote reply"),
+        ),
+      ).toBe(true);
+      expect(notifications).toEqual(
+        expect.arrayContaining([
+          "thread/started",
+          "turn/started",
+          "item/started",
+          "item/agentMessage/delta",
+          "item/completed",
+          "turn/completed",
+        ]),
+      );
 
       await client.interruptTurn(threadId);
       await flushMicrotasks();
       const interrupted = await client.readThread(threadId);
-      expect(interrupted.coworkSnapshot?.feed.some((item) => item.kind === "system" && item.line.includes("Interrupt requested"))).toBe(true);
-      expect(sent.some((entry) => entry.includes("\"turn/start\""))).toBe(true);
+      expect(
+        interrupted.coworkSnapshot?.feed.some(
+          (item) => item.kind === "system" && item.line.includes("Interrupt requested"),
+        ),
+      ).toBe(true);
+      expect(sent.some((entry) => entry.includes('"turn/start"'))).toBe(true);
     } finally {
       subscription.remove();
     }
@@ -183,9 +203,7 @@ describe("mobile transport integration", () => {
       expect(
         reread.coworkSnapshot?.feed.some(
           (item) =>
-            item.kind === "message" &&
-            item.role === "assistant" &&
-            item.text.includes("continue"),
+            item.kind === "message" && item.role === "assistant" && item.text.includes("continue"),
         ),
       ).toBe(true);
     } finally {

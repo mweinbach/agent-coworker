@@ -50,7 +50,9 @@ export class EventStream<TEvent, TResult> {
       }
       if (this.done) return;
 
-      const result = await new Promise<IteratorResult<TEvent>>((resolve) => this.waiting.push(resolve));
+      const result = await new Promise<IteratorResult<TEvent>>((resolve) =>
+        this.waiting.push(resolve),
+      );
       if (result.done) return;
       yield result.value;
     }

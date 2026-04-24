@@ -1,5 +1,5 @@
-import { z } from "zod";
 import { execFile } from "node:child_process";
+import { z } from "zod";
 
 import { getShellCommandPolicyViolation } from "../server/agents/commandPolicy";
 import type { ToolContext } from "./context";
@@ -9,7 +9,7 @@ type ExecResult = { stdout: string; stderr: string; exitCode: number; errorCode?
 type ExecRunner = (
   file: string,
   args: string[],
-  opts: { cwd: string; maxBuffer: number; signal?: AbortSignal }
+  opts: { cwd: string; maxBuffer: number; signal?: AbortSignal },
 ) => Promise<ExecResult>;
 
 const abortByNameSchema = z.object({ name: z.literal("AbortError") }).passthrough();
@@ -18,7 +18,7 @@ const errorCodeSchema = z.object({ code: z.union([z.string(), z.number()]) }).pa
 function execFileAsync(
   file: string,
   args: string[],
-  opts: { cwd: string; maxBuffer: number; signal?: AbortSignal }
+  opts: { cwd: string; maxBuffer: number; signal?: AbortSignal },
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     execFile(
@@ -45,8 +45,13 @@ function execFileAsync(
         }
         const errorCode = typeof code === "string" ? code : undefined;
         const exitCode = typeof code === "number" ? code : err ? 1 : 0;
-        resolve({ stdout: String(stdout ?? ""), stderr: String(stderr ?? ""), exitCode, errorCode });
-      }
+        resolve({
+          stdout: String(stdout ?? ""),
+          stderr: String(stderr ?? ""),
+          exitCode,
+          errorCode,
+        });
+      },
     );
   });
 }
@@ -67,9 +72,19 @@ let runShellCommandOverrideForTests:
   | ((opts: { command: string; cwd: string; abortSignal?: AbortSignal }) => Promise<ExecResult>)
   | null = null;
 
-function buildShellExecutionPlan(platform: NodeJS.Platform, command: string): Array<{ file: string; args: string[] }> {
+function buildShellExecutionPlan(
+  platform: NodeJS.Platform,
+  command: string,
+): Array<{ file: string; args: string[] }> {
   if (platform === "win32") {
-    const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command];
+    const args = [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      command,
+    ];
     return [
       { file: "pwsh", args },
       { file: "powershell.exe", args },
@@ -153,8 +168,8 @@ export function createBashTool(ctx: ToolContext) {
         const res = {
           stdout: "",
           stderr:
-            `Command blocked by shell policy "${shellPolicyViolation.shellPolicy}": `
-            + `${shellPolicyViolation.reason}. Use read/test/build commands or a write-capable role instead.`,
+            `Command blocked by shell policy "${shellPolicyViolation.shellPolicy}": ` +
+            `${shellPolicyViolation.reason}. Use read/test/build commands or a write-capable role instead.`,
           exitCode: 1,
         };
         ctx.log(`tool< bash ${JSON.stringify(res)}`);
@@ -192,7 +207,11 @@ export const __internal = {
   buildShellExecutionPlan,
   runShellCommandWithExec,
   setRunShellCommandForTests(
-    runner: (opts: { command: string; cwd: string; abortSignal?: AbortSignal }) => Promise<ExecResult>
+    runner: (opts: {
+      command: string;
+      cwd: string;
+      abortSignal?: AbortSignal;
+    }) => Promise<ExecResult>,
   ) {
     runShellCommandOverrideForTests = runner;
   },

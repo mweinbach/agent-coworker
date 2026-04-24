@@ -22,50 +22,73 @@ const MOCK_UPDATE_STATE = {
   error: null,
 };
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async ({ path, includeHidden }: { path: string; includeHidden?: boolean }) => {
-    const entries = [
-      { name: "file1.txt", path: path + "/file1.txt", isDirectory: false, isHidden: false, sizeBytes: 10, modifiedAtMs: 1000 },
-      { name: "dir1", path: path + "/dir1", isDirectory: true, isHidden: false, sizeBytes: null, modifiedAtMs: 1000 },
-      { name: ".hidden", path: path + "/.hidden", isDirectory: false, isHidden: true, sizeBytes: 10, modifiedAtMs: 1000 },
-    ];
-    if (!includeHidden) return entries.filter(e => !e.isHidden);
-    return entries;
-  },
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async ({ path, includeHidden }: { path: string; includeHidden?: boolean }) => {
+      const entries = [
+        {
+          name: "file1.txt",
+          path: `${path}/file1.txt`,
+          isDirectory: false,
+          isHidden: false,
+          sizeBytes: 10,
+          modifiedAtMs: 1000,
+        },
+        {
+          name: "dir1",
+          path: `${path}/dir1`,
+          isDirectory: true,
+          isHidden: false,
+          sizeBytes: null,
+          modifiedAtMs: 1000,
+        },
+        {
+          name: ".hidden",
+          path: `${path}/.hidden`,
+          isDirectory: false,
+          isHidden: true,
+          sizeBytes: 10,
+          modifiedAtMs: 1000,
+        },
+      ];
+      if (!includeHidden) return entries.filter((e) => !e.isHidden);
+      return entries;
+    },
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
@@ -103,7 +126,7 @@ describe("store explorer actions", () => {
     expect(explorer?.currentPath).toBe(rootPath);
     expect(explorer?.loading).toBe(false);
     expect(explorer?.entries.length).toBe(2);
-    expect(explorer?.entries.some(e => e.isHidden)).toBe(false);
+    expect(explorer?.entries.some((e) => e.isHidden)).toBe(false);
   });
 
   test("setShowHiddenFiles updates state and re-fetches files", async () => {
@@ -116,10 +139,10 @@ describe("store explorer actions", () => {
     expect(useAppStore.getState().showHiddenFiles).toBe(true);
     // Since setShowHiddenFiles calls refreshWorkspaceFiles, it might take a tick. Let's trigger directly.
     await useAppStore.getState().refreshWorkspaceFiles(wsId);
-    
+
     explorer = useAppStore.getState().workspaceExplorerById[wsId];
     expect(explorer?.entries.length).toBe(3);
-    expect(explorer?.entries.some(e => e.isHidden)).toBe(true);
+    expect(explorer?.entries.some((e) => e.isHidden)).toBe(true);
   });
 
   test("navigateWorkspaceFilesUp stops at root", async () => {
@@ -127,8 +150,10 @@ describe("store explorer actions", () => {
     await useAppStore.getState().navigateWorkspaceFilesUp(wsId);
     expect(useAppStore.getState().workspaceExplorerById[wsId]?.currentPath).toBe(rootPath);
 
-    await useAppStore.getState().navigateWorkspaceFiles(wsId, rootPath + "/dir1");
-    expect(useAppStore.getState().workspaceExplorerById[wsId]?.currentPath).toBe(rootPath + "/dir1");
+    await useAppStore.getState().navigateWorkspaceFiles(wsId, `${rootPath}/dir1`);
+    expect(useAppStore.getState().workspaceExplorerById[wsId]?.currentPath).toBe(
+      `${rootPath}/dir1`,
+    );
 
     await useAppStore.getState().navigateWorkspaceFilesUp(wsId);
     expect(useAppStore.getState().workspaceExplorerById[wsId]?.currentPath).toBe(rootPath);
@@ -136,8 +161,10 @@ describe("store explorer actions", () => {
 
   test("selectWorkspaceFile sets selectedPath", async () => {
     await useAppStore.getState().navigateWorkspaceFiles(wsId, rootPath);
-    useAppStore.getState().selectWorkspaceFile(wsId, rootPath + "/file1.txt");
-    expect(useAppStore.getState().workspaceExplorerById[wsId]?.selectedPath).toBe(rootPath + "/file1.txt");
+    useAppStore.getState().selectWorkspaceFile(wsId, `${rootPath}/file1.txt`);
+    expect(useAppStore.getState().workspaceExplorerById[wsId]?.selectedPath).toBe(
+      `${rootPath}/file1.txt`,
+    );
   });
 
   test("stale request guard discards older results", async () => {

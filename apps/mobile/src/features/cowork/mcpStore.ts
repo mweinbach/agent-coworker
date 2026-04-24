@@ -151,7 +151,10 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
   async deleteServer(name: string) {
     const { client, cwd } = getClientAndCwd();
     try {
-      const result = await callParsedControlMethod(client, "cowork/mcp/server/delete", { cwd, name });
+      const result = await callParsedControlMethod(client, "cowork/mcp/server/delete", {
+        cwd,
+        name,
+      });
       set({
         ...applyServersEvent(result.event),
         validationByName: Object.fromEntries(
@@ -166,7 +169,10 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
   async authorizeServer(name: string) {
     const { client, cwd } = getClientAndCwd();
     try {
-      const result = await callParsedControlMethod(client, "cowork/mcp/server/auth/authorize", { cwd, name });
+      const result = await callParsedControlMethod(client, "cowork/mcp/server/auth/authorize", {
+        cwd,
+        name,
+      });
       if (result.event.type === "mcp_server_auth_challenge") {
         const challenge: McpAuthChallenge = result.event;
         set({
@@ -246,7 +252,10 @@ export const useMcpStore = create<McpStoreState>((set, get) => ({
     const { client, cwd } = getClientAndCwd();
     set({ loading: true, error: null });
     try {
-      const result = await callParsedControlMethod(client, "cowork/mcp/legacy/migrate", { cwd, scope });
+      const result = await callParsedControlMethod(client, "cowork/mcp/legacy/migrate", {
+        cwd,
+        scope,
+      });
       set({
         ...applyServersEvent(result.event),
         loading: false,

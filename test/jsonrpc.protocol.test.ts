@@ -1,25 +1,27 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  JSONRPC_ERROR_CODES,
   buildJsonRpcErrorResponse,
   buildJsonRpcResultResponse,
-  parseInitializeParams,
+  JSONRPC_ERROR_CODES,
   parseInitializedParams,
+  parseInitializeParams,
   parseJsonRpcClientMessage,
 } from "../src/server/jsonrpc/protocol";
 
 describe("JSON-RPC-lite protocol parsing", () => {
   test("parses valid requests and notifications", () => {
-    const request = parseJsonRpcClientMessage(JSON.stringify({
-      id: 1,
-      method: "initialize",
-      params: {
-        clientInfo: {
-          name: "desktop",
+    const request = parseJsonRpcClientMessage(
+      JSON.stringify({
+        id: 1,
+        method: "initialize",
+        params: {
+          clientInfo: {
+            name: "desktop",
+          },
         },
-      },
-    }));
+      }),
+    );
     expect(request.ok).toBe(true);
     if (request.ok) {
       expect(request.message).toEqual({
@@ -33,9 +35,11 @@ describe("JSON-RPC-lite protocol parsing", () => {
       });
     }
 
-    const notification = parseJsonRpcClientMessage(JSON.stringify({
-      method: "initialized",
-    }));
+    const notification = parseJsonRpcClientMessage(
+      JSON.stringify({
+        method: "initialized",
+      }),
+    );
     expect(notification.ok).toBe(true);
     if (notification.ok) {
       expect(notification.message).toEqual({
@@ -65,17 +69,19 @@ describe("JSON-RPC-lite protocol parsing", () => {
   });
 
   test("validates initialize params", () => {
-    expect(parseInitializeParams({
-      clientInfo: {
-        name: "desktop",
-        title: "Desktop App",
-        version: "1.0.0",
-      },
-      capabilities: {
-        experimentalApi: true,
-        optOutNotificationMethods: ["thread/started"],
-      },
-    })).toEqual({
+    expect(
+      parseInitializeParams({
+        clientInfo: {
+          name: "desktop",
+          title: "Desktop App",
+          version: "1.0.0",
+        },
+        capabilities: {
+          experimentalApi: true,
+          optOutNotificationMethods: ["thread/started"],
+        },
+      }),
+    ).toEqual({
       ok: true,
       params: {
         clientInfo: {

@@ -1,10 +1,12 @@
-import type { ComponentProps } from "react";
-
 import { Switch as HeroSwitch } from "@heroui/react";
+import type { ComponentProps } from "react";
 
 import { cn } from "@/lib/utils";
 
-type SwitchProps = Omit<ComponentProps<typeof HeroSwitch>, "children" | "isSelected" | "onChange" | "isDisabled"> & {
+type SwitchProps = Omit<
+  ComponentProps<typeof HeroSwitch>,
+  "children" | "isSelected" | "onChange" | "isDisabled"
+> & {
   checked?: boolean;
   disabled?: boolean;
   onCheckedChange?: (checked: boolean) => void;

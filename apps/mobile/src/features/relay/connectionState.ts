@@ -1,4 +1,8 @@
-import type { RelayConnectionStatus, RelayTransportMode, SecureTransportSnapshot } from "./relayTypes";
+import type {
+  RelayConnectionStatus,
+  RelayTransportMode,
+  SecureTransportSnapshot,
+} from "./relayTypes";
 
 export function isWorkspaceConnectionReady(
   state: Pick<SecureTransportSnapshot, "status" | "transportMode">,
@@ -12,7 +16,6 @@ export function describeTransportMode(mode: RelayTransportMode): string {
       return "Fallback demo";
     case "unsupported":
       return "Unsupported";
-    case "native":
     default:
       return "Secure relay";
   }
@@ -39,7 +42,6 @@ export function describeTransportStatus(
       return "Connected";
     case "error":
       return "Needs attention";
-    case "idle":
     default:
       return "Ready";
   }
@@ -54,12 +56,20 @@ export function toneForTransportState(
   if (state.transportMode === "unsupported" || state.status === "error") {
     return "danger";
   }
-  if (state.transportMode === "fallback" || state.status === "connecting" || state.status === "reconnecting" || state.status === "pairing") {
+  if (
+    state.transportMode === "fallback" ||
+    state.status === "connecting" ||
+    state.status === "reconnecting" ||
+    state.status === "pairing"
+  ) {
     return "warning";
   }
   return "neutral";
 }
 
-export function isLiveTransportStatus(status: RelayConnectionStatus, transportMode: RelayTransportMode): boolean {
+export function isLiveTransportStatus(
+  status: RelayConnectionStatus,
+  transportMode: RelayTransportMode,
+): boolean {
   return status === "connected" && transportMode === "native";
 }

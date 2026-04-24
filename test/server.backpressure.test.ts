@@ -21,8 +21,8 @@ function createFakeBackpressureQueue(max: number): FakeQueue {
           params?: { type?: string };
         };
         if (
-          parsed.method === "model_stream_chunk"
-          || parsed.params?.type === "agentMessage/delta"
+          parsed.method === "model_stream_chunk" ||
+          parsed.params?.type === "agentMessage/delta"
         ) {
           queue.splice(i, 1);
           return;
@@ -81,7 +81,9 @@ describe("WebSocket backpressure queue", () => {
   test("evicts agentMessage/delta params first when queue is full", () => {
     const q = createFakeBackpressureQueue(3);
     q.send('{"jsonrpc":"2.0","method":"ask","params":{}}');
-    q.send('{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"type":"agentMessage/delta"}}');
+    q.send(
+      '{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"type":"agentMessage/delta"}}',
+    );
     q.send('{"jsonrpc":"2.0","method":"approval","params":{}}');
     expect(q.queue.length).toBe(3);
     q.send('{"jsonrpc":"2.0","method":"other","params":{}}');
@@ -113,7 +115,10 @@ describe("startServer backpressure integration", () => {
 
     const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws?protocol=jsonrpc`);
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("Timed out waiting for websocket open")), 5_000);
+      const timer = setTimeout(
+        () => reject(new Error("Timed out waiting for websocket open")),
+        5_000,
+      );
       ws.onopen = () => {
         clearTimeout(timer);
         resolve();

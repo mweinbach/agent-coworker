@@ -4,9 +4,7 @@ import type { PersistedSessionRecord } from "../../sessionDb";
 import type { JsonRpcThread, JsonRpcThreadSummaryFilter } from "./types";
 
 export function toJsonRpcParams(params: unknown): Record<string, unknown> {
-  return params && typeof params === "object"
-    ? params as Record<string, unknown>
-    : {};
+  return params && typeof params === "object" ? (params as Record<string, unknown>) : {};
 }
 
 export function requireWorkspacePath(
@@ -18,9 +16,8 @@ export function requireWorkspacePath(
   if (cwd) {
     return cwd;
   }
-  const fallback = typeof defaultWorkingDirectory === "string"
-    ? defaultWorkingDirectory.trim()
-    : "";
+  const fallback =
+    typeof defaultWorkingDirectory === "string" ? defaultWorkingDirectory.trim() : "";
   if (!fallback) {
     throw new Error(`${method} requires cwd`);
   }
@@ -96,8 +93,8 @@ export function extractJsonRpcInput(input: unknown): ExtractedInput {
       if (!entry || typeof entry !== "object") continue;
       const record = entry as Record<string, unknown>;
       if (
-        (record.type === "text" || record.type === "inputText")
-        && typeof record.text === "string"
+        (record.type === "text" || record.type === "inputText") &&
+        typeof record.text === "string"
       ) {
         orderedParts.push({
           type: "text",
@@ -190,12 +187,14 @@ export function buildJsonRpcThreadFromRecord(record: PersistedSessionRecord): Js
 }
 
 export function shouldIncludeJsonRpcThreadSummary(summary: JsonRpcThreadSummaryFilter): boolean {
-  return summary.executionState === "running"
-    || summary.executionState === "pending_init"
-    || (summary.messageCount ?? 0) > 0
-    || summary.titleSource !== "default"
-    || summary.hasPendingAsk === true
-    || summary.hasPendingApproval === true;
+  return (
+    summary.executionState === "running" ||
+    summary.executionState === "pending_init" ||
+    (summary.messageCount ?? 0) > 0 ||
+    summary.titleSource !== "default" ||
+    summary.hasPendingAsk === true ||
+    summary.hasPendingApproval === true
+  );
 }
 
 export function buildControlSessionStateEvents(session: AgentSession): ServerEvent[] {

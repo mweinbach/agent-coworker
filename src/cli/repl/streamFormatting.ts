@@ -32,7 +32,8 @@ function asPartRecord(value: unknown): Record<string, unknown> {
 
 export function previewStructured(value: unknown, max = 160): string {
   if (value === undefined) return "";
-  if (typeof value === "string") return value.length <= max ? value : `${value.slice(0, max - 3)}...`;
+  if (typeof value === "string")
+    return value.length <= max ? value : `${value.slice(0, max - 3)}...`;
   try {
     const raw = JSON.stringify(value);
     if (!raw) return "";
@@ -44,11 +45,7 @@ export function previewStructured(value: unknown, max = 160): string {
 
 export function modelStreamToolKey(evt: ModelStreamChunkEvent): string {
   const part = asPartRecord(evt.part);
-  return (
-    asIdString(part.toolCallId) ??
-    asIdString(part.id) ??
-    `tool:${evt.turnId}:${evt.index}`
-  );
+  return asIdString(part.toolCallId) ?? asIdString(part.id) ?? `tool:${evt.turnId}:${evt.index}`;
 }
 
 export function modelStreamToolName(evt: ModelStreamChunkEvent): string {

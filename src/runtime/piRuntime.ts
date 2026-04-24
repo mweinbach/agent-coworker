@@ -1,23 +1,11 @@
-import { SpanStatusCode, trace, type AttributeValue, type Span } from "@opentelemetry/api";
-import { setBedrockProviderModule, stream as piStream } from "@mariozechner/pi-ai";
-import {
-  asFiniteNumber,
-  asNonEmptyString,
-  asRecord,
-  asString,
-  buildPiStreamOptions,
-  extractToolCallsFromAssistant,
-  isZodSchema,
-  pickKnownPiModel,
-  toPiJsonSchema,
-  type PiModel,
-  type PiToolCallLike,
-} from "./piRuntimeOptions";
-import { mapPiEventToRawParts } from "./piStreamParts";
-
+import { stream as piStream, setBedrockProviderModule } from "@mariozechner/pi-ai";
+import { type AttributeValue, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
 import { getSavedProviderApiKey } from "../config";
+import { getResolvedModelMetadataSync } from "../models/metadata";
+import type { TelemetrySettings } from "../observability/runtime";
 import { getBasetenModelSpec, resolveBasetenApiKey } from "../providers/basetenShared";
 import { bedrockClientConfig, resolveBedrockAuthConfig } from "../providers/bedrockShared";
+import { getFireworksModelSpec, resolveFireworksApiKey } from "../providers/fireworksShared";
 import { prepareLmStudioModelMetadataForInference } from "../providers/lmstudio/catalog";
 import { lmStudioOpenAiBaseUrl } from "../providers/lmstudio/client";
 import { getNvidiaModelSpec, resolveNvidiaApiKey } from "../providers/nvidiaShared";
@@ -27,32 +15,51 @@ import {
   getOpenCodeProviderConfig,
   isOpenCodeModelSupportedByProvider,
   isOpenCodeProviderName,
-  resolveOpenCodeApiKey,
   type OpenCodeProviderName,
+  resolveOpenCodeApiKey,
 } from "../providers/opencodeShared";
-import { getFireworksModelSpec, resolveFireworksApiKey } from "../providers/fireworksShared";
 import { getTogetherModelSpec, resolveTogetherApiKey } from "../providers/togetherShared";
-import type { ModelMessage, ProviderName } from "../types";
-import { getResolvedModelMetadataSync } from "../models/metadata";
-import type { TelemetrySettings } from "../observability/runtime";
 import {
   continuationMatchesTarget,
   type OpenAiContinuationProvider,
   type OpenAiContinuationState,
 } from "../shared/openaiContinuation";
-import { streamBedrock as coworkStreamBedrock, streamSimpleBedrock as coworkStreamSimpleBedrock } from "./bedrockProviderModule";
-
+import type { ModelMessage, ProviderName } from "../types";
+import {
+  streamBedrock as coworkStreamBedrock,
+  streamSimpleBedrock as coworkStreamSimpleBedrock,
+} from "./bedrockProviderModule";
 import {
   extractPiAssistantText,
   extractPiReasoningText,
   mergePiUsage,
-  normalizePiUsage,
   modelMessagesToPiMessages,
+  normalizePiUsage,
   piTurnMessagesToModelMessages,
   toolResultContentFromOutput,
 } from "./piMessageBridge";
+import {
+  asFiniteNumber,
+  asNonEmptyString,
+  asRecord,
+  asString,
+  buildPiStreamOptions,
+  extractToolCallsFromAssistant,
+  isZodSchema,
+  type PiModel,
+  type PiToolCallLike,
+  pickKnownPiModel,
+  toPiJsonSchema,
+} from "./piRuntimeOptions";
+import { mapPiEventToRawParts } from "./piStreamParts";
 import { maybeSpillToolOutputToWorkspace } from "./toolOutputOverflow";
-import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeStepOverride, RuntimeToolDefinition } from "./types";
+import type {
+  LlmRuntime,
+  RuntimeRunTurnParams,
+  RuntimeRunTurnResult,
+  RuntimeStepOverride,
+  RuntimeToolDefinition,
+} from "./types";
 
 const LM_STUDIO_LOCAL_SENTINEL_API_KEY = "lmstudio-local";
 
@@ -114,7 +121,9 @@ export function splitStepOverrides(raw: unknown): RuntimeStepOverrides {
   const providerOptions = asRecord(parsed.providerOptions) ?? undefined;
   const explicitStreamOptions = asRecord(parsed.streamOptions);
 
-  const streamOptions: Record<string, unknown> = explicitStreamOptions ? { ...explicitStreamOptions } : {};
+  const streamOptions: Record<string, unknown> = explicitStreamOptions
+    ? { ...explicitStreamOptions }
+    : {};
   if (!explicitStreamOptions) {
     for (const [key, value] of Object.entries(parsed)) {
       if (key === "messages" || key === "providerOptions") continue;
@@ -133,14 +142,14 @@ export function buildStepState(
   params: RuntimeRunTurnParams,
   resolved: ResolvedPiRuntimeModel,
   overrides: RuntimeStepOverrides,
-  fallbackMessages: ModelMessage[]
+  fallbackMessages: ModelMessage[],
 ): RuntimeStepState {
   const modelMessages = overrides.messages ?? fallbackMessages;
   const providerOptions = overrides.providerOptions ?? params.providerOptions;
   const baseStreamOptions = buildPiStreamOptions(
     { ...params, providerOptions } as RuntimeRunTurnParams,
     resolved.apiKey,
-    resolved.headers
+    resolved.headers,
   );
   const streamOptions = {
     ...baseStreamOptions,
@@ -151,7 +160,10 @@ export function buildStepState(
     modelMessages,
     providerOptions,
     streamOptions,
-    piMessages: modelMessagesToPiMessages(modelMessages, params.config.provider) as unknown as Array<Record<string, unknown>>,
+    piMessages: modelMessagesToPiMessages(
+      modelMessages,
+      params.config.provider,
+    ) as unknown as Array<Record<string, unknown>>,
   };
 }
 
@@ -203,9 +215,15 @@ function stripPlaceholderCostFromAssistantRecord(
   };
 }
 
-function applySupportedModelMetadata(model: PiModel, provider: ProviderName, modelId: string): PiModel {
+function applySupportedModelMetadata(
+  model: PiModel,
+  provider: ProviderName,
+  modelId: string,
+): PiModel {
   const supported = getResolvedModelMetadataSync(provider, modelId, "model");
-  const input: Array<"text" | "image"> = supported.supportsImageInput ? ["text", "image"] : ["text"];
+  const input: Array<"text" | "image"> = supported.supportsImageInput
+    ? ["text", "image"]
+    : ["text"];
   return {
     ...model,
     id: supported.id,
@@ -222,7 +240,8 @@ function buildLmStudioPiModel(opts: {
   metadata: ReturnType<typeof getResolvedModelMetadataSync>;
   baseUrl: string;
 }): PiModel {
-  const contextWindow = opts.metadata.effectiveContextLength ?? opts.metadata.maxContextLength ?? 8192;
+  const contextWindow =
+    opts.metadata.effectiveContextLength ?? opts.metadata.maxContextLength ?? 8192;
   return {
     id: opts.metadata.id,
     name: opts.metadata.displayName,
@@ -390,13 +409,17 @@ function getNvidiaPiModel(modelId: string): PiModel | null {
 function isNvidiaChatCompletionsUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.origin === "https://integrate.api.nvidia.com" && url.pathname === "/v1/chat/completions";
+    return (
+      url.origin === "https://integrate.api.nvidia.com" && url.pathname === "/v1/chat/completions"
+    );
   } catch {
     return false;
   }
 }
 
-function normalizeNvidiaChatCompletionsBody(body: Record<string, unknown>): Record<string, unknown> {
+function normalizeNvidiaChatCompletionsBody(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
   const next: Record<string, unknown> = { ...body };
   delete next.store;
   delete next.max_tokens;
@@ -489,13 +512,10 @@ async function withPatchedNvidiaFetch<T>(run: () => Promise<T>): Promise<T> {
   }
 
   const originalFetch = globalThis.fetch;
-  const wrappedFetch = Object.assign(
-    async (input: RequestInfo | URL, init?: RequestInit) => {
-      const [nextInput, nextInit] = await maybeRewriteNvidiaFetchRequest(input, init);
-      return originalFetch.call(globalThis, nextInput as any, nextInit as any);
-    },
-    originalFetch,
-  );
+  const wrappedFetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const [nextInput, nextInit] = await maybeRewriteNvidiaFetchRequest(input, init);
+    return originalFetch.call(globalThis, nextInput as any, nextInit as any);
+  }, originalFetch);
 
   globalThis.fetch = wrappedFetch as typeof fetch;
   globalWithState[NVIDIA_FETCH_PATCH_STATE] = {
@@ -526,13 +546,16 @@ type RuntimeStepState = {
   piMessages: Array<Record<string, unknown>>;
 };
 
-export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<ResolvedPiRuntimeModel> {
+export async function resolvePiModel(
+  params: RuntimeRunTurnParams,
+): Promise<ResolvedPiRuntimeModel> {
   const modelId = params.config.model;
   const provider = params.config.provider;
 
   if (provider === "openai") {
     const model = pickKnownPiModel("openai", modelId);
-    if (!model) throw new Error(`No PI model metadata available for provider openai (model: ${modelId}).`);
+    if (!model)
+      throw new Error(`No PI model metadata available for provider openai (model: ${modelId}).`);
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: getSavedProviderApiKey(params.config, "openai"),
@@ -540,12 +563,15 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
   }
 
   if (provider === "google") {
-    throw new Error("Google is handled by the Google Interactions runtime. Set runtime to 'google-interactions'.");
+    throw new Error(
+      "Google is handled by the Google Interactions runtime. Set runtime to 'google-interactions'.",
+    );
   }
 
   if (provider === "anthropic") {
     const model = pickKnownPiModel("anthropic", modelId);
-    if (!model) throw new Error(`No PI model metadata available for provider anthropic (model: ${modelId}).`);
+    if (!model)
+      throw new Error(`No PI model metadata available for provider anthropic (model: ${modelId}).`);
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: getSavedProviderApiKey(params.config, "anthropic"),
@@ -563,7 +589,8 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
 
   if (provider === "baseten") {
     const model = getBasetenPiModel(modelId);
-    if (!model) throw new Error(`No PI model metadata available for provider baseten (model: ${modelId}).`);
+    if (!model)
+      throw new Error(`No PI model metadata available for provider baseten (model: ${modelId}).`);
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveBasetenApiKey({
@@ -574,7 +601,8 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
 
   if (provider === "together") {
     const model = getTogetherPiModel(modelId);
-    if (!model) throw new Error(`No PI model metadata available for provider together (model: ${modelId}).`);
+    if (!model)
+      throw new Error(`No PI model metadata available for provider together (model: ${modelId}).`);
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveTogetherApiKey({
@@ -585,7 +613,8 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
 
   if (provider === "fireworks") {
     const model = getFireworksPiModel(modelId);
-    if (!model) throw new Error(`No PI model metadata available for provider fireworks (model: ${modelId}).`);
+    if (!model)
+      throw new Error(`No PI model metadata available for provider fireworks (model: ${modelId}).`);
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveFireworksApiKey({
@@ -596,7 +625,8 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
 
   if (provider === "nvidia") {
     const model = getNvidiaPiModel(modelId);
-    if (!model) throw new Error(`No PI model metadata available for provider nvidia (model: ${modelId}).`);
+    if (!model)
+      throw new Error(`No PI model metadata available for provider nvidia (model: ${modelId}).`);
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveNvidiaApiKey({
@@ -611,7 +641,8 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
       providerOptions: params.providerOptions ?? params.config.providerOptions,
       log: params.log,
     });
-    const configuredApiKey = prepared.provider.apiKey ?? getSavedProviderApiKey(params.config, "lmstudio");
+    const configuredApiKey =
+      prepared.provider.apiKey ?? getSavedProviderApiKey(params.config, "lmstudio");
     return {
       model: buildLmStudioPiModel({
         metadata: prepared.metadata,
@@ -632,7 +663,10 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
 
   if (isOpenCodeProviderName(provider)) {
     const model = getOpenCodePiModel(provider, modelId);
-    if (!model) throw new Error(`No PI model metadata available for provider ${provider} (model: ${modelId}).`);
+    if (!model)
+      throw new Error(
+        `No PI model metadata available for provider ${provider} (model: ${modelId}).`,
+      );
     return {
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveOpenCodeApiKey(provider, {
@@ -710,7 +744,7 @@ export function startModelCallSpan(
 export function markModelCallSpanSuccess(
   span: Span | null,
   telemetry: TelemetrySettings | undefined,
-  assistantRecord: Record<string, unknown>
+  assistantRecord: Record<string, unknown>,
 ): void {
   if (!span) return;
 
@@ -750,11 +784,13 @@ export function toolMapToPiTools(
     const toolRecord = asRecord(def);
     if (!toolRecord) return [];
 
-    return [{
-      name,
-      description: asNonEmptyString(toolRecord.description) ?? name,
-      parameters: toPiJsonSchema(toolRecord.inputSchema, provider, schemaBudgetState),
-    }];
+    return [
+      {
+        name,
+        description: asNonEmptyString(toolRecord.description) ?? name,
+        parameters: toPiJsonSchema(toolRecord.inputSchema, provider, schemaBudgetState),
+      },
+    ];
   });
 }
 
@@ -826,7 +862,9 @@ export function matchingProviderState(
   }
   const providerState = params.providerState ?? null;
   if (!providerState) return null;
-  return continuationMatchesTarget(providerState, continuationTarget(params, resolved)) ? providerState : null;
+  return continuationMatchesTarget(providerState, continuationTarget(params, resolved))
+    ? providerState
+    : null;
 }
 
 export function buildInitialStepMessages(
@@ -868,7 +906,7 @@ export async function emitPiEventAsRawPart(
   event: any,
   provider: ProviderName,
   includeUnknown: boolean,
-  emit: (part: unknown) => Promise<void>
+  emit: (part: unknown) => Promise<void>,
 ): Promise<void> {
   for (const part of mapPiEventToRawParts(event, provider, includeUnknown)) {
     await emit(part);
@@ -878,7 +916,7 @@ export async function emitPiEventAsRawPart(
 export async function executeToolCall(
   toolCall: PiToolCallLike,
   params: RuntimeRunTurnParams,
-  emitPart: (part: unknown) => Promise<void>
+  emitPart: (part: unknown) => Promise<void>,
 ): Promise<Record<string, unknown>> {
   if (params.abortSignal?.aborted) {
     throw new Error("Model turn aborted.");
@@ -987,7 +1025,7 @@ export function shouldAddInvalidToolCallFormatReminder(
   const errorMessage = extractToolExecutionErrorMessage(toolResult)?.trim() ?? "";
   if (!toolName || !errorMessage) return false;
 
-  const hasKnownTool = Object.prototype.hasOwnProperty.call(tools, toolName);
+  const hasKnownTool = Object.hasOwn(tools, toolName);
   if (!hasKnownTool) {
     if (!VALID_TOOL_NAME_PATTERN.test(toolName)) return true;
     if (/^tool(?:[<\s]|$)/i.test(toolName)) return true;
@@ -997,7 +1035,9 @@ export function shouldAddInvalidToolCallFormatReminder(
 
   const input = asRecord(toolCall.arguments);
   const inputKeys = input ? Object.keys(input) : [];
-  return inputKeys.length === 0 && /invalid input|expected .* received|too small:/i.test(errorMessage);
+  return (
+    inputKeys.length === 0 && /invalid input|expected .* received|too small:/i.test(errorMessage)
+  );
 }
 
 export function buildInvalidToolCallFormatReminderMessage(): ModelMessage {
@@ -1054,7 +1094,8 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
         const turnMessages: Array<Record<string, unknown>> = [];
         let usage = undefined as RuntimeRunTurnResult["usage"];
         let stepMessages: ModelMessage[] = buildInitialStepMessages(params, resolved);
-        let stepProviderOptions: Record<string, unknown> | undefined = asRecord(params.providerOptions) ?? undefined;
+        let stepProviderOptions: Record<string, unknown> | undefined =
+          asRecord(params.providerOptions) ?? undefined;
 
         const maxSteps = Math.max(1, params.maxSteps);
         for (let step = 0; step < maxSteps; step += 1) {
@@ -1081,7 +1122,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             { ...params, providerOptions: stepProviderOptions } as RuntimeRunTurnParams,
             resolved,
             overrides,
-            stepMessages
+            stepMessages,
           );
           stepMessages = stepState.modelMessages;
           stepProviderOptions = stepState.providerOptions;
@@ -1092,7 +1133,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             resolved,
             step + 1,
             stepState.streamOptions,
-            stepState.piMessages
+            stepState.piMessages,
           );
           let assistantRecord: Record<string, unknown> = {};
           try {
@@ -1104,11 +1145,16 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
                   messages: stepState.piMessages as any,
                   tools: piTools as any,
                 },
-                stepState.streamOptions as any
+                stepState.streamOptions as any,
               );
 
               for await (const event of stream as any) {
-                await emitPiEventAsRawPart(event, params.config.provider, includeUnknownRawParts, emitPart);
+                await emitPiEventAsRawPart(
+                  event,
+                  params.config.provider,
+                  includeUnknownRawParts,
+                  emitPart,
+                );
               }
 
               const assistant = await (stream as any).result();
@@ -1146,7 +1192,8 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
 
           const stopReason = asString(assistantRecord.stopReason);
           if (stopReason === "error" || stopReason === "aborted") {
-            const errorMessage = asString(assistantRecord.errorMessage) ?? "PI runtime model stream failed.";
+            const errorMessage =
+              asString(assistantRecord.errorMessage) ?? "PI runtime model stream failed.";
             throw new Error(errorMessage);
           }
 
@@ -1164,17 +1211,18 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             const toolResult = await executeToolCall(toolCall, params, emitPart);
             turnMessages.push(toolResult);
             toolResultMessages.push(...piTurnMessagesToModelMessages([toolResult as any]));
-            needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(toolCall, toolResult, params.tools);
+            needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(
+              toolCall,
+              toolResult,
+              params.tools,
+            );
           }
 
           if (needsInvalidToolCallReminder) {
             toolResultMessages.push(buildInvalidToolCallFormatReminderMessage());
           }
 
-          stepMessages = [
-            ...stepMessages,
-            ...toolResultMessages,
-          ];
+          stepMessages = [...stepMessages, ...toolResultMessages];
         }
 
         return {

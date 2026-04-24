@@ -9,8 +9,8 @@ bun install
 bun run dev
 ```
 
-Dev mode keeps Electron remote debugging disabled unless explicitly enabled.
-Set `COWORK_ELECTRON_REMOTE_DEBUG=1` to enable it, and optionally set `COWORK_ELECTRON_REMOTE_DEBUG_PORT` (default `9222`).
+Dev mode enables Electron remote debugging on loopback automatically so local CDP tooling like the Chrome DevTools MCP can attach to `http://127.0.0.1:9222`.
+Set `COWORK_ELECTRON_REMOTE_DEBUG=0` to opt out, and use `COWORK_ELECTRON_REMOTE_DEBUG_PORT` to override the default port.
 
 Desktop renderer dev URL is restricted to loopback on `COWORK_DESKTOP_RENDERER_PORT` (default `1420`).
 If `ELECTRON_RENDERER_URL` points to another app on the wrong host or port, desktop falls back to its own renderer URL.
@@ -28,10 +28,10 @@ On Windows, the app sets `AppUserModelId` (`com.cowork.desktop`) for better noti
 ## Remote Debugging
 
 Cowork no longer ships an `agent-browser` wrapper or bundled browser-automation skill.
-If you need to inspect or automate the Electron app over CDP, enable remote debugging when you launch dev mode and attach your preferred external tooling to `COWORK_ELECTRON_REMOTE_DEBUG_PORT` (default `9222`).
+If you need to inspect or automate the Electron app over CDP, `bun run dev` already exposes a loopback-only debugging endpoint on `COWORK_ELECTRON_REMOTE_DEBUG_PORT` (default `9222`) so local tooling can attach automatically.
 
 ```bash
-COWORK_ELECTRON_REMOTE_DEBUG=1 bun run dev
+COWORK_ELECTRON_REMOTE_DEBUG=0 bun run dev # opt out
 ```
 
 ## Build

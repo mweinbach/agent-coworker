@@ -29,8 +29,12 @@ describe("runtimeState pending thread message queue", () => {
   });
 
   test("prepends attachment-only retries without desynchronizing the attachment FIFO", () => {
-    const firstAttachment = [{ filename: "first.png", mimeType: "image/png", contentBase64: "Zmlyc3Q=" }];
-    const secondAttachment = [{ filename: "second.png", mimeType: "image/png", contentBase64: "c2Vjb25k" }];
+    const firstAttachment = [
+      { filename: "first.png", mimeType: "image/png", contentBase64: "Zmlyc3Q=" },
+    ];
+    const secondAttachment = [
+      { filename: "second.png", mimeType: "image/png", contentBase64: "c2Vjb25k" },
+    ];
 
     queuePendingThreadMessage("thread-1", "", secondAttachment);
     prependPendingThreadMessageWithAttachments("thread-1", "", firstAttachment);

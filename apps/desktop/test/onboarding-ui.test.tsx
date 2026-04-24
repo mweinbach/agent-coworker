@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { NoopJsonRpcSocket } from "./helpers/jsonRpcSocketMock";
@@ -29,42 +28,44 @@ const MOCK_UPDATE_STATE = {
   progress: null,
 };
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 2, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: NoopJsonRpcSocket,
@@ -214,8 +215,32 @@ describe("DeveloperPage rerun onboarding button", () => {
           onboardingVisible: true,
           onboardingStep: "provider",
           providerCatalog: [
-            { id: "bedrock", name: "Amazon Bedrock", models: [{ id: "amazon.nova-lite-v1:0", displayName: "Amazon Nova Lite", knowledgeCutoff: "Unknown", supportsImageInput: true }], defaultModel: "amazon.nova-lite-v1:0" },
-            { id: "openai", name: "OpenAI", models: [{ id: "gpt-5.4", displayName: "GPT-5.4", knowledgeCutoff: "Unknown", supportsImageInput: true }], defaultModel: "gpt-5.4" },
+            {
+              id: "bedrock",
+              name: "Amazon Bedrock",
+              models: [
+                {
+                  id: "amazon.nova-lite-v1:0",
+                  displayName: "Amazon Nova Lite",
+                  knowledgeCutoff: "Unknown",
+                  supportsImageInput: true,
+                },
+              ],
+              defaultModel: "amazon.nova-lite-v1:0",
+            },
+            {
+              id: "openai",
+              name: "OpenAI",
+              models: [
+                {
+                  id: "gpt-5.4",
+                  displayName: "GPT-5.4",
+                  knowledgeCutoff: "Unknown",
+                  supportsImageInput: true,
+                },
+              ],
+              defaultModel: "gpt-5.4",
+            },
           ] as any,
           providerConnected: [],
         });
@@ -252,7 +277,14 @@ describe("DeveloperPage rerun onboarding button", () => {
             {
               id: "google",
               name: "Google",
-              models: [{ id: "gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro", knowledgeCutoff: "Unknown", supportsImageInput: true }],
+              models: [
+                {
+                  id: "gemini-3.1-pro-preview",
+                  displayName: "Gemini 3.1 Pro",
+                  knowledgeCutoff: "Unknown",
+                  supportsImageInput: true,
+                },
+              ],
               defaultModel: "gemini-3.1-pro-preview",
             },
           ] as any,
@@ -298,7 +330,12 @@ describe("DeveloperPage rerun onboarding button", () => {
               state: "unreachable",
               message: "LM Studio unavailable.",
               models: [
-                { id: "qwen/qwen3-30b-a3b", displayName: "Qwen 3 30B", knowledgeCutoff: "Unknown", supportsImageInput: false },
+                {
+                  id: "qwen/qwen3-30b-a3b",
+                  displayName: "Qwen 3 30B",
+                  knowledgeCutoff: "Unknown",
+                  supportsImageInput: false,
+                },
               ],
               defaultModel: "qwen/qwen3-30b-a3b",
             },
@@ -346,9 +383,13 @@ describe("DeveloperPage rerun onboarding button", () => {
       expect(container.textContent).not.toContain("Paste your API key");
       expect(container.textContent).not.toContain("API token");
 
-      const connectButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Connect");
+      const connectButton = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Connect",
+      );
       if (!connectButton) throw new Error("missing LM Studio connect button");
-      const refreshButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Refresh");
+      const refreshButton = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Refresh",
+      );
       if (!refreshButton) throw new Error("missing LM Studio refresh button");
       await act(async () => {
         refreshButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
@@ -381,7 +422,11 @@ describe("DeveloperPage rerun onboarding button", () => {
         useAppStore.setState({
           onboardingVisible: false,
           onboardingStep: "welcome",
-          onboardingState: { status: "completed", completedAt: "2026-03-10T00:00:00Z", dismissedAt: null },
+          onboardingState: {
+            status: "completed",
+            completedAt: "2026-03-10T00:00:00Z",
+            dismissedAt: null,
+          },
           startOnboarding,
           workspaces: [
             {
@@ -406,8 +451,8 @@ describe("DeveloperPage rerun onboarding button", () => {
         root.render(createElement(DeveloperPage));
       });
 
-      const button = [...container.querySelectorAll("button")].find(
-        (btn) => btn.textContent?.includes("Run onboarding again"),
+      const button = [...container.querySelectorAll("button")].find((btn) =>
+        btn.textContent?.includes("Run onboarding again"),
       );
       if (!button) throw new Error("missing 'Run onboarding again' button");
 

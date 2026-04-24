@@ -20,7 +20,8 @@ mock.module("@/theme/use-app-theme", () => ({
 }));
 
 mock.module("../apps/mobile/src/components/thread/markdown-text", () => ({
-  MarkdownText: ({ text }: { text: string }) => createElement("markdown-text", { "data-text": text }),
+  MarkdownText: ({ text }: { text: string }) =>
+    createElement("markdown-text", { "data-text": text }),
 }));
 
 mock.module("../apps/mobile/src/components/thread/tool-call-card", () => ({
@@ -28,7 +29,8 @@ mock.module("../apps/mobile/src/components/thread/tool-call-card", () => ({
 }));
 
 mock.module("../apps/mobile/src/components/thread/reasoning-card", () => ({
-  ReasoningCard: ({ text }: { text: string }) => createElement("reasoning-card", { "data-text": text }),
+  ReasoningCard: ({ text }: { text: string }) =>
+    createElement("reasoning-card", { "data-text": text }),
 }));
 
 mock.module("../apps/mobile/src/components/thread/todo-card", () => ({

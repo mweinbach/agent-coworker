@@ -53,39 +53,39 @@ describe("bash read-only shell policy", () => {
       ["touch README.tmp", "filesystem mutation command"],
       ["/bin/touch blocked.txt", "filesystem mutation command"],
       ["env /usr/bin/mkdir scratch", "filesystem mutation command"],
-     ["env -C . touch bypass.txt", "filesystem mutation command"],
-     ["env -C. touch bypass.txt", "filesystem mutation command"],
-     ["env --chdir=. touch bypass.txt", "filesystem mutation command"],
+      ["env -C . touch bypass.txt", "filesystem mutation command"],
+      ["env -C. touch bypass.txt", "filesystem mutation command"],
+      ["env --chdir=. touch bypass.txt", "filesystem mutation command"],
       ["mkdir scratch", "filesystem mutation command"],
       ["rm -rf output", "filesystem mutation command"],
       ["ls 'x\\'; rm -rf /; echo 'y'", "filesystem mutation command"],
       ['sh -lc "touch bypass.txt"', "filesystem mutation command"],
-     ['env /bin/sh -c "touch bypass.txt"', "filesystem mutation command"],
+      ['env /bin/sh -c "touch bypass.txt"', "filesystem mutation command"],
       ['env -S "sh -c \\"touch bypass.txt\\""', "filesystem mutation command"],
-     ["time -p touch bypass.txt", "filesystem mutation command"],
+      ["time -p touch bypass.txt", "filesystem mutation command"],
       ["sudo -n touch bypass.txt", "filesystem mutation command"],
-     ["bash -c $'touch bypass.txt'", "filesystem mutation command"],
-      ["bash --rcfile /etc/profile -c \"touch bypass.txt\"", "filesystem mutation command"],
-     ["bash -O extglob -c \"touch bypass.txt\"", "filesystem mutation command"],
+      ["bash -c $'touch bypass.txt'", "filesystem mutation command"],
+      ['bash --rcfile /etc/profile -c "touch bypass.txt"', "filesystem mutation command"],
+      ['bash -O extglob -c "touch bypass.txt"', "filesystem mutation command"],
       ['fish -C "echo ok" -c "touch secret.txt"', "filesystem mutation command"],
-     ['bash --command="touch bypass.txt"', "filesystem mutation command"],
-     ["bash -ctouch bypass.txt", "filesystem mutation command"],
-     ['bash -c "bash -c \\"touch bypass.txt\\""', "filesystem mutation command"],
-      ['bash -c "bash -c \\"bash -c \\\\\"touch bypass.txt\\\\\"\""' , "filesystem mutation command"],
+      ['bash --command="touch bypass.txt"', "filesystem mutation command"],
+      ["bash -ctouch bypass.txt", "filesystem mutation command"],
+      ['bash -c "bash -c \\"touch bypass.txt\\""', "filesystem mutation command"],
+      ['bash -c "bash -c \\"bash -c \\\\"touch bypass.txt\\\\"""', "filesystem mutation command"],
       ['powershell -Command "mkdir bypass"', "filesystem mutation command"],
-     ['pwsh -Command "mkdir bypass"', "filesystem mutation command"],
+      ['pwsh -Command "mkdir bypass"', "filesystem mutation command"],
       ['eval "touch bypass.txt"', "filesystem mutation command"],
-     ["echo `touch bypass.txt`", "filesystem mutation command"],
-     ["echo $(touch bypass.txt)", "filesystem mutation command"],
-     ["echo ok\ntouch bypass.txt", "filesystem mutation command"],
+      ["echo `touch bypass.txt`", "filesystem mutation command"],
+      ["echo $(touch bypass.txt)", "filesystem mutation command"],
+      ["echo ok\ntouch bypass.txt", "filesystem mutation command"],
       ["if touch bypass.txt; then :; fi", "filesystem mutation command"],
       ["! touch bypass.txt", "filesystem mutation command"],
       ["for item in 1; do touch bypass.txt; done", "filesystem mutation command"],
-     ['echo "hello" > out.txt', "shell redirection or tee write"],
+      ['echo "hello" > out.txt', "shell redirection or tee write"],
       ['echo "hello" > "out.txt"', "shell redirection or tee write"],
-     ["echo hello > 'out.txt'", "shell redirection or tee write"],
+      ["echo hello > 'out.txt'", "shell redirection or tee write"],
       ["true <> bypass.txt", "shell redirection or tee write"],
-     ["{ touch bypass.txt; }", "filesystem mutation command"],
+      ["{ touch bypass.txt; }", "filesystem mutation command"],
       ["echo hi>out.txt", "shell redirection or tee write"],
       ["echo hi>>out.txt", "shell redirection or tee write"],
       ["printf hi | tee out.txt", "shell redirection or tee write"],
@@ -97,50 +97,58 @@ describe("bash read-only shell policy", () => {
       ["/usr/bin/git -C . reset --hard HEAD", "git write command"],
       ['git -c "user.name=test" add .', "git write command"],
       ['git --work-tree "/tmp/worktree" commit -m "msg"', "git write command"],
-     ["git checkout main", "git write command"],
-     ["git reset --hard HEAD", "git write command"],
+      ["git checkout main", "git write command"],
+      ["git reset --hard HEAD", "git write command"],
       ["git init", "git write command"],
       ["git clone foo bar", "git write command"],
       ["git stash", "git write command"],
-     ["npm install", "package install command"],
+      ["npm install", "package install command"],
       ["npm --no-audit install", "package install command"],
-     ["/usr/bin/npm install", "package install command"],
-     ["npm ci", "package install command"],
-     ["pnpm add zod", "package install command"],
-     ["pnpm --dir . add zod", "package install command"],
+      ["/usr/bin/npm install", "package install command"],
+      ["npm ci", "package install command"],
+      ["pnpm add zod", "package install command"],
+      ["pnpm --dir . add zod", "package install command"],
       ["pnpm -C . add zod", "package install command"],
-     ["pnpm i", "package install command"],
-     ["yarn", "package install command"],
-     ["yarn install", "package install command"],
-     ["yarn add lodash", "package install command"],
+      ["pnpm i", "package install command"],
+      ["yarn", "package install command"],
+      ["yarn install", "package install command"],
+      ["yarn add lodash", "package install command"],
       ["yarn --cwd . add lodash", "package install command"],
-     ["bun add zod", "package install command"],
-     ["bun --cwd . add zod", "package install command"],
+      ["bun add zod", "package install command"],
+      ["bun --cwd . add zod", "package install command"],
       ["bun -C /tmp install", "package install command"],
-     ["bun i", "package install command"],
-     ["python -m pip install requests", "package install command"],
+      ["bun i", "package install command"],
+      ["python -m pip install requests", "package install command"],
       ["pip --quiet install requests", "package install command"],
       ["python -m pip --quiet install requests", "package install command"],
-     ["cargo add serde", "package install command"],
-   ] as const;
+      ["cargo add serde", "package install command"],
+    ] as const;
 
-   const longNestedShellChain =
-     Array.from({ length: 40 }, (_, i) => `bash -c "echo ${i}"`).join(" && ") +
-     ' && bash -c "touch bypass.txt"';
+    const longNestedShellChain =
+      Array.from({ length: 40 }, (_, i) => `bash -c "echo ${i}"`).join(" && ") +
+      ' && bash -c "touch bypass.txt"';
     const backtick = String.fromCharCode(96);
     const backslash = String.fromCharCode(92);
     const nestedBacktickCommand =
-      "echo " + backtick + "echo " + backslash + backtick + "touch bypass.txt" + backslash + backtick + backtick;
+      "echo " +
+      backtick +
+      "echo " +
+      backslash +
+      backtick +
+      "touch bypass.txt" +
+      backslash +
+      backtick +
+      backtick;
 
-  expect(getShellCommandPolicyViolation(longNestedShellChain, "no_project_write")).toEqual({
-    shellPolicy: "no_project_write",
-    reason: "filesystem mutation command",
-  });
+    expect(getShellCommandPolicyViolation(longNestedShellChain, "no_project_write")).toEqual({
+      shellPolicy: "no_project_write",
+      reason: "filesystem mutation command",
+    });
 
     expect(getShellCommandPolicyViolation(nestedBacktickCommand, "no_project_write")).toEqual({
-     shellPolicy: "no_project_write",
-     reason: "filesystem mutation command",
-   });
+      shellPolicy: "no_project_write",
+      reason: "filesystem mutation command",
+    });
 
     for (const [command, reason] of blockedCommands) {
       expect(getShellCommandPolicyViolation(command, "no_project_write")).toEqual({
@@ -189,7 +197,9 @@ describe("bash read-only shell policy", () => {
   });
 
   test("ignores mutation keywords inside quoted literals", () => {
-    expect(getShellCommandPolicyViolation('rg "touch bypass.txt" src', "no_project_write")).toBeNull();
+    expect(
+      getShellCommandPolicyViolation('rg "touch bypass.txt" src', "no_project_write"),
+    ).toBeNull();
     expect(getShellCommandPolicyViolation('echo "git add ."', "no_project_write")).toBeNull();
   });
 
@@ -203,10 +213,12 @@ describe("bash read-only shell policy", () => {
     }));
     bashInternal.setRunShellCommandForTests(runShell);
 
-    const tool: any = createBashTool(makeCtx(dir, {
-      shellPolicy: "no_project_write",
-      approveCommand,
-    }));
+    const tool: any = createBashTool(
+      makeCtx(dir, {
+        shellPolicy: "no_project_write",
+        approveCommand,
+      }),
+    );
 
     const res = await tool.execute({ command: "touch blocked.txt" });
 
@@ -226,10 +238,12 @@ describe("bash read-only shell policy", () => {
     }));
     bashInternal.setRunShellCommandForTests(runShell);
 
-    const tool: any = createBashTool(makeCtx(dir, {
-      shellPolicy: "no_project_write",
-      approveCommand,
-    }));
+    const tool: any = createBashTool(
+      makeCtx(dir, {
+        shellPolicy: "no_project_write",
+        approveCommand,
+      }),
+    );
 
     const res = await tool.execute({ command: "bun run typecheck" });
 

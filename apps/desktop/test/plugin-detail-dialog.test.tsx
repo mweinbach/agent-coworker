@@ -1,6 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
@@ -30,42 +29,44 @@ const revealPathMock = mock(async () => {});
 const enablePluginMock = mock(async (_pluginId: string, _scope?: "workspace" | "user") => {});
 const disablePluginMock = mock(async (_pluginId: string, _scope?: "workspace" | "user") => {});
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: revealPathMock,
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: revealPathMock,
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 const { useAppStore } = await import("../src/app/store");
 const { defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
@@ -155,23 +156,25 @@ describe("plugin detail dialog", () => {
         root.render(createElement(PluginDetailDialog, { workspaceId: "ws-1" }));
       });
 
-      const openFolderButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find((button) =>
-        button.textContent?.includes("Open folder"),
-      );
+      const openFolderButton = Array.from(
+        harness.dom.window.document.querySelectorAll("button"),
+      ).find((button) => button.textContent?.includes("Open folder"));
       if (!(openFolderButton instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing open folder button");
       }
 
       await act(async () => {
-        openFolderButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        openFolderButton.dispatchEvent(
+          new harness.dom.window.MouseEvent("click", { bubbles: true }),
+        );
       });
 
       expect(revealPathMock).toHaveBeenCalledWith({
         path: "/tmp/workspace/.agents/plugins/figma-toolkit",
       });
 
-      const enableButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find((button) =>
-        button.textContent?.includes("Enable Plugin"),
+      const enableButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent?.includes("Enable Plugin"),
       );
       if (!(enableButton instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing enable plugin button");
@@ -188,7 +191,6 @@ describe("plugin detail dialog", () => {
       expect(pageText).toContain("Bundled Skills");
       expect(pageText).toContain("Bundled MCP Servers");
       expect(pageText).toContain("Bundled Apps");
-
     } finally {
       if (root) {
         await act(async () => {

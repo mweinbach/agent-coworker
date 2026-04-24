@@ -22,6 +22,11 @@ import { jsonRpcMcpRequestSchemas, jsonRpcMcpResultSchemas } from "./schema.mcp"
 import { jsonRpcPluginsRequestSchemas, jsonRpcPluginsResultSchemas } from "./schema.plugins";
 import { jsonRpcProviderRequestSchemas, jsonRpcProviderResultSchemas } from "./schema.provider";
 import {
+  jsonRpcResearchNotificationSchemas,
+  jsonRpcResearchRequestSchemas,
+  jsonRpcResearchResultSchemas,
+} from "./schema.research";
+import {
   jsonRpcSessionNotificationSchemas,
   jsonRpcSessionRequestSchemas,
   jsonRpcSessionResultSchemas,
@@ -46,6 +51,7 @@ export const jsonRpcRequestSchemas = {
   ...jsonRpcSessionRequestSchemas,
   ...jsonRpcAgentRequestSchemas,
   ...jsonRpcProviderRequestSchemas,
+  ...jsonRpcResearchRequestSchemas,
   ...jsonRpcMcpRequestSchemas,
   ...jsonRpcPluginsRequestSchemas,
   ...jsonRpcSkillsRequestSchemas,
@@ -59,6 +65,7 @@ export const jsonRpcNotificationSchemas = {
   ...jsonRpcThreadTurnNotificationSchemas,
   ...jsonRpcSessionNotificationSchemas,
   ...jsonRpcAgentNotificationSchemas,
+  ...jsonRpcResearchNotificationSchemas,
   ...jsonRpcMiscNotificationSchemas,
 } as const;
 
@@ -72,6 +79,7 @@ export const jsonRpcResultSchemas = {
   ...jsonRpcSessionResultSchemas,
   ...jsonRpcAgentResultSchemas,
   ...jsonRpcProviderResultSchemas,
+  ...jsonRpcResearchResultSchemas,
   ...jsonRpcMcpResultSchemas,
   ...jsonRpcPluginsResultSchemas,
   ...jsonRpcSkillsResultSchemas,

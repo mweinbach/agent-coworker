@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import type { PluginDiscoveryKind, PluginScope } from "../types";
 import { manifestPathForPluginRoot } from "./manifest";
-import { parsePluginMarketplace, type ParsedMarketplaceDocument, type ParsedMarketplacePluginEntry } from "./marketplace";
+import { type ParsedMarketplaceDocument, parsePluginMarketplace } from "./marketplace";
 
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
@@ -39,7 +39,9 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
-async function readMarketplaceDocument(marketplacePath: string): Promise<ParsedMarketplaceDocument | null> {
+async function __readMarketplaceDocument(
+  marketplacePath: string,
+): Promise<ParsedMarketplaceDocument | null> {
   try {
     const raw = await fs.readFile(marketplacePath, "utf-8");
     return parsePluginMarketplace(raw, marketplacePath);
@@ -76,7 +78,9 @@ async function discoverMarketplacePlugins(opts: {
   } catch (error) {
     return {
       plugins: [],
-      warnings: [`[plugins] Ignoring malformed marketplace at ${marketplacePath}: ${String(error)}`],
+      warnings: [
+        `[plugins] Ignoring malformed marketplace at ${marketplacePath}: ${String(error)}`,
+      ],
     };
   }
 
@@ -115,7 +119,8 @@ async function discoverDirectPlugins(opts: {
   pluginsDir: string;
   scope: PluginScope;
 }): Promise<DiscoveredPluginCandidate[]> {
-  let dirents: Array<{ name: string; isDirectory: () => boolean; isSymbolicLink: () => boolean }> = [];
+  let dirents: Array<{ name: string; isDirectory: () => boolean; isSymbolicLink: () => boolean }> =
+    [];
   try {
     dirents = await fs.readdir(opts.pluginsDir, { withFileTypes: true, encoding: "utf8" });
   } catch (error) {
@@ -159,10 +164,11 @@ export async function discoverPlugins(opts: {
 
   for (const scopeEntry of scopes) {
     if (!scopeEntry.pluginsDir) continue;
-    const { plugins: marketplacePlugins, warnings: marketplaceWarnings } = await discoverMarketplacePlugins({
-      pluginsDir: scopeEntry.pluginsDir,
-      scope: scopeEntry.scope,
-    });
+    const { plugins: marketplacePlugins, warnings: marketplaceWarnings } =
+      await discoverMarketplacePlugins({
+        pluginsDir: scopeEntry.pluginsDir,
+        scope: scopeEntry.scope,
+      });
     warnings.push(...marketplaceWarnings);
 
     for (const plugin of marketplacePlugins) {

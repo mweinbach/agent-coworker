@@ -1,7 +1,6 @@
-import { describe, test, expect } from "bun:test";
-
-import { sessionFeedItemSchema, type SessionFeedItem } from "../../src/shared/sessionSnapshot";
-import { projectedItemSchema, type ProjectedItem } from "../../src/shared/projectedItems";
+import { describe, expect, test } from "bun:test";
+import { type ProjectedItem, projectedItemSchema } from "../../src/shared/projectedItems";
+import { type SessionFeedItem, sessionFeedItemSchema } from "../../src/shared/sessionSnapshot";
 
 describe("SessionFeedItem ui_surface variant", () => {
   test("parses a valid ui_surface feed item", () => {

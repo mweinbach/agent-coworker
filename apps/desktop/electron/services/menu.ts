@@ -1,9 +1,6 @@
 import { Menu } from "electron";
 
-import {
-  buildDesktopMenuTemplate,
-  type InstallDesktopMenuOptions,
-} from "./menuTemplate";
+import { buildDesktopMenuTemplate, type InstallDesktopMenuOptions } from "./menuTemplate";
 
 export { buildDesktopMenuTemplate, type InstallDesktopMenuOptions };
 

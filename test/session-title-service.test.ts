@@ -1,6 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
 
-import { createSessionTitleGenerator, DEFAULT_SESSION_TITLE } from "../src/server/sessionTitleService";
+import {
+  createSessionTitleGenerator,
+  DEFAULT_SESSION_TITLE,
+} from "../src/server/sessionTitleService";
 import type { AgentConfig } from "../src/types";
 
 function makeConfig(provider: AgentConfig["provider"] = "openai"): AgentConfig {
@@ -102,7 +105,8 @@ describe("sessionTitleService", () => {
 
     const result = await generateSessionTitle({
       config: makeConfig("openai"),
-      query: "build a websocket title service with persistence and protocol updates for desktop and tui",
+      query:
+        "build a websocket title service with persistence and protocol updates for desktop and tui",
     });
 
     expect(result.source).toBe("heuristic");

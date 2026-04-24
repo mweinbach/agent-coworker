@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { createElement, Fragment, useState } from "react";
-import { act } from "react";
+import { act, createElement, Fragment, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { setupJsdom } from "./jsdomHarness";
 
 const { Dialog, DialogContent, DialogTrigger } = await import(
-  new URL("../src/components/ui/dialog.tsx?dialog-component-test", import.meta.url).href,
+  new URL("../src/components/ui/dialog.tsx?dialog-component-test", import.meta.url).href
 );
 
 type TestDialogProps = {
@@ -163,7 +162,10 @@ describe("desktop dialog component", () => {
 
       const firstField = harness.dom.window.document.getElementById("first-field");
       const lastButton = harness.dom.window.document.getElementById("last-button");
-      if (!(firstField instanceof harness.dom.window.HTMLElement) || !(lastButton instanceof harness.dom.window.HTMLElement)) {
+      if (
+        !(firstField instanceof harness.dom.window.HTMLElement) ||
+        !(lastButton instanceof harness.dom.window.HTMLElement)
+      ) {
         throw new Error("missing focusable dialog elements");
       }
 
@@ -178,7 +180,11 @@ describe("desktop dialog component", () => {
       firstField.focus();
       await act(async () => {
         harness.dom.window.document.dispatchEvent(
-          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Tab", shiftKey: true }),
+          new harness.dom.window.KeyboardEvent("keydown", {
+            bubbles: true,
+            key: "Tab",
+            shiftKey: true,
+          }),
         );
       });
       expect(harness.dom.window.document.activeElement).toBe(lastButton);
@@ -337,53 +343,56 @@ describe("desktop dialog component", () => {
     }
   });
 
-  test.serial("only the topmost dialog handles Escape and preserves body scroll lock until the last close", async () => {
-    const harness = setupJsdom();
+  test.serial(
+    "only the topmost dialog handles Escape and preserves body scroll lock until the last close",
+    async () => {
+      const harness = setupJsdom();
 
-    try {
-      const container = harness.dom.window.document.getElementById("root");
-      if (!container) {
-        throw new Error("missing root");
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) {
+          throw new Error("missing root");
+        }
+
+        harness.dom.window.document.body.style.overflow = "scroll";
+
+        const root = createRoot(container);
+
+        await act(async () => {
+          root.render(createElement(StackedDialogs));
+        });
+
+        expect(harness.dom.window.document.body.style.overflow).toBe("hidden");
+        expect(harness.dom.window.document.getElementById("outer-dialog-button")).not.toBeNull();
+        expect(harness.dom.window.document.getElementById("inner-dialog-button")).not.toBeNull();
+
+        await act(async () => {
+          harness.dom.window.document.dispatchEvent(
+            new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+          );
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        expect(harness.dom.window.document.getElementById("inner-dialog-button")).toBeNull();
+        expect(harness.dom.window.document.getElementById("outer-dialog-button")).not.toBeNull();
+        expect(harness.dom.window.document.body.style.overflow).toBe("hidden");
+
+        await act(async () => {
+          harness.dom.window.document.dispatchEvent(
+            new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+          );
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        expect(harness.dom.window.document.getElementById("outer-dialog-button")).toBeNull();
+        expect(harness.dom.window.document.body.style.overflow).toBe("scroll");
+
+        await act(async () => {
+          root.unmount();
+        });
+      } finally {
+        harness.restore();
       }
-
-      harness.dom.window.document.body.style.overflow = "scroll";
-
-      const root = createRoot(container);
-
-      await act(async () => {
-        root.render(createElement(StackedDialogs));
-      });
-
-      expect(harness.dom.window.document.body.style.overflow).toBe("hidden");
-      expect(harness.dom.window.document.getElementById("outer-dialog-button")).not.toBeNull();
-      expect(harness.dom.window.document.getElementById("inner-dialog-button")).not.toBeNull();
-
-      await act(async () => {
-        harness.dom.window.document.dispatchEvent(
-          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
-        );
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
-
-      expect(harness.dom.window.document.getElementById("inner-dialog-button")).toBeNull();
-      expect(harness.dom.window.document.getElementById("outer-dialog-button")).not.toBeNull();
-      expect(harness.dom.window.document.body.style.overflow).toBe("hidden");
-
-      await act(async () => {
-        harness.dom.window.document.dispatchEvent(
-          new harness.dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
-        );
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      });
-
-      expect(harness.dom.window.document.getElementById("outer-dialog-button")).toBeNull();
-      expect(harness.dom.window.document.body.style.overflow).toBe("scroll");
-
-      await act(async () => {
-        root.unmount();
-      });
-    } finally {
-      harness.restore();
-    }
-  });
+    },
+  );
 });

@@ -1,9 +1,9 @@
-import type { PiModel } from "./piRuntimeOptions";
 import {
   createResponsesStreamProjector,
   projectResponsesStreamEvent,
   type ResponsesTextAnnotation,
 } from "./openaiResponsesProjector";
+import type { PiModel } from "./piRuntimeOptions";
 
 type AssistantToolCallBlock = {
   type: "toolCall";
@@ -31,7 +31,9 @@ type ToolResultLike = {
   role: "toolResult";
   toolCallId: string;
   toolName: string;
-  content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }>;
+  content: Array<
+    { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
+  >;
   isError?: boolean;
   timestamp?: number;
 };
@@ -64,7 +66,10 @@ function shortHash(str: string): string {
 }
 
 export function sanitizeSurrogates(text: string): string {
-  return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+  return text.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    "",
+  );
 }
 
 function transformMessages(
@@ -147,7 +152,9 @@ function transformMessages(
 
       if (msg.stopReason === "error" || msg.stopReason === "aborted") continue;
 
-      const toolCalls = msg.content.filter((block): block is AssistantToolCallBlock => block.type === "toolCall");
+      const toolCalls = msg.content.filter(
+        (block): block is AssistantToolCallBlock => block.type === "toolCall",
+      );
       if (toolCalls.length > 0) {
         pendingToolCalls = toolCalls;
         existingToolResultIds = new Set();
@@ -200,8 +207,10 @@ export function convertResponsesMessages(
     if (!sanitizedItemId.startsWith("fc")) {
       sanitizedItemId = `fc_${sanitizedItemId}`;
     }
-    let normalizedCallId = sanitizedCallId.length > 64 ? sanitizedCallId.slice(0, 64) : sanitizedCallId;
-    let normalizedItemId = sanitizedItemId.length > 64 ? sanitizedItemId.slice(0, 64) : sanitizedItemId;
+    let normalizedCallId =
+      sanitizedCallId.length > 64 ? sanitizedCallId.slice(0, 64) : sanitizedCallId;
+    let normalizedItemId =
+      sanitizedItemId.length > 64 ? sanitizedItemId.slice(0, 64) : sanitizedItemId;
     normalizedCallId = normalizedCallId.replace(/_+$/, "");
     normalizedItemId = normalizedItemId.replace(/_+$/, "");
     return `${normalizedCallId}|${normalizedItemId}`;
@@ -224,7 +233,12 @@ export function convertResponsesMessages(
         for (const part of msg.content) {
           if (part.type === "text") {
             contentParts.push({ type: "input_text", text: sanitizeSurrogates(part.text) });
-          } else if (part.type === "image" && model.input.includes("image") && typeof part.mimeType === "string" && part.mimeType.startsWith("image/")) {
+          } else if (
+            part.type === "image" &&
+            model.input.includes("image") &&
+            typeof part.mimeType === "string" &&
+            part.mimeType.startsWith("image/")
+          ) {
             contentParts.push({
               type: "input_image",
               detail: "auto",
@@ -248,9 +262,7 @@ export function convertResponsesMessages(
     if (msg.role === "assistant") {
       const output: Array<Record<string, unknown>> = [];
       const isDifferentModel =
-        msg.model !== model.id &&
-        msg.provider === model.provider &&
-        msg.api === model.api;
+        msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
 
       for (const block of msg.content) {
         if (block.type === "thinking") {
@@ -270,11 +282,13 @@ export function convertResponsesMessages(
           output.push({
             type: "message",
             role: "assistant",
-            content: [{
-              type: "output_text",
-              text: sanitizeSurrogates(block.text),
-              annotations: Array.isArray(block.annotations) ? block.annotations : [],
-            }],
+            content: [
+              {
+                type: "output_text",
+                text: sanitizeSurrogates(block.text),
+                annotations: Array.isArray(block.annotations) ? block.annotations : [],
+              },
+            ],
             status: "completed",
             id: msgId,
           });
@@ -315,10 +329,12 @@ export function convertResponsesMessages(
     });
 
     if (hasImages && model.input.includes("image")) {
-      const contentParts: Array<Record<string, unknown>> = [{
-        type: "input_text",
-        text: "Attached image(s) from tool result:",
-      }];
+      const contentParts: Array<Record<string, unknown>> = [
+        {
+          type: "input_text",
+          text: "Attached image(s) from tool result:",
+        },
+      ];
       for (const block of msg.content) {
         if (block.type !== "image") continue;
         contentParts.push({

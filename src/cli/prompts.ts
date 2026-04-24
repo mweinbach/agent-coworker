@@ -2,7 +2,13 @@ export function resolveAskAnswer(raw: string, options?: string[]) {
   const trimmed = raw.trim();
   if (!trimmed) return "";
   const asNum = Number(trimmed);
-  if (options && options.length > 0 && Number.isInteger(asNum) && asNum >= 1 && asNum <= options.length) {
+  if (
+    options &&
+    options.length > 0 &&
+    Number.isInteger(asNum) &&
+    asNum >= 1 &&
+    asNum <= options.length
+  ) {
     return options[asNum - 1];
   }
   return trimmed;

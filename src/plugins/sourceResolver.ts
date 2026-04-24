@@ -2,25 +2,23 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
+import {
+  buildGitHubApiUrl,
+  downloadGitHubDirectory,
+  type FetchLike,
+  githubHeaders,
+  type ParsedGitHubSource,
+  parseGitHubShorthand,
+  parseGitHubUrl,
+} from "../skills/github";
 import type {
   PluginCatalogSnapshot,
   PluginInstallPreview,
   PluginInstallPreviewCandidate,
   PluginInstallTargetScope,
-  PluginScope,
   PluginSourceDescriptor,
   SkillInstallationDiagnostic,
 } from "../types";
-import {
-  buildGitHubApiUrl,
-  downloadGitHubDirectory,
-  githubHeaders,
-  parseGitHubShorthand,
-  parseGitHubUrl,
-  type FetchLike,
-  type ParsedGitHubSource,
-} from "../skills/github";
 import { readPluginManifest, validatePluginBundledSkills } from "./manifest";
 import { readPluginMcpServers } from "./mcp";
 
@@ -176,7 +174,8 @@ async function loadMaterializedPluginCandidates(
       const skillWarnings = await validatePluginBundledSkills(manifest);
       diagnostics.push(
         ...skillWarnings.map((warning) =>
-          buildDiagnostic("invalid_plugin_skill", "error", warning)),
+          buildDiagnostic("invalid_plugin_skill", "error", warning),
+        ),
       );
       if (manifest.mcpPath) {
         try {
@@ -234,7 +233,9 @@ async function loadMaterializedPluginCandidates(
     });
   }
 
-  return candidates.sort((left, right) => left.relativeRootPath.localeCompare(right.relativeRootPath));
+  return candidates.sort((left, right) =>
+    left.relativeRootPath.localeCompare(right.relativeRootPath),
+  );
 }
 
 async function materializeLocalPath(localPath: string): Promise<MaterializedPluginSource> {
@@ -255,7 +256,10 @@ async function materializeLocalPath(localPath: string): Promise<MaterializedPlug
   };
 }
 
-function buildDescriptorFromGitHubSource(raw: string, parsed: ParsedGitHubSource): PluginSourceDescriptor {
+function buildDescriptorFromGitHubSource(
+  raw: string,
+  parsed: ParsedGitHubSource,
+): PluginSourceDescriptor {
   const kindBySource: Record<ParsedGitHubSource["kind"], PluginSourceDescriptor["kind"]> = {
     repo: "github_repo",
     tree: "github_tree",
@@ -298,15 +302,15 @@ function buildResolvedGitHubDescriptor(
   };
 }
 
-function buildGitHubMaterializationAttempts(descriptor: PluginSourceDescriptor): GitHubMaterializationAttempt[] {
+function buildGitHubMaterializationAttempts(
+  descriptor: PluginSourceDescriptor,
+): GitHubMaterializationAttempt[] {
   const refPathSegments = descriptor.refPath?.split("/").filter(Boolean) ?? [];
   if (
-    refPathSegments.length === 0
-    || (
-      descriptor.kind !== "github_tree"
-      && descriptor.kind !== "github_blob"
-      && descriptor.kind !== "github_raw"
-    )
+    refPathSegments.length === 0 ||
+    (descriptor.kind !== "github_tree" &&
+      descriptor.kind !== "github_blob" &&
+      descriptor.kind !== "github_raw")
   ) {
     return [];
   }
@@ -337,10 +341,11 @@ function buildGitHubMaterializationAttempts(descriptor: PluginSourceDescriptor):
 function dedupeGitHubMaterializationAttempts(
   attempts: GitHubMaterializationAttempt[],
 ): GitHubMaterializationAttempt[] {
-  return attempts.filter((attempt, index, allAttempts) =>
-    allAttempts.findIndex((candidate) =>
-      candidate.ref === attempt.ref && candidate.githubPath === attempt.githubPath
-    ) === index
+  return attempts.filter(
+    (attempt, index, allAttempts) =>
+      allAttempts.findIndex(
+        (candidate) => candidate.ref === attempt.ref && candidate.githubPath === attempt.githubPath,
+      ) === index,
   );
 }
 
@@ -395,34 +400,47 @@ async function materializeGitHubSource(
   }
 
   const shouldSkipPreferredAttempt =
-    descriptor.refPath !== undefined
-    && (descriptor.kind === "github_blob" || descriptor.kind === "github_raw")
-    && isPluginManifestGitHubInput(descriptor.raw);
-  const preferredGitHubPath = descriptor.kind === "github_tree"
-    ? normalizePluginGitHubTreePath(descriptor.subdir ?? "")
-    : descriptor.subdir ?? "";
-  const preferredAttempt = descriptor.ref && !shouldSkipPreferredAttempt
-    ? [{
-        ref: descriptor.ref,
-        githubPath: preferredGitHubPath,
-        descriptor: buildResolvedGitHubDescriptor(descriptor, descriptor.ref, preferredGitHubPath),
-      }]
-    : [];
-  const attempts = buildGitHubMaterializationAttempts(descriptor);
-  const fallbackRefs = descriptor.ref ? [descriptor.ref] : await resolveGitHubFallbackRefs(descriptor.repo, fetchImpl);
-  const fallbackAttempts = fallbackRefs.map((ref) => {
-    const githubPath = descriptor.kind === "github_tree"
+    descriptor.refPath !== undefined &&
+    (descriptor.kind === "github_blob" || descriptor.kind === "github_raw") &&
+    isPluginManifestGitHubInput(descriptor.raw);
+  const preferredGitHubPath =
+    descriptor.kind === "github_tree"
       ? normalizePluginGitHubTreePath(descriptor.subdir ?? "")
-      : descriptor.subdir ?? "";
+      : (descriptor.subdir ?? "");
+  const preferredAttempt =
+    descriptor.ref && !shouldSkipPreferredAttempt
+      ? [
+          {
+            ref: descriptor.ref,
+            githubPath: preferredGitHubPath,
+            descriptor: buildResolvedGitHubDescriptor(
+              descriptor,
+              descriptor.ref,
+              preferredGitHubPath,
+            ),
+          },
+        ]
+      : [];
+  const attempts = buildGitHubMaterializationAttempts(descriptor);
+  const fallbackRefs = descriptor.ref
+    ? [descriptor.ref]
+    : await resolveGitHubFallbackRefs(descriptor.repo, fetchImpl);
+  const fallbackAttempts = fallbackRefs.map((ref) => {
+    const githubPath =
+      descriptor.kind === "github_tree"
+        ? normalizePluginGitHubTreePath(descriptor.subdir ?? "")
+        : (descriptor.subdir ?? "");
     return {
       ref,
       githubPath,
       descriptor: buildResolvedGitHubDescriptor(descriptor, ref, githubPath),
     };
   });
-  const materializationAttempts = dedupeGitHubMaterializationAttempts(attempts.length > 0
-    ? await resolveAmbiguousGitHubMaterializationAttempts(descriptor.repo, attempts, fetchImpl)
-    : [...preferredAttempt, ...fallbackAttempts]);
+  const materializationAttempts = dedupeGitHubMaterializationAttempts(
+    attempts.length > 0
+      ? await resolveAmbiguousGitHubMaterializationAttempts(descriptor.repo, attempts, fetchImpl)
+      : [...preferredAttempt, ...fallbackAttempts],
+  );
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-plugin-source-"));
   let resolvedDescriptor: PluginSourceDescriptor | null = null;
   let resolvedCandidates: MaterializedPluginCandidate[] | null = null;
@@ -463,7 +481,9 @@ async function materializeGitHubSource(
     }
 
     if (!resolvedDescriptor || !resolvedCandidates) {
-      throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Unable to fetch GitHub source"));
+      throw lastError instanceof Error
+        ? lastError
+        : new Error(String(lastError ?? "Unable to fetch GitHub source"));
     }
 
     return {
@@ -488,7 +508,11 @@ async function readResponseError(response: Response): Promise<string> {
   }
 }
 
-async function doesGitHubRefExist(fetchImpl: FetchLike, repo: string, ref: string): Promise<boolean> {
+async function doesGitHubRefExist(
+  fetchImpl: FetchLike,
+  repo: string,
+  ref: string,
+): Promise<boolean> {
   const response = await fetchImpl(buildGitHubApiUrl(repo, ref, ""), {
     headers: githubHeaders(),
   });
@@ -498,7 +522,9 @@ async function doesGitHubRefExist(fetchImpl: FetchLike, repo: string, ref: strin
   if (response.status === 404) {
     return false;
   }
-  throw new Error(`Failed to verify GitHub ref ${repo}@${ref}: ${await readResponseError(response)}`);
+  throw new Error(
+    `Failed to verify GitHub ref ${repo}@${ref}: ${await readResponseError(response)}`,
+  );
 }
 
 async function resolveAmbiguousGitHubMaterializationAttempts(
@@ -524,21 +550,29 @@ async function resolveAmbiguousGitHubMaterializationAttempts(
   return existingAttempts.length > 0 ? existingAttempts : uniqueAttempts;
 }
 
-async function fetchGitHubDefaultBranch(fetchImpl: FetchLike, repo: string): Promise<string | null> {
+async function fetchGitHubDefaultBranch(
+  fetchImpl: FetchLike,
+  repo: string,
+): Promise<string | null> {
   const response = await fetchImpl(`https://api.github.com/repos/${repo}`, {
     headers: githubHeaders(),
   });
   if (!response.ok) {
-    throw new Error(`Failed to fetch GitHub repo metadata for ${repo}: ${await readResponseError(response)}`);
+    throw new Error(
+      `Failed to fetch GitHub repo metadata for ${repo}: ${await readResponseError(response)}`,
+    );
   }
 
-  const parsed = await response.json() as Record<string, unknown>;
+  const parsed = (await response.json()) as Record<string, unknown>;
   return typeof parsed.default_branch === "string" && parsed.default_branch.trim().length > 0
     ? parsed.default_branch.trim()
     : null;
 }
 
-async function resolveGitHubFallbackRefs(repo: string | undefined, fetchImpl: FetchLike): Promise<string[]> {
+async function resolveGitHubFallbackRefs(
+  repo: string | undefined,
+  fetchImpl: FetchLike,
+): Promise<string[]> {
   const fallbackRefs = new Set<string>();
   if (repo) {
     try {
@@ -572,7 +606,9 @@ function wouldCandidateBePrimary(
   targetScope: PluginInstallTargetScope,
   catalog: PluginCatalogSnapshot,
 ): boolean {
-  const activePlugins = catalog.plugins.filter((plugin) => plugin.id === candidatePluginId && plugin.enabled);
+  const activePlugins = catalog.plugins.filter(
+    (plugin) => plugin.id === candidatePluginId && plugin.enabled,
+  );
   if (activePlugins.length === 0) {
     return true;
   }
@@ -615,16 +651,19 @@ export async function buildPluginInstallPreview(opts: {
   fetchImpl?: FetchLike;
   materialized?: MaterializedPluginSource;
 }): Promise<PluginInstallPreview> {
-  const materialized = opts.materialized ?? await materializePluginSource({
-    input: opts.input,
-    cwd: opts.cwd,
-    fetchImpl: opts.fetchImpl,
-  });
+  const materialized =
+    opts.materialized ??
+    (await materializePluginSource({
+      input: opts.input,
+      cwd: opts.cwd,
+      fetchImpl: opts.fetchImpl,
+    }));
   const shouldCleanup = !opts.materialized;
 
   try {
     const candidates = materialized.candidates.map((candidate) =>
-      buildPreviewCandidate(candidate, opts.targetScope, opts.catalog));
+      buildPreviewCandidate(candidate, opts.targetScope, opts.catalog),
+    );
     const warnings: string[] = [];
     if (candidates.every((candidate) => candidate.diagnostics.length > 0)) {
       warnings.push("No valid plugin bundles were found in the provided source.");

@@ -41,16 +41,19 @@ describe("mobile thread store", () => {
     store.appendAgentDelta(threadId, "assistant-1", "Hello", new Date().toISOString());
     store.appendAgentDelta(threadId, "assistant-1", " world", new Date().toISOString());
 
-    const message = useThreadStore.getState().currentFeed(threadId).find(
-      (entry) => entry.id === "assistant-1" && entry.kind === "message",
-    );
+    const message = useThreadStore
+      .getState()
+      .currentFeed(threadId)
+      .find((entry) => entry.id === "assistant-1" && entry.kind === "message");
 
-    expect(message).toEqual(expect.objectContaining({
-      id: "assistant-1",
-      kind: "message",
-      role: "assistant",
-      text: "Hello world",
-    }));
+    expect(message).toEqual(
+      expect.objectContaining({
+        id: "assistant-1",
+        kind: "message",
+        role: "assistant",
+        text: "Hello world",
+      }),
+    );
     expect(useThreadStore.getState().snapshots[threadId]?.lastEventSeq).toBe(2);
   });
 });

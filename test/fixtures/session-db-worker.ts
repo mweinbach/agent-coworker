@@ -62,8 +62,17 @@ function makeSnapshot(sessionId: string, step: number): SessionSnapshot {
 const [rootDir, sessionsDir, sessionId, expectedCountRaw, outputPath] = process.argv.slice(2);
 const expectedCount = Number(expectedCountRaw ?? "0");
 
-if (!rootDir || !sessionsDir || !sessionId || !Number.isFinite(expectedCount) || expectedCount <= 0 || !outputPath) {
-  console.error(JSON.stringify({ error: "usage: <rootDir> <sessionsDir> <sessionId> <expectedCount>" }));
+if (
+  !rootDir ||
+  !sessionsDir ||
+  !sessionId ||
+  !Number.isFinite(expectedCount) ||
+  expectedCount <= 0 ||
+  !outputPath
+) {
+  console.error(
+    JSON.stringify({ error: "usage: <rootDir> <sessionsDir> <sessionId> <expectedCount>" }),
+  );
   process.exit(1);
 }
 
@@ -116,25 +125,34 @@ try {
     const deadline = Date.now() + 10_000;
     let visibleSessionIds: string[] = [];
     while (Date.now() < deadline) {
-      visibleSessionIds = db.listSessions().map((session) => session.sessionId).sort();
+      visibleSessionIds = db
+        .listSessions()
+        .map((session) => session.sessionId)
+        .sort();
       if (visibleSessionIds.length >= expectedCount) {
         break;
       }
       await Bun.sleep(25);
     }
 
-    await fs.writeFile(outputPath, `${JSON.stringify({
-      sessionId,
-      visibleSessionIds,
-      telemetry,
-    })}\n`, "utf-8");
+    await fs.writeFile(
+      outputPath,
+      `${JSON.stringify({
+        sessionId,
+        visibleSessionIds,
+        telemetry,
+      })}\n`,
+      "utf-8",
+    );
   } finally {
     db.close();
   }
 } catch (error) {
-  console.error(JSON.stringify({
-    error: error instanceof Error ? error.message : String(error),
-    stack: error instanceof Error ? error.stack : undefined,
-  }));
+  console.error(
+    JSON.stringify({
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    }),
+  );
   process.exit(1);
 }

@@ -5,18 +5,22 @@ import path from "node:path";
 
 import { readMCPAuthFiles, setMCPServerApiKeyCredential } from "../src/mcp/authStore";
 import { loadMCPConfigRegistry } from "../src/mcp/configRegistry/layers";
-import {
-  __internal as pluginOperationsInternal,
-  installPluginsFromSource,
-  previewPluginInstall,
-} from "../src/plugins/operations";
 import { buildPluginCatalogSnapshot, resolvePluginCatalogEntry } from "../src/plugins/catalog";
 import { discoverPlugins } from "../src/plugins/discovery";
 import { readPluginManifest } from "../src/plugins/manifest";
+import {
+  installPluginsFromSource,
+  __internal as pluginOperationsInternal,
+  previewPluginInstall,
+} from "../src/plugins/operations";
 import { discoverSkillsForConfig } from "../src/skills";
 import type { AgentConfig, PluginCatalogEntry, PluginCatalogSnapshot } from "../src/types";
 
-function makeConfig(workspaceRoot: string, userHome: string, builtInConfigDir: string): AgentConfig {
+function makeConfig(
+  workspaceRoot: string,
+  userHome: string,
+  builtInConfigDir: string,
+): AgentConfig {
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
@@ -81,35 +85,38 @@ async function writePlugin(
   await fs.mkdir(path.join(rootDir, "skills", "import-frame"), { recursive: true });
   await fs.writeFile(
     path.join(rootDir, ".codex-plugin", "plugin.json"),
-    `${JSON.stringify({
-      name: "figma-toolkit",
-      description,
-      interface: { displayName },
-    }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        name: "figma-toolkit",
+        description,
+        interface: { displayName },
+      },
+      null,
+      2,
+    )}\n`,
     "utf-8",
   );
   await fs.writeFile(
     path.join(rootDir, "skills", "import-frame", "SKILL.md"),
-    [
-      "---",
-      "name: import-frame",
-      "description: Import a frame",
-      "---",
-      "",
-      "# Import frame",
-    ].join("\n"),
+    ["---", "name: import-frame", "description: Import a frame", "---", "", "# Import frame"].join(
+      "\n",
+    ),
     "utf-8",
   );
   await fs.writeFile(
     path.join(rootDir, ".mcp.json"),
-    `${JSON.stringify({
-      mcpServers: {
-        [mcpServerName]: {
-          type: "http",
-          url: `https://${displayName.toLowerCase().replace(/\s+/g, "-")}.example.com`,
+    `${JSON.stringify(
+      {
+        mcpServers: {
+          [mcpServerName]: {
+            type: "http",
+            url: `https://${displayName.toLowerCase().replace(/\s+/g, "-")}.example.com`,
+          },
         },
       },
-    }, null, 2)}\n`,
+      null,
+      2,
+    )}\n`,
     "utf-8",
   );
 }
@@ -118,14 +125,7 @@ async function writeBundledSkill(skillsDir: string, name: string, description: s
   await fs.mkdir(path.join(skillsDir, name), { recursive: true });
   await fs.writeFile(
     path.join(skillsDir, name, "SKILL.md"),
-    [
-      "---",
-      `name: ${name}`,
-      `description: ${description}`,
-      "---",
-      "",
-      `# ${name}`,
-    ].join("\n"),
+    ["---", `name: ${name}`, `description: ${description}`, "---", "", `# ${name}`].join("\n"),
     "utf-8",
   );
 }
@@ -153,7 +153,9 @@ describe("plugin catalog and install operations", () => {
   test("skill-only plugins do not invent missing default MCP or app config paths", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-skill-only-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-skill-only-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-skill-only-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-skill-only-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -162,22 +164,19 @@ describe("plugin catalog and install operations", () => {
       await fs.mkdir(path.join(sourceRoot, "skills", "example"), { recursive: true });
       await fs.writeFile(
         path.join(sourceRoot, ".codex-plugin", "plugin.json"),
-        `${JSON.stringify({
-          name: "skill-only",
-          description: "Skills only",
-        }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            name: "skill-only",
+            description: "Skills only",
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
       await fs.writeFile(
         path.join(sourceRoot, "skills", "example", "SKILL.md"),
-        [
-          "---",
-          "name: example",
-          "description: Example skill",
-          "---",
-          "",
-          "# Example",
-        ].join("\n"),
+        ["---", "name: example", "description: Example skill", "---", "", "# Example"].join("\n"),
         "utf-8",
       );
 
@@ -235,10 +234,19 @@ describe("plugin catalog and install operations", () => {
       });
 
       expect(result.pluginIds).toEqual(["figma-toolkit"]);
-      const installedPluginPath = path.join(workspace, ".agents", "plugins", "figma-toolkit", ".codex-plugin", "plugin.json");
+      const installedPluginPath = path.join(
+        workspace,
+        ".agents",
+        "plugins",
+        "figma-toolkit",
+        ".codex-plugin",
+        "plugin.json",
+      );
       await expect(fs.stat(installedPluginPath)).resolves.toBeDefined();
 
-      const matchingPlugins = result.catalog.plugins.filter((plugin) => plugin.id === "figma-toolkit");
+      const matchingPlugins = result.catalog.plugins.filter(
+        (plugin) => plugin.id === "figma-toolkit",
+      );
       expect(matchingPlugins.map((plugin) => plugin.scope).sort()).toEqual(["user", "workspace"]);
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
@@ -250,7 +258,9 @@ describe("plugin catalog and install operations", () => {
   test("installPluginsFromSource preserves the existing install when the replacement copy fails", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-atomic-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-atomic-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-atomic-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-ops-atomic-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -262,11 +272,13 @@ describe("plugin catalog and install operations", () => {
         throw new Error("simulated copy failure");
       });
 
-      await expect(installPluginsFromSource({
-        config,
-        input: sourceRoot,
-        targetScope: "workspace",
-      })).rejects.toThrow("simulated copy failure");
+      await expect(
+        installPluginsFromSource({
+          config,
+          input: sourceRoot,
+          targetScope: "workspace",
+        }),
+      ).rejects.toThrow("simulated copy failure");
 
       const installedManifest = JSON.parse(
         await fs.readFile(path.join(installedPluginRoot, ".codex-plugin", "plugin.json"), "utf-8"),
@@ -282,35 +294,49 @@ describe("plugin catalog and install operations", () => {
   });
 
   test("installPluginsFromSource removes same-scope marketplace copies before installing", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-marketplace-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-ops-marketplace-workspace-"),
+    );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-marketplace-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-ops-marketplace-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-ops-marketplace-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
-      const marketplacePluginRoot = path.join(workspace, ".agents", "plugins", "market", "figma-market");
+      const marketplacePluginRoot = path.join(
+        workspace,
+        ".agents",
+        "plugins",
+        "market",
+        "figma-market",
+      );
       const sourceRoot = path.join(workspace, "plugin-source", "figma-toolkit");
       await writePlugin(marketplacePluginRoot, "Marketplace Figma Toolkit", "Marketplace plugin");
       await fs.mkdir(path.join(workspace, ".agents", "plugins"), { recursive: true });
       await fs.writeFile(
         path.join(workspace, ".agents", "plugins", "marketplace.json"),
-        `${JSON.stringify({
-          name: "workspace-market",
-          plugins: [
-            {
-              name: "figma-toolkit",
-              source: {
-                source: "local",
-                path: "./market/figma-market",
+        `${JSON.stringify(
+          {
+            name: "workspace-market",
+            plugins: [
+              {
+                name: "figma-toolkit",
+                source: {
+                  source: "local",
+                  path: "./market/figma-market",
+                },
+                policy: {
+                  installation: "manual",
+                  authentication: "optional",
+                },
+                category: "design",
               },
-              policy: {
-                installation: "manual",
-                authentication: "optional",
-              },
-              category: "design",
-            },
-          ],
-        }, null, 2)}\n`,
+            ],
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
       await writePlugin(sourceRoot, "Installed Figma Toolkit", "Workspace install");
@@ -321,9 +347,13 @@ describe("plugin catalog and install operations", () => {
         targetScope: "workspace",
       });
 
-      const workspaceMatches = result.catalog.plugins.filter((plugin) => plugin.scope === "workspace" && plugin.id === "figma-toolkit");
+      const workspaceMatches = result.catalog.plugins.filter(
+        (plugin) => plugin.scope === "workspace" && plugin.id === "figma-toolkit",
+      );
       expect(workspaceMatches).toHaveLength(1);
-      expect(workspaceMatches[0]?.rootDir).toBe(path.join(workspace, ".agents", "plugins", "figma-toolkit"));
+      expect(workspaceMatches[0]?.rootDir).toBe(
+        path.join(workspace, ".agents", "plugins", "figma-toolkit"),
+      );
       expect(
         resolvePluginCatalogEntry({
           catalog: result.catalog,
@@ -347,14 +377,26 @@ describe("plugin catalog and install operations", () => {
   test("installPluginsFromSource preserves bundled MCP credentials when a plugin renames its server", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-mcp-rename-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-mcp-rename-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-mcp-rename-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-mcp-rename-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
       const installedPluginRoot = path.join(workspace, ".agents", "plugins", "figma-toolkit");
       const updatedPluginRoot = path.join(workspace, "plugin-source", "figma-toolkit");
-      await writePlugin(installedPluginRoot, "Workspace Figma Toolkit", "Workspace plugin", "figma");
-      await writePlugin(updatedPluginRoot, "Workspace Figma Toolkit", "Workspace plugin", "figma-renamed");
+      await writePlugin(
+        installedPluginRoot,
+        "Workspace Figma Toolkit",
+        "Workspace plugin",
+        "figma",
+      );
+      await writePlugin(
+        updatedPluginRoot,
+        "Workspace Figma Toolkit",
+        "Workspace plugin",
+        "figma-renamed",
+      );
 
       await setMCPServerApiKeyCredential({
         config,
@@ -380,7 +422,9 @@ describe("plugin catalog and install operations", () => {
 
       const authFiles = await readMCPAuthFiles(config);
       expect(authFiles.workspace.doc.servers.figma).toBeUndefined();
-      expect(authFiles.workspace.doc.servers["figma-renamed"]?.apiKey?.value).toBe("workspace-secret");
+      expect(authFiles.workspace.doc.servers["figma-renamed"]?.apiKey?.value).toBe(
+        "workspace-secret",
+      );
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
@@ -389,40 +433,69 @@ describe("plugin catalog and install operations", () => {
   });
 
   test("installPluginsFromSource prefers the installed plugin copy when migrating renamed MCP credentials", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-mcp-installed-precedence-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-mcp-installed-precedence-workspace-"),
+    );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-mcp-installed-precedence-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-mcp-installed-precedence-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-mcp-installed-precedence-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
       const installedPluginRoot = path.join(workspace, ".agents", "plugins", "figma-toolkit");
-      const marketplacePluginRoot = path.join(workspace, ".agents", "plugins", "market", "figma-market");
+      const marketplacePluginRoot = path.join(
+        workspace,
+        ".agents",
+        "plugins",
+        "market",
+        "figma-market",
+      );
       const updatedPluginRoot = path.join(workspace, "plugin-source", "figma-toolkit");
-      await writePlugin(installedPluginRoot, "Workspace Figma Toolkit", "Workspace plugin", "figma");
-      await writePlugin(marketplacePluginRoot, "Marketplace Figma Toolkit", "Marketplace plugin", "figma-market");
+      await writePlugin(
+        installedPluginRoot,
+        "Workspace Figma Toolkit",
+        "Workspace plugin",
+        "figma",
+      );
+      await writePlugin(
+        marketplacePluginRoot,
+        "Marketplace Figma Toolkit",
+        "Marketplace plugin",
+        "figma-market",
+      );
       await fs.mkdir(path.join(workspace, ".agents", "plugins"), { recursive: true });
       await fs.writeFile(
         path.join(workspace, ".agents", "plugins", "marketplace.json"),
-        `${JSON.stringify({
-          name: "workspace-market",
-          plugins: [
-            {
-              name: "figma-toolkit",
-              source: {
-                source: "local",
-                path: "./market/figma-market",
+        `${JSON.stringify(
+          {
+            name: "workspace-market",
+            plugins: [
+              {
+                name: "figma-toolkit",
+                source: {
+                  source: "local",
+                  path: "./market/figma-market",
+                },
+                policy: {
+                  installation: "manual",
+                  authentication: "optional",
+                },
+                category: "design",
               },
-              policy: {
-                installation: "manual",
-                authentication: "optional",
-              },
-              category: "design",
-            },
-          ],
-        }, null, 2)}\n`,
+            ],
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
-      await writePlugin(updatedPluginRoot, "Workspace Figma Toolkit", "Workspace plugin", "figma-renamed");
+      await writePlugin(
+        updatedPluginRoot,
+        "Workspace Figma Toolkit",
+        "Workspace plugin",
+        "figma-renamed",
+      );
 
       await setMCPServerApiKeyCredential({
         config,
@@ -448,7 +521,9 @@ describe("plugin catalog and install operations", () => {
 
       const authFiles = await readMCPAuthFiles(config);
       expect(authFiles.workspace.doc.servers.figma).toBeUndefined();
-      expect(authFiles.workspace.doc.servers["figma-renamed"]?.apiKey?.value).toBe("workspace-secret");
+      expect(authFiles.workspace.doc.servers["figma-renamed"]?.apiKey?.value).toBe(
+        "workspace-secret",
+      );
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
@@ -459,11 +534,17 @@ describe("plugin catalog and install operations", () => {
   test("workspace plugin copies take precedence over user copies for skills and MCP servers", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-precedence-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-precedence-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-precedence-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-precedence-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
-      await writePlugin(path.join(home, ".agents", "plugins", "figma-toolkit"), "User Figma Toolkit", "Global plugin");
+      await writePlugin(
+        path.join(home, ".agents", "plugins", "figma-toolkit"),
+        "User Figma Toolkit",
+        "Global plugin",
+      );
       await writePlugin(
         path.join(workspace, ".agents", "plugins", "figma-toolkit"),
         "Workspace Figma Toolkit",
@@ -477,8 +558,9 @@ describe("plugin catalog and install operations", () => {
       ]);
 
       const skills = await discoverSkillsForConfig(config, { pluginCatalog: catalog });
-      expect(skills.find((skill) => skill.name === "figma-toolkit:import-frame")?.plugin?.displayName)
-        .toBe("Workspace Figma Toolkit");
+      expect(
+        skills.find((skill) => skill.name === "figma-toolkit:import-frame")?.plugin?.displayName,
+      ).toBe("Workspace Figma Toolkit");
 
       const mcpRegistry = await loadMCPConfigRegistry(config);
       const figmaServer = mcpRegistry.servers.find((server) => server.name === "figma");
@@ -495,9 +577,13 @@ describe("plugin catalog and install operations", () => {
   });
 
   test("preview treats disabled workspace plugins as non-blocking for user installs", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-preview-disabled-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-preview-disabled-workspace-"),
+    );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-preview-disabled-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-preview-disabled-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-preview-disabled-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -508,18 +594,26 @@ describe("plugin catalog and install operations", () => {
       await fs.mkdir(path.join(workspace, ".cowork"), { recursive: true });
       await fs.writeFile(
         path.join(workspace, ".cowork", "plugins.json"),
-        `${JSON.stringify({
-          version: 1,
-          updatedAt: "2026-04-01T00:00:00.000Z",
-          plugins: {
-            "figma-toolkit": false,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-01T00:00:00.000Z",
+            plugins: {
+              "figma-toolkit": false,
+            },
           },
-        }, null, 2)}\n`,
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
 
       const catalog = await buildPluginCatalogSnapshot(config);
-      expect(catalog.plugins.find((plugin) => plugin.id === "figma-toolkit" && plugin.scope === "workspace")?.enabled).toBe(false);
+      expect(
+        catalog.plugins.find(
+          (plugin) => plugin.id === "figma-toolkit" && plugin.scope === "workspace",
+        )?.enabled,
+      ).toBe(false);
 
       const preview = await previewPluginInstall({
         config,
@@ -543,7 +637,9 @@ describe("plugin catalog and install operations", () => {
   test("plugin manifests can declare multiple bundled skills directories", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-multi-skills-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-multi-skills-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-multi-skills-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-multi-skills-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -553,11 +649,15 @@ describe("plugin catalog and install operations", () => {
       await fs.mkdir(path.join(pluginRoot, "skills-b"), { recursive: true });
       await fs.writeFile(
         path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-        `${JSON.stringify({
-          name: "multi-skill",
-          description: "Plugin with multiple bundled skill directories",
-          skills: ["./skills-a", "./skills-b"],
-        }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            name: "multi-skill",
+            description: "Plugin with multiple bundled skill directories",
+            skills: ["./skills-a", "./skills-b"],
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
       await writeBundledSkill(path.join(pluginRoot, "skills-a"), "alpha", "Alpha skill");
@@ -591,7 +691,9 @@ describe("plugin catalog and install operations", () => {
   test("plugin catalogs and discovers bundled skill directories through in-root symlinks", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-symlink-skills-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-symlink-skills-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-symlink-skills-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-symlink-skills-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -603,10 +705,14 @@ describe("plugin catalog and install operations", () => {
       await fs.mkdir(linkedSkillsDir, { recursive: true });
       await fs.writeFile(
         path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-        `${JSON.stringify({
-          name: "symlink-skills",
-          description: "Plugin with symlinked bundled skills",
-        }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            name: "symlink-skills",
+            description: "Plugin with symlinked bundled skills",
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
       await fs.writeFile(
@@ -651,23 +757,35 @@ describe("plugin catalog and install operations", () => {
     try {
       await fs.writeFile(
         path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-        `${JSON.stringify({
-          name: "demo-plugin",
-          mcpServers: "../outside.json",
-        }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            name: "demo-plugin",
+            mcpServers: "../outside.json",
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
-      await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves mcpServers outside the plugin root");
+      await expect(readPluginManifest(pluginRoot)).rejects.toThrow(
+        "resolves mcpServers outside the plugin root",
+      );
 
       await fs.writeFile(
         path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-        `${JSON.stringify({
-          name: "demo-plugin",
-          apps: "../outside.json",
-        }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            name: "demo-plugin",
+            apps: "../outside.json",
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
-      await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves apps outside the plugin root");
+      await expect(readPluginManifest(pluginRoot)).rejects.toThrow(
+        "resolves apps outside the plugin root",
+      );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
@@ -708,25 +826,33 @@ describe("plugin catalog and install operations", () => {
         process.platform === "win32" ? "junction" : "dir",
       );
       if (!linkedSkills) return;
-      await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves skills outside the plugin root");
+      await expect(readPluginManifest(pluginRoot)).rejects.toThrow(
+        "resolves skills outside the plugin root",
+      );
 
       await removePathForTest(path.join(pluginRoot, "skills"));
       await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
       const linkedMcp = await createSymlinkOrSkip(outsideFile, path.join(pluginRoot, ".mcp.json"));
       if (!linkedMcp) return;
-      await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves mcpServers outside the plugin root");
+      await expect(readPluginManifest(pluginRoot)).rejects.toThrow(
+        "resolves mcpServers outside the plugin root",
+      );
 
       await removePathForTest(path.join(pluginRoot, ".mcp.json"));
       const linkedApp = await createSymlinkOrSkip(outsideFile, path.join(pluginRoot, ".app.json"));
       if (!linkedApp) return;
-      await expect(readPluginManifest(pluginRoot)).rejects.toThrow("resolves apps outside the plugin root");
+      await expect(readPluginManifest(pluginRoot)).rejects.toThrow(
+        "resolves apps outside the plugin root",
+      );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
 
   test("direct plugin discovery follows symlinked plugin directories", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-discovery-symlink-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-discovery-symlink-workspace-"),
+    );
 
     try {
       const checkoutRoot = path.join(workspace, "plugin-checkout", "figma-toolkit");
@@ -735,7 +861,11 @@ describe("plugin catalog and install operations", () => {
       const pluginsDir = path.join(workspace, ".agents", "plugins");
       await fs.mkdir(pluginsDir, { recursive: true });
       const linkedPluginRoot = path.join(pluginsDir, "figma-toolkit");
-      await fs.symlink(checkoutRoot, linkedPluginRoot, process.platform === "win32" ? "junction" : "dir");
+      await fs.symlink(
+        checkoutRoot,
+        linkedPluginRoot,
+        process.platform === "win32" ? "junction" : "dir",
+      );
 
       const discovery = await discoverPlugins({ workspacePluginsDir: pluginsDir });
 
@@ -752,8 +882,12 @@ describe("plugin catalog and install operations", () => {
   });
 
   test("direct plugin discovery keeps workspace and user symlinks to the same checkout as separate scopes", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-discovery-shared-checkout-workspace-"));
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-discovery-shared-checkout-home-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-discovery-shared-checkout-workspace-"),
+    );
+    const home = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-discovery-shared-checkout-home-"),
+    );
 
     try {
       const checkoutRoot = path.join(workspace, "plugin-checkout", "figma-toolkit");
@@ -766,7 +900,11 @@ describe("plugin catalog and install operations", () => {
 
       const workspaceLink = path.join(workspacePluginsDir, "figma-toolkit");
       const userLink = path.join(userPluginsDir, "figma-toolkit");
-      await fs.symlink(checkoutRoot, workspaceLink, process.platform === "win32" ? "junction" : "dir");
+      await fs.symlink(
+        checkoutRoot,
+        workspaceLink,
+        process.platform === "win32" ? "junction" : "dir",
+      );
       await fs.symlink(checkoutRoot, userLink, process.platform === "win32" ? "junction" : "dir");
 
       const discovery = await discoverPlugins({ workspacePluginsDir, userPluginsDir });
@@ -793,7 +931,9 @@ describe("plugin catalog and install operations", () => {
   });
 
   test("direct plugin discovery deduplicates same-scope symlinks to the same checkout", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-discovery-duplicate-symlink-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-discovery-duplicate-symlink-workspace-"),
+    );
 
     try {
       const checkoutRoot = path.join(workspace, "plugin-checkout", "figma-toolkit");
@@ -822,7 +962,9 @@ describe("plugin catalog and install operations", () => {
   });
 
   test("marketplace discovery rejects symlinked source paths that escape the marketplace root", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-marketplace-symlink-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-marketplace-symlink-workspace-"),
+    );
 
     try {
       const outsidePluginRoot = path.join(workspace, "external-plugin", "figma-toolkit");
@@ -838,23 +980,27 @@ describe("plugin catalog and install operations", () => {
       );
       await fs.writeFile(
         path.join(pluginsDir, "marketplace.json"),
-        `${JSON.stringify({
-          name: "workspace-market",
-          plugins: [
-            {
-              name: "figma-toolkit",
-              source: {
-                source: "local",
-                path: "./market/bundle-link",
+        `${JSON.stringify(
+          {
+            name: "workspace-market",
+            plugins: [
+              {
+                name: "figma-toolkit",
+                source: {
+                  source: "local",
+                  path: "./market/bundle-link",
+                },
+                policy: {
+                  installation: "manual",
+                  authentication: "optional",
+                },
+                category: "design",
               },
-              policy: {
-                installation: "manual",
-                authentication: "optional",
-              },
-              category: "design",
-            },
-          ],
-        }, null, 2)}\n`,
+            ],
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
 
@@ -871,7 +1017,9 @@ describe("plugin catalog and install operations", () => {
   });
 
   test("plugin discovery deduplicates marketplace and direct entries for the same canonical plugin root", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-marketplace-direct-dedupe-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-marketplace-direct-dedupe-workspace-"),
+    );
 
     try {
       const pluginsDir = path.join(workspace, ".agents", "plugins");
@@ -883,26 +1031,30 @@ describe("plugin catalog and install operations", () => {
       await fs.symlink(checkoutRoot, directLink, process.platform === "win32" ? "junction" : "dir");
       await fs.writeFile(
         path.join(pluginsDir, "marketplace.json"),
-        `${JSON.stringify({
-          name: "workspace-market",
-          plugins: [
-            {
-              name: "figma-toolkit",
-              source: {
-                source: "local",
-                path: "./market/figma-toolkit",
+        `${JSON.stringify(
+          {
+            name: "workspace-market",
+            plugins: [
+              {
+                name: "figma-toolkit",
+                source: {
+                  source: "local",
+                  path: "./market/figma-toolkit",
+                },
+                policy: {
+                  installation: "manual",
+                  authentication: "optional",
+                },
+                category: "design",
+                interface: {
+                  displayName: "Marketplace Figma Toolkit",
+                },
               },
-              policy: {
-                installation: "manual",
-                authentication: "optional",
-              },
-              category: "design",
-              interface: {
-                displayName: "Marketplace Figma Toolkit",
-              },
-            },
-          ],
-        }, null, 2)}\n`,
+            ],
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
 
@@ -923,7 +1075,9 @@ describe("plugin catalog and install operations", () => {
   test("preview and install reject explicit missing skills directories", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-missing-skills-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-missing-skills-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-missing-skills-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-missing-skills-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -931,11 +1085,15 @@ describe("plugin catalog and install operations", () => {
       await fs.mkdir(path.join(sourceRoot, ".codex-plugin"), { recursive: true });
       await fs.writeFile(
         path.join(sourceRoot, ".codex-plugin", "plugin.json"),
-        `${JSON.stringify({
-          name: "broken-plugin",
-          description: "Broken plugin",
-          skills: "./missing-skills",
-        }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            name: "broken-plugin",
+            description: "Broken plugin",
+            skills: "./missing-skills",
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
 
@@ -946,7 +1104,9 @@ describe("plugin catalog and install operations", () => {
         input: sourceRoot,
         targetScope: "workspace",
       });
-      expect(preview.warnings).toEqual(["No valid plugin bundles were found in the provided source."]);
+      expect(preview.warnings).toEqual([
+        "No valid plugin bundles were found in the provided source.",
+      ]);
       expect(preview.candidates).toEqual([
         expect.objectContaining({
           pluginId: "broken-plugin",
@@ -960,11 +1120,13 @@ describe("plugin catalog and install operations", () => {
         }),
       ]);
 
-      await expect(installPluginsFromSource({
-        config,
-        input: sourceRoot,
-        targetScope: "workspace",
-      })).rejects.toThrow("No valid plugin bundles were found in the provided source");
+      await expect(
+        installPluginsFromSource({
+          config,
+          input: sourceRoot,
+          targetScope: "workspace",
+        }),
+      ).rejects.toThrow("No valid plugin bundles were found in the provided source");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
@@ -973,9 +1135,13 @@ describe("plugin catalog and install operations", () => {
   });
 
   test("plugin catalog surfaces warnings for invalid bundled skills", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-skill-catalog-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-invalid-skill-catalog-workspace-"),
+    );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-skill-catalog-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-skill-catalog-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-invalid-skill-catalog-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -991,8 +1157,9 @@ describe("plugin catalog and install operations", () => {
       expect(catalog.plugins).toHaveLength(1);
       expect(catalog.plugins[0]?.skills).toEqual([]);
       expect(
-        catalog.plugins[0]?.warnings.some((warning) =>
-          warning.includes("import-frame") && warning.includes("SKILL.md")),
+        catalog.plugins[0]?.warnings.some(
+          (warning) => warning.includes("import-frame") && warning.includes("SKILL.md"),
+        ),
       ).toBe(true);
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
@@ -1002,9 +1169,13 @@ describe("plugin catalog and install operations", () => {
   });
 
   test("plugin catalog surfaces warnings for invalid bundled MCP manifests on installed plugins", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-installed-mcp-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-invalid-installed-mcp-workspace-"),
+    );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-installed-mcp-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-installed-mcp-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-invalid-installed-mcp-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -1012,11 +1183,15 @@ describe("plugin catalog and install operations", () => {
       await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
       await fs.writeFile(
         path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-        `${JSON.stringify({
-          name: "figma-toolkit",
-          description: "Broken MCP plugin",
-          mcpServers: "./missing.mcp.json",
-        }, null, 2)}\n`,
+        `${JSON.stringify(
+          {
+            name: "figma-toolkit",
+            description: "Broken MCP plugin",
+            mcpServers: "./missing.mcp.json",
+          },
+          null,
+          2,
+        )}\n`,
         "utf-8",
       );
 
@@ -1035,9 +1210,13 @@ describe("plugin catalog and install operations", () => {
   });
 
   test("plugin install preview and install reject sources with invalid bundled skills", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-skill-source-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-invalid-skill-source-workspace-"),
+    );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-skill-source-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-skill-source-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-invalid-skill-source-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -1054,7 +1233,9 @@ describe("plugin catalog and install operations", () => {
         input: sourceRoot,
         targetScope: "workspace",
       });
-      expect(preview.warnings).toEqual(["No valid plugin bundles were found in the provided source."]);
+      expect(preview.warnings).toEqual([
+        "No valid plugin bundles were found in the provided source.",
+      ]);
       expect(preview.candidates).toEqual([
         expect.objectContaining({
           pluginId: "figma-toolkit",
@@ -1068,11 +1249,13 @@ describe("plugin catalog and install operations", () => {
         }),
       ]);
 
-      await expect(installPluginsFromSource({
-        config,
-        input: sourceRoot,
-        targetScope: "workspace",
-      })).rejects.toThrow("No valid plugin bundles were found in the provided source");
+      await expect(
+        installPluginsFromSource({
+          config,
+          input: sourceRoot,
+          targetScope: "workspace",
+        }),
+      ).rejects.toThrow("No valid plugin bundles were found in the provided source");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
@@ -1081,9 +1264,13 @@ describe("plugin catalog and install operations", () => {
   });
 
   test("plugin install preview and install reject sources with malformed bundled MCP config", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-mcp-source-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-invalid-mcp-source-workspace-"),
+    );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-mcp-source-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-invalid-mcp-source-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-invalid-mcp-source-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
@@ -1096,7 +1283,9 @@ describe("plugin catalog and install operations", () => {
         input: sourceRoot,
         targetScope: "workspace",
       });
-      expect(preview.warnings).toEqual(["No valid plugin bundles were found in the provided source."]);
+      expect(preview.warnings).toEqual([
+        "No valid plugin bundles were found in the provided source.",
+      ]);
       expect(preview.candidates).toEqual([
         expect.objectContaining({
           pluginId: "figma-toolkit",
@@ -1110,11 +1299,13 @@ describe("plugin catalog and install operations", () => {
         }),
       ]);
 
-      await expect(installPluginsFromSource({
-        config,
-        input: sourceRoot,
-        targetScope: "workspace",
-      })).rejects.toThrow("No valid plugin bundles were found in the provided source");
+      await expect(
+        installPluginsFromSource({
+          config,
+          input: sourceRoot,
+          targetScope: "workspace",
+        }),
+      ).rejects.toThrow("No valid plugin bundles were found in the provided source");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
@@ -1148,9 +1339,13 @@ describe("plugin catalog and install operations", () => {
   });
 
   test("surfaces warnings for malformed bundled plugin skills", async () => {
-    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-malformed-skills-workspace-"));
+    const workspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-malformed-skills-workspace-"),
+    );
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-malformed-skills-home-"));
-    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugins-malformed-skills-builtin-"));
+    const builtInConfigDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "plugins-malformed-skills-builtin-"),
+    );
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {

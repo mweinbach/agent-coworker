@@ -26,7 +26,9 @@ export function parseJsonStringWithSchema<T>(
   }
   const parsed = schema.safeParse(parsedJson);
   if (!parsed.success) {
-    throw new Error(`Invalid ${fieldName}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
+    throw new Error(
+      `Invalid ${fieldName}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`,
+    );
   }
   return parsed.data;
 }
@@ -34,7 +36,9 @@ export function parseJsonStringWithSchema<T>(
 export function parseRequiredIsoTimestamp(value: unknown, fieldName: string): string {
   const parsed = isoTimestampSchema.safeParse(value);
   if (!parsed.success) {
-    throw new Error(`Invalid ${fieldName}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
+    throw new Error(
+      `Invalid ${fieldName}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`,
+    );
   }
   return parsed.data;
 }
@@ -42,7 +46,9 @@ export function parseRequiredIsoTimestamp(value: unknown, fieldName: string): st
 export function parseNonNegativeInteger(value: unknown, fieldName: string): number {
   const parsed = nonNegativeIntegerSchema.safeParse(value);
   if (!parsed.success) {
-    throw new Error(`Invalid ${fieldName}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
+    throw new Error(
+      `Invalid ${fieldName}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`,
+    );
   }
   return parsed.data;
 }
@@ -50,7 +56,9 @@ export function parseNonNegativeInteger(value: unknown, fieldName: string): numb
 export function parseBooleanInteger(value: unknown, fieldName: string): 0 | 1 {
   const parsed = sqliteBooleanIntSchema.safeParse(value);
   if (!parsed.success) {
-    throw new Error(`Invalid ${fieldName}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
+    throw new Error(
+      `Invalid ${fieldName}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`,
+    );
   }
   return parsed.data;
 }
@@ -61,7 +69,9 @@ export function toJsonString(value: unknown): string {
 
 export function isCorruptionError(error: unknown): boolean {
   const msg = String(error).toLowerCase();
-  return msg.includes("database disk image is malformed")
-    || msg.includes("file is not a database")
-    || msg.includes("database corruption");
+  return (
+    msg.includes("database disk image is malformed") ||
+    msg.includes("file is not a database") ||
+    msg.includes("database corruption")
+  );
 }

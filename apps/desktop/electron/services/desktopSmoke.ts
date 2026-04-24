@@ -60,7 +60,9 @@ export type RunDesktopSmokePromptLoadCheckOptions = {
   url: string;
   workspacePath: string;
   clientVersion: string;
-  connectJsonRpc?: (options: ConnectDesktopSmokeJsonRpcOptions) => Promise<DesktopSmokeJsonRpcConnection>;
+  connectJsonRpc?: (
+    options: ConnectDesktopSmokeJsonRpcOptions,
+  ) => Promise<DesktopSmokeJsonRpcConnection>;
   now?: () => number;
 };
 
@@ -79,7 +81,9 @@ export async function connectDesktopSmokeJsonRpc(
   const endpoint = new URL(options.url);
   endpoint.searchParams.set("protocol", "jsonrpc");
 
-  const createWebSocket = options.createWebSocket ?? ((url: string) => new WebSocket(url) as unknown as DesktopSmokeSocket);
+  const createWebSocket =
+    options.createWebSocket ??
+    ((url: string) => new WebSocket(url) as unknown as DesktopSmokeSocket);
   const setTimeoutFn = options.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
 
@@ -114,12 +118,19 @@ export async function connectDesktopSmokeJsonRpc(
   };
 
   ws.on("message", (data) => {
-    const raw = typeof data === "string" ? data : Buffer.isBuffer(data) ? data.toString("utf8") : String(data);
+    const raw =
+      typeof data === "string"
+        ? data
+        : Buffer.isBuffer(data)
+          ? data.toString("utf8")
+          : String(data);
     let message: DesktopSmokeJsonRpcMessage;
     try {
       message = JSON.parse(raw) as DesktopSmokeJsonRpcMessage;
     } catch (error) {
-      failAllWaiters(new Error(`Desktop smoke received malformed JSON-RPC message: ${String(error)}`));
+      failAllWaiters(
+        new Error(`Desktop smoke received malformed JSON-RPC message: ${String(error)}`),
+      );
       ws.close();
       return;
     }
@@ -139,7 +150,10 @@ export async function connectDesktopSmokeJsonRpc(
   });
 
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeoutFn(() => reject(new Error("Timed out waiting for desktop smoke websocket open")), DEFAULT_TIMEOUT_MS);
+    const timer = setTimeoutFn(
+      () => reject(new Error("Timed out waiting for desktop smoke websocket open")),
+      DEFAULT_TIMEOUT_MS,
+    );
     ws.once("open", () => {
       clearTimeoutFn(timer);
       resolve();
@@ -161,7 +175,10 @@ export async function connectDesktopSmokeJsonRpc(
   ): Promise<DesktopSmokeJsonRpcMessage> => {
     const existingIndex = queue.findIndex(predicate);
     if (existingIndex >= 0) {
-      return queue.splice(existingIndex, 1)[0]!;
+      const existing = queue.splice(existingIndex, 1)[0];
+      if (existing) {
+        return existing;
+      }
     }
     if (terminalError) {
       throw terminalError;
@@ -181,7 +198,9 @@ export async function connectDesktopSmokeJsonRpc(
   const sendRequest = async (method: string, params?: unknown) => {
     const id = ++nextId;
     ws.send(JSON.stringify({ id, method, ...(params !== undefined ? { params } : {}) }));
-    const response = await waitFor((message) => message.id === id, { label: `response to ${method}` });
+    const response = await waitFor((message) => message.id === id, {
+      label: `response to ${method}`,
+    });
     if (response.error) {
       const code = typeof response.error.code === "number" ? ` (${response.error.code})` : "";
       throw new Error(`${method} failed${code}: ${response.error.message ?? "unknown_error"}`);
@@ -197,7 +216,10 @@ export async function connectDesktopSmokeJsonRpc(
         version: options.clientVersion,
       },
     });
-    if ((initializeResponse.result as { protocolVersion?: string } | undefined)?.protocolVersion !== "0.1") {
+    if (
+      (initializeResponse.result as { protocolVersion?: string } | undefined)?.protocolVersion !==
+      "0.1"
+    ) {
       throw new Error("Desktop smoke initialize returned an unexpected protocol version");
     }
     // JSON-RPC startup is a two-step handshake: initialize request, then initialized notification.
@@ -233,7 +255,9 @@ export async function runDesktopSmokePromptLoadCheck(
     }
 
     await rpc.waitFor(
-      (message) => message.method === "thread/started" && (message.params as { thread?: { id?: string } } | undefined)?.thread?.id === threadId,
+      (message) =>
+        message.method === "thread/started" &&
+        (message.params as { thread?: { id?: string } } | undefined)?.thread?.id === threadId,
       { label: `thread/started for ${threadId}` },
     );
 
@@ -255,13 +279,15 @@ export async function runDesktopSmokePromptLoadCheck(
 
     const completed = await rpc.waitFor(
       (message) =>
-        message.method === "turn/completed"
-        && (message.params as { turn?: { id?: string } } | undefined)?.turn?.id === turnId,
+        message.method === "turn/completed" &&
+        (message.params as { turn?: { id?: string } } | undefined)?.turn?.id === turnId,
       { timeoutMs: TURN_COMPLETION_TIMEOUT_MS, label: `turn/completed for ${turnId}` },
     );
     const status = (completed.params as { turn?: { status?: string } } | undefined)?.turn?.status;
     if (typeof status !== "string" || !TERMINAL_TURN_STATUSES.has(status)) {
-      throw new Error(`Desktop smoke turn/completed reported an invalid status: ${status ?? "unknown"}`);
+      throw new Error(
+        `Desktop smoke turn/completed reported an invalid status: ${status ?? "unknown"}`,
+      );
     }
   } finally {
     rpc.close();

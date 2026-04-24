@@ -104,7 +104,11 @@ describe("loadProjectAgentsFiles and section", () => {
   test("preserves the most specific workspace AGENTS content under the byte cap", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agents-cap-specific-"));
     await fs.mkdir(path.join(tmp, ".git"), { recursive: true });
-    await fs.writeFile(path.join(tmp, "AGENTS.md"), "R".repeat(PROJECT_INSTRUCTIONS_MAX_BYTES), "utf-8");
+    await fs.writeFile(
+      path.join(tmp, "AGENTS.md"),
+      "R".repeat(PROJECT_INSTRUCTIONS_MAX_BYTES),
+      "utf-8",
+    );
 
     const web = path.join(tmp, "apps", "web");
     await fs.mkdir(web, { recursive: true });
@@ -123,7 +127,11 @@ describe("loadProjectAgentsFiles and section", () => {
 
     const apps = path.join(tmp, "apps");
     await fs.mkdir(apps, { recursive: true });
-    await fs.writeFile(path.join(apps, "AGENTS.md"), "M".repeat(PROJECT_INSTRUCTIONS_MAX_BYTES), "utf-8");
+    await fs.writeFile(
+      path.join(apps, "AGENTS.md"),
+      "M".repeat(PROJECT_INSTRUCTIONS_MAX_BYTES),
+      "utf-8",
+    );
 
     const web = path.join(apps, "web");
     await fs.mkdir(web, { recursive: true });
@@ -141,7 +149,10 @@ describe("loadProjectAgentsFiles and section", () => {
     const workspaceRoot = path.resolve(path.join("/repo", "apps", "web"));
     const io = {
       stat: async (abs: string) => {
-        if (abs === path.join(workspaceRoot, "AGENTS.override.md") || abs === path.join(workspaceRoot, "AGENTS.md")) {
+        if (
+          abs === path.join(workspaceRoot, "AGENTS.override.md") ||
+          abs === path.join(workspaceRoot, "AGENTS.md")
+        ) {
           return { isFile: () => true, isDirectory: () => false } as any;
         }
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });

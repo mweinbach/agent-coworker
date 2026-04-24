@@ -1,5 +1,5 @@
-import type { DesktopStateCache } from "./types";
 import { getCurrentWebWorkspaceScopeHash } from "../lib/webWorkspaceState";
+import type { DesktopStateCache } from "./types";
 
 export const DESKTOP_STATE_CACHE_KEY = "cowork.desktop.state-cache.v2";
 

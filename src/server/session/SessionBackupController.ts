@@ -10,7 +10,9 @@ export class SessionBackupController {
   async getSessionBackupState() {
     await this.ensureSessionBackupInitialized();
     this.emitSessionBackupState("requested");
-    this.context.emitTelemetry("session.backup.state_requested", "ok", { sessionId: this.context.id });
+    this.context.emitTelemetry("session.backup.state_requested", "ok", {
+      sessionId: this.context.id,
+    });
   }
 
   async createManualSessionCheckpoint() {
@@ -33,10 +35,20 @@ export class SessionBackupController {
         return true;
       });
       if (!didCheckpoint) return;
-      this.context.emitTelemetry("session.backup.checkpoint.manual", "ok", { sessionId: this.context.id }, Date.now() - startedAt);
+      this.context.emitTelemetry(
+        "session.backup.checkpoint.manual",
+        "ok",
+        { sessionId: this.context.id },
+        Date.now() - startedAt,
+      );
     } catch (err) {
       this.context.emitError("backup_error", "backup", `manual checkpoint failed: ${String(err)}`);
-      this.context.emitTelemetry("session.backup.checkpoint.manual", "error", { sessionId: this.context.id }, Date.now() - startedAt);
+      this.context.emitTelemetry(
+        "session.backup.checkpoint.manual",
+        "error",
+        { sessionId: this.context.id },
+        Date.now() - startedAt,
+      );
     }
   }
 
@@ -65,10 +77,20 @@ export class SessionBackupController {
         return true;
       });
       if (!didRestore) return;
-      this.context.emitTelemetry("session.backup.restore", "ok", { sessionId: this.context.id }, Date.now() - startedAt);
+      this.context.emitTelemetry(
+        "session.backup.restore",
+        "ok",
+        { sessionId: this.context.id },
+        Date.now() - startedAt,
+      );
     } catch (err) {
       this.context.emitError("backup_error", "backup", `restore failed: ${String(err)}`);
-      this.context.emitTelemetry("session.backup.restore", "error", { sessionId: this.context.id }, Date.now() - startedAt);
+      this.context.emitTelemetry(
+        "session.backup.restore",
+        "error",
+        { sessionId: this.context.id },
+        Date.now() - startedAt,
+      );
     }
   }
 
@@ -89,7 +111,11 @@ export class SessionBackupController {
         }
         const removed = await this.context.state.sessionBackup.deleteCheckpoint(checkpointId);
         if (!removed) {
-          this.context.emitError("validation_failed", "backup", `Unknown checkpoint id: ${checkpointId}`);
+          this.context.emitError(
+            "validation_failed",
+            "backup",
+            `Unknown checkpoint id: ${checkpointId}`,
+          );
           return false;
         }
         this.context.state.sessionBackupState = this.context.state.sessionBackup.getPublicState();
@@ -97,19 +123,31 @@ export class SessionBackupController {
         return true;
       });
       if (!didDelete) return;
-      this.context.emitTelemetry("session.backup.checkpoint.delete", "ok", { sessionId: this.context.id }, Date.now() - startedAt);
+      this.context.emitTelemetry(
+        "session.backup.checkpoint.delete",
+        "ok",
+        { sessionId: this.context.id },
+        Date.now() - startedAt,
+      );
     } catch (err) {
       this.context.emitError("backup_error", "backup", `delete checkpoint failed: ${String(err)}`);
-      this.context.emitTelemetry("session.backup.checkpoint.delete", "error", { sessionId: this.context.id }, Date.now() - startedAt);
+      this.context.emitTelemetry(
+        "session.backup.checkpoint.delete",
+        "error",
+        { sessionId: this.context.id },
+        Date.now() - startedAt,
+      );
     }
   }
 
   async takeAutomaticSessionCheckpoint() {
-    if (Date.now() - this.context.state.lastAutoCheckpointAt < AUTO_CHECKPOINT_MIN_INTERVAL_MS) return;
+    if (Date.now() - this.context.state.lastAutoCheckpointAt < AUTO_CHECKPOINT_MIN_INTERVAL_MS)
+      return;
 
     try {
       const didCheckpoint = await this.runInBackupQueue(async () => {
-        if (Date.now() - this.context.state.lastAutoCheckpointAt < AUTO_CHECKPOINT_MIN_INTERVAL_MS) return false;
+        if (Date.now() - this.context.state.lastAutoCheckpointAt < AUTO_CHECKPOINT_MIN_INTERVAL_MS)
+          return false;
         await this.ensureSessionBackupInitialized();
         if (!this.context.state.sessionBackup) return false;
         await this.context.state.sessionBackup.createCheckpoint("auto");
@@ -120,7 +158,11 @@ export class SessionBackupController {
       });
       if (!didCheckpoint) return;
     } catch (err) {
-      this.context.emitError("backup_error", "backup", `automatic checkpoint failed: ${String(err)}`);
+      this.context.emitError(
+        "backup_error",
+        "backup",
+        `automatic checkpoint failed: ${String(err)}`,
+      );
       this.context.emitTelemetry("session.backup.checkpoint.auto", "error", {
         sessionId: this.context.id,
         error: this.context.formatError(err),
@@ -128,7 +170,9 @@ export class SessionBackupController {
       return;
     }
 
-    this.context.emitTelemetry("session.backup.checkpoint.auto", "ok", { sessionId: this.context.id });
+    this.context.emitTelemetry("session.backup.checkpoint.auto", "ok", {
+      sessionId: this.context.id,
+    });
   }
 
   async closeSessionBackup() {
@@ -174,11 +218,14 @@ export class SessionBackupController {
           : this.buildPlaceholderState("disabled");
         return;
       }
-      this.context.state.sessionBackupState = await this.context.state.sessionBackup.reloadFromDisk();
+      this.context.state.sessionBackupState =
+        await this.context.state.sessionBackup.reloadFromDisk();
     });
   }
 
-  private emitSessionBackupState(reason: "requested" | "auto_checkpoint" | "manual_checkpoint" | "restore" | "delete") {
+  private emitSessionBackupState(
+    reason: "requested" | "auto_checkpoint" | "manual_checkpoint" | "restore" | "delete",
+  ) {
     this.context.emit({
       type: "session_backup_state",
       sessionId: this.context.id,
@@ -188,7 +235,9 @@ export class SessionBackupController {
   }
 
   private getBackupsEnabled(): boolean {
-    return this.context.state.backupsEnabledOverride ?? this.context.state.config.backupsEnabled ?? true;
+    return (
+      this.context.state.backupsEnabledOverride ?? this.context.state.config.backupsEnabled ?? true
+    );
   }
 
   private buildPlaceholderState(status: "initializing" | "disabled") {
@@ -218,9 +267,10 @@ export class SessionBackupController {
     this.context.state.sessionBackup = null;
     this.context.state.sessionBackupInit = null;
     this.context.state.lastAutoCheckpointAt = 0;
-    this.context.state.sessionBackupState = mode === "disabled"
-      ? this.buildPlaceholderState("disabled")
-      : this.buildPlaceholderState("initializing");
+    this.context.state.sessionBackupState =
+      mode === "disabled"
+        ? this.buildPlaceholderState("disabled")
+        : this.buildPlaceholderState("initializing");
   }
 
   private async initializeSessionBackup() {
@@ -230,7 +280,9 @@ export class SessionBackupController {
       return;
     }
 
-    const userHome = this.context.state.config.userAgentDir ? path.dirname(this.context.state.config.userAgentDir) : undefined;
+    const userHome = this.context.state.config.userAgentDir
+      ? path.dirname(this.context.state.config.userAgentDir)
+      : undefined;
     const startedAt = Date.now();
 
     try {
@@ -240,7 +292,12 @@ export class SessionBackupController {
         homedir: userHome,
       });
       this.context.state.sessionBackupState = this.context.state.sessionBackup.getPublicState();
-      this.context.emitTelemetry("session.backup.initialize", "ok", { sessionId: this.context.id }, Date.now() - startedAt);
+      this.context.emitTelemetry(
+        "session.backup.initialize",
+        "ok",
+        { sessionId: this.context.id },
+        Date.now() - startedAt,
+      );
     } catch (err) {
       const reason = `session backup initialization failed: ${String(err)}`;
       this.context.state.sessionBackup = null;
@@ -254,14 +311,17 @@ export class SessionBackupController {
         "session.backup.initialize",
         "error",
         { sessionId: this.context.id, error: reason },
-        Date.now() - startedAt
+        Date.now() - startedAt,
       );
     }
   }
 
   private async ensureSessionBackupInitialized() {
     if (!this.getBackupsEnabled()) {
-      if (this.context.state.sessionBackupState.status !== "disabled" || this.context.state.sessionBackup) {
+      if (
+        this.context.state.sessionBackupState.status !== "disabled" ||
+        this.context.state.sessionBackup
+      ) {
         this.clearSessionBackupState("disabled");
       }
       return;

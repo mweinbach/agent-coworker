@@ -12,14 +12,25 @@ const emptyCatalog: PluginCatalogSnapshot = {
 };
 
 function pluginManifest(name = "demo-plugin"): string {
-  return `${JSON.stringify({
-    name,
-    description: "Demo plugin",
-  }, null, 2)}\n`;
+  return `${JSON.stringify(
+    {
+      name,
+      description: "Demo plugin",
+    },
+    null,
+    2,
+  )}\n`;
 }
 
 function skillDoc(name: string, description: string): string {
-  return ["---", `name: "${name}"`, `description: "${description}"`, "---", "", "# Instructions"].join("\n");
+  return [
+    "---",
+    `name: "${name}"`,
+    `description: "${description}"`,
+    "---",
+    "",
+    "# Instructions",
+  ].join("\n");
 }
 
 function trimSlashes(value: string): string {
@@ -48,9 +59,14 @@ function createGitHubPluginFetch(opts: {
   const normalizedFilesByRef = new Map<string, Map<string, string>>();
   const sourceFilesByRef = opts.filesByRef ?? { [opts.defaultBranch]: opts.files ?? {} };
   for (const [ref, files] of Object.entries(sourceFilesByRef)) {
-    normalizedFilesByRef.set(ref, new Map(
-      Object.entries(files).map(([filePath, content]) => [trimSlashes(filePath), content] as const),
-    ));
+    normalizedFilesByRef.set(
+      ref,
+      new Map(
+        Object.entries(files).map(
+          ([filePath, content]) => [trimSlashes(filePath), content] as const,
+        ),
+      ),
+    );
   }
   if (!normalizedFilesByRef.has("main") && opts.files && opts.defaultBranch !== "main") {
     normalizedFilesByRef.set("main", new Map(normalizedFilesByRef.get(opts.defaultBranch) ?? []));
@@ -100,16 +116,13 @@ function createGitHubPluginFetch(opts: {
     }
 
     return [...entries.values()].sort((left, right) =>
-      String(left.path).localeCompare(String(right.path)));
+      String(left.path).localeCompare(String(right.path)),
+    );
   }
 
   const fetchImpl = (async (input: string | URL | Request) => {
     const url =
-      typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.toString()
-          : input.url;
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     requests.push(url);
 
     if (url === `https://api.github.com/repos/${opts.repo}`) {
@@ -251,7 +264,10 @@ describe("plugin GitHub source materialization", () => {
       filesByRef: {
         feature: {
           "foo/packages/demo-plugin/.codex-plugin/plugin.json": pluginManifest("short-ref-plugin"),
-          "foo/packages/demo-plugin/skills/example/SKILL.md": skillDoc("example", "Short ref plugin."),
+          "foo/packages/demo-plugin/skills/example/SKILL.md": skillDoc(
+            "example",
+            "Short ref plugin.",
+          ),
         },
         "feature/foo": {
           "packages/demo-plugin/.codex-plugin/plugin.json": pluginManifest("long-ref-plugin"),
@@ -283,8 +299,12 @@ describe("plugin GitHub source materialization", () => {
       defaultBranch: "main",
       filesByRef: {
         feature: {
-          "foo/packages/demo-plugin/.codex-plugin/plugin.json": pluginManifest("fallback-ref-plugin"),
-          "foo/packages/demo-plugin/skills/example/SKILL.md": skillDoc("example", "Fallback ref plugin."),
+          "foo/packages/demo-plugin/.codex-plugin/plugin.json":
+            pluginManifest("fallback-ref-plugin"),
+          "foo/packages/demo-plugin/skills/example/SKILL.md": skillDoc(
+            "example",
+            "Fallback ref plugin.",
+          ),
         },
         "feature/foo": {
           "README.md": "not a plugin\n",
@@ -316,7 +336,11 @@ describe("plugin local source materialization", () => {
       const pluginRoot = path.join(workspace, "demo-plugin");
       await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
       await fs.mkdir(path.join(pluginRoot, "skills", "example"), { recursive: true });
-      await fs.writeFile(path.join(pluginRoot, ".codex-plugin", "plugin.json"), pluginManifest(), "utf-8");
+      await fs.writeFile(
+        path.join(pluginRoot, ".codex-plugin", "plugin.json"),
+        pluginManifest(),
+        "utf-8",
+      );
       await fs.writeFile(
         path.join(pluginRoot, "skills", "example", "SKILL.md"),
         skillDoc("example", "Example skill."),
@@ -349,7 +373,11 @@ describe("plugin local source materialization", () => {
 
       await fs.mkdir(path.join(outerPluginRoot, ".codex-plugin"), { recursive: true });
       await fs.mkdir(path.join(outerPluginRoot, "skills", "outer"), { recursive: true });
-      await fs.writeFile(path.join(outerPluginRoot, ".codex-plugin", "plugin.json"), pluginManifest("outer-plugin"), "utf-8");
+      await fs.writeFile(
+        path.join(outerPluginRoot, ".codex-plugin", "plugin.json"),
+        pluginManifest("outer-plugin"),
+        "utf-8",
+      );
       await fs.writeFile(
         path.join(outerPluginRoot, "skills", "outer", "SKILL.md"),
         skillDoc("outer", "Outer skill."),
@@ -358,7 +386,11 @@ describe("plugin local source materialization", () => {
 
       await fs.mkdir(path.join(innerPluginRoot, ".codex-plugin"), { recursive: true });
       await fs.mkdir(path.join(innerPluginRoot, "skills", "inner"), { recursive: true });
-      await fs.writeFile(path.join(innerPluginRoot, ".codex-plugin", "plugin.json"), pluginManifest("inner-plugin"), "utf-8");
+      await fs.writeFile(
+        path.join(innerPluginRoot, ".codex-plugin", "plugin.json"),
+        pluginManifest("inner-plugin"),
+        "utf-8",
+      );
       await fs.writeFile(
         path.join(innerPluginRoot, "skills", "inner", "SKILL.md"),
         skillDoc("inner", "Inner skill."),
@@ -392,7 +424,11 @@ describe("plugin local source materialization", () => {
 
       await fs.mkdir(path.join(realPluginRoot, ".codex-plugin"), { recursive: true });
       await fs.mkdir(path.join(realPluginRoot, "skills", "demo"), { recursive: true });
-      await fs.writeFile(path.join(realPluginRoot, ".codex-plugin", "plugin.json"), pluginManifest(), "utf-8");
+      await fs.writeFile(
+        path.join(realPluginRoot, ".codex-plugin", "plugin.json"),
+        pluginManifest(),
+        "utf-8",
+      );
       await fs.writeFile(
         path.join(realPluginRoot, "skills", "demo", "SKILL.md"),
         skillDoc("demo", "Demo skill."),

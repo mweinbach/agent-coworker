@@ -38,34 +38,41 @@ function createStoreHarness(state: ReturnType<typeof createState>) {
 const failedSkillMutationActions = [
   {
     name: "disableSkillInstallation",
-    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.disableSkillInstallation("inst-1"),
+    invoke: (actions: ReturnType<typeof createSkillActions>) =>
+      actions.disableSkillInstallation("inst-1"),
   },
   {
     name: "enableSkillInstallation",
-    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.enableSkillInstallation("inst-1"),
+    invoke: (actions: ReturnType<typeof createSkillActions>) =>
+      actions.enableSkillInstallation("inst-1"),
   },
   {
     name: "deleteSkillInstallation",
-    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.deleteSkillInstallation("inst-1"),
+    invoke: (actions: ReturnType<typeof createSkillActions>) =>
+      actions.deleteSkillInstallation("inst-1"),
   },
   {
     name: "copySkillInstallation",
-    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.copySkillInstallation("inst-1", "project"),
+    invoke: (actions: ReturnType<typeof createSkillActions>) =>
+      actions.copySkillInstallation("inst-1", "project"),
   },
   {
     name: "updateSkillInstallation",
-    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.updateSkillInstallation("inst-1"),
+    invoke: (actions: ReturnType<typeof createSkillActions>) =>
+      actions.updateSkillInstallation("inst-1"),
   },
 ] as const;
 
 const failedPluginMutationActions = [
   {
     name: "enablePlugin",
-    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.enablePlugin("plugin-1", "workspace"),
+    invoke: (actions: ReturnType<typeof createSkillActions>) =>
+      actions.enablePlugin("plugin-1", "workspace"),
   },
   {
     name: "disablePlugin",
-    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.disablePlugin("plugin-1", "workspace"),
+    invoke: (actions: ReturnType<typeof createSkillActions>) =>
+      actions.disablePlugin("plugin-1", "workspace"),
   },
 ] as const;
 
@@ -83,7 +90,9 @@ describe("skill store actions", () => {
     await createSkillActions(set as any, get as any).refreshSkillsCatalog();
 
     expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].skillCatalogError).toBe("Unable to refresh skills catalog.");
+    expect(state.workspaceRuntimeById[workspaceId].skillCatalogError).toBe(
+      "Unable to refresh skills catalog.",
+    );
     expect(state.notifications).toHaveLength(1);
   });
 
@@ -119,16 +128,17 @@ describe("skill store actions", () => {
     const refreshPromise = createSkillActions(set as any, get as any).refreshSkillsCatalog();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(calls).toEqual([
-      "cowork/skills/catalog/read",
-      "cowork/skills/list",
-    ]);
+    expect(calls).toEqual(["cowork/skills/catalog/read", "cowork/skills/list"]);
 
     resolveCatalog?.({
       event: {
         type: "skills_catalog",
         sessionId: "jsonrpc-control",
-        catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+        catalog: {
+          installations: [],
+          sources: [],
+          stats: { totalInstallations: 0, enabledInstallations: 0 },
+        },
         mutationBlocked: false,
       },
     });
@@ -145,7 +155,9 @@ describe("skill store actions", () => {
     await createSkillActions(set as any, get as any).refreshPluginsCatalog();
 
     expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe("Unable to refresh plugins catalog.");
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe(
+      "Unable to refresh plugins catalog.",
+    );
     expect(state.notifications).toHaveLength(1);
   });
 
@@ -241,7 +253,10 @@ describe("skill store actions", () => {
       close: () => {},
     } as any);
 
-    const selectPromise = createSkillActions(set as any, get as any).selectPlugin("plugin-1", "workspace");
+    const selectPromise = createSkillActions(set as any, get as any).selectPlugin(
+      "plugin-1",
+      "workspace",
+    );
     expect(state.workspaceRuntimeById[workspaceId].selectedPluginId).toBe("plugin-1");
     expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
     expect(state.workspaceRuntimeById[workspaceId].selectedPlugin).toBeNull();
@@ -297,7 +312,9 @@ describe("skill store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].selectedPluginScope).toBe("workspace");
     expect(state.workspaceRuntimeById[workspaceId].selectedPlugin).toBeNull();
     expect(state.workspaceRuntimeById[workspaceId].pluginsLoading).toBe(false);
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe("Unable to load plugin details.");
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe(
+      "Unable to load plugin details.",
+    );
   });
 
   test("previewSkillInstall removes only its pending key when sendControl fails", async () => {
@@ -307,7 +324,9 @@ describe("skill store actions", () => {
 
     await createSkillActions(set as any, get as any).previewSkillInstall("owner/repo", "project");
 
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ other: true });
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
+      other: true,
+    });
     expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
     expect(state.notifications).toHaveLength(1);
   });
@@ -317,11 +336,13 @@ describe("skill store actions", () => {
     state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys = { other: true };
     const { get, set } = createStoreHarness(state);
 
-    await expect(createSkillActions(set as any, get as any).installSkills("owner/repo", "global")).rejects.toThrow(
-      "Unable to install skills.",
-    );
+    await expect(
+      createSkillActions(set as any, get as any).installSkills("owner/repo", "global"),
+    ).rejects.toThrow("Unable to install skills.");
 
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ other: true });
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
+      other: true,
+    });
     expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
     expect(state.notifications).toHaveLength(1);
   });
@@ -344,9 +365,9 @@ describe("skill store actions", () => {
       close: () => {},
     } as any);
 
-    await expect(createSkillActions(set as any, get as any).installSkills("owner/repo", "global")).rejects.toThrow(
-      "Unable to install skills.",
-    );
+    await expect(
+      createSkillActions(set as any, get as any).installSkills("owner/repo", "global"),
+    ).rejects.toThrow("Unable to install skills.");
 
     expect(waiterPendingKey).toBe("install:global");
     expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
@@ -402,7 +423,10 @@ describe("skill store actions", () => {
       close: () => {},
     } as any);
 
-    await createSkillActions(set as any, get as any).previewPluginInstall("owner/repo", "workspace");
+    await createSkillActions(set as any, get as any).previewPluginInstall(
+      "owner/repo",
+      "workspace",
+    );
 
     expect(requests).toEqual([
       {
@@ -414,7 +438,9 @@ describe("skill store actions", () => {
         },
       },
     ]);
-    expect(state.workspaceRuntimeById[managementWorkspaceId].selectedPluginPreview?.targetScope).toBe("workspace");
+    expect(
+      state.workspaceRuntimeById[managementWorkspaceId].selectedPluginPreview?.targetScope,
+    ).toBe("workspace");
     expect(state.workspaceRuntimeById[managementWorkspaceId].skillMutationPendingKeys).toEqual({});
   });
 
@@ -444,7 +470,8 @@ describe("skill store actions", () => {
     RUNTIME.jsonRpcSockets.set(managementWorkspaceId, {
       readyPromise: Promise.resolve(),
       request: async (_method: string, params: any) => {
-        waiterPendingKey = RUNTIME.pluginInstallWaiters.get(managementWorkspaceId)?.pendingKey ?? null;
+        waiterPendingKey =
+          RUNTIME.pluginInstallWaiters.get(managementWorkspaceId)?.pendingKey ?? null;
         requestedParams = params;
         throw new Error("request failed");
       },
@@ -489,13 +516,15 @@ describe("skill store actions", () => {
     RUNTIME.jsonRpcSockets.set(managementWorkspaceId, {
       readyPromise: Promise.resolve(),
       request: async () => ({
-        events: [{
-          type: "error",
-          sessionId: "jsonrpc-control",
-          message: "Ambiguous plugin source; choose workspace or global explicitly.",
-          code: "validation_failed",
-          source: "session",
-        }],
+        events: [
+          {
+            type: "error",
+            sessionId: "jsonrpc-control",
+            message: "Ambiguous plugin source; choose workspace or global explicitly.",
+            code: "validation_failed",
+            source: "session",
+          },
+        ],
       }),
       respond: () => true,
       close: () => {},
@@ -548,7 +577,11 @@ describe("skill store actions", () => {
             {
               type: "skills_catalog",
               sessionId: "jsonrpc-control",
-              catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+              catalog: {
+                installations: [],
+                sources: [],
+                stats: { totalInstallations: 0, enabledInstallations: 0 },
+              },
               mutationBlocked: false,
               clearedMutationPendingKeys: ["plugin:install:user"],
             },
@@ -569,14 +602,24 @@ describe("skill store actions", () => {
       request: async (method: string) => {
         secondaryCalls.push(method);
         if (method === "cowork/plugins/catalog/read") {
-          return { event: { type: "plugins_catalog", sessionId: "jsonrpc-control", catalog: { plugins: [], warnings: [] } } };
+          return {
+            event: {
+              type: "plugins_catalog",
+              sessionId: "jsonrpc-control",
+              catalog: { plugins: [], warnings: [] },
+            },
+          };
         }
         if (method === "cowork/skills/catalog/read") {
           return {
             event: {
               type: "skills_catalog",
               sessionId: "jsonrpc-control",
-              catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+              catalog: {
+                installations: [],
+                sources: [],
+                stats: { totalInstallations: 0, enabledInstallations: 0 },
+              },
               mutationBlocked: false,
             },
           };
@@ -585,7 +628,16 @@ describe("skill store actions", () => {
           return { event: { type: "skills_list", sessionId: "jsonrpc-control", skills: [] } };
         }
         if (method === "cowork/mcp/servers/read") {
-          return { event: { type: "mcp_servers", sessionId: "jsonrpc-control", servers: [], legacy: [], files: [], warnings: [] } };
+          return {
+            event: {
+              type: "mcp_servers",
+              sessionId: "jsonrpc-control",
+              servers: [],
+              legacy: [],
+              files: [],
+              warnings: [],
+            },
+          };
         }
         throw new Error(`Unexpected method: ${method}`);
       },
@@ -656,15 +708,18 @@ describe("skill store actions", () => {
       request: async () => {
         requestCount += 1;
         return {
-          events: [{
-            type: "error",
-            sessionId: "jsonrpc-control",
-            message: requestCount === 1
-              ? "Plugin is shadowed by a global install."
-              : "Plugin is already disabled.",
-            code: "validation_failed",
-            source: "session",
-          }],
+          events: [
+            {
+              type: "error",
+              sessionId: "jsonrpc-control",
+              message:
+                requestCount === 1
+                  ? "Plugin is shadowed by a global install."
+                  : "Plugin is already disabled.",
+              code: "validation_failed",
+              source: "session",
+            },
+          ],
         };
       },
       respond: () => true,
@@ -675,12 +730,18 @@ describe("skill store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
       "Plugin is shadowed by a global install.",
     );
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe("Plugin is shadowed by a global install.");
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe(
+      "Plugin is shadowed by a global install.",
+    );
     expect(state.notifications.at(-1)?.detail).toBe("Plugin is shadowed by a global install.");
 
     await createSkillActions(set as any, get as any).disablePlugin("plugin-1", "workspace");
-    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe("Plugin is already disabled.");
-    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe("Plugin is already disabled.");
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe(
+      "Plugin is already disabled.",
+    );
+    expect(state.workspaceRuntimeById[workspaceId].pluginsError).toBe(
+      "Plugin is already disabled.",
+    );
     expect(state.notifications.at(-1)?.detail).toBe("Plugin is already disabled.");
   });
 
@@ -694,16 +755,18 @@ describe("skill store actions", () => {
       skillMutationError: null,
       serverUrl: "ws://mock",
       controlSessionId: "jsonrpc-control",
-      skills: [{
-        name: "example-skill",
-        description: "Example skill",
-        source: "workspace",
-        enabled: true,
-        effective: true,
-        interface: null,
-        metadata: null,
-        path: "/tmp/workspace/skills/example-skill/SKILL.md",
-      }],
+      skills: [
+        {
+          name: "example-skill",
+          description: "Example skill",
+          source: "workspace",
+          enabled: true,
+          effective: true,
+          interface: null,
+          metadata: null,
+          path: "/tmp/workspace/skills/example-skill/SKILL.md",
+        },
+      ],
     } as any;
     state.workspaces = [{ id: workspaceId, path: "/tmp/workspace" }];
     const { get, set } = createStoreHarness(state);
@@ -759,7 +822,11 @@ describe("skill store actions", () => {
           event: {
             type: "skills_catalog",
             sessionId: "jsonrpc-control",
-            catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+            catalog: {
+              installations: [],
+              sources: [],
+              stats: { totalInstallations: 0, enabledInstallations: 0 },
+            },
             mutationBlocked: false,
             clearedMutationPendingKeys: ["install:global"],
           },
@@ -773,14 +840,24 @@ describe("skill store actions", () => {
       request: async (method: string) => {
         secondaryCalls.push(method);
         if (method === "cowork/plugins/catalog/read") {
-          return { event: { type: "plugins_catalog", sessionId: "jsonrpc-control", catalog: { plugins: [], warnings: [] } } };
+          return {
+            event: {
+              type: "plugins_catalog",
+              sessionId: "jsonrpc-control",
+              catalog: { plugins: [], warnings: [] },
+            },
+          };
         }
         if (method === "cowork/skills/catalog/read") {
           return {
             event: {
               type: "skills_catalog",
               sessionId: "jsonrpc-control",
-              catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+              catalog: {
+                installations: [],
+                sources: [],
+                stats: { totalInstallations: 0, enabledInstallations: 0 },
+              },
               mutationBlocked: false,
             },
           };
@@ -789,7 +866,16 @@ describe("skill store actions", () => {
           return { event: { type: "skills_list", sessionId: "jsonrpc-control", skills: [] } };
         }
         if (method === "cowork/mcp/servers/read") {
-          return { event: { type: "mcp_servers", sessionId: "jsonrpc-control", servers: [], legacy: [], files: [], warnings: [] } };
+          return {
+            event: {
+              type: "mcp_servers",
+              sessionId: "jsonrpc-control",
+              servers: [],
+              legacy: [],
+              files: [],
+              warnings: [],
+            },
+          };
         }
         throw new Error(`Unexpected method: ${method}`);
       },
@@ -852,7 +938,9 @@ describe("skill store actions", () => {
       close: () => {},
     } as any);
 
-    const selectPromise = createSkillActions(set as any, get as any).selectSkillInstallation("inst-1");
+    const selectPromise = createSkillActions(set as any, get as any).selectSkillInstallation(
+      "inst-1",
+    );
 
     expect(state.workspaceRuntimeById[workspaceId].selectedSkillInstallationId).toBe("inst-1");
     expect(state.workspaceRuntimeById[workspaceId].selectedSkillInstallation).toBeNull();
@@ -881,7 +969,9 @@ describe("skill store actions", () => {
 
       await invoke(createSkillActions(set as any, get as any));
 
-      expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ other: true });
+      expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
+        other: true,
+      });
       expect(state.notifications).toHaveLength(1);
     });
   }
@@ -898,7 +988,9 @@ describe("skill store actions", () => {
 
       await invoke(createSkillActions(set as any, get as any));
 
-      expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ other: true });
+      expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
+        other: true,
+      });
       expect(state.notifications).toHaveLength(1);
     });
   }

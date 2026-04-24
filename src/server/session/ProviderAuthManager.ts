@@ -1,21 +1,25 @@
 import type { getAiCoworkerPaths } from "../../connect";
+import { normalizeChildRoutingConfig } from "../../models/childModelRouting";
+import { resolveModelMetadata } from "../../models/metadata";
 import {
-  type ConnectProviderHandler,
   authorizeProviderAuth,
+  type ConnectProviderHandler,
   callbackProviderAuth as callbackProviderAuthMethod,
   copyProviderApiKey as copyProviderApiKeyMethod,
   logoutProviderAuth as logoutProviderAuthMethod,
   resolveProviderAuthMethod,
-  setProviderConfig as setProviderConfigMethod,
   setProviderApiKey as setProviderApiKeyMethod,
+  setProviderConfig as setProviderConfigMethod,
 } from "../../providers/authRegistry";
-import { getOpenCodeDisplayName, isOpenCodeProviderName, isOpenCodeSiblingPair } from "../../providers/opencodeShared";
+import {
+  getOpenCodeDisplayName,
+  isOpenCodeProviderName,
+  isOpenCodeSiblingPair,
+} from "../../providers/opencodeShared";
 import { supportsProviderManagedContinuationProvider } from "../../shared/providerContinuation";
-import { defaultRuntimeNameForProvider, isProviderName } from "../../types";
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
+import { defaultRuntimeNameForProvider, isProviderName } from "../../types";
 import type { ServerEvent } from "../protocol";
-import { resolveModelMetadata } from "../../models/metadata";
-import { normalizeChildRoutingConfig } from "../../models/childModelRouting";
 
 type PreparedModelSelection = {
   nextConfig: AgentConfig;
@@ -54,7 +58,7 @@ export class ProviderAuthManager {
         name: string,
         status: "ok" | "error",
         attributes?: Record<string, string | number | boolean>,
-        durationMs?: number
+        durationMs?: number,
       ) => void;
       formatError: (err: unknown) => string;
       log: (line: string) => void;
@@ -77,7 +81,7 @@ export class ProviderAuthManager {
       refreshProviderStatus: (opts?: { refreshBedrockDiscovery?: boolean }) => Promise<void>;
       getGlobalAuthPaths: () => ReturnType<typeof getAiCoworkerPaths>;
       runProviderConnect: ConnectProviderHandler;
-    }
+    },
   ) {}
 
   private async refreshProviderState(provider: AgentConfig["provider"]) {
@@ -97,20 +101,28 @@ export class ProviderAuthManager {
     }
 
     if (providerRaw !== undefined && !isProviderName(providerRaw)) {
-      this.opts.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        `Unsupported provider: ${String(providerRaw)}`,
+      );
       return null;
     }
 
     const currentConfig = baseConfig ?? this.opts.getConfig();
     const nextProvider = providerRaw ?? currentConfig.provider;
-    let resolvedModel;
+    let resolvedModel: Awaited<ReturnType<typeof resolveModelMetadata>> | undefined;
     try {
       resolvedModel = await resolveModelMetadata(nextProvider, modelId, {
         providerOptions: currentConfig.providerOptions,
         source: "model",
       });
     } catch (error) {
-      this.opts.emitError("validation_failed", "provider", error instanceof Error ? error.message : String(error));
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        error instanceof Error ? error.message : String(error),
+      );
       return null;
     }
     const normalizedChildRouting = normalizeChildRoutingConfig({
@@ -120,16 +132,18 @@ export class ProviderAuthManager {
       preferredChildModelRef:
         currentConfig.childModelRoutingMode === "cross-provider-allowlist"
           ? currentConfig.preferredChildModelRef
-          : currentConfig.provider !== nextProvider || currentConfig.preferredChildModel === currentConfig.model
-          ? `${nextProvider}:${resolvedModel.id}`
-          : currentConfig.preferredChildModelRef ?? currentConfig.preferredChildModel,
+          : currentConfig.provider !== nextProvider ||
+              currentConfig.preferredChildModel === currentConfig.model
+            ? `${nextProvider}:${resolvedModel.id}`
+            : (currentConfig.preferredChildModelRef ?? currentConfig.preferredChildModel),
       preferredChildModel: currentConfig.preferredChildModel,
       allowedChildModelRefs: currentConfig.allowedChildModelRefs,
       source: "model selection",
     });
-    const nextRuntime = currentConfig.provider === nextProvider
-      ? currentConfig.runtime
-      : defaultRuntimeNameForProvider(nextProvider);
+    const nextRuntime =
+      currentConfig.provider === nextProvider
+        ? currentConfig.runtime
+        : defaultRuntimeNameForProvider(nextProvider);
     const shouldClearProviderState =
       currentConfig.provider !== nextProvider || currentConfig.model !== resolvedModel.id;
 
@@ -146,15 +160,18 @@ export class ProviderAuthManager {
     };
 
     const changed =
-      currentConfig.provider !== nextConfig.provider
-      || currentConfig.model !== nextConfig.model
-      || currentConfig.runtime !== nextConfig.runtime
-      || currentConfig.preferredChildModel !== nextConfig.preferredChildModel
-      || (currentConfig.childModelRoutingMode ?? "same-provider") !== (nextConfig.childModelRoutingMode ?? "same-provider")
-      || (currentConfig.preferredChildModelRef ?? `${currentConfig.provider}:${currentConfig.preferredChildModel}`)
-        !== (nextConfig.preferredChildModelRef ?? `${nextConfig.provider}:${nextConfig.preferredChildModel}`)
-      || !stringArrayEqual(currentConfig.allowedChildModelRefs, nextConfig.allowedChildModelRefs)
-      || currentConfig.knowledgeCutoff !== nextConfig.knowledgeCutoff;
+      currentConfig.provider !== nextConfig.provider ||
+      currentConfig.model !== nextConfig.model ||
+      currentConfig.runtime !== nextConfig.runtime ||
+      currentConfig.preferredChildModel !== nextConfig.preferredChildModel ||
+      (currentConfig.childModelRoutingMode ?? "same-provider") !==
+        (nextConfig.childModelRoutingMode ?? "same-provider") ||
+      (currentConfig.preferredChildModelRef ??
+        `${currentConfig.provider}:${currentConfig.preferredChildModel}`) !==
+        (nextConfig.preferredChildModelRef ??
+          `${nextConfig.provider}:${nextConfig.preferredChildModel}`) ||
+      !stringArrayEqual(currentConfig.allowedChildModelRefs, nextConfig.allowedChildModelRefs) ||
+      currentConfig.knowledgeCutoff !== nextConfig.knowledgeCutoff;
 
     return {
       nextConfig,
@@ -176,7 +193,11 @@ export class ProviderAuthManager {
 
   async applyPreparedModelSelection(
     prepared: PreparedModelSelection,
-    opts?: { persistSelection?: boolean; queuePersistSessionSnapshot?: boolean; emitProviderCatalog?: boolean },
+    opts?: {
+      persistSelection?: boolean;
+      queuePersistSessionSnapshot?: boolean;
+      emitProviderCatalog?: boolean;
+    },
   ): Promise<unknown | null> {
     this.opts.setConfig(prepared.nextConfig);
     if (prepared.shouldClearProviderState) {
@@ -193,10 +214,15 @@ export class ProviderAuthManager {
     }
 
     this.opts.emitConfigUpdated();
-    this.opts.updateSessionInfo({
-      provider: prepared.nextProvider,
-      model: prepared.nextModel,
-    }, opts?.queuePersistSessionSnapshot === false ? { queuePersistSessionSnapshot: false } : undefined);
+    this.opts.updateSessionInfo(
+      {
+        provider: prepared.nextProvider,
+        model: prepared.nextModel,
+      },
+      opts?.queuePersistSessionSnapshot === false
+        ? { queuePersistSessionSnapshot: false }
+        : undefined,
+    );
 
     if (opts?.queuePersistSessionSnapshot !== false) {
       this.opts.queuePersistSessionSnapshot("session.model_updated");
@@ -240,7 +266,11 @@ export class ProviderAuthManager {
   async authorizeProviderAuth(providerRaw: AgentConfig["provider"], methodIdRaw: string) {
     if (!this.opts.guardBusy()) return;
     if (!isProviderName(providerRaw)) {
-      this.opts.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        `Unsupported provider: ${String(providerRaw)}`,
+      );
       return;
     }
     const methodId = methodIdRaw.trim();
@@ -249,7 +279,11 @@ export class ProviderAuthManager {
       return;
     }
     if (!resolveProviderAuthMethod(providerRaw, methodId)) {
-      this.opts.emitError("validation_failed", "provider", `Unsupported auth method "${methodId}" for ${providerRaw}.`);
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        `Unsupported auth method "${methodId}" for ${providerRaw}.`,
+      );
       return;
     }
 
@@ -278,10 +312,18 @@ export class ProviderAuthManager {
     });
   }
 
-  async callbackProviderAuth(providerRaw: AgentConfig["provider"], methodIdRaw: string, codeRaw?: string) {
+  async callbackProviderAuth(
+    providerRaw: AgentConfig["provider"],
+    methodIdRaw: string,
+    codeRaw?: string,
+  ) {
     if (!this.opts.guardBusy()) return;
     if (!isProviderName(providerRaw)) {
-      this.opts.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        `Unsupported provider: ${String(providerRaw)}`,
+      );
       return;
     }
     const methodId = methodIdRaw.trim();
@@ -290,7 +332,11 @@ export class ProviderAuthManager {
       return;
     }
     if (!resolveProviderAuthMethod(providerRaw, methodId)) {
-      this.opts.emitError("validation_failed", "provider", `Unsupported auth method "${methodId}" for ${providerRaw}.`);
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        `Unsupported auth method "${methodId}" for ${providerRaw}.`,
+      );
       return;
     }
 
@@ -336,10 +382,14 @@ export class ProviderAuthManager {
           methodId,
           mode: result.ok ? result.mode : "unknown",
         },
-        Date.now() - startedAt
+        Date.now() - startedAt,
       );
     } catch (err) {
-      this.opts.emitError("provider_error", "provider", `Provider auth callback failed: ${String(err)}`);
+      this.opts.emitError(
+        "provider_error",
+        "provider",
+        `Provider auth callback failed: ${String(err)}`,
+      );
       this.opts.emitTelemetry(
         "provider.auth.callback",
         "error",
@@ -349,7 +399,7 @@ export class ProviderAuthManager {
           methodId,
           error: this.opts.formatError(err),
         },
-        Date.now() - startedAt
+        Date.now() - startedAt,
       );
     } finally {
       this.opts.setConnecting(false);
@@ -359,7 +409,11 @@ export class ProviderAuthManager {
   async logoutProviderAuth(providerRaw: AgentConfig["provider"]) {
     if (!this.opts.guardBusy()) return;
     if (!isProviderName(providerRaw)) {
-      this.opts.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        `Unsupported provider: ${String(providerRaw)}`,
+      );
       return;
     }
 
@@ -414,10 +468,18 @@ export class ProviderAuthManager {
     }
   }
 
-  async setProviderApiKey(providerRaw: AgentConfig["provider"], methodIdRaw: string, apiKeyRaw: string) {
+  async setProviderApiKey(
+    providerRaw: AgentConfig["provider"],
+    methodIdRaw: string,
+    apiKeyRaw: string,
+  ) {
     if (!this.opts.guardBusy()) return;
     if (!isProviderName(providerRaw)) {
-      this.opts.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        `Unsupported provider: ${String(providerRaw)}`,
+      );
       return;
     }
     const methodId = methodIdRaw.trim();
@@ -426,7 +488,11 @@ export class ProviderAuthManager {
       return;
     }
     if (!resolveProviderAuthMethod(providerRaw, methodId)) {
-      this.opts.emitError("validation_failed", "provider", `Unsupported auth method "${methodId}" for ${providerRaw}.`);
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        `Unsupported auth method "${methodId}" for ${providerRaw}.`,
+      );
       return;
     }
 
@@ -469,10 +535,14 @@ export class ProviderAuthManager {
           methodId,
           mode: result.ok ? result.mode : "unknown",
         },
-        Date.now() - startedAt
+        Date.now() - startedAt,
       );
     } catch (err) {
-      this.opts.emitError("provider_error", "provider", `Setting provider API key failed: ${String(err)}`);
+      this.opts.emitError(
+        "provider_error",
+        "provider",
+        `Setting provider API key failed: ${String(err)}`,
+      );
       this.opts.emitTelemetry(
         "provider.auth.api_key",
         "error",
@@ -482,7 +552,7 @@ export class ProviderAuthManager {
           methodId,
           error: this.opts.formatError(err),
         },
-        Date.now() - startedAt
+        Date.now() - startedAt,
       );
     } finally {
       this.opts.setConnecting(false);
@@ -496,7 +566,11 @@ export class ProviderAuthManager {
   ) {
     if (!this.opts.guardBusy()) return;
     if (!isProviderName(providerRaw)) {
-      this.opts.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        `Unsupported provider: ${String(providerRaw)}`,
+      );
       return;
     }
     const methodId = methodIdRaw.trim();
@@ -506,7 +580,11 @@ export class ProviderAuthManager {
     }
     const method = resolveProviderAuthMethod(providerRaw, methodId);
     if (!method) {
-      this.opts.emitError("validation_failed", "provider", `Unsupported auth method "${methodId}" for ${providerRaw}.`);
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        `Unsupported auth method "${methodId}" for ${providerRaw}.`,
+      );
       return;
     }
 
@@ -549,7 +627,11 @@ export class ProviderAuthManager {
         Date.now() - startedAt,
       );
     } catch (err) {
-      this.opts.emitError("provider_error", "provider", `Setting provider credentials failed: ${String(err)}`);
+      this.opts.emitError(
+        "provider_error",
+        "provider",
+        `Setting provider credentials failed: ${String(err)}`,
+      );
       this.opts.emitTelemetry(
         "provider.auth.config",
         "error",
@@ -566,14 +648,25 @@ export class ProviderAuthManager {
     }
   }
 
-  async copyProviderApiKey(providerRaw: AgentConfig["provider"], sourceProviderRaw: AgentConfig["provider"]) {
+  async copyProviderApiKey(
+    providerRaw: AgentConfig["provider"],
+    sourceProviderRaw: AgentConfig["provider"],
+  ) {
     if (!this.opts.guardBusy()) return;
     if (!isProviderName(providerRaw)) {
-      this.opts.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        `Unsupported provider: ${String(providerRaw)}`,
+      );
       return;
     }
     if (!isProviderName(sourceProviderRaw)) {
-      this.opts.emitError("validation_failed", "provider", `Unsupported source provider: ${String(sourceProviderRaw)}`);
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        `Unsupported source provider: ${String(sourceProviderRaw)}`,
+      );
       return;
     }
     if (!isOpenCodeSiblingPair(providerRaw, sourceProviderRaw)) {
@@ -595,7 +688,11 @@ export class ProviderAuthManager {
 
     const methodId = "api_key";
     if (!resolveProviderAuthMethod(providerRaw, methodId)) {
-      this.opts.emitError("validation_failed", "provider", `Unsupported auth method "${methodId}" for ${providerRaw}.`);
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        `Unsupported auth method "${methodId}" for ${providerRaw}.`,
+      );
       return;
     }
 
@@ -644,7 +741,11 @@ export class ProviderAuthManager {
         Date.now() - startedAt,
       );
     } catch (err) {
-      this.opts.emitError("provider_error", "provider", `Copying provider API key failed: ${String(err)}`);
+      this.opts.emitError(
+        "provider_error",
+        "provider",
+        `Copying provider API key failed: ${String(err)}`,
+      );
       this.opts.emitTelemetry(
         "provider.auth.api_key_copy",
         "error",

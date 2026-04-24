@@ -1,7 +1,6 @@
 import { Redirect } from "expo-router";
-
-import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 import { usePairingStore } from "@/features/pairing/pairingStore";
+import { isWorkspaceConnectionReady } from "@/features/relay/connectionState";
 
 export default function IndexScreen() {
   const isConnected = usePairingStore((state) => isWorkspaceConnectionReady(state.connectionState));

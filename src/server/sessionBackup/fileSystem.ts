@@ -22,7 +22,8 @@ export async function ensureSecureDirectory(dirPath: string): Promise<void> {
 export async function ensureWorkingDirectory(workingDirectory: string): Promise<void> {
   try {
     const st = await fs.stat(workingDirectory);
-    if (!st.isDirectory()) throw new Error(`Working directory is not a directory: ${workingDirectory}`);
+    if (!st.isDirectory())
+      throw new Error(`Working directory is not a directory: ${workingDirectory}`);
   } catch {
     await fs.mkdir(workingDirectory, { recursive: true });
   }
@@ -57,7 +58,10 @@ export async function copyDirectory(sourceDir: string, destinationDir: string): 
   });
 }
 
-export async function copyDirectoryContents(sourceDir: string, destinationDir: string): Promise<void> {
+export async function copyDirectoryContents(
+  sourceDir: string,
+  destinationDir: string,
+): Promise<void> {
   await ensureDirectory(destinationDir);
   const entries = await fs.readdir(sourceDir, { withFileTypes: true });
   for (const entry of entries) {

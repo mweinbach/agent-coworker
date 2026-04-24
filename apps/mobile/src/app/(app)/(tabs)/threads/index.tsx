@@ -1,10 +1,9 @@
-import { Link, Stack, useRouter } from "expo-router";
+import { Link, Stack } from "expo-router";
 import { Fragment, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { Screen } from "@/components/ui/screen";
 import { SectionCard } from "@/components/ui/section-card";
-import { SFSymbol } from "@/components/ui/sf-symbol";
 import { StatusPill } from "@/components/ui/status-pill";
 import { useThreadStore } from "@/features/cowork/threadStore";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
@@ -22,8 +21,7 @@ export default function ThreadsScreen() {
       return true;
     }
     return (
-      thread.title.toLowerCase().includes(query)
-      || thread.preview.toLowerCase().includes(query)
+      thread.title.toLowerCase().includes(query) || thread.preview.toLowerCase().includes(query)
     );
   });
 
@@ -74,7 +72,10 @@ export default function ThreadsScreen() {
                 >
                   <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 12 }}>
                     <View style={{ flex: 1, gap: 5 }}>
-                      <Text selectable style={{ color: theme.text, fontSize: 16, fontWeight: "700" }}>
+                      <Text
+                        selectable
+                        style={{ color: theme.text, fontSize: 16, fontWeight: "700" }}
+                      >
                         {thread.title}
                       </Text>
                       <Text

@@ -61,12 +61,22 @@ function CollapsibleJson({ label, data }: { label: string; data: unknown }) {
   const text = typeof data === "string" ? data : JSON.stringify(data, null, 2);
   const lines = text.split("\n");
   const isLong = lines.length > 4;
-  const preview = isLong ? lines.slice(0, 3).join("\n") + "\n..." : text;
+  const preview = isLong ? `${lines.slice(0, 3).join("\n")}\n...` : text;
 
   return (
     <View style={{ gap: 4 }}>
-      <Pressable onPress={() => setExpanded(!expanded)} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-        <Text style={{ color: theme.textTertiary, fontSize: 11, fontWeight: "600", textTransform: "uppercase" }}>
+      <Pressable
+        onPress={() => setExpanded(!expanded)}
+        style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
+      >
+        <Text
+          style={{
+            color: theme.textTertiary,
+            fontSize: 11,
+            fontWeight: "600",
+            textTransform: "uppercase",
+          }}
+        >
           {label}
         </Text>
         {isLong ? (

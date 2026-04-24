@@ -19,12 +19,7 @@
  * visible gaps instead of runtime errors.
  */
 
-import {
-  getByPointer,
-  resolveDynamic,
-  splitPointer,
-  type DataModel,
-} from "./expressions";
+import { type DataModel, getByPointer, resolveDynamic, splitPointer } from "./expressions";
 
 /**
  * Set of function keys we understand. If an object contains exactly one of
@@ -118,19 +113,26 @@ export function evaluateA2uiFunction(value: unknown, model: DataModel, depth = 0
     case "concat": {
       const list = normalizeListArgs(payload);
       if (!list) return undefined;
-      return list.map((entry) => {
-        const v = resolve(entry);
-        if (v === null || v === undefined) return "";
-        if (typeof v === "string") return v;
-        if (typeof v === "number" || typeof v === "boolean") return String(v);
-        try { return JSON.stringify(v); } catch { return String(v); }
-      }).join("");
+      return list
+        .map((entry) => {
+          const v = resolve(entry);
+          if (v === null || v === undefined) return "";
+          if (typeof v === "string") return v;
+          if (typeof v === "number" || typeof v === "boolean") return String(v);
+          try {
+            return JSON.stringify(v);
+          } catch {
+            return String(v);
+          }
+        })
+        .join("");
     }
     case "length": {
       const target = resolve(payload);
       if (Array.isArray(target)) return target.length;
       if (typeof target === "string") return target.length;
-      if (target && typeof target === "object") return Object.keys(target as Record<string, unknown>).length;
+      if (target && typeof target === "object")
+        return Object.keys(target as Record<string, unknown>).length;
       return 0;
     }
     case "join": {
@@ -148,7 +150,8 @@ export function evaluateA2uiFunction(value: unknown, model: DataModel, depth = 0
       if (!Array.isArray(from) || template === undefined) return [];
       return from.map((item) => {
         const scopedModel = applyScope(model, asName, item);
-        if (isA2uiFunctionCall(template)) return evaluateA2uiFunction(template, scopedModel, depth + 1);
+        if (isA2uiFunctionCall(template))
+          return evaluateA2uiFunction(template, scopedModel, depth + 1);
         if (typeof template === "object" && template !== null && !Array.isArray(template)) {
           return resolveDynamic(template, scopedModel);
         }
@@ -212,10 +215,9 @@ function deepEqual(a: unknown, b: unknown): boolean {
     const aKeys = Object.keys(a as Record<string, unknown>);
     const bKeys = Object.keys(b as Record<string, unknown>);
     if (aKeys.length !== bKeys.length) return false;
-    return aKeys.every((key) => deepEqual(
-      (a as Record<string, unknown>)[key],
-      (b as Record<string, unknown>)[key],
-    ));
+    return aKeys.every((key) =>
+      deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
+    );
   }
   return false;
 }
@@ -224,7 +226,11 @@ function stringifyJoinEntry(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
-  try { return JSON.stringify(value); } catch { return String(value); }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function applyScope(model: DataModel, name: string, item: unknown): DataModel {

@@ -1,17 +1,16 @@
-import { useEffect } from "react";
 import type { PropsWithChildren } from "react";
+import { useEffect } from "react";
 
 import { CoworkJsonRpcClient } from "../features/cowork/jsonRpcClient";
-import { setActiveCoworkJsonRpcClient } from "../features/cowork/runtimeClient";
 import type { SessionSnapshotLike } from "../features/cowork/protocolTypes";
-import { usePairingStore } from "../features/pairing/pairingStore";
+import { setActiveCoworkJsonRpcClient } from "../features/cowork/runtimeClient";
+import { createSessionBootstrapController } from "../features/cowork/sessionBootstrap";
 import { useThreadStore } from "../features/cowork/threadStore";
-import { useWorkspaceStore } from "../features/cowork/workspaceStore";
 import {
   clearWorkspaceBoundStores,
   hydrateWorkspaceBoundStores,
 } from "../features/cowork/workspaceBootstrap";
-import { createSessionBootstrapController } from "../features/cowork/sessionBootstrap";
+import { usePairingStore } from "../features/pairing/pairingStore";
 import { isWorkspaceConnectionReady } from "../features/relay/connectionState";
 import { defaultSecureTransportClient } from "../features/relay/secureTransportClient";
 
@@ -67,14 +66,26 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
             break;
           case "turn/started":
             for (const item of notification.params.turn.items) {
-              threadStore.appendStarted(notification.params.threadId, item, new Date().toISOString());
+              threadStore.appendStarted(
+                notification.params.threadId,
+                item,
+                new Date().toISOString(),
+              );
             }
             break;
           case "item/started":
-            threadStore.appendStarted(notification.params.threadId, notification.params.item, new Date().toISOString());
+            threadStore.appendStarted(
+              notification.params.threadId,
+              notification.params.item,
+              new Date().toISOString(),
+            );
             break;
           case "item/completed":
-            threadStore.appendCompleted(notification.params.threadId, notification.params.item, new Date().toISOString());
+            threadStore.appendCompleted(
+              notification.params.threadId,
+              notification.params.item,
+              new Date().toISOString(),
+            );
             break;
           case "item/agentMessage/delta":
             threadStore.appendAgentDelta(
@@ -173,7 +184,8 @@ export function MobileAppProvider({ children }: PropsWithChildren) {
       },
     });
 
-    void defaultSecureTransportClient.getSnapshot()
+    void defaultSecureTransportClient
+      .getSnapshot()
       .then((snapshot) => {
         if (isWorkspaceConnectionReady(snapshot)) {
           void sessionBootstrap.ensureConnectedSession();

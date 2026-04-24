@@ -1,15 +1,18 @@
-import { memo, useCallback, useMemo } from "react";
-import type { CSSProperties } from "react";
-
 import { ExpandIcon, SparklesIcon, Trash2Icon } from "lucide-react";
+import type { CSSProperties } from "react";
+import { memo, useCallback, useMemo } from "react";
 
 import { isBasicCatalogId } from "../../../../../../src/shared/a2ui/component";
-import { cn } from "../../../lib/utils";
 import { useAppStore } from "../../../app/store";
 import type { FeedItem } from "../../../app/types";
-import { A2uiRenderer, type A2uiActionDispatcher, type A2uiRenderableComponent } from "./A2uiRenderer";
-import { extractSurfaceTitle } from "./surfaceTitle";
+import { cn } from "../../../lib/utils";
+import {
+  type A2uiActionDispatcher,
+  type A2uiRenderableComponent,
+  A2uiRenderer,
+} from "./A2uiRenderer";
 import { changeKindLabel, changeKindToneClass } from "./changeKind";
+import { extractSurfaceTitle } from "./surfaceTitle";
 
 type UiSurfaceFeedItem = Extract<FeedItem, { kind: "ui_surface" }>;
 
@@ -65,7 +68,14 @@ export const A2uiInlineCard = memo(function A2uiInlineCard({ item }: { item: UiS
     focusA2uiSurface(threadId, item.surfaceId);
     setA2uiActiveRevision(threadId, item.surfaceId, item.revision);
     setA2uiDockExpanded(threadId, true);
-  }, [focusA2uiSurface, item.revision, item.surfaceId, setA2uiActiveRevision, setA2uiDockExpanded, threadId]);
+  }, [
+    focusA2uiSurface,
+    item.revision,
+    item.surfaceId,
+    setA2uiActiveRevision,
+    setA2uiDockExpanded,
+    threadId,
+  ]);
 
   const onAction = useMemo<A2uiActionDispatcher | undefined>(() => {
     if (!threadId || isDeleted) return undefined;
@@ -86,7 +96,8 @@ export const A2uiInlineCard = memo(function A2uiInlineCard({ item }: { item: UiS
         <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
           <Trash2Icon className="size-3.5" />
           <span>
-            Surface <code className="font-mono">{item.surfaceId}</code> was deleted at revision {item.revision}.
+            Surface <code className="font-mono">{item.surfaceId}</code> was deleted at revision{" "}
+            {item.revision}.
           </span>
         </div>
       </div>
@@ -111,7 +122,9 @@ export const A2uiInlineCard = memo(function A2uiInlineCard({ item }: { item: UiS
         <span className="flex size-6 flex-none items-center justify-center rounded-md bg-primary/10 text-primary">
           <SparklesIcon className="size-3.5" />
         </span>
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{title}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+          {title}
+        </span>
         <span
           className={cn(
             "flex-none rounded-full border px-1.5 py-0 text-[10px] font-semibold uppercase tracking-wide leading-[1.2]",
@@ -141,7 +154,8 @@ export const A2uiInlineCard = memo(function A2uiInlineCard({ item }: { item: UiS
       <div className="px-5 py-4 pt-3.5" style={themeStyle}>
         {unsupportedCatalog ? (
           <div className="mb-3 rounded-md border border-warning/35 bg-warning/[0.08] px-3 py-2 text-xs text-warning">
-            This surface uses an unsupported catalog. Rendering with best-effort basic primitives — some components may be skipped.
+            This surface uses an unsupported catalog. Rendering with best-effort basic primitives —
+            some components may be skipped.
             <div className="mt-1 font-mono text-[10px] text-warning/80">{item.catalogId}</div>
           </div>
         ) : null}

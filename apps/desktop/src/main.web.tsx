@@ -19,7 +19,7 @@ function WebEntry() {
 
   const [connected, setConnected] = useState(() => {
     const q = readQueryConnect();
-    if (!q || !q.dir) return false;
+    if (!q?.dir) return false;
     try {
       configureWebAdapter(q.server, q.dir);
       window.cowork = createWebAdapter();

@@ -4,7 +4,9 @@
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
-  "workspaces": ["apps/*"],
+  "workspaces": [
+    "apps/*"
+  ],
   "bin": {
     "cowork": "./src/index.ts"
   },
@@ -57,33 +59,44 @@
     "harness:run": "bun scripts/run_raw_agent_loops.ts --report-only",
     "test": "bun test",
     "test:stable": "bun scripts/run_tests_stable.ts",
-    "clean": "rm -rf dist/ apps/desktop/out/ apps/desktop/release/ apps/desktop/resources/binaries/ .tsbuildinfo .tsbuildinfo-desktop",    "typecheck": "bunx tsc --noEmit && bunx tsc --noEmit -p apps/desktop/tsconfig.json",
-    "typecheck:desktop": "bunx tsc --noEmit -p apps/desktop/tsconfig.json"
+    "clean": "rm -rf dist/ apps/desktop/out/ apps/desktop/release/ apps/desktop/resources/binaries/ .tsbuildinfo .tsbuildinfo-desktop",
+    "typecheck": "bunx tsc --noEmit && bunx tsc --noEmit -p apps/desktop/tsconfig.json",
+    "typecheck:desktop": "bunx tsc --noEmit -p apps/desktop/tsconfig.json",
+    "lint": "bunx biome lint .",
+    "format": "bunx biome format .",
+    "format:write": "bunx biome format --write .",
+    "check": "bunx biome check .",
+    "check:write": "bunx biome check --write ."
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock": "^3.999.0",
-    "@google/genai": "^1.50.0",
+    "@aws-sdk/client-bedrock": "^3.1035.0",
+    "@google/genai": "^1.50.1",
     "@langfuse/otel": "^4.6.1",
-    "@mariozechner/pi-ai": "^0.67.1",
+    "@mariozechner/pi-ai": "^0.67.68",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/sdk-node": "^0.212.0",
+    "@react-pdf/renderer": "^4.5.1",
+    "docx": "^9.6.1",
     "fast-glob": "^3.3.3",
     "jsdom": "^28.1.0",
     "partial-json": "^0.1.7",
     "react": "^19.2.5",
+    "remark-parse": "^11.0.0",
     "turndown": "^7.2.4",
     "tweetnacl": "^1.0.3",
+    "unified": "^11.0.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.13",
     "@types/jsdom": "^27.0.0",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/turndown": "^5.0.6",
-    "bun-types": "^1.3.12",
-    "puppeteer-core": "^24.40.0",
+    "bun-types": "^1.3.13",
+    "puppeteer-core": "^24.42.0",
     "typescript": "^5.9.3"
   }
 }

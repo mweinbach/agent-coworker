@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
@@ -16,7 +15,14 @@ const workspaceId = "ws-1";
 const rootPath = "/workspace";
 
 function makeFileEntry(name: string, modifiedAtMs: number, sizeBytes = 512) {
-  return { name, path: `${rootPath}/${name}`, isDirectory: false, isHidden: false, sizeBytes, modifiedAtMs };
+  return {
+    name,
+    path: `${rootPath}/${name}`,
+    isDirectory: false,
+    isHidden: false,
+    sizeBytes,
+    modifiedAtMs,
+  };
 }
 
 let rootEntries = [makeFileEntry("README.md", 1700000000000)];
@@ -27,9 +33,11 @@ let listDirectoryImpl = async ({ path }: { path: string }) => {
 
 const listDirectoryMock = mock(async (args: { path: string }) => listDirectoryImpl(args));
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  listDirectory: listDirectoryMock,
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    listDirectory: listDirectoryMock,
+  }),
+);
 
 const { useAppStore } = await import("../src/app/store");
 const { WorkspaceFileExplorer } = await import("../src/ui/file-explorer/WorkspaceFileExplorer");
@@ -141,76 +149,79 @@ describe("workspace file explorer UI", () => {
     }
   });
 
-  test.serial("queues another refresh when a workspace invalidation lands during an in-flight sync", async () => {
-    const harness = setupJsdom({
-      includeAnimationFrame: true,
-      extraGlobals: { ResizeObserver: MockResizeObserver },
-    });
-
-    try {
-      const container = harness.dom.window.document.getElementById("root");
-      if (!container) throw new Error("missing root");
-      const root = createRoot(container);
-
-      await act(async () => {
-        root.render(createElement(WorkspaceFileExplorer, { workspaceId }));
-        await flushUi();
+  test.serial(
+    "queues another refresh when a workspace invalidation lands during an in-flight sync",
+    async () => {
+      const harness = setupJsdom({
+        includeAnimationFrame: true,
+        extraGlobals: { ResizeObserver: MockResizeObserver },
       });
 
-      expect(container.textContent).toContain("README.md");
-      expect(container.textContent).not.toContain("preview_latency_review.md");
+      try {
+        const container = harness.dom.window.document.getElementById("root");
+        if (!container) throw new Error("missing root");
+        const root = createRoot(container);
 
-      const staleRootEntries = [...rootEntries];
-      const inFlightRefresh = createDeferred<typeof staleRootEntries>();
-      let refreshCallCount = 0;
-      listDirectoryImpl = async ({ path }: { path: string }) => {
-        if (path !== rootPath) return [];
-        refreshCallCount += 1;
-        if (refreshCallCount === 1) return inFlightRefresh.promise;
-        return rootEntries;
-      };
+        await act(async () => {
+          root.render(createElement(WorkspaceFileExplorer, { workspaceId }));
+          await flushUi();
+        });
 
-      await act(async () => {
-        useAppStore.setState((state) => ({
-          workspaceExplorerRefreshById: {
-            ...state.workspaceExplorerRefreshById,
-            [workspaceId]: 1,
-          },
-        }));
-        await Promise.resolve();
-      });
+        expect(container.textContent).toContain("README.md");
+        expect(container.textContent).not.toContain("preview_latency_review.md");
 
-      rootEntries = [
-        ...staleRootEntries,
-        makeFileEntry("preview_latency_review.md", 1700000001000, 2048),
-      ];
+        const staleRootEntries = [...rootEntries];
+        const inFlightRefresh = createDeferred<typeof staleRootEntries>();
+        let refreshCallCount = 0;
+        listDirectoryImpl = async ({ path }: { path: string }) => {
+          if (path !== rootPath) return [];
+          refreshCallCount += 1;
+          if (refreshCallCount === 1) return inFlightRefresh.promise;
+          return rootEntries;
+        };
 
-      await act(async () => {
-        useAppStore.setState((state) => ({
-          workspaceExplorerRefreshById: {
-            ...state.workspaceExplorerRefreshById,
-            [workspaceId]: 2,
-          },
-        }));
-        await Promise.resolve();
-      });
+        await act(async () => {
+          useAppStore.setState((state) => ({
+            workspaceExplorerRefreshById: {
+              ...state.workspaceExplorerRefreshById,
+              [workspaceId]: 1,
+            },
+          }));
+          await Promise.resolve();
+        });
 
-      await act(async () => {
-        inFlightRefresh.resolve(staleRootEntries);
-        await flushUi();
-      });
-      await act(async () => {
-        await flushUi();
-      });
+        rootEntries = [
+          ...staleRootEntries,
+          makeFileEntry("preview_latency_review.md", 1700000001000, 2048),
+        ];
 
-      expect(container.textContent).toContain("preview_latency_review.md");
-      expect(refreshCallCount).toBeGreaterThanOrEqual(2);
+        await act(async () => {
+          useAppStore.setState((state) => ({
+            workspaceExplorerRefreshById: {
+              ...state.workspaceExplorerRefreshById,
+              [workspaceId]: 2,
+            },
+          }));
+          await Promise.resolve();
+        });
 
-      await act(async () => {
-        root.unmount();
-      });
-    } finally {
-      harness.restore();
-    }
-  });
+        await act(async () => {
+          inFlightRefresh.resolve(staleRootEntries);
+          await flushUi();
+        });
+        await act(async () => {
+          await flushUi();
+        });
+
+        expect(container.textContent).toContain("preview_latency_review.md");
+        expect(refreshCallCount).toBeGreaterThanOrEqual(2);
+
+        await act(async () => {
+          root.unmount();
+        });
+      } finally {
+        harness.restore();
+      }
+    },
+  );
 });

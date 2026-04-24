@@ -21,28 +21,30 @@ function requireAgentControl(ctx: ToolContext) {
 }
 
 export function createSpawnAgentTool(ctx: ToolContext) {
-  const inputSchema = z.object({
-    message: z.string().trim().min(1).max(20_000),
-    role: z.enum(AGENT_ROLE_VALUES).optional().default("default"),
-    model: z.string().trim().min(1).optional(),
-    reasoningEffort: agentReasoningEffortSchema.optional(),
-    nickname: z.string().trim().min(1).optional(),
-    taskType: agentTaskTypeSchema.optional(),
-    targetPaths: agentTargetPathsSchema.optional(),
-    contextMode: agentContextModeSchema.optional(),
-    briefing: z.string().trim().min(1).max(20_000).optional(),
-    includeParentTodos: z.boolean().optional(),
-    includeHarnessContext: z.boolean().optional(),
-  }).superRefine((value, issueContext) => {
-    try {
-      resolveAgentSpawnContextOptions(value);
-    } catch (error) {
-      issueContext.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
-  });
+  const inputSchema = z
+    .object({
+      message: z.string().trim().min(1).max(20_000),
+      role: z.enum(AGENT_ROLE_VALUES).optional().default("default"),
+      model: z.string().trim().min(1).optional(),
+      reasoningEffort: agentReasoningEffortSchema.optional(),
+      nickname: z.string().trim().min(1).optional(),
+      taskType: agentTaskTypeSchema.optional(),
+      targetPaths: agentTargetPathsSchema.optional(),
+      contextMode: agentContextModeSchema.optional(),
+      briefing: z.string().trim().min(1).max(20_000).optional(),
+      includeParentTodos: z.boolean().optional(),
+      includeHarnessContext: z.boolean().optional(),
+    })
+    .superRefine((value, issueContext) => {
+      try {
+        resolveAgentSpawnContextOptions(value);
+      } catch (error) {
+        issueContext.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
   return defineTool({
     description:
       "Spawn a collaborative child agent for a well-scoped task. Use contextMode='brief' with an explicit briefing for a cheap handoff, or contextMode='full' only when the child truly needs the full parent transcript. The optional model override may be a same-provider model id or a provider:modelId child target ref. Returns the child handle to use with sendAgentInput, waitForAgent, inspectAgent, resumeAgent, and closeAgent.",

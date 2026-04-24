@@ -1,8 +1,8 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 
 import { resolvePluginCatalogWorkspaceSelection } from "./app/pluginManagement";
-import { disposeAllJsonRpcState } from "./app/store.helpers";
 import { useAppStore } from "./app/store";
+import { disposeAllJsonRpcState } from "./app/store.helpers";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 import {
   getSystemAppearance,
@@ -16,14 +16,14 @@ import {
 import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { ContextSidebar } from "./ui/ContextSidebar";
 import { FilePreviewModal } from "./ui/FilePreviewModal";
-import { PromptModal } from "./ui/PromptModal";
-import { Sidebar } from "./ui/Sidebar";
 import { AppTopBar } from "./ui/layout/AppTopBar";
 import { ContextSidebarResizer } from "./ui/layout/ContextSidebarResizer";
 import { PrimaryContent } from "./ui/layout/PrimaryContent";
 import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
 import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
+import { PromptModal } from "./ui/PromptModal";
+import { Sidebar } from "./ui/Sidebar";
 
 const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed: boolean }) {
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
@@ -107,6 +107,10 @@ const ChatShell = memo(function ChatShell({
   const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
   const toggleContextSidebar = useAppStore((s) => s.toggleContextSidebar);
   const hasAnimatedSidebarsRef = useRef(false);
+  const previousSidebarStateRef = useRef({
+    sidebarCollapsed,
+    contextSidebarCollapsed,
+  });
 
   const activeThread = useMemo(
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
@@ -118,18 +122,19 @@ const ChatShell = memo(function ChatShell({
     }
     return workspaces.find((workspace) => workspace.id === activeThread.workspaceId) ?? null;
   }, [activeThread, workspaces]);
-  const selectedWorkspace = useMemo(
-    () => workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null,
-    [selectedWorkspaceId, workspaces],
+  const pluginSelection = useMemo(
+    () =>
+      resolvePluginCatalogWorkspaceSelection({
+        workspaces,
+        selectedWorkspaceId,
+        pluginManagementWorkspaceId,
+        pluginManagementMode,
+      }),
+    [pluginManagementMode, pluginManagementWorkspaceId, selectedWorkspaceId, workspaces],
   );
-  const pluginSelection = useMemo(() => resolvePluginCatalogWorkspaceSelection({
-    workspaces,
-    selectedWorkspaceId,
-    pluginManagementWorkspaceId,
-    pluginManagementMode,
-  }), [pluginManagementMode, pluginManagementWorkspaceId, selectedWorkspaceId, workspaces]);
   const pluginManagementWorkspace = useMemo(
-    () => workspaces.find((workspace) => workspace.id === pluginSelection.displayWorkspaceId) ?? null,
+    () =>
+      workspaces.find((workspace) => workspace.id === pluginSelection.displayWorkspaceId) ?? null,
     [pluginSelection.displayWorkspaceId, workspaces],
   );
   const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
@@ -137,23 +142,42 @@ const ChatShell = memo(function ChatShell({
   const showContextSidebar = view === "chat" && activeThread !== null;
   const catalogWorkspaceId = pluginSelection.catalogWorkspaceId;
   const pluginViewMode = catalogWorkspaceId
-    ? workspaceRuntimeById[catalogWorkspaceId]?.pluginViewMode ?? "plugins"
+    ? (workspaceRuntimeById[catalogWorkspaceId]?.pluginViewMode ?? "plugins")
     : "plugins";
-  const topBarTitle = view === "skills"
-    ? (pluginViewMode === "skills" ? "Skills" : "Plugins")
-    : activeThread?.title?.trim() || "New thread";
-  const topBarSubtitle = view === "skills"
-    ? pluginManagementWorkspace?.name ?? "Global"
-    : activeWorkspace?.name ?? "Cowork";
-  const canClearHardCap = runtime?.sessionUsage?.budgetStatus.stopTriggered === true
-    && runtime?.transcriptOnly !== true
-    && runtime?.connected === true
-    && Boolean(runtime?.sessionId)
-    && activeThread?.status === "active";
-
+  const topBarTitle =
+    view === "skills"
+      ? pluginViewMode === "skills"
+        ? "Skills"
+        : "Plugins"
+      : view === "research"
+        ? "Research"
+        : activeThread?.title?.trim() || "New thread";
+  const topBarSubtitle: string | null =
+    view === "skills"
+      ? (pluginManagementWorkspace?.name ?? "Global")
+      : view === "research"
+        ? null
+        : (activeWorkspace?.name ?? "Cowork");
+  const canClearHardCap =
+    runtime?.sessionUsage?.budgetStatus.stopTriggered === true &&
+    runtime?.transcriptOnly !== true &&
+    runtime?.connected === true &&
+    Boolean(runtime?.sessionId) &&
+    activeThread?.status === "active";
   useEffect(() => {
+    const sidebarStateChanged =
+      previousSidebarStateRef.current.sidebarCollapsed !== sidebarCollapsed ||
+      previousSidebarStateRef.current.contextSidebarCollapsed !== contextSidebarCollapsed;
+    previousSidebarStateRef.current = {
+      sidebarCollapsed,
+      contextSidebarCollapsed,
+    };
+
     if (!hasAnimatedSidebarsRef.current) {
       hasAnimatedSidebarsRef.current = true;
+      return;
+    }
+    if (!sidebarStateChanged) {
       return;
     }
     document.body.classList.add("app-animating-sidebars");
@@ -164,7 +188,7 @@ const ChatShell = memo(function ChatShell({
       window.clearTimeout(timer);
       document.body.classList.remove("app-animating-sidebars");
     };
-  }, [sidebarCollapsed, contextSidebarCollapsed]);
+  }, [contextSidebarCollapsed, sidebarCollapsed]);
 
   return (
     <div className="app-shell app-shell--chat flex h-full min-h-0 flex-col text-foreground">
@@ -172,7 +196,7 @@ const ChatShell = memo(function ChatShell({
       <AppTopBar
         busy={view === "chat" ? busy : false}
         onToggleSidebar={toggleSidebar}
-        onNewChat={() => void newThread()}
+        onNewChat={() => void newThread({ workspaceId: selectedWorkspaceId ?? undefined })}
         sidebarCollapsed={sidebarCollapsed}
         sidebarWidth={sidebarWidth}
         contextSidebarCollapsed={contextSidebarCollapsed}
@@ -180,6 +204,7 @@ const ChatShell = memo(function ChatShell({
         title={topBarTitle}
         subtitle={topBarSubtitle}
         managementMode={view === "skills" ? "plugins" : "thread"}
+        suppressThreadDetails={view === "research"}
         managementWorkspaceId={pluginSelection.displayWorkspaceId}
         managementWorkspaces={workspaces.map((workspace) => ({
           id: workspace.id,
@@ -193,7 +218,9 @@ const ChatShell = memo(function ChatShell({
         sessionUsage={view === "chat" ? (runtime?.sessionUsage ?? null) : null}
         lastTurnUsage={view === "chat" ? (runtime?.lastTurnUsage ?? null) : null}
         canClearHardCap={canClearHardCap}
-        onClearHardCap={selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined}
+        onClearHardCap={
+          selectedThreadId ? () => clearThreadUsageHardCap(selectedThreadId) : undefined
+        }
         showContextToggle={showContextSidebar}
       />
       <div className="app-chat-body flex min-h-0 min-w-0 flex-1 flex-row">
@@ -205,7 +232,7 @@ const ChatShell = memo(function ChatShell({
                 init={init}
                 ready={ready}
                 startupError={startupError}
-                view={view === "skills" ? "skills" : "chat"}
+                view={view === "skills" ? "skills" : view === "research" ? "research" : "chat"}
               />
             </div>
             {showContextSidebar ? <RightSidebarPane collapsed={contextSidebarCollapsed} /> : null}
@@ -315,6 +342,10 @@ export default function App() {
         void state.checkForUpdates();
         return;
       }
+      if (command === "openResearch") {
+        void state.openResearch();
+        return;
+      }
       if (command === "openSkills") {
         void state.openSkills();
       }
@@ -326,9 +357,11 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribe = onUpdateStateChanged(setUpdateState);
-    void getUpdateState().then(setUpdateState).catch(() => {
-      // Keep the default disabled/idle state if the updater bridge is unavailable.
-    });
+    void getUpdateState()
+      .then(setUpdateState)
+      .catch(() => {
+        // Keep the default disabled/idle state if the updater bridge is unavailable.
+      });
     return unsubscribe;
   }, [setUpdateState]);
 
@@ -337,10 +370,13 @@ export default function App() {
       const root = document.documentElement;
       const theme = appearance.shouldUseDarkColors ? "dark" : "light";
       root.dataset.systemTheme = theme;
-      root.dataset.systemUiTheme = appearance.shouldUseDarkColorsForSystemIntegratedUI ? "dark" : "light";
+      root.dataset.systemUiTheme = appearance.shouldUseDarkColorsForSystemIntegratedUI
+        ? "dark"
+        : "light";
       root.dataset.theme = theme;
       root.dataset.platform = appearance.platform;
-      root.dataset.highContrast = appearance.shouldUseHighContrastColors || appearance.inForcedColorsMode ? "true" : "false";
+      root.dataset.highContrast =
+        appearance.shouldUseHighContrastColors || appearance.inForcedColorsMode ? "true" : "false";
       root.dataset.reducedTransparency = appearance.prefersReducedTransparency ? "true" : "false";
       root.style.colorScheme = theme;
       root.classList.toggle("dark", theme === "dark");
@@ -348,9 +384,11 @@ export default function App() {
     }
 
     const unsubscribe = onSystemAppearanceChanged(applySystemAppearance);
-    void getSystemAppearance().then(applySystemAppearance).catch(() => {
-      // Keep CSS media-query fallback when system appearance cannot be loaded.
-    });
+    void getSystemAppearance()
+      .then(applySystemAppearance)
+      .catch(() => {
+        // Keep CSS media-query fallback when system appearance cannot be loaded.
+      });
     void setWindowAppearance({ themeSource: "system" }).catch(() => {
       // Ignore and continue with default system theme behavior.
     });

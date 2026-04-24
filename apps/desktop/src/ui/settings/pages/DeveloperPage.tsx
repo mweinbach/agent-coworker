@@ -2,10 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { Button } from "../../../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
-import { Switch } from "../../../components/ui/switch";
-import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "../../../lib/wsProtocol";
 import {
   Select,
   SelectContent,
@@ -13,6 +17,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../../components/ui/select";
+import { Switch } from "../../../components/ui/switch";
+import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "../../../lib/wsProtocol";
 
 function parseOverflowThresholdDraft(value: string): number | null {
   const trimmed = value.trim();
@@ -42,10 +48,11 @@ export function DeveloperPage() {
     [selectedWorkspaceId, workspaces],
   );
   const workspaceRuntime = useMemo(
-    () => (workspace ? workspaceRuntimeById[workspace.id] ?? null : null),
-    [workspace?.id, workspaceRuntimeById],
+    () => (workspace ? (workspaceRuntimeById[workspace.id] ?? null) : null),
+    [workspace, workspaceRuntimeById],
   );
-  const inheritedOverflowThreshold = workspaceRuntime?.controlSessionConfig?.toolOutputOverflowChars;
+  const inheritedOverflowThreshold =
+    workspaceRuntime?.controlSessionConfig?.toolOutputOverflowChars;
   const overflowUsesInheritedDefault = workspace?.defaultToolOutputOverflowChars === undefined;
   const effectiveOverflowThreshold =
     workspace?.defaultToolOutputOverflowChars !== undefined
@@ -60,11 +67,13 @@ export function DeveloperPage() {
       ? effectiveOverflowThreshold
       : nextEnabledOverflowThreshold;
   const overflowEnabled = workspace ? effectiveOverflowThreshold !== null : false;
-  const [overflowThresholdDraft, setOverflowThresholdDraft] = useState(String(persistedOverflowThreshold));
+  const [overflowThresholdDraft, setOverflowThresholdDraft] = useState(
+    String(persistedOverflowThreshold),
+  );
 
   useEffect(() => {
     setOverflowThresholdDraft(String(persistedOverflowThreshold));
-  }, [persistedOverflowThreshold, workspace?.id]);
+  }, [persistedOverflowThreshold]);
 
   const enableOverflowWithDefault = () => {
     if (!workspace) return;
@@ -96,7 +105,9 @@ export function DeveloperPage() {
           <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
             <div>
               <div className="text-sm font-medium">Show hidden files</div>
-              <div className="text-xs text-muted-foreground">Display dotfiles and other hidden system files.</div>
+              <div className="text-xs text-muted-foreground">
+                Display dotfiles and other hidden system files.
+              </div>
             </div>
             <Switch
               checked={showHiddenFiles}
@@ -116,7 +127,9 @@ export function DeveloperPage() {
           <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
             <div>
               <div className="text-sm font-medium">Developer mode</div>
-              <div className="text-xs text-muted-foreground">Show internal system notices in the chat feed.</div>
+              <div className="text-xs text-muted-foreground">
+                Show internal system notices in the chat feed.
+              </div>
             </div>
             <Switch
               checked={developerMode}
@@ -161,7 +174,10 @@ export function DeveloperPage() {
               {workspacePickerEnabled && workspaces.length > 1 ? (
                 <div className="space-y-2">
                   <div className="text-sm font-medium">Workspace</div>
-                  <Select value={workspace.id} onValueChange={(value) => void selectWorkspace(value)}>
+                  <Select
+                    value={workspace.id}
+                    onValueChange={(value) => void selectWorkspace(value)}
+                  >
                     <SelectTrigger aria-label="Developer workspace">
                       <SelectValue />
                     </SelectTrigger>
@@ -183,9 +199,12 @@ export function DeveloperPage() {
 
               <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                 <div>
-                  <div className="text-sm font-medium">Save oversized tool output to scratch files</div>
+                  <div className="text-sm font-medium">
+                    Save oversized tool output to scratch files
+                  </div>
                   <div className="text-xs text-muted-foreground">
-                    When enabled, oversized text or JSON-like tool results are saved to disk instead of filling up the chat history. Cowork keeps a fixed inline preview.
+                    When enabled, oversized text or JSON-like tool results are saved to disk instead
+                    of filling up the chat history. Cowork keeps a fixed inline preview.
                   </div>
                 </div>
                 <Switch
@@ -205,7 +224,9 @@ export function DeveloperPage() {
               </div>
 
               <div className="space-y-2">
-                <div className="text-sm font-medium text-foreground">Spill after this many characters</div>
+                <div className="text-sm font-medium text-foreground">
+                  Spill after this many characters
+                </div>
                 <Input
                   type="text"
                   inputMode="numeric"
@@ -216,13 +237,16 @@ export function DeveloperPage() {
                   onChange={(event) => setOverflowThresholdDraft(event.target.value)}
                 />
                 <div className="text-xs text-muted-foreground">
-                  Once a result spills, Cowork keeps the first 5,000 characters inline and saves the rest to <code>{workspace.path}/.ModelScratchpad</code>. Default: {DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS.toLocaleString()} characters.
+                  Once a result spills, Cowork keeps the first 5,000 characters inline and saves the
+                  rest to <code>{workspace.path}/.ModelScratchpad</code>. Default:{" "}
+                  {DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS.toLocaleString()} characters.
                 </div>
                 {overflowThresholdError ? (
                   <div className="text-xs text-destructive">{overflowThresholdError}</div>
                 ) : (
                   <div className="text-xs text-muted-foreground">
-                    Set the threshold to <code>0</code> to spill immediately while still keeping the preview.
+                    Set the threshold to <code>0</code> to spill immediately while still keeping the
+                    preview.
                   </div>
                 )}
               </div>

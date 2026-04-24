@@ -91,7 +91,7 @@ function resolveRuntime(config: AgentConfig): ResolvedRuntime {
   }
 
   const baseUrl = normalizeBaseUrl(
-    asNonEmptyString(observability.baseUrl) || normalizeBaseUrl(DEFAULT_LANGFUSE_BASE_URL)
+    asNonEmptyString(observability.baseUrl) || normalizeBaseUrl(DEFAULT_LANGFUSE_BASE_URL),
   );
   const publicKey = asNonEmptyString(observability.publicKey);
   const secretKey = asNonEmptyString(observability.secretKey);
@@ -118,7 +118,10 @@ function resolveRuntime(config: AgentConfig): ResolvedRuntime {
   };
 }
 
-function setHealth(next: Omit<ObservabilityHealth, "updatedAt">): { changed: boolean; health: ObservabilityHealth } {
+function setHealth(next: Omit<ObservabilityHealth, "updatedAt">): {
+  changed: boolean;
+  health: ObservabilityHealth;
+} {
   const prev = state.health;
   const changed =
     prev.status !== next.status ||
@@ -137,7 +140,7 @@ function setHealth(next: Omit<ObservabilityHealth, "updatedAt">): { changed: boo
   if (state.health.status === "degraded") {
     warnOnce(
       `observability-degraded:${state.health.reason}:${state.health.message ?? ""}`,
-      `[observability] ${state.health.message ?? state.health.reason}`
+      `[observability] ${state.health.message ?? state.health.reason}`,
     );
   }
 
@@ -161,7 +164,7 @@ async function shutdownRuntime(): Promise<void> {
 
 function applyResolutionHealth(
   resolved: ResolvedRuntime,
-  fallbackReadyReason = "configured"
+  fallbackReadyReason = "configured",
 ): { changed: boolean; health: ObservabilityHealth } {
   if (resolved.kind === "disabled") {
     return setHealth({
@@ -195,7 +198,7 @@ export function getObservabilityHealth(config: AgentConfig): ObservabilityHealth
 }
 
 export async function ensureObservabilityRuntime(
-  config: AgentConfig
+  config: AgentConfig,
 ): Promise<{ ready: boolean; health: ObservabilityHealth; healthChanged: boolean }> {
   const resolved = resolveRuntime(config);
 
@@ -272,7 +275,7 @@ export async function ensureObservabilityRuntime(
 
 export function noteObservabilityFailure(
   reason: string,
-  message: string
+  message: string,
 ): { changed: boolean; health: ObservabilityHealth } {
   return setHealth({
     status: "degraded",
@@ -283,7 +286,7 @@ export function noteObservabilityFailure(
 
 export function noteObservabilitySuccess(
   config: AgentConfig,
-  reason = "runtime_ready"
+  reason = "runtime_ready",
 ): { changed: boolean; health: ObservabilityHealth } {
   const resolved = resolveRuntime(config);
   if (resolved.kind !== "ready") {
@@ -296,7 +299,9 @@ export function noteObservabilitySuccess(
 }
 
 export async function forceFlushObservabilityRuntime(): Promise<void> {
-  const sdkWithFlush = state.sdk as (typeof state.sdk & { forceFlush?: () => Promise<void> }) | null;
+  const sdkWithFlush = state.sdk as
+    | (typeof state.sdk & { forceFlush?: () => Promise<void> })
+    | null;
   if (sdkWithFlush && typeof sdkWithFlush.forceFlush === "function") {
     await sdkWithFlush.forceFlush();
     return;
@@ -317,7 +322,7 @@ function truncateString(value: string): string {
 }
 
 function sanitizeTelemetryMetadata(
-  metadata: Record<string, string | number | boolean | null | undefined>
+  metadata: Record<string, string | number | boolean | null | undefined>,
 ): Record<string, AttributeValue> {
   const out: Record<string, AttributeValue> = {};
   for (const [key, value] of Object.entries(metadata)) {
@@ -338,7 +343,7 @@ function sanitizeTelemetryMetadata(
 
 export async function buildRuntimeTelemetrySettings(
   config: AgentConfig,
-  context: TelemetryContext
+  context: TelemetryContext,
 ): Promise<TelemetrySettings | undefined> {
   const runtime = await ensureObservabilityRuntime(config);
   if (!runtime.ready) return undefined;

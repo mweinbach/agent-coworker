@@ -5,19 +5,24 @@ import { app } from "electron";
 import { WebSocket } from "ws";
 
 import {
-  buildRelayKeyFingerprint,
   buildRelayHandshakeProofPayload,
   computeRelayReconnectDelayMs,
   createRelaySharedKey,
   decodeRelaySecureEnvelope,
   encodeRelaySecureEnvelope,
-  isRelayHandshakeProofPayload,
   isCoworkJsonRpcPayload,
+  isRelayHandshakeProofPayload,
   parseRelayControlMessage,
   RELAY_PAIRING_QR_VERSION,
   verifyRelayPairingProof,
 } from "../../../../src/shared/mobileRelaySecurity";
-import type { ServerManager } from "./serverManager";
+import {
+  forgetTrustedPhoneRecord,
+  loadOrCreateMobileRelayStoreState,
+  persistMobileRelayStoreState,
+  rememberTrustedPhoneRecord,
+  resolveMobileRelayStoreDir,
+} from "./mobileRelayStore";
 import type {
   MobileRelayBridgeState,
   MobileRelayIdentityState,
@@ -27,13 +32,7 @@ import type {
   MobileRelayTrustedPhoneRecord,
   MobileRelayWorkspaceRecord,
 } from "./mobileRelayTypes";
-import {
-  forgetTrustedPhoneRecord,
-  loadOrCreateMobileRelayStoreState,
-  persistMobileRelayStoreState,
-  rememberTrustedPhoneRecord,
-  resolveMobileRelayStoreDir,
-} from "./mobileRelayStore";
+import type { ServerManager } from "./serverManager";
 
 const MANAGED_RELAY_URL = "wss://api.phodex.app/relay";
 const MAX_LEGACY_RELAY_SESSION_COUNT = 4;
@@ -66,8 +65,10 @@ function normalizeRelayUrl(value: string | undefined): string {
 function decodeSocketMessage(raw: unknown): string {
   if (typeof raw === "string") return raw;
   if (raw instanceof ArrayBuffer) return Buffer.from(raw).toString("utf8");
-  if (Array.isArray(raw)) return Buffer.concat(raw.map((entry) => Buffer.from(entry))).toString("utf8");
-  if (ArrayBuffer.isView(raw)) return Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength).toString("utf8");
+  if (Array.isArray(raw))
+    return Buffer.concat(raw.map((entry) => Buffer.from(entry))).toString("utf8");
+  if (ArrayBuffer.isView(raw))
+    return Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength).toString("utf8");
   if (raw == null) return "";
   return String(raw);
 }
@@ -78,12 +79,6 @@ function closeSocket(socket: BridgeSocket | null): void {
     return;
   }
   socket.close();
-}
-
-function buildFingerprint(publicKeyBase64: string | null | undefined): string | null {
-  const normalized = typeof publicKeyBase64 === "string" ? publicKeyBase64.trim() : "";
-  if (!normalized) return null;
-  return buildRelayKeyFingerprint(normalized);
 }
 
 function buildInitialState(): MobileRelayBridgeState {
@@ -111,9 +106,14 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private readonly remodexStateDir?: string;
   private readonly relayUrlOverride: string;
   private readonly getAppName: () => string;
-  private getWorkspaceList: () => Promise<MobileRelayWorkspaceRecord[]> | MobileRelayWorkspaceRecord[];
+  private getWorkspaceList: () =>
+    | Promise<MobileRelayWorkspaceRecord[]>
+    | MobileRelayWorkspaceRecord[];
   private readonly createSidecarSocket: (url: string) => BridgeSocket;
-  private readonly createRelaySocket: (url: string, headers: Record<string, string>) => BridgeSocket;
+  private readonly createRelaySocket: (
+    url: string,
+    headers: Record<string, string>,
+  ) => BridgeSocket;
   private readonly getReconnectDelayMs: (attempt: number) => number;
 
   private state: MobileRelayBridgeState = buildInitialState();
@@ -143,12 +143,17 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.serverManager = options.serverManager;
     this.userDataPath = options.userDataPath;
     this.remodexStateDir = options.remodexStateDir;
-    this.relayUrlOverride = normalizeRelayUrl(options.relayUrl ?? process.env.COWORK_MOBILE_RELAY_URL);
+    this.relayUrlOverride = normalizeRelayUrl(
+      options.relayUrl ?? process.env.COWORK_MOBILE_RELAY_URL,
+    );
     this.getAppName = options.getAppName ?? (() => app.getName());
     this.getWorkspaceList = options.getWorkspaceList ?? (() => []);
-    this.createSidecarSocket = options.createSidecarSocket ?? ((url: string) => new WebSocket(url, "cowork.jsonrpc.v1"));
-    this.createRelaySocket = options.createRelaySocket ?? ((url, headers) => new WebSocket(url, { headers }));
-    this.getReconnectDelayMs = options.getReconnectDelayMs ?? ((attempt) => computeRelayReconnectDelayMs(attempt));
+    this.createSidecarSocket =
+      options.createSidecarSocket ?? ((url: string) => new WebSocket(url, "cowork.jsonrpc.v1"));
+    this.createRelaySocket =
+      options.createRelaySocket ?? ((url, headers) => new WebSocket(url, { headers }));
+    this.getReconnectDelayMs =
+      options.getReconnectDelayMs ?? ((attempt) => computeRelayReconnectDelayMs(attempt));
   }
 
   initialize(): void {
@@ -229,7 +234,7 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
 
   setWorkspaceListProvider(
     provider: () => Promise<MobileRelayWorkspaceRecord[]> | MobileRelayWorkspaceRecord[],
-    invalidator?: () => void
+    invalidator?: () => void,
   ): void {
     this.getWorkspaceList = provider;
     this.workspaceListCacheInvalidator = invalidator ?? null;
@@ -256,7 +261,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       const relayUrl = this.state.relayUrl;
       const identityState = this.identityState;
       if (!relayUrl || !identityState) {
-        throw new Error(this.state.relaySourceMessage ?? "Remote access relay configuration is unavailable.");
+        throw new Error(
+          this.state.relaySourceMessage ?? "Remote access relay configuration is unavailable.",
+        );
       }
       this.state = {
         ...this.state,
@@ -380,14 +387,13 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     this.syncTrustedPhoneSummary();
     this.pendingRelayRestartAfterSidecarReconnect = false;
     const canRestartRelaySession = Boolean(
-      this.state.workspaceId
-      && this.state.workspacePath
-      && this.state.relayUrl
-      && this.identityState,
+      this.state.workspaceId &&
+        this.state.workspacePath &&
+        this.state.relayUrl &&
+        this.identityState,
     );
     const shouldRestartRelaySession = Boolean(
-      canRestartRelaySession
-      && this.sidecarSocket?.readyState === WebSocket.OPEN
+      canRestartRelaySession && this.sidecarSocket?.readyState === WebSocket.OPEN,
     );
     if (shouldRestartRelaySession) {
       try {
@@ -449,7 +455,10 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     }
   }
 
-  private sendRelayControlMessage(message: Record<string, unknown>, socket: BridgeSocket | null = this.relaySocket): boolean {
+  private sendRelayControlMessage(
+    message: Record<string, unknown>,
+    socket: BridgeSocket | null = this.relaySocket,
+  ): boolean {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return false;
     }
@@ -457,11 +466,17 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     return true;
   }
 
-  private sendSecureRelayError(message: string, socket: BridgeSocket | null = this.relaySocket): void {
-    this.sendRelayControlMessage({
-      kind: "secureError",
-      message,
-    }, socket);
+  private sendSecureRelayError(
+    message: string,
+    socket: BridgeSocket | null = this.relaySocket,
+  ): void {
+    this.sendRelayControlMessage(
+      {
+        kind: "secureError",
+        message,
+      },
+      socket,
+    );
   }
 
   private queueOutboundApplicationMessage(text: string): void {
@@ -477,10 +492,10 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       return;
     }
     if (
-      !this.relaySocket
-      || this.relaySocket.readyState !== WebSocket.OPEN
-      || !this.secureSharedKey
-      || !this.secureChannelReady
+      !this.relaySocket ||
+      this.relaySocket.readyState !== WebSocket.OPEN ||
+      !this.secureSharedKey ||
+      !this.secureChannelReady
     ) {
       this.queueOutboundApplicationMessage(text);
       return;
@@ -490,9 +505,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
 
   private sendSecureRelayEnvelope(text: string): boolean {
     if (
-      !this.relaySocket
-      || this.relaySocket.readyState !== WebSocket.OPEN
-      || !this.secureSharedKey
+      !this.relaySocket ||
+      this.relaySocket.readyState !== WebSocket.OPEN ||
+      !this.secureSharedKey
     ) {
       return false;
     }
@@ -512,11 +527,11 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
 
   private flushQueuedApplicationMessages(): void {
     if (
-      !this.relaySocket
-      || this.relaySocket.readyState !== WebSocket.OPEN
-      || !this.secureSharedKey
-      || !this.secureChannelReady
-      || this.queuedOutboundApplicationMessages.length === 0
+      !this.relaySocket ||
+      this.relaySocket.readyState !== WebSocket.OPEN ||
+      !this.secureSharedKey ||
+      !this.secureChannelReady ||
+      this.queuedOutboundApplicationMessages.length === 0
     ) {
       return;
     }
@@ -529,12 +544,12 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
 
   private restoreConnectedStatusIfReady(): void {
     if (
-      this.state.status === "connected"
-      || !this.sidecarSocket
-      || this.sidecarSocket.readyState !== WebSocket.OPEN
-      || !this.relaySocket
-      || this.relaySocket.readyState !== WebSocket.OPEN
-      || !this.secureChannelReady
+      this.state.status === "connected" ||
+      !this.sidecarSocket ||
+      this.sidecarSocket.readyState !== WebSocket.OPEN ||
+      !this.relaySocket ||
+      this.relaySocket.readyState !== WebSocket.OPEN ||
+      !this.secureChannelReady
     ) {
       return;
     }
@@ -543,16 +558,16 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
 
   private restorePairingStatusIfReady(): void {
     if (
-      this.state.status === "pairing"
-      || !this.sidecarSocket
-      || this.sidecarSocket.readyState !== WebSocket.OPEN
-      || !this.relaySocket
-      || this.relaySocket.readyState !== WebSocket.OPEN
-      || this.secureChannelReady
-      || Boolean(this.getTrustedPhone())
-      || !this.state.sessionId
-      || !this.state.pairingPayload
-      || this.state.pairingPayload.sessionId !== this.state.sessionId
+      this.state.status === "pairing" ||
+      !this.sidecarSocket ||
+      this.sidecarSocket.readyState !== WebSocket.OPEN ||
+      !this.relaySocket ||
+      this.relaySocket.readyState !== WebSocket.OPEN ||
+      this.secureChannelReady ||
+      this.getTrustedPhone() ||
+      !this.state.sessionId ||
+      !this.state.pairingPayload ||
+      this.state.pairingPayload.sessionId !== this.state.sessionId
     ) {
       return;
     }
@@ -603,15 +618,15 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
 
   private maybeRestartRelayAfterSidecarReconnect(): void {
     if (
-      !this.pendingRelayRestartAfterSidecarReconnect
-      || this.stopping
-      || !this.sidecarSocket
-      || this.sidecarSocket.readyState !== WebSocket.OPEN
-      || this.relaySocket
-      || !this.state.workspaceId
-      || !this.state.workspacePath
-      || !this.state.relayUrl
-      || !this.identityState
+      !this.pendingRelayRestartAfterSidecarReconnect ||
+      this.stopping ||
+      !this.sidecarSocket ||
+      this.sidecarSocket.readyState !== WebSocket.OPEN ||
+      this.relaySocket ||
+      !this.state.workspaceId ||
+      !this.state.workspacePath ||
+      !this.state.relayUrl ||
+      !this.identityState
     ) {
       return;
     }
@@ -631,14 +646,17 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     const relayUrl = this.state.relayUrl;
     const identityState = this.identityState;
     if (!relayUrl || !identityState) {
-      throw new Error(this.state.relaySourceMessage ?? "Remote access relay configuration is unavailable.");
+      throw new Error(
+        this.state.relaySourceMessage ?? "Remote access relay configuration is unavailable.",
+      );
     }
     this.resetSecureRelayState({ clearQueue: true });
     this.relayReconnectAttempts = 0;
     this.notificationSecret = randomUUID();
-    const sessionId = !opts.forceNewSession && this.getTrustedPhone() && this.reusableSessionId
-      ? this.reusableSessionId
-      : randomUUID();
+    const sessionId =
+      !opts.forceNewSession && this.getTrustedPhone() && this.reusableSessionId
+        ? this.reusableSessionId
+        : randomUUID();
     this.reusableSessionId = sessionId;
     const pairingPayload: MobileRelayPairingPayload = {
       v: RELAY_PAIRING_QR_VERSION,
@@ -666,7 +684,8 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       throw new Error("Remote access relay URL is unavailable.");
     }
     const relaySessionUrl = `${this.state.relayUrl}/${sessionId}`;
-    const preserveReplayCounters = this.state.status === "reconnecting" && this.state.sessionId === sessionId;
+    const preserveReplayCounters =
+      this.state.status === "reconnecting" && this.state.sessionId === sessionId;
     await new Promise<void>((resolve, reject) => {
       const socket = this.createRelaySocket(relaySessionUrl, {
         "x-role": "mac",
@@ -696,7 +715,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         if (this.handleSecureRelayApplicationMessage(text)) {
           return;
         }
-        this.rejectRelayApplicationMessage("Rejected unexpected relay payload outside the secure channel.");
+        this.rejectRelayApplicationMessage(
+          "Rejected unexpected relay payload outside the secure channel.",
+        );
       });
 
       socket.on("close", () => {
@@ -832,17 +853,20 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
       return;
     }
     const trustedPhone = this.getTrustedPhone();
-    this.sendRelayControlMessage({
-      kind: "relayMacRegistration",
-      registration: {
-        sessionId,
-        macDeviceId: this.identityState.macDeviceId,
-        macIdentityPublicKey: this.identityState.macIdentityPublicKey,
-        displayName: this.getAppName(),
-        trustedPhoneDeviceId: trustedPhone?.phoneDeviceId ?? null,
-        trustedPhonePublicKey: trustedPhone?.phoneIdentityPublicKey ?? null,
+    this.sendRelayControlMessage(
+      {
+        kind: "relayMacRegistration",
+        registration: {
+          sessionId,
+          macDeviceId: this.identityState.macDeviceId,
+          macIdentityPublicKey: this.identityState.macIdentityPublicKey,
+          displayName: this.getAppName(),
+          trustedPhoneDeviceId: trustedPhone?.phoneDeviceId ?? null,
+          trustedPhonePublicKey: trustedPhone?.phoneIdentityPublicKey ?? null,
+        },
       },
-    }, socket);
+      socket,
+    );
   }
 
   /**
@@ -1013,16 +1037,19 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private handleLegacyRelayMessage(sessionId: string, socket: BridgeSocket, rawText: string): void {
     const message = parseRelayControlMessage(rawText);
     if (!message || message.kind !== "clientHello") {
-      this.sendSecureRelayError("This relay session is no longer active. Reconnect from the latest desktop session.", socket);
+      this.sendSecureRelayError(
+        "This relay session is no longer active. Reconnect from the latest desktop session.",
+        socket,
+      );
       closeSocket(socket);
       return;
     }
 
     const trustedPhone = this.getTrustedPhone();
     if (
-      !trustedPhone
-      || trustedPhone.phoneDeviceId !== message.phoneDeviceId
-      || trustedPhone.phoneIdentityPublicKey !== message.phoneIdentityPublicKey
+      !trustedPhone ||
+      trustedPhone.phoneDeviceId !== message.phoneDeviceId ||
+      trustedPhone.phoneIdentityPublicKey !== message.phoneIdentityPublicKey
     ) {
       this.sendSecureRelayError(
         "This desktop is already paired with a different phone. Scan the latest QR or forget the trusted phone first.",
@@ -1033,13 +1060,19 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
     }
 
     if (!this.state.sessionId || this.state.sessionId === sessionId) {
-      this.sendSecureRelayError("This relay session is no longer active. Reconnect from the latest desktop session.", socket);
+      this.sendSecureRelayError(
+        "This relay session is no longer active. Reconnect from the latest desktop session.",
+        socket,
+      );
       closeSocket(socket);
       return;
     }
 
     this.sendRelayRegistrationUpdate(socket, this.state.sessionId);
-    this.sendSecureRelayError("Relay session rotated. Reconnecting to the latest desktop session.", socket);
+    this.sendSecureRelayError(
+      "Relay session rotated. Reconnecting to the latest desktop session.",
+      socket,
+    );
     closeSocket(socket);
   }
 
@@ -1061,9 +1094,10 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         }
         const trustedPhone = this.getTrustedPhone();
         // Check if connecting from already-trusted phone (allow reconnects regardless of expiry)
-        const isTrustedReconnect = trustedPhone
-          && trustedPhone.phoneDeviceId === message.phoneDeviceId
-          && trustedPhone.phoneIdentityPublicKey === message.phoneIdentityPublicKey;
+        const isTrustedReconnect =
+          trustedPhone &&
+          trustedPhone.phoneDeviceId === message.phoneDeviceId &&
+          trustedPhone.phoneIdentityPublicKey === message.phoneIdentityPublicKey;
         if (!isTrustedReconnect) {
           // Not a trusted reconnect - either new pairing or different phone
           if (trustedPhone) {
@@ -1074,15 +1108,20 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
             return true;
           }
           // First-time pairing: check expiry
-          if (this.state.pairingPayload?.expiresAt && Date.now() > this.state.pairingPayload.expiresAt) {
-            this.rejectRelayApplicationMessage("Pairing session has expired. Please restart remote access to generate a new QR code.");
+          if (
+            this.state.pairingPayload?.expiresAt &&
+            Date.now() > this.state.pairingPayload.expiresAt
+          ) {
+            this.rejectRelayApplicationMessage(
+              "Pairing session has expired. Please restart remote access to generate a new QR code.",
+            );
             return true;
           }
           const pairingPayload = this.state.pairingPayload;
           if (
-            !pairingPayload?.pairingSecret
-            || !message.pairingProof
-            || !verifyRelayPairingProof({
+            !pairingPayload?.pairingSecret ||
+            !message.pairingProof ||
+            !verifyRelayPairingProof({
               pairingSecret: pairingPayload.pairingSecret,
               sessionId: pairingPayload.sessionId,
               macDeviceId: pairingPayload.macDeviceId,
@@ -1091,7 +1130,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
               pairingProof: message.pairingProof,
             })
           ) {
-            this.rejectRelayApplicationMessage("Pairing proof is invalid. Scan the latest QR code and try again.");
+            this.rejectRelayApplicationMessage(
+              "Pairing proof is invalid. Scan the latest QR code and try again.",
+            );
             return true;
           }
         }
@@ -1107,7 +1148,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
           );
           this.secureChannelReady = false;
         } catch (error) {
-          this.rejectRelayApplicationMessage(error instanceof Error ? error.message : String(error));
+          this.rejectRelayApplicationMessage(
+            error instanceof Error ? error.message : String(error),
+          );
           return true;
         }
         if (!this.sendSecureHandshakeProofToPhone()) {
@@ -1123,7 +1166,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
         this.updateStatus("error", message.message);
         return true;
       case "relayMacRegistration":
-        this.rejectRelayApplicationMessage("Desktop received an unexpected relay registration from the phone.");
+        this.rejectRelayApplicationMessage(
+          "Desktop received an unexpected relay registration from the phone.",
+        );
         return true;
       case "serverHello":
       case "clientAuth":
@@ -1136,11 +1181,9 @@ export class MobileRelayBridge extends EventEmitter<{ stateChanged: [MobileRelay
   private async persistTrustedPhoneFromHandshake(handshake: PendingPhoneHandshake): Promise<void> {
     const trustedPhone = this.getTrustedPhone();
     if (
-      trustedPhone
-      && (
-        trustedPhone.phoneDeviceId !== handshake.trustedPhoneDeviceId
-        || trustedPhone.phoneIdentityPublicKey !== handshake.trustedPhonePublicKey
-      )
+      trustedPhone &&
+      (trustedPhone.phoneDeviceId !== handshake.trustedPhoneDeviceId ||
+        trustedPhone.phoneIdentityPublicKey !== handshake.trustedPhonePublicKey)
     ) {
       throw new Error("This desktop is already paired with a different phone.");
     }

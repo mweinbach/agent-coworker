@@ -13,13 +13,13 @@ import type {
   SkillScope,
   SkillScopeDescriptor,
 } from "../types";
+import { isPathInside } from "../utils/paths";
 import {
   adoptSkillInstallManifest,
   deriveFallbackInstallationId,
   manifestPathForSkillRoot,
   readSkillInstallManifest,
 } from "./manifest";
-import { isPathInside } from "../utils/paths";
 
 type SkillFrontMatter = {
   name: string;
@@ -60,20 +60,27 @@ const unknownRecordSchema = z.record(z.string(), z.unknown());
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const triggerValueSchema = z.union([z.string(), z.array(z.unknown())]);
 const metadataSchema = z.record(z.string(), z.string());
-const skillFrontMatterSchema = z.object({
-  name: z.string().trim().min(1).max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  description: z.string().trim().min(1).max(1024),
-  license: nonEmptyTrimmedStringSchema.optional(),
-  compatibility: z.string().trim().min(1).max(500).optional(),
-  metadata: metadataSchema.optional(),
-  "allowed-tools": nonEmptyTrimmedStringSchema.optional(),
-}).passthrough();
+const skillFrontMatterSchema = z
+  .object({
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    description: z.string().trim().min(1).max(1024),
+    license: nonEmptyTrimmedStringSchema.optional(),
+    compatibility: z.string().trim().min(1).max(500).optional(),
+    metadata: metadataSchema.optional(),
+    "allowed-tools": nonEmptyTrimmedStringSchema.optional(),
+  })
+  .passthrough();
 
 function stripQuotes(v: string): string {
   const trimmed = v.trim();
   if (
-    (trimmed.startsWith("\"") && trimmed.endsWith("\"") && trimmed.length >= 2)
-    || (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2)
+    (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2)
   ) {
     return trimmed.slice(1, -1);
   }
@@ -183,7 +190,10 @@ async function readFileAsDataUri(targetPath: string): Promise<string | null> {
   }
 }
 
-async function readSkillFileAsDataUri(skillRoot: string, relativePath: string): Promise<string | null> {
+async function readSkillFileAsDataUri(
+  skillRoot: string,
+  relativePath: string,
+): Promise<string | null> {
   const resolvedPath = path.resolve(skillRoot, relativePath);
   if (!isPathInside(skillRoot, resolvedPath)) {
     return null;
@@ -262,7 +272,10 @@ async function readAgentInterface(skillRoot: string): Promise<SkillInterfaceMeta
     return undefined;
   }
 
-  const primary = agentFiles.find((file) => file.toLowerCase() === "openai.yaml") ?? agentFiles[0]!;
+  const primary = agentFiles.find((file) => file.toLowerCase() === "openai.yaml") ?? agentFiles[0];
+  if (!primary) {
+    return undefined;
+  }
   let raw: string;
   try {
     raw = await fs.readFile(path.join(agentsDir, primary), "utf-8");
@@ -325,7 +338,11 @@ export function extractTriggers(name: string, frontMatter?: Record<string, unkno
   return defaults[name] || [name];
 }
 
-function buildDiagnostic(code: string, severity: SkillInstallationDiagnostic["severity"], message: string): SkillInstallationDiagnostic {
+function buildDiagnostic(
+  code: string,
+  severity: SkillInstallationDiagnostic["severity"],
+  message: string,
+): SkillInstallationDiagnostic {
   return { code, severity, message };
 }
 
@@ -367,7 +384,10 @@ export function getSkillScopeDescriptors(skillsDirs: string[]): SkillScopeDescri
   });
 }
 
-function getScanScopeDirs(descriptors: SkillScopeDescriptor[], includeDisabled: boolean): ScanScopeDir[] {
+function getScanScopeDirs(
+  descriptors: SkillScopeDescriptor[],
+  includeDisabled: boolean,
+): ScanScopeDir[] {
   const out: ScanScopeDir[] = [];
   for (const descriptor of descriptors) {
     out.push({
@@ -409,10 +429,18 @@ async function buildPluginInstallationEntry(opts: {
       const raw = await fs.readFile(opts.skill.skillPath, "utf-8");
       const parsed = parseSkillFrontMatter(raw, opts.skill.rawName);
       if (!parsed) {
-        diagnostics.push(buildDiagnostic("invalid_frontmatter", "error", "Invalid or missing skill frontmatter"));
+        diagnostics.push(
+          buildDiagnostic("invalid_frontmatter", "error", "Invalid or missing skill frontmatter"),
+        );
       }
     } catch (error) {
-      diagnostics.push(buildDiagnostic("unreadable_skill_md", "error", `Unable to read SKILL.md: ${String(error)}`));
+      diagnostics.push(
+        buildDiagnostic(
+          "unreadable_skill_md",
+          "error",
+          `Unable to read SKILL.md: ${String(error)}`,
+        ),
+      );
     }
   }
 
@@ -448,15 +476,19 @@ async function buildInstallationEntry(opts: {
   const diagnostics: SkillInstallationDiagnostic[] = [];
   const manifest = await readSkillInstallManifest(rootDir);
   let installationId =
-    manifest?.installationId
-    ?? deriveFallbackInstallationId(opts.scopeDir.scope, opts.scopeDir.scopeAnchorDir, opts.dirent.name);
+    manifest?.installationId ??
+    deriveFallbackInstallationId(
+      opts.scopeDir.scope,
+      opts.scopeDir.scopeAnchorDir,
+      opts.dirent.name,
+    );
   let name = opts.dirent.name;
   let description = "Skill installation";
   let descriptionSource: SkillInstallationEntry["descriptionSource"] = "directory";
   let triggers: string[] = [opts.dirent.name];
   let interfaceMeta: SkillEntry["interface"] | undefined;
   let fileModifiedAt: string | undefined;
-  let parsedSkill: ParsedSkillDocument | null = null;
+  let _parsedSkill: ParsedSkillDocument | null = null;
   let readableSkillPath: string | null = null;
 
   try {
@@ -471,9 +503,11 @@ async function buildInstallationEntry(opts: {
       const raw = await fs.readFile(skillPath, "utf-8");
       const parsed = parseSkillFrontMatter(raw, opts.dirent.name);
       if (!parsed) {
-        diagnostics.push(buildDiagnostic("invalid_frontmatter", "error", "Invalid or missing skill frontmatter"));
+        diagnostics.push(
+          buildDiagnostic("invalid_frontmatter", "error", "Invalid or missing skill frontmatter"),
+        );
       } else {
-        parsedSkill = parsed;
+        _parsedSkill = parsed;
         readableSkillPath = skillPath;
         name = parsed.frontMatter.name;
         description = parsed.frontMatter.description;
@@ -482,11 +516,17 @@ async function buildInstallationEntry(opts: {
         interfaceMeta = await readAgentInterface(rootDir);
       }
     } catch (error) {
-      diagnostics.push(buildDiagnostic("unreadable_skill_md", "error", `Unable to read SKILL.md: ${String(error)}`));
+      diagnostics.push(
+        buildDiagnostic(
+          "unreadable_skill_md",
+          "error",
+          `Unable to read SKILL.md: ${String(error)}`,
+        ),
+      );
     }
   }
 
-  if (manifest && manifest.installationId.trim()) {
+  if (manifest?.installationId.trim()) {
     installationId = manifest.installationId.trim();
   }
 
@@ -557,7 +597,10 @@ export async function scanSkillCatalogFromSources(
   } = {},
 ): Promise<SkillCatalogSnapshot> {
   const descriptors = sources
-    .filter((source): source is Extract<SkillCatalogSource, { kind: "standalone" }> => source.kind === "standalone")
+    .filter(
+      (source): source is Extract<SkillCatalogSource, { kind: "standalone" }> =>
+        source.kind === "standalone",
+    )
     .map((source) => source.descriptor);
   const scanDirs = getScanScopeDirs(descriptors, opts.includeDisabled === true);
   const installations: SkillInstallationEntry[] = [];
@@ -576,7 +619,12 @@ export async function scanSkillCatalogFromSources(
       }
 
       const entry = await buildInstallationEntry({ scopeDir, dirent });
-      if (opts.adoptManagedWritableInstalls && scopeDir.writable && entry.managed === false && entry.state !== "invalid") {
+      if (
+        opts.adoptManagedWritableInstalls &&
+        scopeDir.writable &&
+        entry.managed === false &&
+        entry.state !== "invalid"
+      ) {
         const manifest = await adoptSkillInstallManifest({
           skillRoot: entry.rootDir,
           fallbackInstallationId: entry.installationId,
@@ -618,7 +666,10 @@ export async function scanSkillCatalog(
   } = {},
 ): Promise<SkillCatalogSnapshot> {
   return await scanSkillCatalogFromSources(
-    getSkillScopeDescriptors(skillsDirs).map((descriptor) => ({ kind: "standalone" as const, descriptor })),
+    getSkillScopeDescriptors(skillsDirs).map((descriptor) => ({
+      kind: "standalone" as const,
+      descriptor,
+    })),
     opts,
   );
 }
@@ -644,7 +695,10 @@ export function getInstallationById(
   catalog: SkillCatalogSnapshot,
   installationId: string,
 ): SkillInstallationEntry | null {
-  return catalog.installations.find((installation) => installation.installationId === installationId) ?? null;
+  return (
+    catalog.installations.find((installation) => installation.installationId === installationId) ??
+    null
+  );
 }
 
 export function getEffectiveInstallationByName(

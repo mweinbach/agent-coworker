@@ -56,7 +56,10 @@ export async function readWorkspaceMCPServersDocument(config: AgentConfig): Prom
   };
 }
 
-export async function writeWorkspaceMCPServersDocument(config: AgentConfig, rawJson: string): Promise<void> {
+export async function writeWorkspaceMCPServersDocument(
+  config: AgentConfig,
+  rawJson: string,
+): Promise<void> {
   parseMCPServersDocument(rawJson);
   const paths = resolveMcpConfigPaths(config);
   await fs.mkdir(paths.workspaceCoworkDir, { recursive: true });
@@ -69,7 +72,10 @@ async function readEditableWorkspaceServers(config: AgentConfig): Promise<MCPSer
   return parseMCPServersDocument(rawJson).servers;
 }
 
-async function writeWorkspaceServers(config: AgentConfig, servers: MCPServerConfig[]): Promise<void> {
+async function writeWorkspaceServers(
+  config: AgentConfig,
+  servers: MCPServerConfig[],
+): Promise<void> {
   const payload = `${JSON.stringify({ servers: sortServersByName(servers) }, null, 2)}\n`;
   const paths = resolveMcpConfigPaths(config);
   await fs.mkdir(paths.workspaceCoworkDir, { recursive: true });
@@ -85,7 +91,8 @@ export async function upsertWorkspaceMCPServer(
   const workspaceServers = await readEditableWorkspaceServers(config);
 
   const trimmedPrevious = previousName?.trim();
-  const isRename = trimmedPrevious && trimmedPrevious.length > 0 && trimmedPrevious !== validated.name;
+  const isRename =
+    trimmedPrevious && trimmedPrevious.length > 0 && trimmedPrevious !== validated.name;
 
   if (isRename && workspaceServers.some((entry) => entry.name === validated.name)) {
     throw new Error(
@@ -113,7 +120,10 @@ export async function upsertWorkspaceMCPServer(
   }
 }
 
-export async function deleteWorkspaceMCPServer(config: AgentConfig, nameRaw: string): Promise<void> {
+export async function deleteWorkspaceMCPServer(
+  config: AgentConfig,
+  nameRaw: string,
+): Promise<void> {
   const name = nameRaw.trim();
   if (!name) {
     throw new Error("mcp-servers.json: server name is required");

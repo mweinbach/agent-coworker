@@ -102,10 +102,7 @@ const DEFAULT_PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> 
       id: "api_key",
       type: "api",
       label: "Bedrock API key",
-      fields: [
-        bedrockApiKeyField,
-        { ...bedrockRegionField, required: true },
-      ],
+      fields: [bedrockApiKeyField, { ...bedrockRegionField, required: true }],
     },
   ],
   baseten: [{ id: "api_key", type: "api", label: "API key" }],

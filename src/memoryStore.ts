@@ -1,6 +1,6 @@
+import { Database } from "bun:sqlite";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Database } from "bun:sqlite";
 
 export type MemoryScope = "workspace" | "user";
 
@@ -33,13 +33,15 @@ function ensureSchema(db: Database): void {
 function normalizeMemoryId(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return "memory";
-  return trimmed
-    .toLowerCase()
-    .replace(/\\/g, "/")
-    .replace(/\.md$/i, "")
-    .replace(/[^a-z0-9/._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "") || "memory";
+  return (
+    trimmed
+      .toLowerCase()
+      .replace(/\\/g, "/")
+      .replace(/\.md$/i, "")
+      .replace(/[^a-z0-9/._-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "") || "memory"
+  );
 }
 
 function normalizeStoredMemoryId(raw: string): string {
@@ -106,7 +108,9 @@ export class MemoryStore {
     db: Database,
     opts: { includeDeepStorage?: boolean } = {},
   ): Promise<void> {
-    const imported = db.query("SELECT value FROM meta WHERE key = 'legacy_import_done'").get() as { value?: string } | null;
+    const imported = db.query("SELECT value FROM meta WHERE key = 'legacy_import_done'").get() as {
+      value?: string;
+    } | null;
     if (imported?.value === "1") return;
 
     const dbPath = this.dbPath(scope);
@@ -115,7 +119,7 @@ export class MemoryStore {
 
     const hotCachePath = path.join(agentDir, "AGENT.md");
     const hotCache = await readTextIfExists(hotCachePath);
-    if (hotCache && hotCache.trim()) {
+    if (hotCache?.trim()) {
       filesToImport.push({ id: HOT_MEMORY_ID, content: hotCache });
     }
 
@@ -124,7 +128,7 @@ export class MemoryStore {
       const memoryFiles = await walkMarkdownFiles(memoryDir);
       for (const filePath of memoryFiles) {
         const content = await readTextIfExists(filePath);
-        if (!content || !content.trim()) continue;
+        if (!content?.trim()) continue;
         const relative = path.relative(memoryDir, filePath);
         filesToImport.push({ id: normalizeMemoryId(relative), content });
       }
@@ -133,14 +137,14 @@ export class MemoryStore {
     if (filesToImport.length > 0) {
       const timestamp = nowIso();
       const existingIds = new Set(
-        (db.query("SELECT id FROM memories").all() as Array<{ id: string }>).map((row) => row.id)
+        (db.query("SELECT id FROM memories").all() as Array<{ id: string }>).map((row) => row.id),
       );
       const seenIds = new Set<string>();
       for (const item of filesToImport) {
         if (existingIds.has(item.id) || seenIds.has(item.id)) continue;
         seenIds.add(item.id);
         db.query(
-          "INSERT OR IGNORE INTO memories(id, content, created_at, updated_at) VALUES(?, ?, ?, ?)"
+          "INSERT OR IGNORE INTO memories(id, content, created_at, updated_at) VALUES(?, ?, ?, ?)",
         ).run(item.id, item.content.trim(), timestamp, timestamp);
       }
     }
@@ -167,13 +171,18 @@ export class MemoryStore {
 
   async list(scope?: MemoryScope): Promise<MemoryEntry[]> {
     if (scope) return this.listScope(scope);
-    const [workspace, user] = await Promise.all([this.listScope("workspace"), this.listScope("user")]);
+    const [workspace, user] = await Promise.all([
+      this.listScope("workspace"),
+      this.listScope("user"),
+    ]);
     return [...workspace, ...user].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   private async listScope(scope: MemoryScope): Promise<MemoryEntry[]> {
     return this.withDb(scope, (db) => {
-      const rows = db.query("SELECT id, content, created_at, updated_at FROM memories ORDER BY updated_at DESC").all() as Array<{
+      const rows = db
+        .query("SELECT id, content, created_at, updated_at FROM memories ORDER BY updated_at DESC")
+        .all() as Array<{
         id: string;
         content: string;
         created_at: string;
@@ -194,7 +203,9 @@ export class MemoryStore {
     const scopes: MemoryScope[] = scope ? [scope] : ["workspace", "user"];
     for (const currentScope of scopes) {
       const match = await this.withDb(currentScope, (db) => {
-        const row = db.query("SELECT id, content, created_at, updated_at FROM memories WHERE id = ?").get(normalizedId) as {
+        const row = db
+          .query("SELECT id, content, created_at, updated_at FROM memories WHERE id = ?")
+          .get(normalizedId) as {
           id: string;
           content: string;
           created_at: string;
@@ -219,11 +230,13 @@ export class MemoryStore {
     const content = input.content.trim();
     const timestamp = nowIso();
     return this.withDb(scope, (db) => {
-      const existing = db.query("SELECT created_at FROM memories WHERE id = ?").get(normalizedId) as { created_at: string } | null;
+      const existing = db
+        .query("SELECT created_at FROM memories WHERE id = ?")
+        .get(normalizedId) as { created_at: string } | null;
       db.query(
         `INSERT INTO memories(id, content, created_at, updated_at)
          VALUES(?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`
+         ON CONFLICT(id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
       ).run(normalizedId, content, existing?.created_at ?? timestamp, timestamp);
       return {
         id: normalizedId,
@@ -245,7 +258,7 @@ export class MemoryStore {
 
   async renderPromptSection(): Promise<string> {
     const workspaceHotCache = await this.getById(HOT_MEMORY_ID, "workspace");
-    const activeHotCache = workspaceHotCache ?? await this.getById(HOT_MEMORY_ID, "user");
+    const activeHotCache = workspaceHotCache ?? (await this.getById(HOT_MEMORY_ID, "user"));
     if (!activeHotCache) return "";
     return [
       "## Memory",

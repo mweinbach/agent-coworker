@@ -83,10 +83,9 @@ export function getFireworksModelSpec(modelId: string): FireworksModelSpec | nul
   return FIREWORKS_MODEL_SPECS[modelId as FireworksModelId] ?? null;
 }
 
-export function resolveFireworksApiKey(opts: {
-  savedKey?: string;
-  env?: NodeJS.ProcessEnv;
-} = {}): string | undefined {
+export function resolveFireworksApiKey(
+  opts: { savedKey?: string; env?: NodeJS.ProcessEnv } = {},
+): string | undefined {
   const env = opts.env ?? process.env;
   const key = opts.savedKey?.trim() || env.FIREWORKS_API_KEY?.trim();
   return key || undefined;

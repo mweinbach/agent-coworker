@@ -1,6 +1,6 @@
-import readline from "node:readline";
+import type readline from "node:readline";
 
-import type { AskPrompt, ApprovalPrompt, ReplPromptMode } from "./serverEventHandler";
+import type { ApprovalPrompt, AskPrompt, ReplPromptMode } from "./serverEventHandler";
 
 export type ReplPromptStateAdapter = {
   pendingAsk: AskPrompt[];

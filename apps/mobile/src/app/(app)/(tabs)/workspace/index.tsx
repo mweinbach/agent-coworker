@@ -12,16 +12,14 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { WorkspaceSwitcher } from "@/components/workspace/workspace-switcher";
 import { useWorkspaceStore } from "@/features/cowork/workspaceStore";
 import { usePairingStore } from "@/features/pairing/pairingStore";
-import { describeTransportStatus, isWorkspaceConnectionReady, toneForTransportState } from "@/features/relay/connectionState";
+import {
+  describeTransportStatus,
+  isWorkspaceConnectionReady,
+  toneForTransportState,
+} from "@/features/relay/connectionState";
 import { useAppTheme } from "@/theme/use-app-theme";
 
-function WorkspaceMetric({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
+function WorkspaceMetric({ label, value }: { label: string; value: string }) {
   const theme = useAppTheme();
 
   return (
@@ -53,11 +51,11 @@ export default function WorkspaceHubScreen() {
   const activeWorkspaceCwd = useWorkspaceStore((state) => state.activeWorkspaceCwd);
   const controlSnapshot = useWorkspaceStore((state) => state.controlSnapshot);
   const workspaces = useWorkspaceStore((state) => state.workspaces);
-  
+
   const connectionState = usePairingStore((state) => state.connectionState);
   const isConnected = isWorkspaceConnectionReady(connectionState);
   const connectionTone = toneForTransportState(connectionState);
-  
+
   const [switcherVisible, setSwitcherVisible] = useState(false);
 
   const providerLabel = controlSnapshot?.config?.provider ?? "Not set";
@@ -74,10 +72,7 @@ export default function WorkspaceHubScreen() {
           headerRight: () => (
             <Link href="/(app)/(tabs)/workspace" asChild>
               <Link.Trigger>
-                <HeaderGlassButton
-                  icon="ellipsis"
-                  onPress={() => {}}
-                />
+                <HeaderGlassButton icon="ellipsis" onPress={() => {}} />
               </Link.Trigger>
               <Link.Menu>
                 <Link.MenuAction
@@ -115,10 +110,7 @@ export default function WorkspaceHubScreen() {
         >
           <View style={{ gap: 12 }}>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-              <StatusPill
-                label={describeTransportStatus(connectionState)}
-                tone={connectionTone}
-              />
+              <StatusPill label={describeTransportStatus(connectionState)} tone={connectionTone} />
               {controlSnapshot?.config?.provider ? (
                 <StatusPill label={controlSnapshot.config.provider} tone="primary" />
               ) : null}
@@ -163,7 +155,8 @@ export default function WorkspaceHubScreen() {
                 }}
               >
                 {isConnected
-                  ? activeWorkspaceCwd ?? `Follow live work from your desktop and keep ${providerLabel} on ${modelLabel}.`
+                  ? (activeWorkspaceCwd ??
+                    `Follow live work from your desktop and keep ${providerLabel} on ${modelLabel}.`)
                   : "Pair with a desktop to bring live threads, approvals, and workspace defaults onto this phone."}
               </Text>
             </View>
@@ -177,7 +170,9 @@ export default function WorkspaceHubScreen() {
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
             <AppButton
               icon={isConnected ? "gearshape.2" : "qrcode.viewfinder"}
-              onPress={() => router.push(isConnected ? "/(app)/workspace/general" : "/(pairing)/scan")}
+              onPress={() =>
+                router.push(isConnected ? "/(app)/workspace/general" : "/(pairing)/scan")
+              }
             >
               {isConnected ? "Edit defaults" : "Scan QR Code"}
             </AppButton>
@@ -252,10 +247,7 @@ export default function WorkspaceHubScreen() {
           />
         </SectionCard>
 
-        <WorkspaceSwitcher
-          visible={switcherVisible}
-          onClose={() => setSwitcherVisible(false)}
-        />
+        <WorkspaceSwitcher visible={switcherVisible} onClose={() => setSwitcherVisible(false)} />
       </Screen>
     </>
   );

@@ -2,11 +2,10 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import type { ServerEvent } from "../src/server/protocol";
-import type { AgentConfig } from "../src/types";
 import type { MCPRegistryServer } from "../src/mcp/configRegistry";
+import type { ServerEvent } from "../src/server/protocol";
 import { McpAuthFlow } from "../src/server/session/mcp/McpAuthFlow";
+import type { AgentConfig } from "../src/types";
 
 const mockAuthorizeMcpServerOAuth = mock(async () => {
   throw new Error("mockAuthorizeMcpServerOAuth not configured");
@@ -16,7 +15,11 @@ const mockExchangeMcpServerOAuthCode = mock(async () => {
   throw new Error("mockExchangeMcpServerOAuthCode not configured");
 });
 
-function makeConfig(workspaceRoot: string, userHome: string, builtInConfigDir: string): AgentConfig {
+function makeConfig(
+  workspaceRoot: string,
+  userHome: string,
+  builtInConfigDir: string,
+): AgentConfig {
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
@@ -47,7 +50,10 @@ function inheritedOauthServer(name: string): MCPRegistryServer {
   };
 }
 
-async function waitForCondition(predicate: () => boolean | Promise<boolean>, timeoutMs = 2_000): Promise<void> {
+async function waitForCondition(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 2_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await predicate()) return;
@@ -75,7 +81,7 @@ function createHarness(config: AgentConfig, server: MCPRegistryServer) {
   const flow = new McpAuthFlow(
     context,
     {
-      resolveByName: async (nameRaw: string) => nameRaw.trim() === server.name ? server : null,
+      resolveByName: async (nameRaw: string) => (nameRaw.trim() === server.name ? server : null),
     } as any,
     async () => {
       emitMcpServersCalls += 1;
@@ -152,21 +158,32 @@ describe("McpAuthFlow", () => {
 
       await flow.authorize("quartr");
 
-      expect(events.some((event) => event.type === "mcp_server_auth_challenge" && event.name === "quartr")).toBe(true);
+      expect(
+        events.some(
+          (event) => event.type === "mcp_server_auth_challenge" && event.name === "quartr",
+        ),
+      ).toBe(true);
 
       await waitForCondition(async () => {
         const raw = await fs.readFile(userAuthFile, "utf-8").catch(() => null);
         if (!raw) return false;
         const parsed = JSON.parse(raw) as {
-          servers?: Record<string, { oauth?: { pending?: unknown; tokens?: { accessToken?: string } } }>;
+          servers?: Record<
+            string,
+            { oauth?: { pending?: unknown; tokens?: { accessToken?: string } } }
+          >;
         };
-        return parsed.servers?.quartr?.oauth?.tokens?.accessToken === "access-for-oauth-code-1"
-          && parsed.servers?.quartr?.oauth?.pending === undefined
-          && events.some((event) =>
-            event.type === "mcp_server_auth_result"
-            && event.name === "quartr"
-            && event.ok
-            && event.mode === "oauth");
+        return (
+          parsed.servers?.quartr?.oauth?.tokens?.accessToken === "access-for-oauth-code-1" &&
+          parsed.servers?.quartr?.oauth?.pending === undefined &&
+          events.some(
+            (event) =>
+              event.type === "mcp_server_auth_result" &&
+              event.name === "quartr" &&
+              event.ok &&
+              event.mode === "oauth",
+          )
+        );
       });
 
       expect(mockConsumeCapturedOAuthCode).toHaveBeenCalledTimes(2);

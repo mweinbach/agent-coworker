@@ -1,24 +1,35 @@
-import readline from "node:readline";
-
-import { renderTodosToLines, renderToolsToLines } from "../render";
-import type { ProviderAuthMethod } from "../parser";
-import { CliStreamState } from "../streamState";
-import { asString, previewStructured } from "./streamFormatting";
+import type readline from "node:readline";
 import type { ServerEvent } from "../../server/protocol";
-import { isProviderName, type AgentConfig, type ApprovalRiskCode, type TodoItem } from "../../types";
+import { type AgentConfig, type ApprovalRiskCode, isProviderName } from "../../types";
+import type { ProviderAuthMethod } from "../parser";
+import type { CliStreamState } from "../streamState";
+import { asString, previewStructured } from "./streamFormatting";
 
-export type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & { outputDirectory?: string };
-export type PublicSessionConfig = Pick<AgentConfig, "providerOptions" | "enableMemory" | "memoryRequireApproval">;
+export type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & {
+  outputDirectory?: string;
+};
+export type PublicSessionConfig = Pick<
+  AgentConfig,
+  "providerOptions" | "enableMemory" | "memoryRequireApproval"
+>;
 
 export type AskPrompt = { requestId: string | number; question: string; options?: string[] };
-export type ApprovalPrompt = { requestId: string | number; command: string; dangerous: boolean; reasonCode: ApprovalRiskCode };
+export type ApprovalPrompt = {
+  requestId: string | number;
+  command: string;
+  dangerous: boolean;
+  reasonCode: ApprovalRiskCode;
+};
 export type ProviderStatus = {
   provider: string;
   authorized: boolean;
   verified: boolean;
   mode: string;
   account?: { email?: string };
-  usage?: { planType?: string; rateLimits?: Array<{ limitName?: string; limitId?: string; primaryWindow?: unknown }> };
+  usage?: {
+    planType?: string;
+    rateLimits?: Array<{ limitName?: string; limitId?: string; primaryWindow?: unknown }>;
+  };
 };
 export type ReplPromptMode = "user" | "ask" | "approval";
 
@@ -50,7 +61,9 @@ export type ReplServerEventContext = {
   resetModelStreamState: () => void;
 };
 
-function logProviderAuthChallenge(event: Extract<ServerEvent, { type: "provider_auth_challenge" }>) {
+function logProviderAuthChallenge(
+  event: Extract<ServerEvent, { type: "provider_auth_challenge" }>,
+) {
   const instructions = asString(event.challenge?.instructions);
   const url = asString(event.challenge?.url);
   const command = asString(event.challenge?.command);
@@ -70,12 +83,6 @@ function logProviderAuthResult(event: Extract<ServerEvent, { type: "provider_aut
   const message = asString(event.message);
   if (message) {
     console.log(message);
-  }
-}
-
-function renderTodos(todos: TodoItem[]) {
-  for (const line of renderTodosToLines(todos)) {
-    console.log(line);
   }
 }
 
@@ -277,7 +284,9 @@ export function createNotificationHandler(ctx: ReplServerEventContext) {
           const preview = previewStructured(output);
           if (item.error) {
             const errPreview = previewStructured(item.error);
-            console.log(errPreview ? `\n[tool:error] ${name} ${errPreview}` : `\n[tool:error] ${name}`);
+            console.log(
+              errPreview ? `\n[tool:error] ${name} ${errPreview}` : `\n[tool:error] ${name}`,
+            );
           } else {
             console.log(preview ? `\n[tool:done] ${name} ${preview}` : `\n[tool:done] ${name}`);
           }
@@ -286,11 +295,13 @@ export function createNotificationHandler(ctx: ReplServerEventContext) {
 
         if (item.type === "agentMessage") {
           const text = asString(item.text);
-          if (!text || !text.trim()) break;
+          if (!text?.trim()) break;
           const out = text.trim();
           // Deduplicate if we already streamed this text
           if (ctx.state.lastStreamedAssistantTurnId) {
-            const streamed = ctx.streamState.getAssistantText(ctx.state.lastStreamedAssistantTurnId).trim();
+            const streamed = ctx.streamState
+              .getAssistantText(ctx.state.lastStreamedAssistantTurnId)
+              .trim();
             if (streamed && streamed === out) {
               if (ctx.streamState.closeAssistantTurn(ctx.state.lastStreamedAssistantTurnId)) {
                 process.stdout.write("\n");
@@ -305,7 +316,6 @@ export function createNotificationHandler(ctx: ReplServerEventContext) {
         if (item.type === "reasoning") {
           const text = asString(item.text);
           if (!text) break;
-          const turnId = asString(params.turnId) ?? "unknown";
           if (
             ctx.state.lastStreamedReasoningTurnId &&
             ctx.streamState.hasReasoningTurn(ctx.state.lastStreamedReasoningTurnId)
@@ -321,11 +331,15 @@ export function createNotificationHandler(ctx: ReplServerEventContext) {
       }
 
       case "cowork/session/configUpdated": {
-        applyCliServerEvent(ctx.state, {
-          type: "config_updated",
-          sessionId: asString(params.threadId) ?? asString(params.sessionId) ?? "unknown",
-          config: params.config as PublicConfig,
-        }, { logConfigUpdate: true });
+        applyCliServerEvent(
+          ctx.state,
+          {
+            type: "config_updated",
+            sessionId: asString(params.threadId) ?? asString(params.sessionId) ?? "unknown",
+            config: params.config as PublicConfig,
+          },
+          { logConfigUpdate: true },
+        );
         break;
       }
 

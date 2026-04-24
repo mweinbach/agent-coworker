@@ -44,7 +44,9 @@ describe("memory store actions", () => {
       close: () => {},
     } as any);
 
-    await createWorkspaceMemoryActions(set as any, get as any).requestWorkspaceMemories(workspaceId);
+    await createWorkspaceMemoryActions(set as any, get as any).requestWorkspaceMemories(
+      workspaceId,
+    );
 
     expect(state.workspaceRuntimeById[workspaceId].memoriesLoading).toBe(false);
     expect(state.notifications).toHaveLength(0);

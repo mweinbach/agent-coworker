@@ -1,7 +1,10 @@
 import path from "node:path";
 
 import type { AgentConfig, HarnessContextState } from "../types";
-import { deriveActiveWorkspaceContext, renderActiveWorkspaceContextSection } from "../workspace/context";
+import {
+  deriveActiveWorkspaceContext,
+  renderActiveWorkspaceContextSection,
+} from "../workspace/context";
 import { renderHarnessContextSection } from "./renderHarnessContextSection";
 
 const MCP_NAMESPACING_TOKEN = "`mcp__{serverName}__{toolName}`";
@@ -33,10 +36,19 @@ function rewriteLegacyProjectPathGuidance(
       "(`.agent/` in the current working directory)",
       `(\`${withTrailingSeparator(context.projectAgentDir)}\`)`,
     )
-    .replaceAll("`.agent/skills/`", `\`${withTrailingSeparator(path.join(context.projectAgentDir, "skills"))}\``)
+    .replaceAll(
+      "`.agent/skills/`",
+      `\`${withTrailingSeparator(path.join(context.projectAgentDir, "skills"))}\``,
+    )
     .replaceAll("`.agent/AGENT.md`", `\`${path.join(context.projectAgentDir, "AGENT.md")}\``)
-    .replaceAll("`.agent/memory/`", `\`${withTrailingSeparator(path.join(context.projectAgentDir, "memory"))}\``)
-    .replaceAll("`.agent/mcp-servers.json`", `\`${path.join(context.projectAgentDir, "mcp-servers.json")}\``)
+    .replaceAll(
+      "`.agent/memory/`",
+      `\`${withTrailingSeparator(path.join(context.projectAgentDir, "memory"))}\``,
+    )
+    .replaceAll(
+      "`.agent/mcp-servers.json`",
+      `\`${path.join(context.projectAgentDir, "mcp-servers.json")}\``,
+    )
     .replaceAll("`.agent/config.json`", `\`${path.join(context.projectAgentDir, "config.json")}\``)
     .replaceAll(
       "`.agent/skills/{name}/SKILL.md`",
@@ -50,7 +62,9 @@ export function buildTurnSystemPrompt(
   mcpToolNames: string[],
   harnessContext?: HarnessContextState | null,
 ): string {
-  const sections = [rewriteLegacyProjectPathGuidance(stripStaticMcpNamespacingGuidance(system), config)];
+  const sections = [
+    rewriteLegacyProjectPathGuidance(stripStaticMcpNamespacingGuidance(system), config),
+  ];
 
   const workspaceSection = renderActiveWorkspaceContextSection(config);
   if (workspaceSection) {
@@ -58,11 +72,13 @@ export function buildTurnSystemPrompt(
   }
 
   if (mcpToolNames.length > 0) {
-    sections.push([
-      "## Active MCP Tools",
-      "MCP tools are active in this turn. Their names follow `mcp__{serverName}__{toolName}`.",
-      "Only call MCP tools that are present in the current tool list.",
-    ].join("\n"));
+    sections.push(
+      [
+        "## Active MCP Tools",
+        "MCP tools are active in this turn. Their names follow `mcp__{serverName}__{toolName}`.",
+        "Only call MCP tools that are present in the current tool list.",
+      ].join("\n"),
+    );
   }
 
   const harnessSection = renderHarnessContextSection(harnessContext);

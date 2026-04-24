@@ -1,14 +1,27 @@
-import type { connectProvider as connectModelProvider, ConnectProviderResult } from "../../connect";
-import type { loadSystemPromptWithSkills } from "../../prompt";
 import type { runTurn } from "../../agent";
+import type { ConnectProviderResult, connectProvider as connectModelProvider } from "../../connect";
 import { HarnessContextStore } from "../../harness/contextStore";
-import { SessionCostTracker, type SessionUsageSnapshot, type TurnUsage } from "../../session/costTracker";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
-import type { getProviderCatalog } from "../../providers/connectionCatalog";
-import type { getProviderStatuses } from "../../providerStatus";
-import { defaultSupportedModel, getSupportedModel } from "../../models/registry";
+import { type MemoryScope, MemoryStore } from "../../memoryStore";
 import { getKnownResolvedModelMetadata, isDynamicModelProvider } from "../../models/metadata";
-import { MemoryStore, type MemoryScope } from "../../memoryStore";
+import { defaultSupportedModel } from "../../models/registry";
+import type { loadSystemPromptWithSkills } from "../../prompt";
+import type { getProviderStatuses } from "../../providerStatus";
+import type { getProviderCatalog } from "../../providers/connectionCatalog";
+import {
+  SessionCostTracker,
+  type SessionUsageSnapshot,
+  type TurnUsage,
+} from "../../session/costTracker";
+import type { A2uiComponent, A2uiSurfaceState, A2uiSurfacesById } from "../../shared/a2ui";
+import type {
+  AgentContextMode,
+  AgentInspectResult,
+  AgentReasoningEffort,
+  AgentRole,
+  AgentSpawnContextOptions,
+} from "../../shared/agents";
+import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import { getAiCoworkerPaths } from "../../store/connections";
 import type {
   AgentConfig,
@@ -17,24 +30,18 @@ import type {
   ServerErrorCode,
   ServerErrorSource,
 } from "../../types";
-import type { ServerEvent } from "../protocol";
+import type { AgentWaitMode } from "../agents/types";
+import type { ServerEvent, SessionConfigPatch } from "../protocol";
 import {
-  SessionBackupManager,
   type SessionBackupHandle,
   type SessionBackupInitOptions,
+  SessionBackupManager,
 } from "../sessionBackup";
-import {
-  type PersistedSessionMutation,
-  type PersistedSessionRecord,
-  SessionDb,
-} from "../sessionDb";
-import {
-  type PersistedSessionSnapshot,
-  writePersistedSessionSnapshot,
-} from "../sessionStore";
-import { DEFAULT_SESSION_TITLE } from "../sessionTitleService";
+import type { PersistedSessionMutation, PersistedSessionRecord, SessionDb } from "../sessionDb";
+import { type PersistedSessionSnapshot, writePersistedSessionSnapshot } from "../sessionStore";
 import type { generateSessionTitle } from "../sessionTitleService";
-import type { AgentWaitMode } from "../agents/types";
+import { DEFAULT_SESSION_TITLE } from "../sessionTitleService";
+import { A2uiSurfaceManager } from "./A2uiSurfaceManager";
 import { HistoryManager } from "./HistoryManager";
 import { InteractionManager, type PendingPromptReplayEvent } from "./InteractionManager";
 import { McpManager } from "./McpManager";
@@ -54,33 +61,25 @@ import type {
   SessionInfoState,
   SessionRuntimeState,
 } from "./SessionContext";
-import type { SessionConfigPatch } from "../protocol";
 import { SessionMetadataManager } from "./SessionMetadataManager";
 import { SessionRuntimeSupport } from "./SessionRuntimeSupport";
-import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
 import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
+import { SessionSnapshotProjector } from "./SessionSnapshotProjector";
 import { SkillManager } from "./SkillManager";
 import { TurnExecutionManager } from "./TurnExecutionManager";
-import { A2uiSurfaceManager } from "./A2uiSurfaceManager";
-import type {
-  AgentInspectResult,
-  AgentReasoningEffort,
-  AgentRole,
-  AgentSpawnContextOptions,
-  AgentContextMode,
-} from "../../shared/agents";
-import type { SessionSnapshot } from "../../shared/sessionSnapshot";
-import type { A2uiComponent, A2uiSurfaceState, A2uiSurfacesById } from "../../shared/a2ui";
 
 // Packaged Bun sidecar builds need these dynamic imports because the old createRequire
 // path is unavailable there, and we want to avoid eagerly loading the heavier
 // connection/prompt/agent modules at startup.
 let connectModulePromise: Promise<typeof import("../../connect")> | null = null;
 let promptModulePromise: Promise<typeof import("../../prompt")> | null = null;
-let providerCatalogModulePromise: Promise<typeof import("../../providers/connectionCatalog")> | null = null;
+let providerCatalogModulePromise: Promise<
+  typeof import("../../providers/connectionCatalog")
+> | null = null;
 let providerStatusModulePromise: Promise<typeof import("../../providerStatus")> | null = null;
 let agentModulePromise: Promise<typeof import("../../agent")> | null = null;
-let sessionTitleServiceModulePromise: Promise<typeof import("../sessionTitleService")> | null = null;
+let sessionTitleServiceModulePromise: Promise<typeof import("../sessionTitleService")> | null =
+  null;
 
 const loadConnectModule = async (): Promise<typeof import("../../connect")> => {
   connectModulePromise ??= import("../../connect");
@@ -92,7 +91,9 @@ const loadPromptModule = async (): Promise<typeof import("../../prompt")> => {
   return await promptModulePromise;
 };
 
-const loadProviderCatalogModule = async (): Promise<typeof import("../../providers/connectionCatalog")> => {
+const loadProviderCatalogModule = async (): Promise<
+  typeof import("../../providers/connectionCatalog")
+> => {
   providerCatalogModulePromise ??= import("../../providers/connectionCatalog");
   return await providerCatalogModulePromise;
 };
@@ -107,7 +108,9 @@ const loadAgentModule = async (): Promise<typeof import("../../agent")> => {
   return await agentModulePromise;
 };
 
-const loadSessionTitleServiceModule = async (): Promise<typeof import("../sessionTitleService")> => {
+const loadSessionTitleServiceModule = async (): Promise<
+  typeof import("../sessionTitleService")
+> => {
   sessionTitleServiceModulePromise ??= import("../sessionTitleService");
   return await sessionTitleServiceModulePromise;
 };
@@ -138,7 +141,8 @@ function contentText(value: unknown): string {
       if (!part || typeof part !== "object") return "";
       const record = part as Record<string, unknown>;
       if (typeof record.text === "string" && record.text.trim()) return record.text.trim();
-      if (typeof record.inputText === "string" && record.inputText.trim()) return record.inputText.trim();
+      if (typeof record.inputText === "string" && record.inputText.trim())
+        return record.inputText.trim();
       return "";
     })
     .filter(Boolean)
@@ -157,13 +161,20 @@ function normalizeHydratedExecutionState(
   if (status === "closed") {
     return "closed";
   }
-  if (!executionState || executionState === "completed" || executionState === "errored" || executionState === "closed") {
+  if (
+    !executionState ||
+    executionState === "completed" ||
+    executionState === "errored" ||
+    executionState === "closed"
+  ) {
     return executionState;
   }
   return "completed";
 }
 
-function normalizeHydratedSessionInfo(hydrated?: HydratedSessionState): SessionInfoState | undefined {
+function normalizeHydratedSessionInfo(
+  hydrated?: HydratedSessionState,
+): SessionInfoState | undefined {
   if (!hydrated) {
     return undefined;
   }
@@ -181,7 +192,9 @@ function normalizeHydratedSessionInfo(hydrated?: HydratedSessionState): SessionI
   };
 }
 
-function initialCurrentTurnOutcome(hydrated?: HydratedSessionState): SessionRuntimeState["currentTurnOutcome"] {
+function initialCurrentTurnOutcome(
+  hydrated?: HydratedSessionState,
+): SessionRuntimeState["currentTurnOutcome"] {
   if (
     normalizeHydratedExecutionState(
       hydrated?.sessionInfo.sessionKind,
@@ -268,7 +281,9 @@ function shouldReplayDisconnectedEvent(evt: ServerEvent): boolean {
   return DISCONNECTED_REPLAY_EVENT_TYPES.has(evt.type);
 }
 
-function deriveA2uiSurfacesFromSnapshot(snapshot: SessionSnapshot | null | undefined): A2uiSurfacesById | undefined {
+function deriveA2uiSurfacesFromSnapshot(
+  snapshot: SessionSnapshot | null | undefined,
+): A2uiSurfacesById | undefined {
   if (!snapshot) return undefined;
 
   const surfaces: Record<string, A2uiSurfaceState> = {};
@@ -371,19 +386,26 @@ export class AgentSession {
   }) {
     const hydrated = opts.hydratedState;
     const hydratedSessionInfo = normalizeHydratedSessionInfo(hydrated);
-    const seededMessages = hydrated?.messages ?? (opts.seedContext ? structuredClone(opts.seedContext.messages) : []);
-    const seededTodos = hydrated?.todos ?? (opts.seedContext ? structuredClone(opts.seedContext.todos) : []);
-    const seededHarnessContext = hydrated?.harnessContext
-      ?? (opts.seedContext?.harnessContext ? structuredClone(opts.seedContext.harnessContext) : null);
+    const seededMessages =
+      hydrated?.messages ?? (opts.seedContext ? structuredClone(opts.seedContext.messages) : []);
+    const seededTodos =
+      hydrated?.todos ?? (opts.seedContext ? structuredClone(opts.seedContext.todos) : []);
+    const seededHarnessContext =
+      hydrated?.harnessContext ??
+      (opts.seedContext?.harnessContext ? structuredClone(opts.seedContext.harnessContext) : null);
     this.id = hydrated?.sessionId ?? makeId();
-    this.persistedLastEventSeq = Math.max(0, Math.floor(opts.initialLastEventSeq ?? opts.initialSessionSnapshot?.lastEventSeq ?? 0));
+    this.persistedLastEventSeq = Math.max(
+      0,
+      Math.floor(opts.initialLastEventSeq ?? opts.initialSessionSnapshot?.lastEventSeq ?? 0),
+    );
 
     const now = new Date().toISOString();
     this.state = {
       config: opts.config,
       system: opts.system,
       discoveredSkills: opts.discoveredSkills ?? [],
-      systemPromptMetadataLoaded: opts.system.trim().length > 0 && opts.discoveredSkills !== undefined,
+      systemPromptMetadataLoaded:
+        opts.system.trim().length > 0 && opts.discoveredSkills !== undefined,
       yolo: opts.yolo === true,
       messages: [],
       allMessages: [...seededMessages],
@@ -407,23 +429,37 @@ export class AgentSession {
         provider: opts.config.provider,
         model: opts.config.model,
         sessionKind: opts.sessionInfoPatch?.sessionKind ?? "root",
-        ...(opts.sessionInfoPatch?.parentSessionId ? { parentSessionId: opts.sessionInfoPatch.parentSessionId } : {}),
+        ...(opts.sessionInfoPatch?.parentSessionId
+          ? { parentSessionId: opts.sessionInfoPatch.parentSessionId }
+          : {}),
         ...(opts.sessionInfoPatch?.role ? { role: opts.sessionInfoPatch.role } : {}),
         ...(opts.sessionInfoPatch?.mode ? { mode: opts.sessionInfoPatch.mode } : {}),
-        ...(typeof opts.sessionInfoPatch?.depth === "number" ? { depth: opts.sessionInfoPatch.depth } : {}),
+        ...(typeof opts.sessionInfoPatch?.depth === "number"
+          ? { depth: opts.sessionInfoPatch.depth }
+          : {}),
         ...(opts.sessionInfoPatch?.nickname ? { nickname: opts.sessionInfoPatch.nickname } : {}),
         ...(opts.sessionInfoPatch?.taskType ? { taskType: opts.sessionInfoPatch.taskType } : {}),
-        ...(opts.sessionInfoPatch?.targetPaths !== undefined ? { targetPaths: opts.sessionInfoPatch.targetPaths } : {}),
-        ...(opts.sessionInfoPatch?.requestedModel ? { requestedModel: opts.sessionInfoPatch.requestedModel } : {}),
-        ...(opts.sessionInfoPatch?.effectiveModel ? { effectiveModel: opts.sessionInfoPatch.effectiveModel } : {}),
+        ...(opts.sessionInfoPatch?.targetPaths !== undefined
+          ? { targetPaths: opts.sessionInfoPatch.targetPaths }
+          : {}),
+        ...(opts.sessionInfoPatch?.requestedModel
+          ? { requestedModel: opts.sessionInfoPatch.requestedModel }
+          : {}),
+        ...(opts.sessionInfoPatch?.effectiveModel
+          ? { effectiveModel: opts.sessionInfoPatch.effectiveModel }
+          : {}),
         ...(opts.sessionInfoPatch?.requestedReasoningEffort
           ? { requestedReasoningEffort: opts.sessionInfoPatch.requestedReasoningEffort }
           : {}),
         ...(opts.sessionInfoPatch?.effectiveReasoningEffort
           ? { effectiveReasoningEffort: opts.sessionInfoPatch.effectiveReasoningEffort }
           : {}),
-        ...(opts.sessionInfoPatch?.executionState ? { executionState: opts.sessionInfoPatch.executionState } : {}),
-        ...(opts.sessionInfoPatch?.lastMessagePreview ? { lastMessagePreview: opts.sessionInfoPatch.lastMessagePreview } : {}),
+        ...(opts.sessionInfoPatch?.executionState
+          ? { executionState: opts.sessionInfoPatch.executionState }
+          : {}),
+        ...(opts.sessionInfoPatch?.lastMessagePreview
+          ? { lastMessagePreview: opts.sessionInfoPatch.lastMessagePreview }
+          : {}),
       },
       persistenceStatus: hydrated?.status ?? "active",
       hasGeneratedTitle: hydrated?.hasGeneratedTitle ?? false,
@@ -444,23 +480,30 @@ export class AgentSession {
       costTracker: null,
     };
 
-    this.memoryStore = new MemoryStore(`${opts.config.projectAgentDir}/memory.sqlite`, `${opts.config.userAgentDir}/memory.sqlite`);
+    this.memoryStore = new MemoryStore(
+      `${opts.config.projectAgentDir}/memory.sqlite`,
+      `${opts.config.userAgentDir}/memory.sqlite`,
+    );
 
     this.deps = {
       connectProviderImpl: opts.connectProviderImpl ?? lazyConnectProvider,
       getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl ?? getAiCoworkerPaths,
-      loadSystemPromptWithSkillsImpl: opts.loadSystemPromptWithSkillsImpl ?? lazyLoadSystemPromptWithSkills,
+      loadSystemPromptWithSkillsImpl:
+        opts.loadSystemPromptWithSkillsImpl ?? lazyLoadSystemPromptWithSkills,
       getProviderCatalogImpl: opts.getProviderCatalogImpl ?? lazyGetProviderCatalog,
       getProviderStatusesImpl: opts.getProviderStatusesImpl ?? lazyGetProviderStatuses,
       sessionBackupFactory:
-        opts.sessionBackupFactory ?? (async (factoryOpts: SessionBackupInitOptions): Promise<SessionBackupHandle> => await SessionBackupManager.create(factoryOpts)),
+        opts.sessionBackupFactory ??
+        (async (factoryOpts: SessionBackupInitOptions): Promise<SessionBackupHandle> =>
+          await SessionBackupManager.create(factoryOpts)),
       harnessContextStore: opts.harnessContextStore ?? new HarnessContextStore(),
       runTurnImpl: opts.runTurnImpl ?? lazyRunTurn,
       persistModelSelectionImpl: opts.persistModelSelectionImpl,
       persistProjectConfigPatchImpl: opts.persistProjectConfigPatchImpl,
       generateSessionTitleImpl: opts.generateSessionTitleImpl ?? lazyGenerateSessionTitle,
       sessionDb: opts.sessionDb ?? null,
-      writePersistedSessionSnapshotImpl: opts.writePersistedSessionSnapshotImpl ?? writePersistedSessionSnapshot,
+      writePersistedSessionSnapshotImpl:
+        opts.writePersistedSessionSnapshotImpl ?? writePersistedSessionSnapshot,
       createAgentSessionImpl: opts.createAgentSessionImpl,
       listAgentSessionsImpl: opts.listAgentSessionsImpl,
       sendAgentInputImpl: opts.sendAgentInputImpl,
@@ -490,7 +533,10 @@ export class AgentSession {
       if (this.bufferDisconnectedEvents && shouldReplayDisconnectedEvent(evt)) {
         this.disconnectedReplayEvents.push(evt);
         if (this.disconnectedReplayEvents.length > MAX_DISCONNECTED_REPLAY_EVENTS) {
-          this.disconnectedReplayEvents.splice(0, this.disconnectedReplayEvents.length - MAX_DISCONNECTED_REPLAY_EVENTS);
+          this.disconnectedReplayEvents.splice(
+            0,
+            this.disconnectedReplayEvents.length - MAX_DISCONNECTED_REPLAY_EVENTS,
+          );
         }
       }
       this.sessionSnapshotProjector?.applyEvent(evt);
@@ -513,17 +559,20 @@ export class AgentSession {
       deps: this.deps,
       emit,
       emitError: (code, source, message) => this.emitError(code, source, message),
-      emitTelemetry: (name, status, attributes, durationMs) => this.emitTelemetry(name, status, attributes, durationMs),
+      emitTelemetry: (name, status, attributes, durationMs) =>
+        this.emitTelemetry(name, status, attributes, durationMs),
       formatError: (err) => this.formatErrorMessage(err),
       guardBusy: () => this.guardBusy(),
       getCoworkPaths: () => this.getCoworkPaths(),
       runProviderConnect: async (providerOpts) => await this.runProviderConnect(providerOpts),
       getMcpServerByName: async (nameRaw) => await this.getMcpServerByName(nameRaw),
       queuePersistSessionSnapshot: (reason) => this.queuePersistSessionSnapshot(reason),
-      updateSessionInfo: (patch, infoOpts) => this.metadataManager.updateSessionInfo(patch, infoOpts),
+      updateSessionInfo: (patch, infoOpts) =>
+        this.metadataManager.updateSessionInfo(patch, infoOpts),
       emitConfigUpdated: () => this.metadataManager.emitConfigUpdated(),
       syncSessionBackupAvailability: async () => {},
-      refreshProviderStatus: async (opts) => await this.getProviderCatalogManager().refreshProviderStatus(opts),
+      refreshProviderStatus: async (opts) =>
+        await this.getProviderCatalogManager().refreshProviderStatus(opts),
       emitProviderCatalog: async () => await this.getProviderCatalogManager().emitProviderCatalog(),
       emitMcpServers: async () => await this.getMcpManager().emitMcpServers(),
       getSkillMutationBlockReason: () =>
@@ -574,7 +623,8 @@ export class AgentSession {
       onPersistedLastEventSeq: (lastEventSeq) => {
         this.persistedLastEventSeq = lastEventSeq;
       },
-      emitTelemetry: (name, status, attributes, durationMs) => this.emitTelemetry(name, status, attributes, durationMs),
+      emitTelemetry: (name, status, attributes, durationMs) =>
+        this.emitTelemetry(name, status, attributes, durationMs),
       emitError: (message) => this.emitError("internal_error", "session", message),
       formatError: (err) => this.formatErrorMessage(err),
     });
@@ -645,7 +695,9 @@ export class AgentSession {
         emit: (evt) => this.context.emit(evt),
         log: (line) => this.context.emit({ type: "log", sessionId: this.id, line }),
       });
-      this.a2uiSurfaceManager.hydrate(deriveA2uiSurfacesFromSnapshot(this.sessionSnapshotProjector.getSnapshot()));
+      this.a2uiSurfaceManager.hydrate(
+        deriveA2uiSurfacesFromSnapshot(this.sessionSnapshotProjector.getSnapshot()),
+      );
     }
     return this.a2uiSurfaceManager;
   }
@@ -667,7 +719,8 @@ export class AgentSession {
         getProviderStatuses: this.deps.getProviderStatusesImpl,
         emit: (evt) => this.context.emit(evt),
         emitError: (code, source, message) => this.context.emitError(code, source, message),
-        emitTelemetry: (name, status, attributes, durationMs) => this.emitTelemetry(name, status, attributes, durationMs),
+        emitTelemetry: (name, status, attributes, durationMs) =>
+          this.emitTelemetry(name, status, attributes, durationMs),
         formatError: (err) => this.formatErrorMessage(err),
       });
     }
@@ -689,7 +742,8 @@ export class AgentSession {
         },
         emit: (evt) => this.context.emit(evt),
         emitError: (code, source, message) => this.context.emitError(code, source, message),
-        emitTelemetry: (name, status, attributes, durationMs) => this.emitTelemetry(name, status, attributes, durationMs),
+        emitTelemetry: (name, status, attributes, durationMs) =>
+          this.emitTelemetry(name, status, attributes, durationMs),
         formatError: (err) => this.formatErrorMessage(err),
         log: (line) => this.log(line),
         clearProviderState: () => {
@@ -699,8 +753,10 @@ export class AgentSession {
         updateSessionInfo: (patch) => this.metadataManager.updateSessionInfo(patch),
         queuePersistSessionSnapshot: (reason) => this.queuePersistSessionSnapshot(reason),
         emitConfigUpdated: () => this.metadataManager.emitConfigUpdated(),
-        emitProviderCatalog: async () => await this.getProviderCatalogManager().emitProviderCatalog(),
-        refreshProviderStatus: async (opts) => await this.getProviderCatalogManager().refreshProviderStatus(opts),
+        emitProviderCatalog: async () =>
+          await this.getProviderCatalogManager().emitProviderCatalog(),
+        refreshProviderStatus: async (opts) =>
+          await this.getProviderCatalogManager().refreshProviderStatus(opts),
         getGlobalAuthPaths: () => this.getGlobalAuthPaths(),
         runProviderConnect: async (providerOpts) => await this.runProviderConnect(providerOpts),
       });
@@ -744,13 +800,17 @@ export class AgentSession {
     initialSessionSnapshot?: SessionSnapshot | null;
   }): AgentSession {
     const { persisted } = opts;
-    const resolvedPersistedModel = getKnownResolvedModelMetadata(persisted.provider, persisted.model);
+    const resolvedPersistedModel = getKnownResolvedModelMetadata(
+      persisted.provider,
+      persisted.model,
+    );
     const resumedModel = resolvedPersistedModel ?? defaultSupportedModel(persisted.provider);
-    const migratedUnsupportedModel = resolvedPersistedModel === null && !isDynamicModelProvider(persisted.provider);
+    const migratedUnsupportedModel =
+      resolvedPersistedModel === null && !isDynamicModelProvider(persisted.provider);
     const migratedAliasedModel =
-      resolvedPersistedModel !== null
-      && resolvedPersistedModel.id !== persisted.model
-      && !isDynamicModelProvider(persisted.provider);
+      resolvedPersistedModel !== null &&
+      resolvedPersistedModel.id !== persisted.model &&
+      !isDynamicModelProvider(persisted.provider);
     const migratedLegacyModel = migratedUnsupportedModel || migratedAliasedModel;
     const clearedContinuationState = migratedLegacyModel && persisted.providerState !== null;
     const config: AgentConfig = {
@@ -761,7 +821,9 @@ export class AgentSession {
       enableMcp: persisted.enableMcp,
       outputDirectory: persisted.outputDirectory,
       uploadsDirectory: persisted.uploadsDirectory,
-      ...(persisted.providerOptions !== undefined ? { providerOptions: structuredClone(persisted.providerOptions) } : {}),
+      ...(persisted.providerOptions !== undefined
+        ? { providerOptions: structuredClone(persisted.providerOptions) }
+        : {}),
     };
 
     const sessionInfo = {
@@ -779,11 +841,17 @@ export class AgentSession {
       ...(typeof persisted.depth === "number" ? { depth: persisted.depth } : {}),
       ...(persisted.nickname ? { nickname: persisted.nickname } : {}),
       ...(persisted.taskType ? { taskType: persisted.taskType } : {}),
-      ...(persisted.targetPaths !== undefined && persisted.targetPaths !== null ? { targetPaths: persisted.targetPaths } : {}),
+      ...(persisted.targetPaths !== undefined && persisted.targetPaths !== null
+        ? { targetPaths: persisted.targetPaths }
+        : {}),
       ...(persisted.requestedModel ? { requestedModel: persisted.requestedModel } : {}),
       ...(persisted.effectiveModel ? { effectiveModel: persisted.effectiveModel } : {}),
-      ...(persisted.requestedReasoningEffort ? { requestedReasoningEffort: persisted.requestedReasoningEffort } : {}),
-      ...(persisted.effectiveReasoningEffort ? { effectiveReasoningEffort: persisted.effectiveReasoningEffort } : {}),
+      ...(persisted.requestedReasoningEffort
+        ? { requestedReasoningEffort: persisted.requestedReasoningEffort }
+        : {}),
+      ...(persisted.effectiveReasoningEffort
+        ? { effectiveReasoningEffort: persisted.effectiveReasoningEffort }
+        : {}),
       ...(persisted.executionState ? { executionState: persisted.executionState } : {}),
       ...(persisted.lastMessagePreview ? { lastMessagePreview: persisted.lastMessagePreview } : {}),
     };
@@ -821,7 +889,9 @@ export class AgentSession {
       deleteWorkspaceBackupCheckpointImpl: opts.deleteWorkspaceBackupCheckpointImpl,
       deleteWorkspaceBackupEntryImpl: opts.deleteWorkspaceBackupEntryImpl,
       getWorkspaceBackupDeltaImpl: opts.getWorkspaceBackupDeltaImpl,
-      ...(opts.initialSessionSnapshot ? { initialSessionSnapshot: opts.initialSessionSnapshot } : {}),
+      ...(opts.initialSessionSnapshot
+        ? { initialSessionSnapshot: opts.initialSessionSnapshot }
+        : {}),
       initialLastEventSeq: persisted.lastEventSeq,
       hydratedState: {
         sessionId: persisted.sessionId,
@@ -839,7 +909,9 @@ export class AgentSession {
     });
 
     if (migratedLegacyModel) {
-      const migrationDescriptor = migratedUnsupportedModel ? "unsupported model" : "legacy model alias";
+      const migrationDescriptor = migratedUnsupportedModel
+        ? "unsupported model"
+        : "legacy model alias";
       opts.emit({
         type: "log",
         sessionId: persisted.sessionId,
@@ -861,7 +933,8 @@ export class AgentSession {
     snapshot.parentSessionId = this.state.sessionInfo.parentSessionId ?? null;
     snapshot.role = this.state.sessionInfo.role ?? null;
     snapshot.mode = this.state.sessionInfo.mode ?? null;
-    snapshot.depth = typeof this.state.sessionInfo.depth === "number" ? this.state.sessionInfo.depth : null;
+    snapshot.depth =
+      typeof this.state.sessionInfo.depth === "number" ? this.state.sessionInfo.depth : null;
     snapshot.nickname = this.state.sessionInfo.nickname ?? null;
     snapshot.taskType = this.state.sessionInfo.taskType ?? null;
     snapshot.targetPaths = this.state.sessionInfo.targetPaths ?? null;
@@ -874,13 +947,16 @@ export class AgentSession {
     snapshot.createdAt = this.state.sessionInfo.createdAt;
     snapshot.updatedAt = this.state.sessionInfo.updatedAt;
     snapshot.messageCount = this.state.allMessages.length;
-    snapshot.lastEventSeq = this.persistenceManager.getProjectedLastEventSeq(this.persistedLastEventSeq);
+    snapshot.lastEventSeq = this.persistenceManager.getProjectedLastEventSeq(
+      this.persistedLastEventSeq,
+    );
     snapshot.todos = structuredClone(this.state.todos);
     snapshot.sessionUsage = this.state.costTracker?.getSnapshot() ?? null;
-    snapshot.lastTurnUsage = snapshot.sessionUsage?.turns?.length
+    const latestTurnUsage = snapshot.sessionUsage?.turns?.at(-1);
+    snapshot.lastTurnUsage = latestTurnUsage
       ? {
-          turnId: snapshot.sessionUsage.turns[snapshot.sessionUsage.turns.length - 1]!.turnId,
-          usage: { ...snapshot.sessionUsage.turns[snapshot.sessionUsage.turns.length - 1]!.usage },
+          turnId: latestTurnUsage.turnId,
+          usage: { ...latestTurnUsage.usage },
         }
       : snapshot.lastTurnUsage;
     snapshot.hasPendingAsk = this.hasPendingAsk;
@@ -899,7 +975,8 @@ export class AgentSession {
     snapshot.parentSessionId = this.state.sessionInfo.parentSessionId ?? null;
     snapshot.role = this.state.sessionInfo.role ?? null;
     snapshot.mode = this.state.sessionInfo.mode ?? null;
-    snapshot.depth = typeof this.state.sessionInfo.depth === "number" ? this.state.sessionInfo.depth : null;
+    snapshot.depth =
+      typeof this.state.sessionInfo.depth === "number" ? this.state.sessionInfo.depth : null;
     snapshot.nickname = this.state.sessionInfo.nickname ?? null;
     snapshot.taskType = this.state.sessionInfo.taskType ?? null;
     snapshot.targetPaths = this.state.sessionInfo.targetPaths ?? null;
@@ -912,13 +989,16 @@ export class AgentSession {
     snapshot.createdAt = this.state.sessionInfo.createdAt;
     snapshot.updatedAt = this.state.sessionInfo.updatedAt;
     snapshot.messageCount = this.state.allMessages.length;
-    snapshot.lastEventSeq = this.persistenceManager.getProjectedLastEventSeq(this.persistedLastEventSeq);
+    snapshot.lastEventSeq = this.persistenceManager.getProjectedLastEventSeq(
+      this.persistedLastEventSeq,
+    );
     snapshot.todos = structuredClone(this.state.todos);
     snapshot.sessionUsage = this.state.costTracker?.getSnapshot() ?? null;
-    snapshot.lastTurnUsage = snapshot.sessionUsage?.turns?.length
+    const latestTurnUsage = snapshot.sessionUsage?.turns?.at(-1);
+    snapshot.lastTurnUsage = latestTurnUsage
       ? {
-          turnId: snapshot.sessionUsage.turns[snapshot.sessionUsage.turns.length - 1]!.turnId,
-          usage: { ...snapshot.sessionUsage.turns[snapshot.sessionUsage.turns.length - 1]!.usage },
+          turnId: latestTurnUsage.turnId,
+          usage: { ...latestTurnUsage.usage },
         }
       : snapshot.lastTurnUsage;
     snapshot.hasPendingAsk = this.hasPendingAsk;
@@ -968,14 +1048,6 @@ export class AgentSession {
 
   get hasPendingApproval(): boolean {
     return this.interactionManager.hasPendingApproval;
-  }
-
-  private get pendingAskEvents() {
-    return this.interactionManager.pendingAskEventsForReplay;
-  }
-
-  private get pendingApprovalEvents() {
-    return this.interactionManager.pendingApprovalEventsForReplay;
   }
 
   getEnableMcp() {
@@ -1199,7 +1271,13 @@ export class AgentSession {
     if (this.deps.persistProjectConfigPatchImpl) {
       await this.deps.persistProjectConfigPatchImpl({ enableMemory });
     }
-    this.context.emit({ type: "session_settings", sessionId: this.id, enableMcp: this.getEnableMcp(), enableMemory: this.getEnableMemory(), memoryRequireApproval: this.getMemoryRequireApproval() });
+    this.context.emit({
+      type: "session_settings",
+      sessionId: this.id,
+      enableMcp: this.getEnableMcp(),
+      enableMemory: this.getEnableMemory(),
+      memoryRequireApproval: this.getMemoryRequireApproval(),
+    });
     this.queuePersistSessionSnapshot("session.enable_memory");
     await this.refreshSystemPromptWithSkills("session.enable_memory");
   }
@@ -1209,7 +1287,13 @@ export class AgentSession {
     if (this.deps.persistProjectConfigPatchImpl) {
       await this.deps.persistProjectConfigPatchImpl({ memoryRequireApproval });
     }
-    this.context.emit({ type: "session_settings", sessionId: this.id, enableMcp: this.getEnableMcp(), enableMemory: this.getEnableMemory(), memoryRequireApproval: this.getMemoryRequireApproval() });
+    this.context.emit({
+      type: "session_settings",
+      sessionId: this.id,
+      enableMcp: this.getEnableMcp(),
+      enableMemory: this.getEnableMemory(),
+      memoryRequireApproval: this.getMemoryRequireApproval(),
+    });
     this.queuePersistSessionSnapshot("session.memory_require_approval");
   }
 
@@ -1218,7 +1302,11 @@ export class AgentSession {
       const memories = await this.memoryStore.list(scope);
       this.context.emit({ type: "memory_list", sessionId: this.id, memories });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to list memories: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to list memories: ${String(err)}`,
+      );
     }
   }
 
@@ -1226,7 +1314,11 @@ export class AgentSession {
     try {
       await this.memoryStore.upsert(scope, { id, content });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to upsert memory: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to upsert memory: ${String(err)}`,
+      );
       return;
     }
     await this.emitMemories();
@@ -1237,7 +1329,11 @@ export class AgentSession {
     try {
       await this.memoryStore.remove(scope, id);
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to delete memory: ${String(err)}`);
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to delete memory: ${String(err)}`,
+      );
       return;
     }
     await this.emitMemories();
@@ -1357,9 +1453,10 @@ export class AgentSession {
         return;
       }
 
-      const preparedModel = opts.provider !== undefined && opts.model !== undefined
-        ? await this.getProviderAuthManager().prepareModelSelection(opts.model, opts.provider)
-        : null;
+      const preparedModel =
+        opts.provider !== undefined && opts.model !== undefined
+          ? await this.getProviderAuthManager().prepareModelSelection(opts.model, opts.provider)
+          : null;
       if (opts.provider !== undefined && opts.model !== undefined && !preparedModel) {
         return;
       }
@@ -1375,14 +1472,15 @@ export class AgentSession {
         return;
       }
 
-      const preparedEnableMcp = typeof opts.enableMcp === "boolean"
-        ? this.getMcpManager().prepareEnableMcpChange(opts.enableMcp)
-        : null;
+      const preparedEnableMcp =
+        typeof opts.enableMcp === "boolean"
+          ? this.getMcpManager().prepareEnableMcpChange(opts.enableMcp)
+          : null;
 
       const changed =
-        (preparedModel?.changed ?? false)
-        || (preparedConfig?.changed ?? false)
-        || (preparedEnableMcp?.changed ?? false);
+        (preparedModel?.changed ?? false) ||
+        (preparedConfig?.changed ?? false) ||
+        (preparedEnableMcp?.changed ?? false);
       if (!changed) {
         this.emitTelemetry("session.defaults.noop", "ok", {
           sessionId: this.id,
@@ -1464,11 +1562,19 @@ export class AgentSession {
     await this.getProviderAuthManager().logoutProviderAuth(providerRaw);
   }
 
-  async callbackProviderAuth(providerRaw: AgentConfig["provider"], methodIdRaw: string, codeRaw?: string) {
+  async callbackProviderAuth(
+    providerRaw: AgentConfig["provider"],
+    methodIdRaw: string,
+    codeRaw?: string,
+  ) {
     await this.getProviderAuthManager().callbackProviderAuth(providerRaw, methodIdRaw, codeRaw);
   }
 
-  async setProviderApiKey(providerRaw: AgentConfig["provider"], methodIdRaw: string, apiKeyRaw: string) {
+  async setProviderApiKey(
+    providerRaw: AgentConfig["provider"],
+    methodIdRaw: string,
+    apiKeyRaw: string,
+  ) {
     await this.getProviderAuthManager().setProviderApiKey(providerRaw, methodIdRaw, apiKeyRaw);
   }
 
@@ -1480,7 +1586,10 @@ export class AgentSession {
     await this.getProviderAuthManager().setProviderConfig(providerRaw, methodIdRaw, values);
   }
 
-  async copyProviderApiKey(providerRaw: AgentConfig["provider"], sourceProviderRaw: AgentConfig["provider"]) {
+  async copyProviderApiKey(
+    providerRaw: AgentConfig["provider"],
+    sourceProviderRaw: AgentConfig["provider"],
+  ) {
     await this.getProviderAuthManager().copyProviderApiKey(providerRaw, sourceProviderRaw);
   }
 
@@ -1498,7 +1607,9 @@ export class AgentSession {
   handleApprovalResponse(requestId: string, approved: boolean) {
     const handled = this.getTurnExecutionManager().handleApprovalResponse(requestId, approved);
     if (handled) {
-      this.sessionSnapshotProjector.syncSessionState({ hasPendingApproval: this.hasPendingApproval });
+      this.sessionSnapshotProjector.syncSessionState({
+        hasPendingApproval: this.hasPendingApproval,
+      });
     }
   }
 
@@ -1520,8 +1631,8 @@ export class AgentSession {
     if (this.state.persistenceStatus === "active") return;
     this.state.persistenceStatus = "active";
     if (
-      (this.state.sessionInfo.sessionKind ?? "root") === "agent"
-      && this.state.sessionInfo.executionState === "closed"
+      (this.state.sessionInfo.sessionKind ?? "root") === "agent" &&
+      this.state.sessionInfo.executionState === "closed"
     ) {
       this.metadataManager.updateSessionInfo({
         executionState: this.currentTurnOutcome === "error" ? "errored" : "completed",
@@ -1567,11 +1678,14 @@ export class AgentSession {
     includeHarnessContext?: boolean;
   }): SeededSessionContext {
     return {
-      messages: opts.contextMode === "brief" && opts.briefing
-        ? [{ role: "user", content: `Parent briefing:\n${opts.briefing}` }]
-        : [],
+      messages:
+        opts.contextMode === "brief" && opts.briefing
+          ? [{ role: "user", content: `Parent briefing:\n${opts.briefing}` }]
+          : [],
       todos: opts.includeParentTodos ? structuredClone(this.state.todos) : [],
-      harnessContext: opts.includeHarnessContext ? this.deps.harnessContextStore.get(this.id) : null,
+      harnessContext: opts.includeHarnessContext
+        ? this.deps.harnessContextStore.get(this.id)
+        : null,
     };
   }
 
@@ -1591,12 +1705,14 @@ export class AgentSession {
     await this.getAdminManager().listAgentSessions();
   }
 
-  async createAgentSession(opts: AgentSpawnContextOptions & {
-    message: string;
-    role?: AgentRole;
-    model?: string;
-    reasoningEffort?: AgentReasoningEffort;
-  }) {
+  async createAgentSession(
+    opts: AgentSpawnContextOptions & {
+      message: string;
+      role?: AgentRole;
+      model?: string;
+      reasoningEffort?: AgentReasoningEffort;
+    },
+  ) {
     await this.getAdminManager().createAgentSession(opts);
   }
 
@@ -1709,10 +1825,16 @@ export class AgentSession {
     inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
   ) {
     await this.pendingConfigMutation.catch(() => {});
-    if (!await this.ensureSystemPromptReady()) {
+    if (!(await this.ensureSystemPromptReady())) {
       return;
     }
-    await this.getTurnExecutionManager().sendUserMessage(text, clientMessageId, displayText, attachments, inputParts);
+    await this.getTurnExecutionManager().sendUserMessage(
+      text,
+      clientMessageId,
+      displayText,
+      attachments,
+      inputParts,
+    );
   }
 
   async sendSteerMessage(
@@ -1723,13 +1845,22 @@ export class AgentSession {
     inputParts?: import("../jsonrpc/routes/shared").OrderedInputPart[],
   ) {
     await this.pendingConfigMutation.catch(() => {});
-    if (!await this.ensureSystemPromptReady()) {
+    if (!(await this.ensureSystemPromptReady())) {
       return;
     }
-    await this.getTurnExecutionManager().sendSteerMessage(text, expectedTurnId, clientMessageId, attachments, inputParts);
+    await this.getTurnExecutionManager().sendSteerMessage(
+      text,
+      expectedTurnId,
+      clientMessageId,
+      attachments,
+      inputParts,
+    );
   }
 
-  validateA2uiAction(opts: { surfaceId: string; componentId: string }): ReturnType<A2uiSurfaceManager["validateAction"]> {
+  validateA2uiAction(opts: {
+    surfaceId: string;
+    componentId: string;
+  }): ReturnType<A2uiSurfaceManager["validateAction"]> {
     return this.getA2uiSurfaceManager().validateAction(opts);
   }
 
@@ -1803,7 +1934,9 @@ export class AgentSession {
     return this.runtimeSupport.getGlobalAuthPaths();
   }
 
-  private async runProviderConnect(opts: Parameters<typeof connectModelProvider>[0]): Promise<ConnectProviderResult> {
+  private async runProviderConnect(
+    opts: Parameters<typeof connectModelProvider>[0],
+  ): Promise<ConnectProviderResult> {
     return await this.runtimeSupport.runProviderConnect(opts);
   }
 
@@ -1811,7 +1944,10 @@ export class AgentSession {
     return await this.runtimeSupport.getMcpServerByName(nameRaw);
   }
 
-  private waitForPromptResponse<T>(requestId: string, bucket: Map<string, PromiseWithResolvers<T>>): Promise<T> {
+  private waitForPromptResponse<T>(
+    requestId: string,
+    bucket: Map<string, PromiseWithResolvers<T>>,
+  ): Promise<T> {
     return this.runtimeSupport.waitForPromptResponse(requestId, bucket);
   }
 
@@ -1858,7 +1994,12 @@ export class AgentSession {
     });
   }
 
-  private emitTelemetry(name: string, status: "ok" | "error", attributes?: Record<string, string | number | boolean>, durationMs?: number) {
+  private emitTelemetry(
+    name: string,
+    status: "ok" | "error",
+    attributes?: Record<string, string | number | boolean>,
+    durationMs?: number,
+  ) {
     this.runtimeSupport.emitTelemetry(name, status, attributes, durationMs);
   }
 }

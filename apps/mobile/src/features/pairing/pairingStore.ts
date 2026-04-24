@@ -1,10 +1,9 @@
 import { create } from "zustand";
-
-import {
-  SecureTransportSnapshot,
-  defaultSecureTransportClient,
-} from "../relay/secureTransportClient";
 import type { RelayTrustedDesktop } from "../relay/relayTypes";
+import {
+  defaultSecureTransportClient,
+  type SecureTransportSnapshot,
+} from "../relay/secureTransportClient";
 import type { PairingQrPayload } from "./pairingTypes";
 
 export type PairingStoreState = {
@@ -79,9 +78,7 @@ export const usePairingStore = create<PairingStoreState>((set, get) => ({
     });
 
     set({
-      listenerCleanup: [
-        unsubscribe,
-      ],
+      listenerCleanup: [unsubscribe],
     });
   },
   resetTransportListeners() {

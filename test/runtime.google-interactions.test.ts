@@ -2,16 +2,15 @@ import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import { __internal as citationMetadataInternal } from "../src/server/citationMetadata";
-import { createGoogleInteractionsRuntime } from "../src/runtime/googleInteractionsRuntime";
 import { buildGooglePrepareStep } from "../src/providers/googleReplay";
+import { createGoogleInteractionsRuntime } from "../src/runtime/googleInteractionsRuntime";
 import {
-  __internal as googleNativeInternal,
   type GoogleNativeStepRequest,
   type GoogleNativeStepResult,
+  __internal as googleNativeInternal,
 } from "../src/runtime/googleNativeInteractions";
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
+import { __internal as citationMetadataInternal } from "../src/server/citationMetadata";
 import type { AgentConfig, ModelMessage } from "../src/types";
 
 function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -42,7 +41,10 @@ function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): Agen
   };
 }
 
-function makeParams(config: AgentConfig, overrides: Partial<RuntimeRunTurnParams> = {}): RuntimeRunTurnParams {
+function makeParams(
+  config: AgentConfig,
+  overrides: Partial<RuntimeRunTurnParams> = {},
+): RuntimeRunTurnParams {
   return {
     config,
     system: "You are helpful.",
@@ -67,9 +69,7 @@ describe("google interactions runtime", () => {
           api: "google-interactions",
           provider: "google",
           model: "gemini-3-flash-preview",
-          content: [
-            { type: "text", text: "Hello! How can I help you?" },
-          ],
+          content: [{ type: "text", text: "Hello! How can I help you?" }],
           usage: { input: 10, output: 20, totalTokens: 30 },
           stopReason: "stop",
           timestamp: Date.now(),
@@ -104,7 +104,11 @@ describe("google interactions runtime", () => {
 
       expect(first).toBe(second);
       expect(googleNativeInternal.__testGetGoogleInteractionsClientCacheSize()).toBe(1);
-      expect(warn.mock.calls.filter(([message]) => String(message).includes("GoogleGenAI.interactions: Interactions usage is experimental")).length).toBe(1);
+      expect(
+        warn.mock.calls.filter(([message]) =>
+          String(message).includes("GoogleGenAI.interactions: Interactions usage is experimental"),
+        ).length,
+      ).toBe(1);
     } finally {
       console.warn = realWarn;
       googleNativeInternal.__testResetGoogleInteractionsClientCache();
@@ -222,9 +226,7 @@ describe("google interactions runtime", () => {
         return {
           assistant: {
             role: "assistant",
-            content: [
-              { type: "text", text: "Tool result received." },
-            ],
+            content: [{ type: "text", text: "Tool result received." }],
             usage: { input: 20, output: 10, totalTokens: 30 },
             stopReason: "stop",
             timestamp: Date.now(),
@@ -235,19 +237,21 @@ describe("google interactions runtime", () => {
     });
 
     let toolExecuted = false;
-    const result = await runtime.runTurn(makeParams(makeConfig(homeDir), {
-      maxSteps: 5,
-      tools: {
-        testTool: {
-          description: "A test tool",
-          inputSchema: undefined,
-          execute: async (input: unknown) => {
-            toolExecuted = true;
-            return { type: "text", value: "tool result" };
+    const result = await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        maxSteps: 5,
+        tools: {
+          testTool: {
+            description: "A test tool",
+            inputSchema: undefined,
+            execute: async (input: unknown) => {
+              toolExecuted = true;
+              return { type: "text", value: "tool result" };
+            },
           },
         },
-      },
-    }));
+      }),
+    );
 
     expect(toolExecuted).toBe(true);
     expect(stepCount).toBe(2);
@@ -264,9 +268,7 @@ describe("google interactions runtime", () => {
           return {
             assistant: {
               role: "assistant",
-              content: [
-                { type: "toolCall", id: "call_1", name: "testTool", arguments: {} },
-              ],
+              content: [{ type: "toolCall", id: "call_1", name: "testTool", arguments: {} }],
               usage: { input: 100, output: 10, totalTokens: 110 },
               stopReason: "tool_calls",
               timestamp: Date.now(),
@@ -287,16 +289,18 @@ describe("google interactions runtime", () => {
       },
     });
 
-    const result = await runtime.runTurn(makeParams(makeConfig(homeDir), {
-      maxSteps: 5,
-      tools: {
-        testTool: {
-          description: "test",
-          inputSchema: undefined,
-          execute: async () => "ok",
+    const result = await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        maxSteps: 5,
+        tools: {
+          testTool: {
+            description: "test",
+            inputSchema: undefined,
+            execute: async () => "ok",
+          },
         },
-      },
-    }));
+      }),
+    );
 
     expect(result.usage).toBeDefined();
     expect(result.usage!.promptTokens).toBeGreaterThan(0);
@@ -325,24 +329,26 @@ describe("google interactions runtime", () => {
       },
     });
 
-    const result = await runtime.runTurn(makeParams(makeConfig(homeDir), {
-      messages: [
-        { role: "user", content: "Find the latest pricing" },
-        { role: "assistant", content: [{ type: "text", text: "Here are the latest prices." }] },
-        { role: "user", content: "Open the second result" },
-      ] as ModelMessage[],
-      allMessages: [
-        { role: "user", content: "Find the latest pricing" },
-        { role: "assistant", content: [{ type: "text", text: "Here are the latest prices." }] },
-        { role: "user", content: "Open the second result" },
-      ] as ModelMessage[],
-      providerState: {
-        provider: "google",
-        model: "gemini-3-flash-preview",
-        interactionId: "interaction_prev",
-        updatedAt: "2026-03-18T12:00:00.000Z",
-      },
-    }));
+    const result = await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        messages: [
+          { role: "user", content: "Find the latest pricing" },
+          { role: "assistant", content: [{ type: "text", text: "Here are the latest prices." }] },
+          { role: "user", content: "Open the second result" },
+        ] as ModelMessage[],
+        allMessages: [
+          { role: "user", content: "Find the latest pricing" },
+          { role: "assistant", content: [{ type: "text", text: "Here are the latest prices." }] },
+          { role: "user", content: "Open the second result" },
+        ] as ModelMessage[],
+        providerState: {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          interactionId: "interaction_prev",
+          updatedAt: "2026-03-18T12:00:00.000Z",
+        },
+      }),
+    );
 
     expect(seenRequests).toHaveLength(1);
     expect(seenRequests[0]?.previousInteractionId).toBe("interaction_prev");
@@ -375,18 +381,20 @@ describe("google interactions runtime", () => {
       },
     });
 
-    await runtime.runTurn(makeParams(makeConfig(homeDir), {
-      prepareStep: async () => ({
-        providerOptions: {
-          google: {
-            thinkingConfig: {
-              includeThoughts: false,
-              thinkingLevel: "high",
+    await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        prepareStep: async () => ({
+          providerOptions: {
+            google: {
+              thinkingConfig: {
+                includeThoughts: false,
+                thinkingLevel: "high",
+              },
             },
           },
-        },
+        }),
       }),
-    }));
+    );
 
     expect(seenStreamOptions).toHaveLength(1);
     expect(seenStreamOptions[0]?.thinkingLevel).toBe("high");
@@ -446,17 +454,19 @@ describe("google interactions runtime", () => {
       (line) => prepareLogs.push(line),
     );
 
-    const result = await runtime.runTurn(makeParams(makeConfig(homeDir), {
-      maxSteps: 5,
-      prepareStep,
-      tools: {
-        testTool: {
-          description: "test",
-          inputSchema: undefined,
-          execute: async () => ({ type: "text", value: "tool result" }),
+    const result = await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        maxSteps: 5,
+        prepareStep,
+        tools: {
+          testTool: {
+            description: "test",
+            inputSchema: undefined,
+            execute: async () => ({ type: "text", value: "tool result" }),
+          },
         },
-      },
-    }));
+      }),
+    );
 
     expect(seenStreamOptions).toHaveLength(2);
     expect(seenStreamOptions[0]?.thinkingSummaries).toBe("auto");
@@ -516,16 +526,18 @@ describe("google interactions runtime", () => {
       },
     });
 
-    await runtime.runTurn(makeParams(makeConfig(homeDir), {
-      maxSteps: 5,
-      tools: {
-        testTool: {
-          description: "A test tool",
-          inputSchema: undefined,
-          execute: async () => ({ type: "text", value: "tool result" }),
+    await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        maxSteps: 5,
+        tools: {
+          testTool: {
+            description: "A test tool",
+            inputSchema: undefined,
+            execute: async () => ({ type: "text", value: "tool result" }),
+          },
         },
-      },
-    }));
+      }),
+    );
 
     expect(seenMessages).toHaveLength(2);
     expect(seenMessages[0]?.[0]?.role).toBe("user");
@@ -549,11 +561,13 @@ describe("google interactions runtime", () => {
     });
 
     const streamParts: unknown[] = [];
-    await runtime.runTurn(makeParams(makeConfig(homeDir), {
-      onModelStreamPart: async (part) => {
-        streamParts.push(part);
-      },
-    }));
+    await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        onModelStreamPart: async (part) => {
+          streamParts.push(part);
+        },
+      }),
+    );
 
     const types = streamParts.map((p) => (p as Record<string, unknown>).type);
     expect(types).toContain("start-step");
@@ -599,19 +613,21 @@ describe("google interactions runtime", () => {
     });
 
     const streamParts: Array<Record<string, unknown>> = [];
-    await runtime.runTurn(makeParams(makeConfig(homeDir), {
-      maxSteps: 5,
-      tools: {
-        testTool: {
-          description: "A test tool",
-          inputSchema: undefined,
-          execute: async () => ({ type: "text", value: "tool result" }),
+    await runtime.runTurn(
+      makeParams(makeConfig(homeDir), {
+        maxSteps: 5,
+        tools: {
+          testTool: {
+            description: "A test tool",
+            inputSchema: undefined,
+            execute: async () => ({ type: "text", value: "tool result" }),
+          },
         },
-      },
-      onModelStreamPart: async (part) => {
-        streamParts.push(part as Record<string, unknown>);
-      },
-    }));
+        onModelStreamPart: async (part) => {
+          streamParts.push(part as Record<string, unknown>);
+        },
+      }),
+    );
 
     const types = streamParts.map((part) => part.type);
     expect(types.filter((type) => type === "start")).toHaveLength(1);
@@ -638,11 +654,13 @@ describe("google interactions runtime", () => {
 
     let errorCaught: unknown;
     try {
-      await runtime.runTurn(makeParams(makeConfig(homeDir), {
-        onModelError: async (error) => {
-          errorCaught = error;
-        },
-      }));
+      await runtime.runTurn(
+        makeParams(makeConfig(homeDir), {
+          onModelError: async (error) => {
+            errorCaught = error;
+          },
+        }),
+      );
     } catch (error) {
       expect((error as Error).message).toBe("API rate limit exceeded");
     }
@@ -724,8 +742,18 @@ describe("google native interactions request building", () => {
     });
 
     expect(request.tools).toEqual([
-      { type: "function", name: "bash", description: "Run bash commands", parameters: { type: "object" } },
-      { type: "function", name: "webFetch", description: "Fetch a web page", parameters: { type: "object" } },
+      {
+        type: "function",
+        name: "bash",
+        description: "Run bash commands",
+        parameters: { type: "object" },
+      },
+      {
+        type: "function",
+        name: "webFetch",
+        description: "Fetch a web page",
+        parameters: { type: "object" },
+      },
       { type: "google_search", search_types: ["web_search"] },
       { type: "url_context" },
     ]);
@@ -742,7 +770,9 @@ describe("google native interactions request building", () => {
         maxTokens: 65_536,
       },
       systemPrompt: "You are helpful.",
-      messages: [{ role: "user", content: "Find coffee shops near me and read their websites" }] as ModelMessage[],
+      messages: [
+        { role: "user", content: "Find coffee shops near me and read their websites" },
+      ] as ModelMessage[],
       tools: [{ name: "bash", description: "Run bash commands", parameters: { type: "object" } }],
       streamOptions: {
         nativeWebSearch: true,
@@ -750,7 +780,12 @@ describe("google native interactions request building", () => {
     });
 
     expect(request.tools).toEqual([
-      { type: "function", name: "bash", description: "Run bash commands", parameters: { type: "object" } },
+      {
+        type: "function",
+        name: "bash",
+        description: "Run bash commands",
+        parameters: { type: "object" },
+      },
     ]);
   });
 
@@ -776,18 +811,22 @@ describe("google native interactions request building", () => {
       },
     });
 
-    await runtime.runTurn(makeParams(makeConfig(homeDir, {
-      model: "gemini-3.1-pro-preview",
-      preferredChildModel: "gemini-3.1-pro-preview",
-      providerOptions: {
-        google: {
-          thinkingConfig: {
-            includeThoughts: true,
-            thinkingLevel: "minimal",
+    await runtime.runTurn(
+      makeParams(
+        makeConfig(homeDir, {
+          model: "gemini-3.1-pro-preview",
+          preferredChildModel: "gemini-3.1-pro-preview",
+          providerOptions: {
+            google: {
+              thinkingConfig: {
+                includeThoughts: true,
+                thinkingLevel: "minimal",
+              },
+            },
           },
-        },
-      },
-    })));
+        }),
+      ),
+    );
 
     expect(seenStreamOptions).toHaveLength(1);
     expect(seenStreamOptions[0]?.thinkingLevel).toBeUndefined();
@@ -1006,7 +1045,11 @@ describe("google native interactions request building", () => {
 
   test("convertToolsToInteractionsTools maps to function type", () => {
     const tools = googleNativeInternal.convertToolsToInteractionsTools([
-      { name: "readFile", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } } } },
+      {
+        name: "readFile",
+        description: "Read a file",
+        parameters: { type: "object", properties: { path: { type: "string" } } },
+      },
     ]);
 
     expect(tools.length).toBe(1);
@@ -1045,7 +1088,8 @@ describe("google native interactions request building", () => {
       writable: true,
       value: async (input: RequestInfo | URL) => {
         fetchCalls += 1;
-        const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+        const url =
+          input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
         if (url.includes("/grounding-api-redirect/example")) {
           return new Response(null, {
             status: 302,
@@ -1093,7 +1137,8 @@ describe("google native interactions request building", () => {
         {
           type: "url_citation",
           url: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
-          title: "LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure",
+          title:
+            "LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure",
           start_index: 0,
           end_index: 6,
         },
@@ -1116,7 +1161,8 @@ describe("google native interactions request building", () => {
       writable: true,
       value: async (input: RequestInfo | URL) => {
         fetchCalls += 1;
-        const url = input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
+        const url =
+          input instanceof URL ? input.toString() : typeof input === "string" ? input : input.url;
         if (url.includes("/grounding-api-redirect/slow-example")) {
           fetchStarted.resolve();
           return new Response(null, {
@@ -1153,11 +1199,13 @@ describe("google native interactions request building", () => {
       await fetchStarted.promise;
       expect(fetchCalls).toBe(1);
 
-      expect(googleNativeInternal.mapGoogleEventToStreamParts(
-        { event_type: "content.stop", index: 0 },
-        blocks,
-        providerToolCallsById,
-      )).toEqual([
+      expect(
+        googleNativeInternal.mapGoogleEventToStreamParts(
+          { event_type: "content.stop", index: 0 },
+          blocks,
+          providerToolCallsById,
+        ),
+      ).toEqual([
         {
           type: "text-end",
           id: "s0",
@@ -1194,7 +1242,8 @@ describe("google native interactions request building", () => {
         {
           type: "url_citation",
           url: "https://www.foxnews.com/live-news/new-york-laguardia-plane-crash-march-23",
-          title: "LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure",
+          title:
+            "LaGuardia collision: 2 pilots killed after Air Canada jet hits fire truck, forcing airport closure",
           start_index: 0,
           end_index: 6,
         },
@@ -1309,13 +1358,15 @@ describe("google native interactions request building", () => {
     expect(block.arguments).toEqual({ command: "ls" });
 
     expect(googleNativeInternal.mapGoogleEventToStreamParts(deltaEvent, blocks)).toEqual([
-      { type: "tool-input-delta", id: fallbackId, delta: "{\"command\":\"ls\"}" },
+      { type: "tool-input-delta", id: fallbackId, delta: '{"command":"ls"}' },
     ]);
 
-    expect(googleNativeInternal.mapGoogleEventToStreamParts(
-      { event_type: "content.stop", index: 0 },
-      blocks,
-    )).toEqual([
+    expect(
+      googleNativeInternal.mapGoogleEventToStreamParts(
+        { event_type: "content.stop", index: 0 },
+        blocks,
+      ),
+    ).toEqual([
       { type: "tool-input-end", id: fallbackId },
       { type: "tool-call", toolCallId: fallbackId, toolName: "bash", input: { command: "ls" } },
     ]);
@@ -1339,12 +1390,15 @@ describe("google native interactions request building", () => {
     expect(startBlock.type).toBe("providerToolCall");
     const fallbackId = startBlock.id;
 
-    expect(googleNativeInternal.mapGoogleEventToStreamParts(
-      startEvent,
-      blocks,
-      providerToolCallsById,
-    )).toEqual([
-      { type: "tool-input-start", id: fallbackId, toolName: "nativeWebSearch", providerExecuted: true },
+    expect(
+      googleNativeInternal.mapGoogleEventToStreamParts(startEvent, blocks, providerToolCallsById),
+    ).toEqual([
+      {
+        type: "tool-input-start",
+        id: fallbackId,
+        toolName: "nativeWebSearch",
+        providerExecuted: true,
+      },
     ]);
 
     const deltaEvent = {
@@ -1364,12 +1418,14 @@ describe("google native interactions request building", () => {
     expect(block.id).toBe(fallbackId);
     expect(block.arguments).toEqual({ queries: ["latest Gemini announcements"] });
 
-    expect(googleNativeInternal.mapGoogleEventToStreamParts(
-      deltaEvent,
-      blocks,
-      providerToolCallsById,
-    )).toEqual([
-      { type: "tool-input-delta", id: fallbackId, delta: "{\"queries\":[\"latest Gemini announcements\"]}" },
+    expect(
+      googleNativeInternal.mapGoogleEventToStreamParts(deltaEvent, blocks, providerToolCallsById),
+    ).toEqual([
+      {
+        type: "tool-input-delta",
+        id: fallbackId,
+        delta: '{"queries":["latest Gemini announcements"]}',
+      },
     ]);
 
     googleNativeInternal.processStreamEvent(
@@ -1386,11 +1442,13 @@ describe("google native interactions request building", () => {
       providerToolCallsById,
     );
 
-    expect(googleNativeInternal.mapGoogleEventToStreamParts(
-      { event_type: "content.stop", index: 1 },
-      blocks,
-      providerToolCallsById,
-    )).toEqual([
+    expect(
+      googleNativeInternal.mapGoogleEventToStreamParts(
+        { event_type: "content.stop", index: 1 },
+        blocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([
       {
         type: "tool-result",
         toolCallId: fallbackId,
@@ -1485,10 +1543,12 @@ describe("google native interactions request building", () => {
       { event_type: "content.start", index: 0, content: { type: "text", text: "" } },
       blocks,
     );
-    expect(googleNativeInternal.mapGoogleEventToStreamParts(
-      { event_type: "content.start", index: 0, content: { type: "text", text: "" } },
-      blocks,
-    )).toEqual([{ type: "text-start", id: "s0" }]);
+    expect(
+      googleNativeInternal.mapGoogleEventToStreamParts(
+        { event_type: "content.start", index: 0, content: { type: "text", text: "" } },
+        blocks,
+      ),
+    ).toEqual([{ type: "text-start", id: "s0" }]);
 
     googleNativeInternal.processStreamEvent(
       {
@@ -1498,30 +1558,39 @@ describe("google native interactions request building", () => {
       },
       blocks,
     );
-    expect(googleNativeInternal.mapGoogleEventToStreamParts(
-      {
-        event_type: "content.delta",
-        index: 1,
-        delta: { type: "thought_summary", content: { type: "text", text: "Thinking..." } },
-      },
-      blocks,
-    )).toEqual([{ type: "reasoning-delta", id: "s1", text: "Thinking..." }]);
+    expect(
+      googleNativeInternal.mapGoogleEventToStreamParts(
+        {
+          event_type: "content.delta",
+          index: 1,
+          delta: { type: "thought_summary", content: { type: "text", text: "Thinking..." } },
+        },
+        blocks,
+      ),
+    ).toEqual([{ type: "reasoning-delta", id: "s1", text: "Thinking..." }]);
 
     googleNativeInternal.processStreamEvent(
       {
         event_type: "content.start",
         index: 2,
-        content: { type: "function_call", id: "call_1", name: "bash", arguments: { command: "ls" } },
+        content: {
+          type: "function_call",
+          id: "call_1",
+          name: "bash",
+          arguments: { command: "ls" },
+        },
       },
       blocks,
     );
-    expect(googleNativeInternal.mapGoogleEventToStreamParts(
-      {
-        event_type: "content.stop",
-        index: 2,
-      },
-      blocks,
-    )).toEqual([
+    expect(
+      googleNativeInternal.mapGoogleEventToStreamParts(
+        {
+          event_type: "content.stop",
+          index: 2,
+        },
+        blocks,
+      ),
+    ).toEqual([
       { type: "tool-input-end", id: "call_1" },
       { type: "tool-call", toolCallId: "call_1", toolName: "bash", input: { command: "ls" } },
     ]);
@@ -1551,10 +1620,12 @@ describe("google native interactions request building", () => {
       blocks,
     );
 
-    expect(googleNativeInternal.mapGoogleEventToStreamParts(
-      { event_type: "content.stop", index: 0 },
-      blocks,
-    )).toEqual([
+    expect(
+      googleNativeInternal.mapGoogleEventToStreamParts(
+        { event_type: "content.stop", index: 0 },
+        blocks,
+      ),
+    ).toEqual([
       { type: "tool-input-end", id: "call_1" },
       {
         type: "tool-call",
@@ -1583,14 +1654,16 @@ describe("google native interactions request building", () => {
       providerToolCallsById,
     );
 
-    expect(googleNativeInternal.mapGoogleEventToStreamParts(
-      {
-        event_type: "content.stop",
-        index: 0,
-      },
-      blocks,
-      providerToolCallsById,
-    )).toEqual([
+    expect(
+      googleNativeInternal.mapGoogleEventToStreamParts(
+        {
+          event_type: "content.stop",
+          index: 0,
+        },
+        blocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([
       { type: "tool-input-end", id: "gs_1", toolName: "nativeWebSearch", providerExecuted: true },
     ]);
 
@@ -1608,14 +1681,16 @@ describe("google native interactions request building", () => {
       providerToolCallsById,
     );
 
-    expect(googleNativeInternal.mapGoogleEventToStreamParts(
-      {
-        event_type: "content.stop",
-        index: 1,
-      },
-      blocks,
-      providerToolCallsById,
-    )).toEqual([
+    expect(
+      googleNativeInternal.mapGoogleEventToStreamParts(
+        {
+          event_type: "content.stop",
+          index: 1,
+        },
+        blocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([
       {
         type: "tool-result",
         toolCallId: "gs_1",
@@ -1660,9 +1735,7 @@ describe("google native interactions request building", () => {
           call_id: "gs_2",
           result: {
             results: [{ search_suggestions: "Latest Gemini announcements" }],
-            sources: [
-              { title: "Gemini update", url: "https://example.com/gemini-update" },
-            ],
+            sources: [{ title: "Gemini update", url: "https://example.com/gemini-update" }],
           },
         },
       },
@@ -1670,14 +1743,16 @@ describe("google native interactions request building", () => {
       providerToolCallsById,
     );
 
-    expect(googleNativeInternal.mapGoogleEventToStreamParts(
-      {
-        event_type: "content.stop",
-        index: 1,
-      },
-      blocks,
-      providerToolCallsById,
-    )).toEqual([
+    expect(
+      googleNativeInternal.mapGoogleEventToStreamParts(
+        {
+          event_type: "content.stop",
+          index: 1,
+        },
+        blocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([
       {
         type: "tool-result",
         toolCallId: "gs_2",
@@ -1688,14 +1763,10 @@ describe("google native interactions request building", () => {
           callId: "gs_2",
           queries: ["latest Gemini announcements"],
           results: [{ search_suggestions: "Latest Gemini announcements" }],
-          sources: [
-            { title: "Gemini update", url: "https://example.com/gemini-update" },
-          ],
+          sources: [{ title: "Gemini update", url: "https://example.com/gemini-update" }],
           raw: {
             results: [{ search_suggestions: "Latest Gemini announcements" }],
-            sources: [
-              { title: "Gemini update", url: "https://example.com/gemini-update" },
-            ],
+            sources: [{ title: "Gemini update", url: "https://example.com/gemini-update" }],
           },
         },
         providerExecuted: true,
@@ -1735,14 +1806,16 @@ describe("google native interactions request building", () => {
       providerToolCallsById,
     );
 
-    expect(googleNativeInternal.mapGoogleEventToStreamParts(
-      {
-        event_type: "content.stop",
-        index: 1,
-      },
-      blocks,
-      providerToolCallsById,
-    )).toEqual([
+    expect(
+      googleNativeInternal.mapGoogleEventToStreamParts(
+        {
+          event_type: "content.stop",
+          index: 1,
+        },
+        blocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([
       {
         type: "tool-result",
         toolCallId: "uc_1",
@@ -1795,11 +1868,13 @@ describe("google native interactions request building", () => {
       providerToolCallsById,
     );
 
-    expect(googleNativeInternal.mapGoogleEventToStreamParts(
-      { event_type: "content.stop", index: 0 },
-      blocks,
-      providerToolCallsById,
-    )).toEqual([
+    expect(
+      googleNativeInternal.mapGoogleEventToStreamParts(
+        { event_type: "content.stop", index: 0 },
+        blocks,
+        providerToolCallsById,
+      ),
+    ).toEqual([
       {
         type: "text-end",
         id: "s0",

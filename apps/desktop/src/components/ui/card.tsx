@@ -1,19 +1,20 @@
-import * as React from "react";
 import {
   Card as HeroCard,
   CardContent as HeroCardContent,
   CardDescription as HeroCardDescription,
   CardFooter as HeroCardFooter,
   CardHeader as HeroCardHeader,
-  CardTitle as HeroCardTitle,
   type CardProps as HeroCardProps,
+  CardTitle as HeroCardTitle,
 } from "@heroui/react";
+import type * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-type CardProps = Omit<HeroCardProps, "variant"> & {
-  variant?: "default" | "secondary" | "tertiary" | "transparent";
-};
+type CardProps = Omit<HeroCardProps, "variant"> &
+  React.HTMLAttributes<HTMLDivElement> & {
+    variant?: "default" | "secondary" | "tertiary" | "transparent";
+  };
 
 function Card({ className, variant = "default", ...props }: CardProps) {
   return (
@@ -74,11 +75,7 @@ function CardAction({ className, ...props }: React.ComponentProps<"div">) {
 
 function CardContent({ className, ...props }: React.ComponentProps<typeof HeroCardContent>) {
   return (
-    <HeroCardContent
-      data-slot="card-content"
-      className={cn("p-4 pt-0", className)}
-      {...props}
-    />
+    <HeroCardContent data-slot="card-content" className={cn("p-4 pt-0", className)} {...props} />
   );
 }
 

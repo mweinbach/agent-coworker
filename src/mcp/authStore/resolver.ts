@@ -26,9 +26,13 @@ function joinAuthHeader(prefix: string | undefined, value: string): string {
   return `${trimmedPrefix} ${value}`;
 }
 
-function resolveApiKeyHeader(auth: Extract<MCPServerAuthConfig, { type: "api_key" }>, apiKey: string): Record<string, string> {
+function resolveApiKeyHeader(
+  auth: Extract<MCPServerAuthConfig, { type: "api_key" }>,
+  apiKey: string,
+): Record<string, string> {
   const headerName = auth.headerName?.trim() || "Authorization";
-  const prefix = auth.prefix?.trim() ?? (headerName.toLowerCase() === "authorization" ? "Bearer" : "");
+  const prefix =
+    auth.prefix?.trim() ?? (headerName.toLowerCase() === "authorization" ? "Bearer" : "");
   return {
     [headerName]: joinAuthHeader(prefix, apiKey),
   };

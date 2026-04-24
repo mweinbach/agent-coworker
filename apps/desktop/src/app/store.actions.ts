@@ -1,17 +1,17 @@
-import type { AppStoreActions, StoreGet, StoreSet } from "./store.helpers";
-
 import { createA2uiDockActions } from "./store.actions/a2uiDock";
 import { createWorkspaceBackupActions } from "./store.actions/backup";
 import { createBootstrapActions } from "./store.actions/bootstrap";
 import { createExplorerActions } from "./store.actions/explorer";
 import { createWorkspaceMcpActions } from "./store.actions/mcp";
 import { createWorkspaceMemoryActions } from "./store.actions/memory";
+import { createOnboardingActions } from "./store.actions/onboarding";
 import { createProviderActions } from "./store.actions/provider";
+import { createResearchActions } from "./store.actions/research";
 import { createSkillActions } from "./store.actions/skills";
 import { createThreadActions } from "./store.actions/thread";
 import { createWorkspaceActions } from "./store.actions/workspace";
 import { createWorkspaceDefaultsActions } from "./store.actions/workspaceDefaults";
-import { createOnboardingActions } from "./store.actions/onboarding";
+import type { AppStoreActions, StoreGet, StoreSet } from "./store.helpers";
 
 export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions {
   return {
@@ -20,6 +20,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     ...createWorkspaceBackupActions(set, get),
     ...createThreadActions(set, get),
     ...createSkillActions(set, get),
+    ...createResearchActions(set, get),
     ...createWorkspaceDefaultsActions(set, get),
     ...createWorkspaceMcpActions(set, get),
     ...createWorkspaceMemoryActions(set, get),

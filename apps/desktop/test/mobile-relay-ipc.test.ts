@@ -72,7 +72,9 @@ describe("mobile relay IPC", () => {
       await flushMicrotasks();
 
       expect(workspaceListProvider).toBeTruthy();
-      await expect(workspaceListProvider?.()).rejects.toThrow("Could not load workspace list: disk offline");
+      await expect(workspaceListProvider?.()).rejects.toThrow(
+        "Could not load workspace list: disk offline",
+      );
 
       expect(loadState).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(
@@ -272,23 +274,29 @@ describe("mobile relay IPC", () => {
     const handler = handlers.get(DESKTOP_IPC_CHANNELS.mobileRelayStart);
     expect(handler).toBeTruthy();
 
-    await expect(handler?.(null, {
-      workspaceId: "ws_1",
-      workspacePath: "/tmp/workspace",
-      yolo: false,
-    })).rejects.toThrow("Remote access is disabled.");
+    await expect(
+      handler?.(null, {
+        workspaceId: "ws_1",
+        workspacePath: "/tmp/workspace",
+        yolo: false,
+      }),
+    ).rejects.toThrow("Remote access is disabled.");
     expect(start).not.toHaveBeenCalled();
   });
 
   test("invalidates the mobile relay workspace cache after the save-state hook fires", async () => {
-    let workspaceListProvider: (() => Promise<Array<{ id: string; name: string; path: string; yolo: boolean }>>) | null = null;
+    let workspaceListProvider:
+      | (() => Promise<Array<{ id: string; name: string; path: string; yolo: boolean }>>)
+      | null = null;
     let invalidateWorkspaceCache: (() => void) | null = null;
-    let currentWorkspaces = [{
-      id: "ws-1",
-      name: "Workspace One",
-      path: "/tmp/workspace-one",
-      yolo: false,
-    }];
+    let currentWorkspaces = [
+      {
+        id: "ws-1",
+        name: "Workspace One",
+        path: "/tmp/workspace-one",
+        yolo: false,
+      },
+    ];
     const loadState = mock(async () => ({
       version: 2,
       workspaces: currentWorkspaces,
@@ -300,8 +308,10 @@ describe("mobile relay IPC", () => {
         persistence: { loadState } as never,
         mobileRelayBridge: {
           setWorkspaceListProvider(
-            provider: () => Promise<Array<{ id: string; name: string; path: string; yolo: boolean }>>,
-            invalidator?: () => void
+            provider: () => Promise<
+              Array<{ id: string; name: string; path: string; yolo: boolean }>
+            >,
+            invalidator?: () => void,
           ) {
             workspaceListProvider = provider;
             if (invalidator) invalidateWorkspaceCache = invalidator;
@@ -323,28 +333,34 @@ describe("mobile relay IPC", () => {
 
     await flushMicrotasks();
 
-    expect(await workspaceListProvider?.()).toEqual([{
-      id: "ws-1",
-      name: "Workspace One",
-      path: "/tmp/workspace-one",
-      yolo: false,
-    }]);
+    expect(await workspaceListProvider?.()).toEqual([
+      {
+        id: "ws-1",
+        name: "Workspace One",
+        path: "/tmp/workspace-one",
+        yolo: false,
+      },
+    ]);
     expect(loadState).toHaveBeenCalledTimes(1);
 
-    currentWorkspaces = [{
-      id: "ws-2",
-      name: "Workspace Two",
-      path: "/tmp/workspace-two",
-      yolo: true,
-    }];
+    currentWorkspaces = [
+      {
+        id: "ws-2",
+        name: "Workspace Two",
+        path: "/tmp/workspace-two",
+        yolo: true,
+      },
+    ];
     invalidateWorkspaceCache?.();
 
-    expect(await workspaceListProvider?.()).toEqual([{
-      id: "ws-2",
-      name: "Workspace Two",
-      path: "/tmp/workspace-two",
-      yolo: true,
-    }]);
+    expect(await workspaceListProvider?.()).toEqual([
+      {
+        id: "ws-2",
+        name: "Workspace Two",
+        path: "/tmp/workspace-two",
+        yolo: true,
+      },
+    ]);
     expect(loadState).toHaveBeenCalledTimes(2);
   });
 });

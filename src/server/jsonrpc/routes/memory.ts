@@ -1,25 +1,22 @@
 import type { ServerEvent } from "../../protocol";
 
-import {
-  captureWorkspaceControlOutcome,
-  sendSessionMutationError,
-} from "./outcomes";
+import { captureWorkspaceControlOutcome, sendSessionMutationError } from "./outcomes";
 import { toJsonRpcParams } from "./shared";
 import type { JsonRpcRequestHandlerMap, JsonRpcRouteContext } from "./types";
 
-export function createMemoryRouteHandlers(
-  context: JsonRpcRouteContext,
-): JsonRpcRequestHandlerMap {
+export function createMemoryRouteHandlers(context: JsonRpcRouteContext): JsonRpcRequestHandlerMap {
   return {
     "cowork/memory/list": async (ws, message) => {
       const params = toJsonRpcParams(message.params);
       const cwd = context.utils.resolveWorkspacePath(params, message.method);
-      const scope = params.scope === "user" ? "user" : params.scope === "workspace" ? "workspace" : undefined;
+      const scope =
+        params.scope === "user" ? "user" : params.scope === "workspace" ? "workspace" : undefined;
       const event = await captureWorkspaceControlOutcome(
         context,
         cwd,
         async (session) => await session.emitMemories(scope),
-        (event): event is Extract<ServerEvent, { type: "memory_list" }> => event.type === "memory_list",
+        (event): event is Extract<ServerEvent, { type: "memory_list" }> =>
+          event.type === "memory_list",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -38,7 +35,8 @@ export function createMemoryRouteHandlers(
         context,
         cwd,
         async (session) => await session.upsertMemory(scope, id, content),
-        (event): event is Extract<ServerEvent, { type: "memory_list" }> => event.type === "memory_list",
+        (event): event is Extract<ServerEvent, { type: "memory_list" }> =>
+          event.type === "memory_list",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);
@@ -56,7 +54,8 @@ export function createMemoryRouteHandlers(
         context,
         cwd,
         async (session) => await session.deleteMemory(scope, id),
-        (event): event is Extract<ServerEvent, { type: "memory_list" }> => event.type === "memory_list",
+        (event): event is Extract<ServerEvent, { type: "memory_list" }> =>
+          event.type === "memory_list",
       );
       if (context.utils.isSessionError(event)) {
         sendSessionMutationError(context, ws, message.id, event);

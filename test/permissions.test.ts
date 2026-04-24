@@ -68,7 +68,9 @@ describe("isWritePathAllowed", () => {
 
     test("file in subdirectory of uploadsDirectory", () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "uploads", "images", "photo.jpg"), cfg)).toBe(true);
+      expect(isWritePathAllowed(path.join(PROJECT, "uploads", "images", "photo.jpg"), cfg)).toBe(
+        true,
+      );
     });
 
     test("uploadsDirectory root itself", () => {
@@ -187,7 +189,9 @@ describe("isWritePathAllowed", () => {
 
     test("denies .. that escapes workingDirectory", () => {
       const cfg = makeConfig(PROJECT);
-      expect(isWritePathAllowed(path.join(PROJECT, "..", "..", "..", "etc", "passwd"), cfg)).toBe(false);
+      expect(isWritePathAllowed(path.join(PROJECT, "..", "..", "..", "etc", "passwd"), cfg)).toBe(
+        false,
+      );
     });
 
     test("denies single parent traversal that leaves project", () => {
@@ -322,7 +326,7 @@ describe("assertWritePathAllowed", () => {
     await fs.symlink(outside, link);
 
     await expect(
-      assertWritePathAllowed(path.join(link, "pwned.txt"), cfg, "write")
+      assertWritePathAllowed(path.join(link, "pwned.txt"), cfg, "write"),
     ).rejects.toThrow(/blocked/i);
   });
 
@@ -351,7 +355,7 @@ describe("assertWritePathAllowed", () => {
     await fs.symlink(outside, link);
 
     await expect(
-      assertWritePathAllowed(path.join(link, "pwned.txt"), cfg, "write")
+      assertWritePathAllowed(path.join(link, "pwned.txt"), cfg, "write"),
     ).rejects.toThrow(/blocked/i);
   });
 });
@@ -379,7 +383,9 @@ describe("isReadPathAllowed", () => {
   test("reads inside configured global skills directory are allowed", () => {
     const cfg = makeConfig(PROJECT);
     cfg.skillsDirs = [path.join(PROJECT, ".cowork", "skills")];
-    expect(isReadPathAllowed(path.join(PROJECT, ".cowork", "skills", "pdf", "assets", "pdf.png"), cfg)).toBe(true);
+    expect(
+      isReadPathAllowed(path.join(PROJECT, ".cowork", "skills", "pdf", "assets", "pdf.png"), cfg),
+    ).toBe(true);
   });
 
   test("denies reads outside allowed roots", () => {
@@ -419,7 +425,9 @@ describe("assertReadPathAllowed", () => {
     const link = path.join(dir, "linked-outside");
     await fs.symlink(outside, link);
 
-    await expect(assertReadPathAllowed(path.join(link, "pwned.txt"), cfg, "read")).rejects.toThrow(/blocked/i);
+    await expect(assertReadPathAllowed(path.join(link, "pwned.txt"), cfg, "read")).rejects.toThrow(
+      /blocked/i,
+    );
   });
 
   test("allows a path inside configured skillsDirs", async () => {
@@ -445,13 +453,21 @@ describe("assertReadPathAllowed", () => {
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(
       path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-      `${JSON.stringify({
-        name: "figma-toolkit",
-        description: "Figma plugin",
-      }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          name: "figma-toolkit",
+          description: "Figma plugin",
+        },
+        null,
+        2,
+      )}\n`,
       "utf-8",
     );
-    await fs.writeFile(target, "---\nname: import-frame\ndescription: Import a frame\n---\n", "utf-8");
+    await fs.writeFile(
+      target,
+      "---\nname: import-frame\ndescription: Import a frame\n---\n",
+      "utf-8",
+    );
 
     await expect(assertReadPathAllowed(target, cfg, "read")).resolves.toBe(path.resolve(target));
   });

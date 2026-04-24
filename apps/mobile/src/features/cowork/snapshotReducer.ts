@@ -66,11 +66,7 @@ function normalizeErrorSource(source: string): SessionErrorSource {
     : "session";
 }
 
-function toFeedItem(
-  item: ProjectedItem,
-  ts: string,
-  existing?: SessionFeedItem,
-): SessionFeedItem {
+function toFeedItem(item: ProjectedItem, ts: string, existing?: SessionFeedItem): SessionFeedItem {
   switch (item.type) {
     case "userMessage":
       return {
@@ -155,7 +151,11 @@ function toFeedItem(
   }
 }
 
-function upsertFeedItem(feed: SessionFeedItem[], item: ProjectedItem, ts: string): SessionFeedItem[] {
+function upsertFeedItem(
+  feed: SessionFeedItem[],
+  item: ProjectedItem,
+  ts: string,
+): SessionFeedItem[] {
   const index = feed.findIndex((entry) => entry.id === item.id);
   const existing = index >= 0 ? feed[index] : undefined;
   const next = toFeedItem(item, ts, existing);
@@ -279,7 +279,12 @@ export function applyAgentDelta(
   eventSeq: number,
 ): MobileFeedState {
   return {
-    feed: applyProjectedAgentMessageDelta(state.feed as never, itemId, delta, ts) as SessionFeedItem[],
+    feed: applyProjectedAgentMessageDelta(
+      state.feed as never,
+      itemId,
+      delta,
+      ts,
+    ) as SessionFeedItem[],
     lastEventSeq: Math.max(state.lastEventSeq, eventSeq),
   };
 }
@@ -293,7 +298,13 @@ export function applyReasoningDelta(
   eventSeq: number,
 ): MobileFeedState {
   return {
-    feed: applyProjectedReasoningDelta(state.feed as never, itemId, mode, delta, ts) as SessionFeedItem[],
+    feed: applyProjectedReasoningDelta(
+      state.feed as never,
+      itemId,
+      mode,
+      delta,
+      ts,
+    ) as SessionFeedItem[],
     lastEventSeq: Math.max(state.lastEventSeq, eventSeq),
   };
 }

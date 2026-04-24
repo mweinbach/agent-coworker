@@ -1,12 +1,6 @@
 import {
   jsonRpcControlRequestSchemas,
   jsonRpcControlResultSchemas,
-  skillContentEventSchema,
-  skillInstallationEventSchema,
-  skillInstallPreviewEventSchema,
-  skillInstallUpdateCheckEventSchema,
-  skillsCatalogEventSchema,
-  skillsListEventSchema,
 } from "../../shared/jsonrpcControlSchemas";
 
 export const jsonRpcSkillsRequestSchemas = {
@@ -16,15 +10,22 @@ export const jsonRpcSkillsRequestSchemas = {
   "cowork/skills/disable": jsonRpcControlRequestSchemas["cowork/skills/disable"],
   "cowork/skills/enable": jsonRpcControlRequestSchemas["cowork/skills/enable"],
   "cowork/skills/delete": jsonRpcControlRequestSchemas["cowork/skills/delete"],
-  "cowork/skills/installation/read": jsonRpcControlRequestSchemas["cowork/skills/installation/read"],
+  "cowork/skills/installation/read":
+    jsonRpcControlRequestSchemas["cowork/skills/installation/read"],
   "cowork/skills/install/preview": jsonRpcControlRequestSchemas["cowork/skills/install/preview"],
   "cowork/skills/install": jsonRpcControlRequestSchemas["cowork/skills/install"],
-  "cowork/skills/installation/enable": jsonRpcControlRequestSchemas["cowork/skills/installation/enable"],
-  "cowork/skills/installation/disable": jsonRpcControlRequestSchemas["cowork/skills/installation/disable"],
-  "cowork/skills/installation/delete": jsonRpcControlRequestSchemas["cowork/skills/installation/delete"],
-  "cowork/skills/installation/update": jsonRpcControlRequestSchemas["cowork/skills/installation/update"],
-  "cowork/skills/installation/copy": jsonRpcControlRequestSchemas["cowork/skills/installation/copy"],
-  "cowork/skills/installation/checkUpdate": jsonRpcControlRequestSchemas["cowork/skills/installation/checkUpdate"],
+  "cowork/skills/installation/enable":
+    jsonRpcControlRequestSchemas["cowork/skills/installation/enable"],
+  "cowork/skills/installation/disable":
+    jsonRpcControlRequestSchemas["cowork/skills/installation/disable"],
+  "cowork/skills/installation/delete":
+    jsonRpcControlRequestSchemas["cowork/skills/installation/delete"],
+  "cowork/skills/installation/update":
+    jsonRpcControlRequestSchemas["cowork/skills/installation/update"],
+  "cowork/skills/installation/copy":
+    jsonRpcControlRequestSchemas["cowork/skills/installation/copy"],
+  "cowork/skills/installation/checkUpdate":
+    jsonRpcControlRequestSchemas["cowork/skills/installation/checkUpdate"],
 } as const;
 
 export const jsonRpcSkillsResultSchemas = {
@@ -37,10 +38,15 @@ export const jsonRpcSkillsResultSchemas = {
   "cowork/skills/installation/read": jsonRpcControlResultSchemas["cowork/skills/installation/read"],
   "cowork/skills/install/preview": jsonRpcControlResultSchemas["cowork/skills/install/preview"],
   "cowork/skills/install": jsonRpcControlResultSchemas["cowork/skills/install"],
-  "cowork/skills/installation/enable": jsonRpcControlResultSchemas["cowork/skills/installation/enable"],
-  "cowork/skills/installation/disable": jsonRpcControlResultSchemas["cowork/skills/installation/disable"],
-  "cowork/skills/installation/delete": jsonRpcControlResultSchemas["cowork/skills/installation/delete"],
-  "cowork/skills/installation/update": jsonRpcControlResultSchemas["cowork/skills/installation/update"],
+  "cowork/skills/installation/enable":
+    jsonRpcControlResultSchemas["cowork/skills/installation/enable"],
+  "cowork/skills/installation/disable":
+    jsonRpcControlResultSchemas["cowork/skills/installation/disable"],
+  "cowork/skills/installation/delete":
+    jsonRpcControlResultSchemas["cowork/skills/installation/delete"],
+  "cowork/skills/installation/update":
+    jsonRpcControlResultSchemas["cowork/skills/installation/update"],
   "cowork/skills/installation/copy": jsonRpcControlResultSchemas["cowork/skills/installation/copy"],
-  "cowork/skills/installation/checkUpdate": jsonRpcControlResultSchemas["cowork/skills/installation/checkUpdate"],
+  "cowork/skills/installation/checkUpdate":
+    jsonRpcControlResultSchemas["cowork/skills/installation/checkUpdate"],
 } as const;

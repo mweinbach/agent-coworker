@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, type MouseEventHandler, type PointerEventHandler } from "react";
+import {
+  type MouseEventHandler,
+  type PointerEventHandler,
+  useCallback,
+  useEffect,
+  useRef,
+} from "react";
 
 import { windowDragEnd, windowDragMove, windowDragStart } from "../../lib/desktopCommands";
 
@@ -39,7 +45,9 @@ function createInitialState(): DragState {
   };
 }
 
-export function useWindowDragHandle<T extends HTMLElement>(enabled: boolean): Partial<WindowDragHandleProps<T>> {
+export function useWindowDragHandle<T extends HTMLElement>(
+  enabled: boolean,
+): Partial<WindowDragHandleProps<T>> {
   const dragStateRef = useRef<DragState>(createInitialState());
 
   const flushMove = useCallback(() => {
@@ -54,15 +62,18 @@ export function useWindowDragHandle<T extends HTMLElement>(enabled: boolean): Pa
     });
   }, []);
 
-  const queueMove = useCallback((screenX: number, screenY: number) => {
-    const state = dragStateRef.current;
-    state.lastScreenX = screenX;
-    state.lastScreenY = screenY;
-    if (state.frameId !== null) {
-      return;
-    }
-    state.frameId = window.requestAnimationFrame(flushMove);
-  }, [flushMove]);
+  const queueMove = useCallback(
+    (screenX: number, screenY: number) => {
+      const state = dragStateRef.current;
+      state.lastScreenX = screenX;
+      state.lastScreenY = screenY;
+      if (state.frameId !== null) {
+        return;
+      }
+      state.frameId = window.requestAnimationFrame(flushMove);
+    },
+    [flushMove],
+  );
 
   const resetDrag = useCallback(() => {
     const state = dragStateRef.current;
@@ -78,82 +89,100 @@ export function useWindowDragHandle<T extends HTMLElement>(enabled: boolean): Pa
     state.startScreenY = 0;
   }, []);
 
-  const finishDrag = useCallback((screenX?: number, screenY?: number) => {
-    const state = dragStateRef.current;
-    if (state.frameId !== null) {
-      window.cancelAnimationFrame(state.frameId);
-      state.frameId = null;
-    }
-    if (!state.dragging) {
-      resetDrag();
-      return;
-    }
-    if (typeof screenX === "number" && typeof screenY === "number") {
-      void windowDragMove({ screenX, screenY });
-    }
-    void windowDragEnd();
-    state.suppressClick = true;
-    resetDrag();
-  }, [resetDrag]);
-
-  const onPointerDown = useCallback<PointerEventHandler<T>>((event) => {
-    if (!enabled || event.button !== 0) {
-      return;
-    }
-    const state = dragStateRef.current;
-    state.activePointerId = event.pointerId;
-    state.dragging = false;
-    state.suppressClick = false;
-    state.startScreenX = event.screenX;
-    state.startScreenY = event.screenY;
-    state.lastScreenX = event.screenX;
-    state.lastScreenY = event.screenY;
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-  }, [enabled]);
-
-  const onPointerMove = useCallback<PointerEventHandler<T>>((event) => {
-    const state = dragStateRef.current;
-    if (!enabled || state.activePointerId !== event.pointerId) {
-      return;
-    }
-    const deltaX = event.screenX - state.startScreenX;
-    const deltaY = event.screenY - state.startScreenY;
-    if (!state.dragging) {
-      if (Math.hypot(deltaX, deltaY) < DRAG_THRESHOLD_PX) {
+  const finishDrag = useCallback(
+    (screenX?: number, screenY?: number) => {
+      const state = dragStateRef.current;
+      if (state.frameId !== null) {
+        window.cancelAnimationFrame(state.frameId);
+        state.frameId = null;
+      }
+      if (!state.dragging) {
+        resetDrag();
         return;
       }
-      state.dragging = true;
-      void windowDragStart({
-        screenX: state.startScreenX,
-        screenY: state.startScreenY,
-      });
-    }
-    queueMove(event.screenX, event.screenY);
-  }, [enabled, queueMove]);
+      if (typeof screenX === "number" && typeof screenY === "number") {
+        void windowDragMove({ screenX, screenY });
+      }
+      void windowDragEnd();
+      state.suppressClick = true;
+      resetDrag();
+    },
+    [resetDrag],
+  );
 
-  const onPointerUp = useCallback<PointerEventHandler<T>>((event) => {
-    if (!enabled || dragStateRef.current.activePointerId !== event.pointerId) {
-      return;
-    }
-    finishDrag(event.screenX, event.screenY);
-  }, [enabled, finishDrag]);
+  const onPointerDown = useCallback<PointerEventHandler<T>>(
+    (event) => {
+      if (!enabled || event.button !== 0) {
+        return;
+      }
+      const state = dragStateRef.current;
+      state.activePointerId = event.pointerId;
+      state.dragging = false;
+      state.suppressClick = false;
+      state.startScreenX = event.screenX;
+      state.startScreenY = event.screenY;
+      state.lastScreenX = event.screenX;
+      state.lastScreenY = event.screenY;
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    },
+    [enabled],
+  );
 
-  const onPointerCancel = useCallback<PointerEventHandler<T>>((event) => {
-    if (!enabled || dragStateRef.current.activePointerId !== event.pointerId) {
-      return;
-    }
-    finishDrag();
-  }, [enabled, finishDrag]);
+  const onPointerMove = useCallback<PointerEventHandler<T>>(
+    (event) => {
+      const state = dragStateRef.current;
+      if (!enabled || state.activePointerId !== event.pointerId) {
+        return;
+      }
+      const deltaX = event.screenX - state.startScreenX;
+      const deltaY = event.screenY - state.startScreenY;
+      if (!state.dragging) {
+        if (Math.hypot(deltaX, deltaY) < DRAG_THRESHOLD_PX) {
+          return;
+        }
+        state.dragging = true;
+        void windowDragStart({
+          screenX: state.startScreenX,
+          screenY: state.startScreenY,
+        });
+      }
+      queueMove(event.screenX, event.screenY);
+    },
+    [enabled, queueMove],
+  );
 
-  const onClickCapture = useCallback<MouseEventHandler<T>>((event) => {
-    const state = dragStateRef.current;
-    if (!enabled || !state.suppressClick) {
-      return;
-    }
-    state.suppressClick = false;
-    event.preventDefault();
-    event.stopPropagation();
-  }, [enabled]);
+  const onPointerUp = useCallback<PointerEventHandler<T>>(
+    (event) => {
+      if (!enabled || dragStateRef.current.activePointerId !== event.pointerId) {
+        return;
+      }
+      finishDrag(event.screenX, event.screenY);
+    },
+    [enabled, finishDrag],
+  );
+
+  const onPointerCancel = useCallback<PointerEventHandler<T>>(
+    (event) => {
+      if (!enabled || dragStateRef.current.activePointerId !== event.pointerId) {
+        return;
+      }
+      finishDrag();
+    },
+    [enabled, finishDrag],
+  );
+
+  const onClickCapture = useCallback<MouseEventHandler<T>>(
+    (event) => {
+      const state = dragStateRef.current;
+      if (!enabled || !state.suppressClick) {
+        return;
+      }
+      state.suppressClick = false;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    [enabled],
+  );
 
   useEffect(() => {
     return () => {

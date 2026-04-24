@@ -1,19 +1,24 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { z } from "zod";
-
+import type { z } from "zod";
 import {
-  DESKTOP_EVENT_CHANNELS,
-  DESKTOP_IPC_CHANNELS,
+  type DesktopFeatureFlagOverrides,
+  normalizeDesktopFeatureFlagOverrides,
+  resolveDesktopFeatureFlags,
+} from "../../../src/shared/featureFlags";
+import type { PersistedState } from "../src/app/types";
+import {
   type ConfirmActionInput,
-  type DeleteTranscriptInput,
-  type DesktopMenuCommand,
-  type MobileRelayBridgeState,
-  type MobileRelayStartInput,
   type CopyPathInput,
   type CreateDirectoryInput,
+  DESKTOP_EVENT_CHANNELS,
+  DESKTOP_IPC_CHANNELS,
+  type DeleteTranscriptInput,
   type DesktopApi,
+  type DesktopMenuCommand,
   type DesktopNotificationInput,
   type ListDirectoryInput,
+  type MobileRelayBridgeState,
+  type MobileRelayStartInput,
   type OpenExternalUrlInput,
   type OpenPathInput,
   type PreferredFileAppInput,
@@ -23,6 +28,7 @@ import {
   type ReadTranscriptInput,
   type RenamePathInput,
   type RevealPathInput,
+  type SaveExportedFileInput,
   type SetWindowAppearanceInput,
   type ShowContextMenuInput,
   type StartWorkspaceServerInput,
@@ -33,7 +39,6 @@ import {
   type UpdaterState,
   type WindowDragPointInput,
 } from "../src/lib/desktopApi";
-import type { PersistedState } from "../src/app/types";
 import {
   confirmActionInputSchema,
   copyPathInputSchema,
@@ -44,16 +49,17 @@ import {
   listDirectoryInputSchema,
   mobileRelayBridgeStateSchema,
   mobileRelayStartInputSchema,
-  openPathInputSchema,
-  preferredFileAppInputSchema,
   openExternalUrlInputSchema,
+  openPathInputSchema,
+  persistedStateInputSchema,
+  preferredFileAppInputSchema,
   previewOSFileInputSchema,
   readFileForPreviewInputSchema,
   readFileInputSchema,
-  persistedStateInputSchema,
   readTranscriptInputSchema,
   renamePathInputSchema,
   revealPathInputSchema,
+  saveExportedFileInputSchema,
   setWindowAppearanceInputSchema,
   showContextMenuInputSchema,
   startWorkspaceServerInputSchema,
@@ -64,11 +70,6 @@ import {
   updaterStateSchema,
   windowDragPointInputSchema,
 } from "../src/lib/desktopSchemas";
-import {
-  normalizeDesktopFeatureFlagOverrides,
-  resolveDesktopFeatureFlags,
-  type DesktopFeatureFlagOverrides,
-} from "../../../src/shared/featureFlags";
 
 function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
   const parsed = schema.safeParse(value);
@@ -126,6 +127,10 @@ function assertPreviewOSFileInput(opts: PreviewOSFileInput): void {
 
 function assertOpenPathInput(opts: OpenPathInput): void {
   parseWithSchema(openPathInputSchema, opts, "openPath options");
+}
+
+function assertSaveExportedFileInput(opts: SaveExportedFileInput): void {
+  parseWithSchema(saveExportedFileInputSchema, opts, "saveExportedFile options");
 }
 
 function assertPreferredFileAppInput(opts: PreferredFileAppInput): void {
@@ -205,9 +210,8 @@ const desktopFeatures = Object.freeze(resolvePreloadDesktopFeatureFlags());
 const desktopApi = Object.freeze<DesktopApi>({
   features: desktopFeatures,
   isPackaged: process.env.COWORK_IS_PACKAGED === "true",
-  resolveDesktopFeatureFlags: (overrides) => resolvePreloadDesktopFeatureFlags(
-    normalizeDesktopFeatureFlagOverrides(overrides),
-  ),
+  resolveDesktopFeatureFlags: (overrides) =>
+    resolvePreloadDesktopFeatureFlags(normalizeDesktopFeatureFlagOverrides(overrides)),
   startWorkspaceServer: (opts: StartWorkspaceServerInput) => {
     assertStartWorkspaceServerInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.startWorkspaceServer, opts);
@@ -336,6 +340,11 @@ const desktopApi = Object.freeze<DesktopApi>({
   openPath: (opts: OpenPathInput) => {
     assertOpenPathInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.openPath, opts);
+  },
+
+  saveExportedFile: (opts: SaveExportedFileInput) => {
+    assertSaveExportedFileInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.saveExportedFile, opts);
   },
 
   openExternalUrl: (opts: OpenExternalUrlInput) => {

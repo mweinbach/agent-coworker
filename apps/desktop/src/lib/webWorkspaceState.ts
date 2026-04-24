@@ -1,4 +1,4 @@
-import type { PersistedState, WorkspaceRecord, ThreadRecord } from "../app/types";
+import type { PersistedState } from "../app/types";
 
 const LEGACY_STATE_KEY = "cowork:web:state";
 const STATE_KEY_PREFIX = "cowork:web:state:v2";
@@ -151,7 +151,10 @@ export function seedWorkspaceFromUrl(serverUrl: string, workspacePath: string): 
   return state;
 }
 
-export function deriveServerUrlFromWorkspace(state: PersistedState, workspaceId: string): string | null {
+export function deriveServerUrlFromWorkspace(
+  state: PersistedState,
+  workspaceId: string,
+): string | null {
   if (state.workspaces.some((w) => w.id === workspaceId)) {
     return getSavedServerUrl();
   }

@@ -1,5 +1,5 @@
-import type { AgentSession } from "../session/AgentSession";
 import type { JsonRpcInitializeParams } from "../jsonrpc/protocol";
+import type { AgentSession } from "../session/AgentSession";
 
 export type JsonRpcConnectionState = {
   initializeRequestReceived: boolean;
@@ -11,11 +11,14 @@ export type JsonRpcConnectionState = {
     experimentalApi: boolean;
     optOutNotificationMethods: string[];
   };
-  pendingServerRequests: Map<string | number, {
-    threadId: string;
-    type: "ask" | "approval";
-    requestId: string;
-  }>;
+  pendingServerRequests: Map<
+    string | number,
+    {
+      threadId: string;
+      type: "ask" | "approval";
+      requestId: string;
+    }
+  >;
 };
 
 export type StartServerSocketData = {

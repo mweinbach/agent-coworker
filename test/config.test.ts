@@ -1,4 +1,4 @@
-import { describe, expect, test, mock } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -43,10 +43,7 @@ async function withEnv<T>(
   }
 }
 
-async function withMockedFetch<T>(
-  fetchImpl: typeof fetch,
-  run: () => Promise<T>,
-): Promise<T> {
+async function withMockedFetch<T>(fetchImpl: typeof fetch, run: () => Promise<T>): Promise<T> {
   const previous = globalThis.fetch;
   globalThis.fetch = fetchImpl;
   try {
@@ -160,23 +157,27 @@ describe("loadConfig", () => {
     const { cwd, home } = await makeTmpDirs();
 
     await withMockedFetch(
-      (async () => new Response(JSON.stringify({
-        models: [
+      (async () =>
+        new Response(
+          JSON.stringify({
+            models: [
+              {
+                type: "llm",
+                publisher: "local",
+                key: "local/qwen-2.5",
+                display_name: "Qwen 2.5 Local",
+                loaded_instances: [],
+                max_context_length: 32768,
+                capabilities: { vision: false, trained_for_tool_use: false },
+                size_bytes: 1,
+              },
+            ],
+          }),
           {
-            type: "llm",
-            publisher: "local",
-            key: "local/qwen-2.5",
-            display_name: "Qwen 2.5 Local",
-            loaded_instances: [],
-            max_context_length: 32768,
-            capabilities: { vision: false, trained_for_tool_use: false },
-            size_bytes: 1,
+            status: 200,
+            headers: { "content-type": "application/json" },
           },
-        ],
-      }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })) as typeof fetch,
+        )) as typeof fetch,
       async () => {
         const cfg = await loadConfig({
           cwd,
@@ -200,33 +201,37 @@ describe("loadConfig", () => {
     const { cwd, home } = await makeTmpDirs();
 
     await withMockedFetch(
-      (async () => new Response(JSON.stringify({
-        models: [
+      (async () =>
+        new Response(
+          JSON.stringify({
+            models: [
+              {
+                type: "llm",
+                publisher: "local",
+                key: "local/beta",
+                display_name: "Beta",
+                loaded_instances: [],
+                max_context_length: 32768,
+                capabilities: { vision: false, trained_for_tool_use: false },
+                size_bytes: 1,
+              },
+              {
+                type: "llm",
+                publisher: "local",
+                key: "local/alpha",
+                display_name: "Alpha",
+                loaded_instances: [{ id: "inst-1", config: { context_length: 8192 } }],
+                max_context_length: 32768,
+                capabilities: { vision: false, trained_for_tool_use: false },
+                size_bytes: 1,
+              },
+            ],
+          }),
           {
-            type: "llm",
-            publisher: "local",
-            key: "local/beta",
-            display_name: "Beta",
-            loaded_instances: [],
-            max_context_length: 32768,
-            capabilities: { vision: false, trained_for_tool_use: false },
-            size_bytes: 1,
+            status: 200,
+            headers: { "content-type": "application/json" },
           },
-          {
-            type: "llm",
-            publisher: "local",
-            key: "local/alpha",
-            display_name: "Alpha",
-            loaded_instances: [{ id: "inst-1", config: { context_length: 8192 } }],
-            max_context_length: 32768,
-            capabilities: { vision: false, trained_for_tool_use: false },
-            size_bytes: 1,
-          },
-        ],
-      }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })) as typeof fetch,
+        )) as typeof fetch,
       async () => {
         const cfg = await loadConfig({
           cwd,
@@ -1061,7 +1066,9 @@ describe("loadConfig", () => {
     expect(cfg.observabilityEnabled).toBe(true);
     expect(cfg.observability?.provider).toBe("langfuse");
     expect(cfg.observability?.baseUrl).toBe("https://self-hosted.langfuse.example");
-    expect(cfg.observability?.otelEndpoint).toBe("https://self-hosted.langfuse.example/api/public/otel/v1/traces");
+    expect(cfg.observability?.otelEndpoint).toBe(
+      "https://self-hosted.langfuse.example/api/public/otel/v1/traces",
+    );
     expect(cfg.observability?.publicKey).toBe("pk-lf-test");
     expect(cfg.observability?.secretKey).toBe("sk-lf-test");
     expect(cfg.observability?.tracingEnvironment).toBe("staging");
@@ -1385,9 +1392,15 @@ describe("getModel", () => {
       expect(cfg.provider).toBe("anthropic");
       expect(cfg.model).toBe(defaultModelForProvider("anthropic"));
       const warnings = warn.mock.calls.map(([message]) => String(message));
-      expect(warnings.some((message) => message.includes("Ignoring unsupported model \"gpt-5.4(xhigh)\" for provider anthropic"))).toBe(true);
+      expect(
+        warnings.some((message) =>
+          message.includes('Ignoring unsupported model "gpt-5.4(xhigh)" for provider anthropic'),
+        ),
+      ).toBe(true);
       expect(warnings.some((message) => message.includes("looks like an OpenAI model"))).toBe(true);
-      expect(warnings.some((message) => message.includes("use provider openai instead"))).toBe(true);
+      expect(warnings.some((message) => message.includes("use provider openai instead"))).toBe(
+        true,
+      );
     } finally {
       console.warn = realWarn;
     }
@@ -1398,9 +1411,13 @@ describe("getModel", () => {
 // defaultModelForProvider
 // ---------------------------------------------------------------------------
 describe("defaultModelForProvider", () => {
-  for (const providerName of Object.keys(PROVIDER_MODEL_CATALOG) as (keyof typeof PROVIDER_MODEL_CATALOG)[]) {
+  for (const providerName of Object.keys(
+    PROVIDER_MODEL_CATALOG,
+  ) as (keyof typeof PROVIDER_MODEL_CATALOG)[]) {
     test(`returns correct default for ${providerName}`, () => {
-      expect(defaultModelForProvider(providerName)).toBe(PROVIDER_MODEL_CATALOG[providerName].defaultModel);
+      expect(defaultModelForProvider(providerName)).toBe(
+        PROVIDER_MODEL_CATALOG[providerName].defaultModel,
+      );
     });
   }
 });

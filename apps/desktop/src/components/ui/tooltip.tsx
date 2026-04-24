@@ -1,5 +1,5 @@
-import * as React from "react";
 import { Tooltip as HeroTooltip } from "@heroui/react";
+import type * as React from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -69,7 +69,10 @@ function TooltipContent({
   return (
     <HeroTooltip.Content
       data-slot="tooltip-content"
-      className={cn("app-surface-overlay app-border-subtle app-shadow-overlay rounded-[10px] border px-2 py-1 text-xs", className)}
+      className={cn(
+        "app-surface-overlay app-border-subtle app-shadow-overlay rounded-[10px] border px-2 py-1 text-xs",
+        className,
+      )}
       offset={sideOffset}
       placement={side}
       {...props}

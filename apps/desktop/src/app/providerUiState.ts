@@ -30,10 +30,12 @@ function normalizeHiddenModels(value: unknown): string[] {
   return normalized;
 }
 
-export function deriveDefaultLmStudioUiEnabled(opts: {
-  providerState?: PersistedProviderState;
-  workspaces?: readonly Pick<WorkspaceRecord, "defaultProvider">[];
-} = {}): boolean {
+export function deriveDefaultLmStudioUiEnabled(
+  opts: {
+    providerState?: PersistedProviderState;
+    workspaces?: readonly Pick<WorkspaceRecord, "defaultProvider">[];
+  } = {},
+): boolean {
   const providerStatus = opts.providerState?.statusByName?.lmstudio;
   if (providerStatus?.authorized || providerStatus?.verified) {
     return true;

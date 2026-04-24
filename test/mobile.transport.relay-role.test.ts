@@ -7,10 +7,12 @@ const { __internal } = await import("../apps/mobile/modules/remodex-secure-trans
 
 describe("mobile relay websocket headers", () => {
   test("uses the hosted relay iphone role for mobile socket upgrades", () => {
-    expect(__internal.buildRelaySocketHeaders({
-      phoneDeviceId: "phone-1",
-      phoneIdentityPublicKey: "phone-public-key",
-    })).toEqual({
+    expect(
+      __internal.buildRelaySocketHeaders({
+        phoneDeviceId: "phone-1",
+        phoneIdentityPublicKey: "phone-public-key",
+      }),
+    ).toEqual({
       "x-role": "iphone",
       "x-phone-device-id": "phone-1",
       "x-phone-identity-public-key": "phone-public-key",

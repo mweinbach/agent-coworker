@@ -5,9 +5,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { z } from "zod";
-
-import { loadConfig } from "../src/config";
 import { runTurnWithDeps } from "../src/agent";
+import { loadConfig } from "../src/config";
+import { getAiCoworkerPaths } from "../src/connect";
 import { normalizeHarnessContextPayload } from "../src/harness/contextStore";
 import {
   buildPathArtifactAssertions,
@@ -15,31 +15,25 @@ import {
   type ValidationIssue,
   validateWithOptionalRepair,
 } from "../src/harness/rawLoopValidation";
+import { emitObservabilityEvent } from "../src/observability/otel";
+import { getObservabilityHealth } from "../src/observability/runtime";
+import { loadSystemPromptWithSkills } from "../src/prompt";
 import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
 import { getProviderCatalog } from "../src/providers/connectionCatalog";
-import { getAiCoworkerPaths } from "../src/connect";
-import { loadSystemPromptWithSkills } from "../src/prompt";
-import { StatusBus } from "../src/server/agents/StatusBus";
 import { DelegateRunner } from "../src/server/agents/DelegateRunner";
 import { routeAgentConfig } from "../src/server/agents/modelRouter";
-import { getAgentRoleDefinition } from "../src/server/agents/roles";
 import { parseChildAgentReport } from "../src/server/agents/reportParser";
+import { getAgentRoleDefinition } from "../src/server/agents/roles";
+import { StatusBus } from "../src/server/agents/StatusBus";
+import type { SessionUsageSnapshot, TurnUsage } from "../src/session/costTracker";
 import {
-  resolveAgentSpawnContextOptions,
   type AgentInspectResult,
   type AgentReasoningEffort,
   type AgentRole,
   type PersistentAgentSummary,
+  resolveAgentSpawnContextOptions,
 } from "../src/shared/agents";
 import { ensureDefaultGlobalSkillsReady } from "../src/skills/defaultGlobalSkills";
-import type { SessionUsageSnapshot, TurnUsage } from "../src/session/costTracker";
-import type {
-  AgentConfig,
-  HarnessContextPayload,
-  ModelMessage,
-  ProviderName,
-  TodoItem,
-} from "../src/types";
 import type { ToolContext } from "../src/tools";
 import { createAskTool } from "../src/tools/ask";
 import { createBashTool } from "../src/tools/bash";
@@ -64,8 +58,13 @@ import { createTodoWriteTool } from "../src/tools/todoWrite";
 import { createWebFetchTool } from "../src/tools/webFetch";
 import { createWebSearchTool } from "../src/tools/webSearch";
 import { createWriteTool } from "../src/tools/write";
-import { emitObservabilityEvent } from "../src/observability/otel";
-import { getObservabilityHealth } from "../src/observability/runtime";
+import type {
+  AgentConfig,
+  HarnessContextPayload,
+  ModelMessage,
+  ProviderName,
+  TodoItem,
+} from "../src/types";
 
 type AskEvent = {
   at: string;
@@ -183,7 +182,7 @@ function parseArgs(argv: string[]): RawLoopArgs {
     }
     if (a === "--help" || a === "-h") {
       console.log(
-        "Usage: bun scripts/run_raw_agent_loops.ts [--report-only] [--strict-mode|--no-strict-mode] [--scenario mixed|dcf-model-matrix|gpt-skill-reliability|google-customtools-tool-coverage|codex-gpt-5.4-smoke] [--only-run <run-id>] [--only-model <model>]"
+        "Usage: bun scripts/run_raw_agent_loops.ts [--report-only] [--strict-mode|--no-strict-mode] [--scenario mixed|dcf-model-matrix|gpt-skill-reliability|google-customtools-tool-coverage|codex-gpt-5.4-smoke] [--only-run <run-id>] [--only-model <model>]",
       );
       process.exit(0);
     }
@@ -303,7 +302,7 @@ function safeJsonStringify(v: unknown): string {
       }
       return value;
     },
-    2
+    2,
   );
 }
 
@@ -356,10 +355,12 @@ function buildJsonFileContract(
 ): FinalContract {
   return {
     format: "json",
-    schema: z.object({
-      ...fields,
-      end: endSentinelSchema,
-    }).strict(),
+    schema: z
+      .object({
+        ...fields,
+        end: endSentinelSchema,
+      })
+      .strict(),
     artifactAssertions,
   };
 }
@@ -370,16 +371,20 @@ function buildLinePairFileContract(
 ): FinalContract {
   return {
     format: "line_pairs",
-    schema: z.object({
-      ...fields,
-      end: endSentinelSchema,
-    }).strict(),
+    schema: z
+      .object({
+        ...fields,
+        end: endSentinelSchema,
+      })
+      .strict(),
     sentinel: "<<END_RUN>>",
     artifactAssertions,
   };
 }
 
-function artifactAssertionsForPaths(entries: Array<{ field: string; ext: string }>): ReturnType<typeof buildPathArtifactAssertions> {
+function artifactAssertionsForPaths(
+  entries: Array<{ field: string; ext: string }>,
+): ReturnType<typeof buildPathArtifactAssertions> {
   return entries.flatMap(({ field, ext }) => buildPathArtifactAssertions(field, ext));
 }
 
@@ -475,7 +480,12 @@ function summarizeValidationResult(validationResult: {
   };
 }
 
-function traceToolExecution(steps: TracedStep[], toolName: string, input: unknown, output: unknown) {
+function traceToolExecution(
+  steps: TracedStep[],
+  toolName: string,
+  input: unknown,
+  output: unknown,
+) {
   steps.push({
     scope: "tool-call",
     step: {
@@ -498,7 +508,7 @@ function withExecuteGuard(
   original: any,
   shouldBlock: () => boolean,
   errorMessage: string,
-  onSuccess?: (input: any, output: any) => void
+  onSuccess?: (input: any, output: any) => void,
 ): any {
   if (!original || typeof original.execute !== "function") return original;
   return defineTool({
@@ -516,8 +526,20 @@ function withExecuteGuard(
 }
 
 export function createRawLoopAgentControl(
-  opts: Pick<ToolContext, "config" | "log" | "askUser" | "approveCommand" | "availableSkills" | "spawnDepth" | "abortSignal">
-    & { parentMessages?: ModelMessage[]; getParentTodos?: () => TodoItem[]; harnessContext?: HarnessContextState | null },
+  opts: Pick<
+    ToolContext,
+    | "config"
+    | "log"
+    | "askUser"
+    | "approveCommand"
+    | "availableSkills"
+    | "spawnDepth"
+    | "abortSignal"
+  > & {
+    parentMessages?: ModelMessage[];
+    getParentTodos?: () => TodoItem[];
+    harnessContext?: HarnessContextState | null;
+  },
   deps: RawLoopAgentControlDeps = {},
 ): NonNullable<ToolContext["agentControl"]> {
   const statusBus = new StatusBus();
@@ -561,53 +583,69 @@ export function createRawLoopAgentControl(
       busy: true,
     });
 
-    const run = delegateRunner.run({
-      config: state.routedConfig,
-      role: state.role,
-      message,
-      spawnDepth: opts.spawnDepth,
-      log: opts.log,
-      askUser: opts.askUser,
-      approveCommand: opts.approveCommand,
-      abortSignal: controller.signal,
-      discoveredSkills: opts.availableSkills,
-      ...(priorMessages.length > 0 ? { seedMessages: priorMessages } : {}),
-      ...(state.todos.length > 0 ? { initialTodos: structuredClone(state.todos) } : {}),
-      ...(state.harnessContext ? { harnessContext: state.harnessContext } : {}),
-      updateTodos: (todos) => {
-        state.todos = structuredClone(todos);
-      },
-      ...(state.requestedModel ? { model: state.requestedModel } : {}),
-      ...(state.requestedReasoningEffort ? { reasoningEffort: state.requestedReasoningEffort } : {}),
-      ...(state.connectedProviders.length > 0 ? { connectedProviders: state.connectedProviders } : {}),
-    }).then((result) => {
-      if (state.runToken !== runToken || state.abortController !== controller || state.summary.lifecycleState === "closed") {
-        return;
-      }
-      state.historyMessages.push(...structuredClone(result.responseMessages));
-      const trimmed = result.text.trim();
-      state.latestAssistantText = trimmed || null;
-      publish(state, {
-        executionState: "completed",
-        busy: false,
-        ...(trimmed ? { lastMessagePreview: trimmed } : {}),
+    const run = delegateRunner
+      .run({
+        config: state.routedConfig,
+        role: state.role,
+        message,
+        spawnDepth: opts.spawnDepth,
+        log: opts.log,
+        askUser: opts.askUser,
+        approveCommand: opts.approveCommand,
+        abortSignal: controller.signal,
+        discoveredSkills: opts.availableSkills,
+        ...(priorMessages.length > 0 ? { seedMessages: priorMessages } : {}),
+        ...(state.todos.length > 0 ? { initialTodos: structuredClone(state.todos) } : {}),
+        ...(state.harnessContext ? { harnessContext: state.harnessContext } : {}),
+        updateTodos: (todos) => {
+          state.todos = structuredClone(todos);
+        },
+        ...(state.requestedModel ? { model: state.requestedModel } : {}),
+        ...(state.requestedReasoningEffort
+          ? { reasoningEffort: state.requestedReasoningEffort }
+          : {}),
+        ...(state.connectedProviders.length > 0
+          ? { connectedProviders: state.connectedProviders }
+          : {}),
+      })
+      .then((result) => {
+        if (
+          state.runToken !== runToken ||
+          state.abortController !== controller ||
+          state.summary.lifecycleState === "closed"
+        ) {
+          return;
+        }
+        state.historyMessages.push(...structuredClone(result.responseMessages));
+        const trimmed = result.text.trim();
+        state.latestAssistantText = trimmed || null;
+        publish(state, {
+          executionState: "completed",
+          busy: false,
+          ...(trimmed ? { lastMessagePreview: trimmed } : {}),
+        });
+      })
+      .catch((err) => {
+        if (
+          state.runToken !== runToken ||
+          state.abortController !== controller ||
+          state.summary.lifecycleState === "closed"
+        ) {
+          return;
+        }
+        state.latestAssistantText = controller.signal.aborted ? null : String(err);
+        publish(state, {
+          executionState: controller.signal.aborted ? "closed" : "errored",
+          busy: false,
+          ...(controller.signal.aborted ? {} : { lastMessagePreview: String(err) }),
+        });
+      })
+      .finally(() => {
+        if (state.runToken === runToken && state.abortController === controller) {
+          state.abortController = null;
+          state.runPromise = null;
+        }
       });
-    }).catch((err) => {
-      if (state.runToken !== runToken || state.abortController !== controller || state.summary.lifecycleState === "closed") {
-        return;
-      }
-      state.latestAssistantText = controller.signal.aborted ? null : String(err);
-      publish(state, {
-        executionState: controller.signal.aborted ? "closed" : "errored",
-        busy: false,
-        ...(controller.signal.aborted ? {} : { lastMessagePreview: String(err) }),
-      });
-    }).finally(() => {
-      if (state.runToken === runToken && state.abortController === controller) {
-        state.abortController = null;
-        state.runPromise = null;
-      }
-    });
 
     state.runPromise = run;
   };
@@ -622,12 +660,7 @@ export function createRawLoopAgentControl(
 
   return {
     spawn: async (spawnOpts) => {
-      const {
-        message,
-        role,
-        model,
-        reasoningEffort,
-      } = spawnOpts;
+      const { message, role, model, reasoningEffort } = spawnOpts;
       const effectiveRole = role ?? "default";
       const resolvedContext = resolveAgentSpawnContextOptions(spawnOpts);
       const connectedProviders = await getConnectedProviders();
@@ -641,9 +674,10 @@ export function createRawLoopAgentControl(
         opts.log(routed.fallbackLine);
       }
       const timestamp = now();
-      const seededTodos = resolvedContext.includeParentTodos && opts.getParentTodos
-        ? structuredClone(opts.getParentTodos())
-        : [];
+      const seededTodos =
+        resolvedContext.includeParentTodos && opts.getParentTodos
+          ? structuredClone(opts.getParentTodos())
+          : [];
       const state: RawLoopAgentControlState = {
         routedConfig: routed.config,
         summary: {
@@ -654,8 +688,12 @@ export function createRawLoopAgentControl(
           depth: (opts.spawnDepth ?? 0) + 1,
           ...(routed.requestedModel ? { requestedModel: routed.requestedModel } : {}),
           effectiveModel: routed.effectiveModel,
-          ...(routed.requestedReasoningEffort ? { requestedReasoningEffort: routed.requestedReasoningEffort } : {}),
-          ...(routed.effectiveReasoningEffort ? { effectiveReasoningEffort: routed.effectiveReasoningEffort } : {}),
+          ...(routed.requestedReasoningEffort
+            ? { requestedReasoningEffort: routed.requestedReasoningEffort }
+            : {}),
+          ...(routed.effectiveReasoningEffort
+            ? { effectiveReasoningEffort: routed.effectiveReasoningEffort }
+            : {}),
           provider: routed.config.provider,
           title: `Raw ${effectiveRole} agent`,
           createdAt: timestamp,
@@ -668,18 +706,18 @@ export function createRawLoopAgentControl(
         requestedModel: routed.requestedModel,
         requestedReasoningEffort: routed.requestedReasoningEffort,
         connectedProviders,
-        historyMessages: resolvedContext.contextMode === "full" && opts.parentMessages
-          ? structuredClone(opts.parentMessages)
-          : resolvedContext.contextMode === "brief"
-            ? [{ role: "user", content: `Parent briefing:\n${resolvedContext.briefing}` }]
-            : [],
+        historyMessages:
+          resolvedContext.contextMode === "full" && opts.parentMessages
+            ? structuredClone(opts.parentMessages)
+            : resolvedContext.contextMode === "brief"
+              ? [{ role: "user", content: `Parent briefing:\n${resolvedContext.briefing}` }]
+              : [],
         todos: seededTodos,
-        harnessContext: (
-          resolvedContext.contextMode === "full"
-          || resolvedContext.includeHarnessContext
-        ) && opts.harnessContext
-          ? structuredClone(opts.harnessContext)
-          : null,
+        harnessContext:
+          (resolvedContext.contextMode === "full" || resolvedContext.includeHarnessContext) &&
+          opts.harnessContext
+            ? structuredClone(opts.harnessContext)
+            : null,
         abortController: null,
         runPromise: null,
         runToken: 0,
@@ -692,7 +730,10 @@ export function createRawLoopAgentControl(
       startRun(state, message);
       return state.summary;
     },
-    list: async () => [...states.values()].map((state) => state.summary).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    list: async () =>
+      [...states.values()]
+        .map((state) => state.summary)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     sendInput: async ({ agentId, message, interrupt }) => {
       const state = getState(agentId);
       reopenClosed(state);
@@ -745,7 +786,7 @@ export function createToolsWithTracing(
   ctx: ToolContext,
   steps: TracedStep[],
   skillGuard?: SkillGuardConfig,
-  prerequisiteToolGuard?: PrerequisiteToolGuardConfig
+  prerequisiteToolGuard?: PrerequisiteToolGuardConfig,
 ): Record<string, any> {
   const baseTools = {
     bash: createBashTool(ctx),
@@ -787,7 +828,11 @@ export function createToolsWithTracing(
     );
   }
 
-  if (skillGuard?.requiredSkillName && skillGuard.guardedToolNames && skillGuard.guardedToolNames.length > 0) {
+  if (
+    skillGuard?.requiredSkillName &&
+    skillGuard.guardedToolNames &&
+    skillGuard.guardedToolNames.length > 0
+  ) {
     let requiredSkillLoaded = false;
     const required = skillGuard.requiredSkillName;
     const guarded = new Set(skillGuard.guardedToolNames);
@@ -800,7 +845,7 @@ export function createToolsWithTracing(
         if (input && typeof input.skillName === "string" && input.skillName === required) {
           requiredSkillLoaded = true;
         }
-      }
+      },
     );
 
     for (const toolName of guarded) {
@@ -809,7 +854,7 @@ export function createToolsWithTracing(
       wrapped[toolName] = withExecuteGuard(
         original,
         () => !requiredSkillLoaded,
-        `Required skill "${required}" must be loaded via the skill tool before calling "${toolName}".`
+        `Required skill "${required}" must be loaded via the skill tool before calling "${toolName}".`,
       );
     }
   }
@@ -830,7 +875,7 @@ export function createToolsWithTracing(
         "",
         () => {
           requiredToolCalled = true;
-        }
+        },
       );
     }
 
@@ -840,7 +885,7 @@ export function createToolsWithTracing(
       wrapped[toolName] = withExecuteGuard(
         original,
         () => !requiredToolCalled,
-        `Tool "${requiredTool}" must be called before "${toolName}".`
+        `Tool "${requiredTool}" must be called before "${toolName}".`,
       );
     }
   }
@@ -865,7 +910,8 @@ function extractRetryDelayMs(err: unknown): number | null {
 
   // Common structured-ish fields.
   const directMs = asAny?.retryAfterMs ?? asAny?.retryDelayMs ?? asAny?.retry_ms;
-  if (typeof directMs === "number" && Number.isFinite(directMs) && directMs > 0) return Math.ceil(directMs);
+  if (typeof directMs === "number" && Number.isFinite(directMs) && directMs > 0)
+    return Math.ceil(directMs);
 
   const directSeconds = asAny?.retryAfterSeconds ?? asAny?.retryDelaySeconds ?? asAny?.retry_after;
   if (typeof directSeconds === "number" && Number.isFinite(directSeconds) && directSeconds > 0) {
@@ -905,7 +951,10 @@ function maskApiKey(value: string): string {
 }
 
 function safePathComponent(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/_+/g, "_").replace(/^_+|_+$/g, "");
+  return value
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 async function listFilesRecursive(dir: string): Promise<string[]> {
@@ -944,7 +993,9 @@ async function collectArtifacts(runDir: string): Promise<ArtifactEntry[]> {
   return entries;
 }
 
-async function fetchAnthropicModels(apiKey: string): Promise<{ ok: boolean; status: number; bodyText: string }> {
+async function fetchAnthropicModels(
+  apiKey: string,
+): Promise<{ ok: boolean; status: number; bodyText: string }> {
   const res = await fetch("https://api.anthropic.com/v1/models", {
     headers: {
       "x-api-key": apiKey,
@@ -957,8 +1008,12 @@ async function fetchAnthropicModels(apiKey: string): Promise<{ ok: boolean; stat
 
 function resolveAnthropicAlias(
   requestedModel: string,
-  availableIds: string[]
-): { requestedModel: string; resolvedModel: string; resolvedFrom: "alias" | "passthrough" | "fallback" } {
+  availableIds: string[],
+): {
+  requestedModel: string;
+  resolvedModel: string;
+  resolvedFrom: "alias" | "passthrough" | "fallback";
+} {
   if (requestedModel === "claude-4-6-opus") {
     // Pick newest dated opus-4-6 model id when the alias form is used.
     const candidates = availableIds.filter((id) => id.startsWith("claude-opus-4-6-"));
@@ -1008,7 +1063,10 @@ function cloneRecord(record: Record<string, any> | undefined): Record<string, an
   return JSON.parse(JSON.stringify(record)) as Record<string, any>;
 }
 
-function deepMergeRecords(base: Record<string, any>, override: Record<string, any>): Record<string, any> {
+function deepMergeRecords(
+  base: Record<string, any>,
+  override: Record<string, any>,
+): Record<string, any> {
   const out: Record<string, any> = { ...base };
   for (const [k, v] of Object.entries(override)) {
     if (isPlainObject(out[k]) && isPlainObject(v)) {
@@ -1022,7 +1080,7 @@ function deepMergeRecords(base: Record<string, any>, override: Record<string, an
 
 function mergeProviderOptions(
   defaults: Record<string, any>,
-  override?: Record<string, any>
+  override?: Record<string, any>,
 ): Record<string, any> {
   const merged = cloneRecord(defaults);
   if (!override) return merged;
@@ -1077,7 +1135,7 @@ function buildSkillReliabilityPrompt(
   skillName: "spreadsheet" | "doc" | "slides" | "pdf",
   task: string,
   primaryFileName: string,
-  primaryFileRequirements: string
+  primaryFileRequirements: string,
 ): string {
   const checkFileName = `${skillName}_skill_check.json`;
   return `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
@@ -1247,8 +1305,8 @@ function buildGptSkillReliabilityRuns(): RunSpec[] {
           [
             '- Include sections: "Objective", "Inputs", and "Formula Skeleton".',
             '- In "Formula Skeleton", include at least 3 Excel-style formulas using cell references (e.g., =B2*(1+C2)).',
-            '- Keep content concise and implementation-oriented.',
-          ].join("\n")
+            "- Keep content concise and implementation-oriented.",
+          ].join("\n"),
         ),
     },
     {
@@ -1282,10 +1340,10 @@ function buildGptSkillReliabilityRuns(): RunSpec[] {
           "Create a DOCX execution brief as plain text guidance.",
           "docx_execution_brief.txt",
           [
-            '- Include a title and exactly 5 numbered implementation steps.',
+            "- Include a title and exactly 5 numbered implementation steps.",
             '- Mention both "python-docx" and "render_docx.py" explicitly.',
             '- End with a short "Verification" paragraph.',
-          ].join("\n")
+          ].join("\n"),
         ),
     },
     {
@@ -1319,10 +1377,10 @@ function buildGptSkillReliabilityRuns(): RunSpec[] {
           "Create a slide deck outline with speaker notes guidance.",
           "slides_outline.md",
           [
-            '- Include 6 slides as a numbered list with title + one-line purpose.',
+            "- Include 6 slides as a numbered list with title + one-line purpose.",
             '- Add a "Speaker Notes Strategy" section with 3 bullets.',
-            '- Keep tone internal and practical.',
-          ].join("\n")
+            "- Keep tone internal and practical.",
+          ].join("\n"),
         ),
     },
     {
@@ -1359,7 +1417,7 @@ function buildGptSkillReliabilityRuns(): RunSpec[] {
             '- Include sections: "Page Structure", "Table Rules", and "Quality Checks".',
             '- In "Table Rules", include at least 4 concrete rules.',
             '- In "Quality Checks", include 3 pass/fail checks.',
-          ].join("\n")
+          ].join("\n"),
         ),
     },
   ];
@@ -1380,7 +1438,9 @@ export function buildGoogleCustomtoolsToolCoverageRuns(): RunSpec[] {
         { notes: absolutePathSchema },
         artifactAssertionsForPaths([{ field: "notes", ext: ".md" }]),
       ),
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Exercise Google custom-tools web + planning flow.
 
@@ -1410,7 +1470,9 @@ Final response must be raw JSON:
         { file: absolutePathSchema },
         artifactAssertionsForPaths([{ field: "file", ext: ".txt" }]),
       ),
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Exercise skill loading plus shell execution.
 
@@ -1436,7 +1498,9 @@ Final response must be raw JSON:
       finalContract: buildLinePairFileContract({
         label: z.string().trim().min(1),
       }),
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Exercise ask, notebookEdit, and memory in one turn.
 
@@ -1464,7 +1528,9 @@ label: <selected label>
         { report: absolutePathSchema },
         artifactAssertionsForPaths([{ field: "report", ext: ".md" }]),
       ),
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Exercise spawnAgent + grep + edit deterministically.
 
@@ -1504,7 +1570,9 @@ export function buildMixedRuns(): RunSpec[] {
         },
         artifactAssertionsForPaths([{ field: "memo_file", ext: ".md" }]),
       ),
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Research HTTP 418 ("I'm a teapot") and RFC 2324, then write a short memo.
 
@@ -1532,7 +1600,10 @@ Final response must be a JSON object:
         { bash_tool_notes: absolutePathSchema },
         artifactAssertionsForPaths([{ field: "bash_tool_notes", ext: ".md" }]),
       ),
-      prompt: ({ runDir, repoDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+        repoDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Produce an internal note explaining how command approvals and the bash tool work in this repo.
 
@@ -1567,7 +1638,9 @@ bash_tool_notes: <absolute path>
           { field: "verify", ext: ".txt" },
         ]),
       ),
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Build a real Excel amortization model (XLSX) for a loan and save verification output.
 
@@ -1604,7 +1677,9 @@ Final response must be a JSON object:
           { field: "excerpt", ext: ".txt" },
         ]),
       ),
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Create a professional DOCX brief and a text extract for quick inspection.
 
@@ -1638,7 +1713,9 @@ Final response must be a JSON object:
           { field: "outline", ext: ".txt" },
         ]),
       ),
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Create a PPTX deck and a machine-readable outline of its slides.
 
@@ -1675,7 +1752,9 @@ outline: <absolute path>
           { field: "meta", ext: ".json" },
         ]),
       ),
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Create a PDF report and write a small verification file describing it.
 
@@ -1702,7 +1781,9 @@ Final response must be a JSON object:
       finalContract: buildLinePairFileContract({
         dataset: z.string().trim().min(1),
       }),
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Exercise ask + notebookEdit + memory in one run.
 
@@ -1724,12 +1805,22 @@ dataset: <dataset>
       provider: "openai",
       model: "gpt-5-mini",
       maxSteps: 120,
-      requiredToolCalls: ["spawnAgent", "waitForAgent", "webFetch", "write", "edit", "glob", "read"],
+      requiredToolCalls: [
+        "spawnAgent",
+        "waitForAgent",
+        "webFetch",
+        "write",
+        "edit",
+        "glob",
+        "read",
+      ],
       finalContract: buildLinePairFileContract(
         { report: absolutePathSchema },
         artifactAssertionsForPaths([{ field: "report", ext: ".md" }]),
       ),
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Use a research sub-agent, then write and lightly edit a short report.
 
@@ -1759,13 +1850,16 @@ report: <absolute path>
         { ws_quickref: absolutePathSchema },
         artifactAssertionsForPaths([{ field: "ws_quickref", ext: ".md" }]),
       ),
-      prompt: ({ runDir, repoDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+        repoDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Create a WebSocket protocol quick reference based on the repo docs.
 
 Steps (must use tools):
 1) Use read to read "${repoDir}/docs/websocket-protocol.md" (limit=260, offset=1).
-2) Use grep to find lines matching pattern "type: \\\"(client_|server_)\" in path "${repoDir}/docs/websocket-protocol.md".
+2) Use grep to find lines matching pattern "type: \\"(client_|server_)" in path "${repoDir}/docs/websocket-protocol.md".
 3) Use write to create "ws_quickref.md" that includes:
 - A short introduction
 - A table of message/event types you found (name + one-sentence meaning)
@@ -1784,7 +1878,9 @@ ws_quickref: <absolute path>
         { manifest: absolutePathSchema },
         artifactAssertionsForPaths([{ field: "manifest", ext: ".json" }]),
       ),
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Create a small bundle of artifacts: XLSX + DOCX + PPTX derived from one tiny dataset.
 
@@ -1821,7 +1917,9 @@ Final response must be a JSON object:
         },
         artifactAssertionsForPaths([{ field: "memo", ext: ".md" }]),
       ),
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Demonstrate Claude 4.6 Sonnet tool use with web research.
 
@@ -1852,7 +1950,9 @@ function buildCodexHarnessSmokeRuns(): RunSpec[] {
         { report: absolutePathSchema },
         artifactAssertionsForPaths([{ field: "report", ext: ".md" }]),
       ),
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+      prompt: ({
+        runDir,
+      }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Smoke-test the harness against the current repo using a focused local tool loop.
 
@@ -1879,7 +1979,7 @@ Final response must be raw JSON:
 function computeRetryDelayMs(err: unknown, attempt: number): number {
   const extracted = extractRetryDelayMs(err);
   const backoffBaseMs = 12_000;
-  const backoffMs = Math.min(180_000, backoffBaseMs * Math.pow(2, Math.max(0, attempt - 1)));
+  const backoffMs = Math.min(180_000, backoffBaseMs * 2 ** Math.max(0, attempt - 1));
   const target = extracted ? Math.max(extracted, backoffMs) : backoffMs;
   const jitterMs = Math.floor(Math.random() * 1500);
   return target + jitterMs;
@@ -1891,7 +1991,7 @@ async function emitHarnessRunEvent(
   status: "ok" | "error",
   at: string,
   attrs: Record<string, string | number | boolean>,
-  durationMs?: number
+  durationMs?: number,
 ) {
   await emitObservabilityEvent(config, {
     name,
@@ -1925,7 +2025,10 @@ async function main() {
           : cliArgs.scenario === "google-customtools-tool-coverage"
             ? "raw-agent-loop_google-customtools-tool-coverage"
             : "raw-agent-loop_codex-gpt-5.4-smoke";
-  const runRoot = path.join(baseConfig.outputDirectory || path.join(repoDir, "tmp"), `${runRootPrefix}_${safeStamp()}`);
+  const runRoot = path.join(
+    baseConfig.outputDirectory || path.join(repoDir, "tmp"),
+    `${runRootPrefix}_${safeStamp()}`,
+  );
   await ensureDir(runRoot);
 
   const googleApiKey = (
@@ -1963,13 +2066,15 @@ async function main() {
 
   if (runs.length === 0) {
     throw new Error(
-      `No runs selected for scenario="${cliArgs.scenario}". Try --only-run/--only-model values that exist in this scenario.`
+      `No runs selected for scenario="${cliArgs.scenario}". Try --only-run/--only-model values that exist in this scenario.`,
     );
   }
 
   const requiredProviders = new Set(runs.map((run) => run.provider));
   if (requiredProviders.has("google") && !googleApiKey) {
-    throw new Error("Missing GEMINI_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY env var (required for Gemini runs).");
+    throw new Error(
+      "Missing GEMINI_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY env var (required for Gemini runs).",
+    );
   }
   if (requiredProviders.has("openai") && !openaiApiKey) {
     throw new Error("Missing OPENAI_API_KEY env var (required for GPT runs).");
@@ -1982,7 +2087,11 @@ async function main() {
     // Cache Anthropic model ids for alias resolution and persist the raw response.
     try {
       const modelsRes = await fetchAnthropicModels(anthropicApiKey);
-      await fs.writeFile(path.join(runRoot, "anthropic_models_raw.json"), modelsRes.bodyText, "utf-8");
+      await fs.writeFile(
+        path.join(runRoot, "anthropic_models_raw.json"),
+        modelsRes.bodyText,
+        "utf-8",
+      );
       if (modelsRes.ok) {
         const parsed = JSON.parse(modelsRes.bodyText) as any;
         anthropicModelIds = Array.isArray(parsed?.data)
@@ -1990,14 +2099,20 @@ async function main() {
           : [];
       }
     } catch (err) {
-      await fs.writeFile(path.join(runRoot, "anthropic_models_raw_error.txt"), String(err), "utf-8");
+      await fs.writeFile(
+        path.join(runRoot, "anthropic_models_raw_error.txt"),
+        String(err),
+        "utf-8",
+      );
       anthropicModelIds = [];
     }
   }
 
-  const connectedProviders = (await getProviderCatalog({
-    paths: getAiCoworkerPaths(),
-  })).connected;
+  const connectedProviders = (
+    await getProviderCatalog({
+      paths: getAiCoworkerPaths(),
+    })
+  ).connected;
 
   for (let i = 0; i < runs.length; i++) {
     const runIndex = i + 1;
@@ -2006,7 +2121,11 @@ async function main() {
     const resolved =
       run.provider === "anthropic"
         ? resolveAnthropicAlias(run.model, anthropicModelIds)
-        : { requestedModel: run.model, resolvedModel: run.model, resolvedFrom: "passthrough" as const };
+        : {
+            requestedModel: run.model,
+            resolvedModel: run.model,
+            resolvedFrom: "passthrough" as const,
+          };
 
     const runDirName = `${run.id}_${run.provider}_${safePathComponent(resolved.resolvedModel)}`;
     const runDir = path.join(runRoot, runDirName);
@@ -2032,7 +2151,10 @@ async function main() {
     });
 
     const config = await loadConfig({ cwd: repoDir, env });
-    config.providerOptions = mergeProviderOptions(DEFAULT_PROVIDER_OPTIONS as Record<string, any>, run.providerOptionsOverride);
+    config.providerOptions = mergeProviderOptions(
+      DEFAULT_PROVIDER_OPTIONS as Record<string, any>,
+      run.providerOptionsOverride,
+    );
     config.enableMcp = false;
     config.provider = run.provider;
     config.model = resolved.resolvedModel;
@@ -2054,7 +2176,10 @@ async function main() {
       hasUserSkillsDir ? path.join(localUserAgentDir, "skills") : "",
       ...trailingSkillDirs,
     ].filter(Boolean);
-    config.memoryDirs = [path.join(localProjectAgentDir, "memory"), path.join(localUserAgentDir, "memory")];
+    config.memoryDirs = [
+      path.join(localProjectAgentDir, "memory"),
+      path.join(localUserAgentDir, "memory"),
+    ];
     config.configDirs = [localProjectAgentDir, localUserAgentDir, config.builtInConfigDir];
 
     await ensureDir(config.projectAgentDir);
@@ -2072,7 +2197,7 @@ async function main() {
         maxAttempts: run.maxAttempts ?? 5,
         maxSteps: run.maxSteps ?? 100,
       },
-      0
+      0,
     );
     const observabilityStartHealth = getObservabilityHealth(config);
 
@@ -2081,12 +2206,25 @@ async function main() {
     const promptContext = { runId: run.id, runDir, repoDir };
     const userPrompt = run.prompt(promptContext);
     const inputMessages: ModelMessage[] = [{ role: "user", content: userPrompt }];
-    const harnessContext = buildRawLoopHarnessContext(run, cliArgs.scenario, promptContext, startedAt);
+    const harnessContext = buildRawLoopHarnessContext(
+      run,
+      cliArgs.scenario,
+      promptContext,
+      startedAt,
+    );
 
     await fs.writeFile(path.join(runDir, "prompt.txt"), userPrompt, "utf-8");
     await fs.writeFile(path.join(runDir, "system.txt"), system, "utf-8");
-    await fs.writeFile(path.join(runDir, "input_messages.json"), safeJsonStringify(inputMessages), "utf-8");
-    await fs.writeFile(path.join(runDir, "harness_context.json"), safeJsonStringify(harnessContext), "utf-8");
+    await fs.writeFile(
+      path.join(runDir, "input_messages.json"),
+      safeJsonStringify(inputMessages),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(runDir, "harness_context.json"),
+      safeJsonStringify(harnessContext),
+      "utf-8",
+    );
 
     const attempts: AttemptMeta[] = [];
     const maxAttempts = run.maxAttempts ?? 5;
@@ -2102,13 +2240,11 @@ async function main() {
     let degraded = false;
     let finalValidation: ValidationSummary | null = null;
     let finalBudgets = buildRawLoopBudgetSummary([], 0, 0);
-    let finalRes:
-      | {
-          text: string;
-          reasoningText?: string;
-          responseMessages: ModelMessage[];
-        }
-      | null = null;
+    let finalRes: {
+      text: string;
+      reasoningText?: string;
+      responseMessages: ModelMessage[];
+    } | null = null;
     let finalError: unknown = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -2157,20 +2293,23 @@ async function main() {
           {
             requiredToolName: run.requiredToolBeforeTools,
             guardedToolNames: run.guardedToolsBeforeRequiredTool,
-          }
+          },
         );
-      const agentControl = createRawLoopAgentControl({
-        config,
-        log,
-        askUser,
-        approveCommand,
-        availableSkills: discoveredSkills,
-        parentMessages: inputMessages,
-        getParentTodos: () => structuredClone(todoEvents.at(-1)?.todos ?? []),
-        harnessContext,
-      }, {
-        getConnectedProviders: async () => connectedProviders,
-      });
+      const agentControl = createRawLoopAgentControl(
+        {
+          config,
+          log,
+          askUser,
+          approveCommand,
+          availableSkills: discoveredSkills,
+          parentMessages: inputMessages,
+          getParentTodos: () => structuredClone(todoEvents.at(-1)?.todos ?? []),
+          harnessContext,
+        },
+        {
+          getConnectedProviders: async () => connectedProviders,
+        },
+      );
 
       try {
         const mainStepNumbers: number[] = [];
@@ -2205,7 +2344,7 @@ async function main() {
               },
               {
                 createTools: createToolsOverride as any,
-              }
+              },
             );
           } finally {
             attemptTotalSteps += countObservedLoopSteps(mainStepNumbers);
@@ -2232,7 +2371,7 @@ async function main() {
           const first = nonTodoCalls[0] ?? "";
           if (first !== run.requiredFirstNonTodoToolCall) {
             throw new Error(
-              `First non-todo tool call must be "${run.requiredFirstNonTodoToolCall}", got "${first || "none"}".`
+              `First non-todo tool call must be "${run.requiredFirstNonTodoToolCall}", got "${first || "none"}".`,
             );
           }
         }
@@ -2287,7 +2426,7 @@ async function main() {
                   },
                   {
                     createTools: (() => ({})) as any,
-                  }
+                  },
                 );
               } finally {
                 attemptTotalSteps += countObservedLoopSteps(repairStepNumbers);
@@ -2297,9 +2436,10 @@ async function main() {
             return {
               finalText: String(finalized.text ?? "").trim() || finalText,
               data: {
-                reasoningText: typeof finalized.reasoningText === "string"
-                  ? finalized.reasoningText
-                  : finalReasoningText,
+                reasoningText:
+                  typeof finalized.reasoningText === "string"
+                    ? finalized.reasoningText
+                    : finalReasoningText,
                 responseMessages: (finalized.responseMessages || []) as ModelMessage[],
               },
             };
@@ -2333,7 +2473,7 @@ async function main() {
           degraded = attemptDegraded;
           finalBudgets = budgetSummary;
           throw new Error(
-            `Final contract validation failed: ${validationResult.issues.map((entry) => entry.message).join("; ")}`
+            `Final contract validation failed: ${validationResult.issues.map((entry) => entry.message).join("; ")}`,
           );
         }
 
@@ -2384,7 +2524,10 @@ async function main() {
             error: undefined,
           },
         };
-        await writeTraceFile(path.join(runDir, `trace_attempt-${pad2(attempt)}.json`), attemptTrace);
+        await writeTraceFile(
+          path.join(runDir, `trace_attempt-${pad2(attempt)}.json`),
+          attemptTrace,
+        );
         break;
       } catch (err) {
         finalRes = null;
@@ -2435,7 +2578,10 @@ async function main() {
             error: String(err),
           },
         };
-        await writeTraceFile(path.join(runDir, `trace_attempt-${pad2(attempt)}.json`), attemptTrace);
+        await writeTraceFile(
+          path.join(runDir, `trace_attempt-${pad2(attempt)}.json`),
+          attemptTrace,
+        );
 
         await sleep(delayMs);
       }
@@ -2470,14 +2616,28 @@ async function main() {
     await fs.writeFile(path.join(runDir, "attempts.json"), safeJsonStringify(attempts), "utf-8");
     await fs.writeFile(path.join(runDir, "tool-log.txt"), finalToolLogLines.join("\n"), "utf-8");
     await fs.writeFile(path.join(runDir, "final.txt"), trace.result.text ?? "", "utf-8");
-    await fs.writeFile(path.join(runDir, "final_reasoning.txt"), trace.result.reasoningText ?? "", "utf-8");
-    await fs.writeFile(path.join(runDir, "response_messages.json"), safeJsonStringify(trace.result.responseMessages), "utf-8");
+    await fs.writeFile(
+      path.join(runDir, "final_reasoning.txt"),
+      trace.result.reasoningText ?? "",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(runDir, "response_messages.json"),
+      safeJsonStringify(trace.result.responseMessages),
+      "utf-8",
+    );
 
     const artifacts = await collectArtifacts(runDir);
-    await fs.writeFile(path.join(runDir, "artifacts_index.json"), safeJsonStringify(artifacts), "utf-8");
+    await fs.writeFile(
+      path.join(runDir, "artifacts_index.json"),
+      safeJsonStringify(artifacts),
+      "utf-8",
+    );
 
     const runFailureError =
-      !finalRes && finalError ? new Error(`Run ${run.id} failed after ${maxAttempts} attempts: ${String(finalError)}`) : undefined;
+      !finalRes && finalError
+        ? new Error(`Run ${run.id} failed after ${maxAttempts} attempts: ${String(finalError)}`)
+        : undefined;
 
     if (runFailureError) {
       await emitHarnessRunEvent(
@@ -2492,7 +2652,7 @@ async function main() {
           scenario: cliArgs.scenario,
           maxAttempts,
         },
-        Date.now() - startedAtMs
+        Date.now() - startedAtMs,
       );
     } else {
       await emitHarnessRunEvent(
@@ -2508,7 +2668,7 @@ async function main() {
           attempts: attempts.length,
           successfulAttempts: attempts.filter((attempt) => attempt.ok).length,
         },
-        Date.now() - startedAtMs
+        Date.now() - startedAtMs,
       );
     }
 

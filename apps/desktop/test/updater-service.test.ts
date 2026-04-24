@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { __internal, DesktopUpdaterService, type UpdaterClient } from "../electron/services/updater";
+import {
+  __internal,
+  DesktopUpdaterService,
+  type UpdaterClient,
+} from "../electron/services/updater";
 
 type Handler = (...args: any[]) => void;
 
@@ -54,7 +58,9 @@ describe("desktop updater service", () => {
   });
 
   test("throws when autoUpdater export is unavailable", () => {
-    expect(() => __internal.resolveAutoUpdaterClient({})).toThrow("autoUpdater export was not found");
+    expect(() => __internal.resolveAutoUpdaterClient({})).toThrow(
+      "autoUpdater export was not found",
+    );
   });
 
   test("stays disabled for unpackaged builds", async () => {
@@ -226,7 +232,9 @@ describe("desktop updater service", () => {
   test("treats missing latest-arm64.yml checks as unavailable instead of an error", async () => {
     const updater = new FakeUpdater();
     updater.checkForUpdates = async () => {
-      throw new Error("Cannot find latest-arm64.yml in the latest release artifacts: HttpError: 404");
+      throw new Error(
+        "Cannot find latest-arm64.yml in the latest release artifacts: HttpError: 404",
+      );
     };
     const service = new DesktopUpdaterService({
       currentVersion: "0.1.9",
@@ -252,7 +260,10 @@ describe("desktop updater service", () => {
       now: () => "2026-03-08T15:39:19.000Z",
     });
 
-    updater.emit("error", new Error("Cannot find latest.yml in the latest release artifacts: HttpError: 404"));
+    updater.emit(
+      "error",
+      new Error("Cannot find latest.yml in the latest release artifacts: HttpError: 404"),
+    );
 
     const state = service.getState();
     expect(state.phase).toBe("disabled");

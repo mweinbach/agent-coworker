@@ -1,9 +1,12 @@
-import { describe, expect, test, mock } from "bun:test";
-import { act } from "react";
-import { createElement } from "react";
+import { describe, expect, mock, test } from "bun:test";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import { A2uiRenderer, type A2uiActionDispatcher, type A2uiRenderableComponent } from "../src/ui/chat/a2ui/A2uiRenderer";
+import {
+  type A2uiActionDispatcher,
+  type A2uiRenderableComponent,
+  A2uiRenderer,
+} from "../src/ui/chat/a2ui/A2uiRenderer";
 import { setupJsdom } from "./jsdomHarness";
 
 const BUTTON_TREE: A2uiRenderableComponent = {
@@ -23,7 +26,9 @@ describe("A2uiRenderer Phase 2 interactions", () => {
     const root = createRoot(harness.dom.window.document.getElementById("root")!);
     try {
       await act(async () => {
-        root.render(createElement(A2uiRenderer, { root: BUTTON_TREE, dataModel: {}, onAction: dispatcher }));
+        root.render(
+          createElement(A2uiRenderer, { root: BUTTON_TREE, dataModel: {}, onAction: dispatcher }),
+        );
       });
 
       const button = harness.dom.window.document.querySelector("button");
@@ -34,7 +39,8 @@ describe("A2uiRenderer Phase 2 interactions", () => {
         button!.click();
       });
       expect(dispatcher).toHaveBeenCalledTimes(1);
-      const call = (dispatcher as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]![0] as {
+      const call = (dispatcher as unknown as { mock: { calls: unknown[][] } }).mock
+        .calls[0]![0] as {
         componentId: string;
         eventType: string;
       };
@@ -71,16 +77,23 @@ describe("A2uiRenderer Phase 2 interactions", () => {
     const root = createRoot(harness.dom.window.document.getElementById("root")!);
     try {
       await act(async () => {
-        root.render(createElement(A2uiRenderer, { root: BUTTON_TREE, dataModel: {}, onAction: dispatcher }));
+        root.render(
+          createElement(A2uiRenderer, { root: BUTTON_TREE, dataModel: {}, onAction: dispatcher }),
+        );
       });
-      const checkbox = harness.dom.window.document.querySelector<HTMLInputElement>("input[type=\"checkbox\"]");
+      const checkbox =
+        harness.dom.window.document.querySelector<HTMLInputElement>('input[type="checkbox"]');
       expect(checkbox).not.toBeNull();
       await act(async () => {
         checkbox!.click();
       });
       const calls = (dispatcher as unknown as { mock: { calls: unknown[][] } }).mock.calls;
       expect(calls.length).toBe(1);
-      const arg = calls[0]![0] as { componentId: string; eventType: string; payload?: Record<string, unknown> };
+      const arg = calls[0]![0] as {
+        componentId: string;
+        eventType: string;
+        payload?: Record<string, unknown>;
+      };
       expect(arg.componentId).toBe("agree");
       expect(arg.eventType).toBe("change");
       expect(arg.payload).toEqual({ value: true });

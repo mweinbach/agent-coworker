@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import { getProviderCatalog, listProviderCatalogEntries } from "../../src/providers/connectionCatalog";
 import { getAiCoworkerPaths } from "../../src/connect";
+import {
+  getProviderCatalog,
+  listProviderCatalogEntries,
+} from "../../src/providers/connectionCatalog";
 import { PROVIDER_NAMES } from "../../src/types";
 
 describe("providers/connectionCatalog", () => {

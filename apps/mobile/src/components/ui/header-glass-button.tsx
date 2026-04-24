@@ -1,8 +1,7 @@
-import { Platform, Pressable } from "react-native";
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
-
-import { SFSymbol } from "./sf-symbol";
+import { Platform, Pressable } from "react-native";
 import { useAppTheme } from "@/theme/use-app-theme";
+import { SFSymbol } from "./sf-symbol";
 
 type HeaderGlassButtonProps = {
   icon: string;

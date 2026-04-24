@@ -1,6 +1,23 @@
+import type {
+  OpenAiContinuationProvider,
+  OpenAiContinuationState,
+} from "../shared/openaiContinuation";
+import type { ModelMessage } from "../types";
 import {
-  buildInvalidToolCallFormatReminderMessage,
+  type RunOpenAiNativeResponseStep,
+  runOpenAiNativeResponseStep,
+} from "./openaiNativeResponses";
+import { resolveOpenAiResponsesModel } from "./openaiResponsesModel";
+import {
+  extractPiAssistantText,
+  extractPiReasoningText,
+  mergePiUsage,
+  normalizePiUsage,
+  piTurnMessagesToModelMessages,
+} from "./piMessageBridge";
+import {
   buildInitialStepMessages,
+  buildInvalidToolCallFormatReminderMessage,
   buildStepState,
   emitPiEventAsRawPart,
   executeToolCall,
@@ -16,23 +33,18 @@ import {
   supportsProviderManagedContinuation,
   toolMapToPiTools,
 } from "./piRuntime";
-import { resolveOpenAiResponsesModel } from "./openaiResponsesModel";
-import { asNonEmptyString, asRecord, asString, extractToolCallsFromAssistant } from "./piRuntimeOptions";
 import {
-  extractPiAssistantText,
-  extractPiReasoningText,
-  mergePiUsage,
-  normalizePiUsage,
-  piTurnMessagesToModelMessages,
-} from "./piMessageBridge";
-import {
-  runOpenAiNativeResponseStep,
-  type RunOpenAiNativeResponseStep,
-} from "./openaiNativeResponses";
-
-import type { OpenAiContinuationProvider, OpenAiContinuationState } from "../shared/openaiContinuation";
-import type { ModelMessage } from "../types";
-import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeStepOverride } from "./types";
+  asNonEmptyString,
+  asRecord,
+  asString,
+  extractToolCallsFromAssistant,
+} from "./piRuntimeOptions";
+import type {
+  LlmRuntime,
+  RuntimeRunTurnParams,
+  RuntimeRunTurnResult,
+  RuntimeStepOverride,
+} from "./types";
 
 type RuntimeStepOverrides = RuntimeStepOverride;
 
@@ -64,7 +76,8 @@ export function createOpenAiResponsesRuntime(
         let stepMessages: ModelMessage[] = activeProviderState
           ? buildInitialStepMessages(params, resolved)
           : [...(params.allMessages ?? params.messages)];
-        let stepProviderOptions: Record<string, unknown> | undefined = asRecord(params.providerOptions) ?? undefined;
+        let stepProviderOptions: Record<string, unknown> | undefined =
+          asRecord(params.providerOptions) ?? undefined;
         const providerManagedContinuation = supportsProviderManagedContinuation(params, resolved);
 
         const maxSteps = Math.max(1, params.maxSteps);
@@ -92,7 +105,7 @@ export function createOpenAiResponsesRuntime(
             { ...params, providerOptions: stepProviderOptions } as RuntimeRunTurnParams,
             resolved,
             overrides,
-            stepMessages
+            stepMessages,
           );
           stepMessages = stepState.modelMessages;
           stepProviderOptions = stepState.providerOptions;
@@ -115,14 +128,21 @@ export function createOpenAiResponsesRuntime(
               provider: params.config.provider as OpenAiContinuationProvider,
               model: resolved.model,
               apiKey: asNonEmptyString(stepState.streamOptions.apiKey) ?? resolved.apiKey,
-              headers: asRecord(stepState.streamOptions.headers) as Record<string, string> | undefined,
+              headers: asRecord(stepState.streamOptions.headers) as
+                | Record<string, string>
+                | undefined,
               systemPrompt: params.system,
               piMessages: stepState.piMessages,
               tools: piTools,
               streamOptions: stepState.streamOptions,
               previousResponseId: activeProviderState?.responseId,
               onEvent: async (event) => {
-                await emitPiEventAsRawPart(event, params.config.provider, includeUnknownRawParts, emitPart);
+                await emitPiEventAsRawPart(
+                  event,
+                  params.config.provider,
+                  includeUnknownRawParts,
+                  emitPart,
+                );
               },
               onRawEvent: async (event) => {
                 await params.onModelRawEvent?.({
@@ -145,10 +165,7 @@ export function createOpenAiResponsesRuntime(
           activeProviderState = finalProviderState ?? activeProviderState;
           const assistantModelMessages = piTurnMessagesToModelMessages([assistantRecord as any]);
           if (!providerManagedContinuation) {
-            stepMessages = [
-              ...stepMessages,
-              ...assistantModelMessages,
-            ];
+            stepMessages = [...stepMessages, ...assistantModelMessages];
           }
 
           await emitPart({
@@ -161,7 +178,9 @@ export function createOpenAiResponsesRuntime(
 
           const stopReason = asString(assistantRecord.stopReason);
           if (stopReason === "error" || stopReason === "aborted") {
-            const errorMessage = asString(assistantRecord.errorMessage) ?? "OpenAI Responses runtime model stream failed.";
+            const errorMessage =
+              asString(assistantRecord.errorMessage) ??
+              "OpenAI Responses runtime model stream failed.";
             throw new Error(errorMessage);
           }
 
@@ -179,7 +198,11 @@ export function createOpenAiResponsesRuntime(
             const toolResult = await executeToolCall(toolCall, params, emitPart);
             turnMessages.push(toolResult);
             toolResultMessages.push(...piTurnMessagesToModelMessages([toolResult as any]));
-            needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(toolCall, toolResult, params.tools);
+            needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(
+              toolCall,
+              toolResult,
+              params.tools,
+            );
           }
 
           if (needsInvalidToolCallReminder) {

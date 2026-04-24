@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import pkg from "../package.json";
-import { VERSION, resolveVersion } from "../src/version";
+import { resolveVersion, VERSION } from "../src/version";
 
 describe("version resolution", () => {
   test("falls back to the packaged version", () => {

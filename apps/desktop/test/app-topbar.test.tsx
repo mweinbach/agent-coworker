@@ -1,6 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { createDesktopCommandsMock } from "./helpers/mockDesktopCommands";
@@ -90,7 +89,9 @@ describe("desktop app top bar", () => {
       expect(sidebarToggle?.className).toContain("app-topbar__plain-icon-button");
       expect(inlineSidebarToggle?.className).toContain("app-topbar__toolbar-layer");
       expect(inlineSidebarToggle?.className).not.toContain("app-topbar__toolbar ");
-      expect(inlineSidebarToggle?.className).not.toContain("app-topbar__toolbar app-topbar__controls");
+      expect(inlineSidebarToggle?.className).not.toContain(
+        "app-topbar__toolbar app-topbar__controls",
+      );
       expect(newChatButton).toBeNull();
       expect(newChatReveal).toBeUndefined();
       expect(titleShell).not.toBeNull();
@@ -299,12 +300,100 @@ describe("desktop app top bar", () => {
             lastTurnUsage: null,
             showContextToggle: false,
             managementMode: "thread",
+            suppressThreadDetails: true,
           }),
         );
       });
 
       expect(container.querySelector('button[aria-label="Hide context"]')).toBeNull();
       expect(container.querySelector(".app-topbar__toolbar--right")).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("renders Research as non-interactive title chrome", async () => {
+    const harness = setupJsdom();
+
+    try {
+      harness.dom.window.document.documentElement.dataset.platform = "darwin";
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(AppTopBar, {
+            busy: false,
+            onToggleSidebar: () => {},
+            onNewChat: () => {},
+            sidebarCollapsed: false,
+            sidebarWidth: 280,
+            contextSidebarCollapsed: false,
+            onToggleContextSidebar: () => {},
+            title: "Research",
+            subtitle: null,
+            sessionUsage: null,
+            lastTurnUsage: null,
+            showContextToggle: false,
+            managementMode: "thread",
+            suppressThreadDetails: true,
+          }),
+        );
+      });
+
+      const titleShell = container.querySelector(".app-topbar__thread-shell");
+      const researchTitle = container.querySelector(".app-topbar__thread-title");
+
+      expect(titleShell?.getAttribute("style")).toContain("left: 280px");
+      expect(researchTitle?.textContent).toBe("Research");
+      expect(container.querySelector('button[aria-label="Open thread details"]')).toBeNull();
+      expect(container.querySelector(".app-sidebar-collapse-control")).not.toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("keeps thread details available for chat threads titled Research", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(
+          createElement(AppTopBar, {
+            busy: false,
+            onToggleSidebar: () => {},
+            onNewChat: () => {},
+            sidebarCollapsed: false,
+            sidebarWidth: 280,
+            contextSidebarCollapsed: false,
+            onToggleContextSidebar: () => {},
+            title: "Research",
+            subtitle: "agent-coworker",
+            sessionUsage,
+            lastTurnUsage: null,
+            managementMode: "thread",
+            suppressThreadDetails: false,
+          }),
+        );
+      });
+
+      const titleButton = container.querySelector('button[aria-label="Open thread details"]');
+
+      expect(titleButton).not.toBeNull();
+      expect(titleButton?.textContent).toContain("Research");
 
       await act(async () => {
         root.unmount();
@@ -411,7 +500,9 @@ describe("desktop app top bar", () => {
         );
       });
 
-      const titleButton = container.querySelector('button[aria-label="Select plugin management workspace"]');
+      const titleButton = container.querySelector(
+        'button[aria-label="Select plugin management workspace"]',
+      );
       if (!(titleButton instanceof harness.dom.window.HTMLButtonElement)) {
         throw new Error("missing plugin management selector button");
       }
@@ -427,9 +518,9 @@ describe("desktop app top bar", () => {
       expect(harness.dom.window.document.body.textContent).toContain("IntelProDay");
       expect(harness.dom.window.document.body.textContent).toContain("Research Lab");
 
-      const intelOption = Array.from(harness.dom.window.document.querySelectorAll('[data-slot="select-item"]')).find(
-        (element) => element.textContent?.includes("IntelProDay"),
-      );
+      const intelOption = Array.from(
+        harness.dom.window.document.querySelectorAll('[data-slot="select-item"]'),
+      ).find((element) => element.textContent?.includes("IntelProDay"));
       if (!(intelOption instanceof harness.dom.window.HTMLElement)) {
         throw new Error("missing IntelProDay option");
       }

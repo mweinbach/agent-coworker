@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { createElement } from "react";
-import { act } from "react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { clearJsonRpcSocketOverride, setJsonRpcSocketOverride } from "./helpers/jsonRpcSocketMock";
@@ -80,42 +79,44 @@ class MockJsonRpcSocket {
   }
 }
 
-mock.module("../src/lib/desktopCommands", () => createDesktopCommandsMock({
-  appendTranscriptBatch: async () => {},
-  appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
-  listDirectory: async () => [],
-  loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
-  pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
-  stopWorkspaceServer: async () => {},
-  showContextMenu: async () => null,
-  windowMinimize: async () => {},
-  windowMaximize: async () => {},
-  windowClose: async () => {},
-  getPlatform: async () => "linux",
-  readFile: async () => "",
-  previewOSFile: async () => {},
-  openPath: async () => {},
-  openExternalUrl: async () => {},
-  revealPath: async () => {},
-  copyPath: async () => {},
-  createDirectory: async () => {},
-  renamePath: async () => {},
-  trashPath: async () => {},
-  confirmAction: async () => true,
-  showNotification: async () => true,
-  getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
-  getUpdateState: async () => MOCK_UPDATE_STATE,
-  checkForUpdates: async () => {},
-  quitAndInstallUpdate: async () => {},
-  onSystemAppearanceChanged: () => () => {},
-  onMenuCommand: () => () => {},
-  onUpdateStateChanged: () => () => {},
-}));
+mock.module("../src/lib/desktopCommands", () =>
+  createDesktopCommandsMock({
+    appendTranscriptBatch: async () => {},
+    appendTranscriptEvent: async () => {},
+    deleteTranscript: async () => {},
+    listDirectory: async () => [],
+    loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+    pickWorkspaceDirectory: async () => null,
+    readTranscript: async () => [],
+    saveState: async () => {},
+    startWorkspaceServer: async () => ({ url: "ws://mock" }),
+    stopWorkspaceServer: async () => {},
+    showContextMenu: async () => null,
+    windowMinimize: async () => {},
+    windowMaximize: async () => {},
+    windowClose: async () => {},
+    getPlatform: async () => "linux",
+    readFile: async () => "",
+    previewOSFile: async () => {},
+    openPath: async () => {},
+    openExternalUrl: async () => {},
+    revealPath: async () => {},
+    copyPath: async () => {},
+    createDirectory: async () => {},
+    renamePath: async () => {},
+    trashPath: async () => {},
+    confirmAction: async () => true,
+    showNotification: async () => true,
+    getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+    getUpdateState: async () => MOCK_UPDATE_STATE,
+    checkForUpdates: async () => {},
+    quitAndInstallUpdate: async () => {},
+    onSystemAppearanceChanged: () => () => {},
+    onMenuCommand: () => () => {},
+    onUpdateStateChanged: () => () => {},
+  }),
+);
 
 mock.module("../src/lib/agentSocket", () => ({
   JsonRpcSocket: MockJsonRpcSocket,
@@ -183,7 +184,13 @@ function setDefaultHandlers(sessionId = "thread-session") {
     thread: threadMeta(sessionId),
   }));
   jsonRpcHandlers.set("cowork/provider/catalog/read", async () => ({
-    event: { type: "provider_catalog", sessionId: "jsonrpc-control", all: [], default: {}, connected: [] },
+    event: {
+      type: "provider_catalog",
+      sessionId: "jsonrpc-control",
+      all: [],
+      default: {},
+      connected: [],
+    },
   }));
   jsonRpcHandlers.set("cowork/provider/authMethods/read", async () => ({
     event: { type: "provider_auth_methods", sessionId: "jsonrpc-control", methods: {} },
@@ -210,7 +217,11 @@ function setDefaultHandlers(sessionId = "thread-session") {
     event: {
       type: "skills_catalog",
       sessionId: "jsonrpc-control",
-      catalog: { installations: [], sources: [], stats: { totalInstallations: 0, enabledInstallations: 0 } },
+      catalog: {
+        installations: [],
+        sources: [],
+        stats: { totalInstallations: 0, enabledInstallations: 0 },
+      },
       mutationBlocked: false,
     },
   }));
@@ -273,7 +284,9 @@ describe("desktop JSON-RPC event mapping", () => {
 
       expect(openedPromptRequestIds).toEqual([requestId]);
       expect(useAppStore.getState().promptModal).toMatchObject(expectedModal);
-      expect(useAppStore.getState().threadRuntimeById[threadId]?.feed ?? []).toHaveLength(feedLengthBefore);
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.feed ?? []).toHaveLength(
+        feedLengthBefore,
+      );
       expect(useAppStore.getState().notifications).toHaveLength(notificationCountBefore);
 
       await act(async () => {
@@ -281,9 +294,13 @@ describe("desktop JSON-RPC event mapping", () => {
         await Promise.resolve();
       });
 
-      expect(socket.responses.slice(responseCountBefore)).toEqual([{ id: requestId, result: expectedResponse }]);
+      expect(socket.responses.slice(responseCountBefore)).toEqual([
+        { id: requestId, result: expectedResponse },
+      ]);
       expect(useAppStore.getState().promptModal).toBeNull();
-      expect(useAppStore.getState().threadRuntimeById[threadId]?.feed ?? []).toHaveLength(feedLengthBefore);
+      expect(useAppStore.getState().threadRuntimeById[threadId]?.feed ?? []).toHaveLength(
+        feedLengthBefore,
+      );
       expect(useAppStore.getState().notifications).toHaveLength(notificationCountBefore);
     } finally {
       unsubscribe();
@@ -305,10 +322,18 @@ describe("desktop JSON-RPC event mapping", () => {
       setupWindow: (dom) => {
         Object.assign(dom.window, { event: undefined });
         if (typeof dom.window.HTMLElement.prototype.attachEvent !== "function") {
-          (dom.window.HTMLElement.prototype as { attachEvent?: (name: string, handler: unknown) => void }).attachEvent = () => {};
+          (
+            dom.window.HTMLElement.prototype as {
+              attachEvent?: (name: string, handler: unknown) => void;
+            }
+          ).attachEvent = () => {};
         }
         if (typeof dom.window.HTMLElement.prototype.detachEvent !== "function") {
-          (dom.window.HTMLElement.prototype as { detachEvent?: (name: string, handler: unknown) => void }).detachEvent = () => {};
+          (
+            dom.window.HTMLElement.prototype as {
+              detachEvent?: (name: string, handler: unknown) => void;
+            }
+          ).detachEvent = () => {};
         }
       },
     });
@@ -486,7 +511,14 @@ describe("desktop JSON-RPC event mapping", () => {
     const runtime = useAppStore.getState().threadRuntimeById[threadId];
     expect(runtime?.busy).toBe(false);
     expect(runtime?.activeTurnId).toBeNull();
-    expect(runtime?.feed.some((item) => "text" in item && typeof item.text === "string" && item.text.includes("Hello from JSON-RPC"))).toBe(true);
+    expect(
+      runtime?.feed.some(
+        (item) =>
+          "text" in item &&
+          typeof item.text === "string" &&
+          item.text.includes("Hello from JSON-RPC"),
+      ),
+    ).toBe(true);
   });
 
   test("shared JSON-RPC reasoning deltas render before the assistant reply", async () => {
@@ -516,9 +548,12 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
     await flushAsyncWork();
 
-    const reasoningOnlyFeed = useAppStore.getState().threadRuntimeById[threadId]?.feed.filter((item) =>
-      item.kind === "reasoning" || item.kind === "message",
-    ) ?? [];
+    const reasoningOnlyFeed =
+      useAppStore
+        .getState()
+        .threadRuntimeById[threadId]?.feed.filter(
+          (item) => item.kind === "reasoning" || item.kind === "message",
+        ) ?? [];
     expect(reasoningOnlyFeed).toHaveLength(1);
     expect(reasoningOnlyFeed[0]).toMatchObject({
       kind: "reasoning",
@@ -550,9 +585,12 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
     await flushAsyncWork();
 
-    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed.filter((item) =>
-      item.kind === "reasoning" || item.kind === "message",
-    ) ?? [];
+    const feed =
+      useAppStore
+        .getState()
+        .threadRuntimeById[threadId]?.feed.filter(
+          (item) => item.kind === "reasoning" || item.kind === "message",
+        ) ?? [];
     expect(feed.map((item) => item.kind)).toEqual(["reasoning", "message"]);
     expect(feed[0]).toMatchObject({
       kind: "reasoning",
@@ -603,7 +641,10 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
     await flushAsyncWork();
 
-    const tools = useAppStore.getState().threadRuntimeById[threadId]?.feed.filter((item) => item.kind === "tool") ?? [];
+    const tools =
+      useAppStore
+        .getState()
+        .threadRuntimeById[threadId]?.feed.filter((item) => item.kind === "tool") ?? [];
     expect(tools).toHaveLength(1);
     expect(tools[0]).toMatchObject({
       kind: "tool",
@@ -650,9 +691,12 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
     await flushAsyncWork();
 
-    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed.filter((item) =>
-      item.kind === "reasoning" || item.kind === "message"
-    ) ?? [];
+    const feed =
+      useAppStore
+        .getState()
+        .threadRuntimeById[threadId]?.feed.filter(
+          (item) => item.kind === "reasoning" || item.kind === "message",
+        ) ?? [];
     expect(feed.map((item) => item.kind)).toEqual(["reasoning", "message"]);
     expect(feed[0]).toMatchObject({
       kind: "reasoning",
@@ -720,9 +764,12 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
     await flushAsyncWork();
 
-    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed.filter((item) =>
-      item.kind === "reasoning" || item.kind === "tool" || item.kind === "message"
-    ) ?? [];
+    const feed =
+      useAppStore
+        .getState()
+        .threadRuntimeById[threadId]?.feed.filter(
+          (item) => item.kind === "reasoning" || item.kind === "tool" || item.kind === "message",
+        ) ?? [];
     expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "tool", "message"]);
     expect(feed[0]).toMatchObject({
       kind: "message",
@@ -825,10 +872,20 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
     await flushAsyncWork();
 
-    const liveFeed = useAppStore.getState().threadRuntimeById[threadId]?.feed.filter((item) =>
-      item.kind === "reasoning" || item.kind === "tool" || item.kind === "message"
-    ) ?? [];
-    expect(liveFeed.map((item) => item.kind)).toEqual(["message", "reasoning", "tool", "message", "tool", "message"]);
+    const liveFeed =
+      useAppStore
+        .getState()
+        .threadRuntimeById[threadId]?.feed.filter(
+          (item) => item.kind === "reasoning" || item.kind === "tool" || item.kind === "message",
+        ) ?? [];
+    expect(liveFeed.map((item) => item.kind)).toEqual([
+      "message",
+      "reasoning",
+      "tool",
+      "message",
+      "tool",
+      "message",
+    ]);
     expect(liveFeed[0]).toMatchObject({
       kind: "message",
       role: "assistant",
@@ -889,10 +946,20 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
     await flushAsyncWork();
 
-    const completedFeed = useAppStore.getState().threadRuntimeById[threadId]?.feed.filter((item) =>
-      item.kind === "reasoning" || item.kind === "tool" || item.kind === "message"
-    ) ?? [];
-    expect(completedFeed.map((item) => item.kind)).toEqual(["message", "reasoning", "tool", "message", "tool", "message"]);
+    const completedFeed =
+      useAppStore
+        .getState()
+        .threadRuntimeById[threadId]?.feed.filter(
+          (item) => item.kind === "reasoning" || item.kind === "tool" || item.kind === "message",
+        ) ?? [];
+    expect(completedFeed.map((item) => item.kind)).toEqual([
+      "message",
+      "reasoning",
+      "tool",
+      "message",
+      "tool",
+      "message",
+    ]);
   });
 
   test("shared JSON-RPC notifications hydrate live session metadata immediately", async () => {
@@ -947,7 +1014,9 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
 
     const runtime = useAppStore.getState().threadRuntimeById[threadId];
-    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.title).toBe("Renamed over JSON-RPC");
+    expect(useAppStore.getState().threads.find((thread) => thread.id === threadId)?.title).toBe(
+      "Renamed over JSON-RPC",
+    );
     expect(runtime?.config?.model).toBe("gpt-5.4-mini");
     expect(runtime?.enableMcp).toBe(false);
     expect(runtime?.sessionConfig?.preferredChildModel).toBe("gpt-5.4-mini");
@@ -956,14 +1025,20 @@ describe("desktop JSON-RPC event mapping", () => {
   test("shared JSON-RPC notifications map remaining live thread events", async () => {
     const socket = await reconnectThreadAndGetSocket();
 
-    RUNTIME.pendingThreadSteers.set(threadId, new Map([
-      ["steer-1", {
-        clientMessageId: "steer-1",
-        text: "tighten scope",
-        expectedTurnId: "turn-1",
-        accepted: false,
-      }],
-    ]));
+    RUNTIME.pendingThreadSteers.set(
+      threadId,
+      new Map([
+        [
+          "steer-1",
+          {
+            clientMessageId: "steer-1",
+            text: "tighten scope",
+            expectedTurnId: "turn-1",
+            accepted: false,
+          },
+        ],
+      ]),
+    );
     act(() => {
       useAppStore.setState((state) => ({
         threadRuntimeById: {
@@ -992,21 +1067,23 @@ describe("desktop JSON-RPC event mapping", () => {
     socket.notify("cowork/session/agentList", {
       type: "agent_list",
       sessionId,
-      agents: [{
-        agentId: "agent-1",
-        parentSessionId: sessionId,
-        role: "research",
-        mode: "delegate",
-        depth: 1,
-        title: "Research worker",
-        provider: "openai",
-        effectiveModel: "gpt-5.4-mini",
-        createdAt: "2024-01-01T00:00:01.000Z",
-        updatedAt: "2024-01-01T00:00:02.000Z",
-        lifecycleState: "active",
-        executionState: "running",
-        busy: true,
-      }],
+      agents: [
+        {
+          agentId: "agent-1",
+          parentSessionId: sessionId,
+          role: "research",
+          mode: "delegate",
+          depth: 1,
+          title: "Research worker",
+          provider: "openai",
+          effectiveModel: "gpt-5.4-mini",
+          createdAt: "2024-01-01T00:00:01.000Z",
+          updatedAt: "2024-01-01T00:00:02.000Z",
+          lifecycleState: "active",
+          executionState: "running",
+          busy: true,
+        },
+      ],
     });
     socket.notify("item/completed", {
       threadId: sessionId,
@@ -1044,10 +1121,18 @@ describe("desktop JSON-RPC event mapping", () => {
     const runtime = state.threadRuntimeById[threadId];
     expect(runtime?.pendingSteer?.status).toBe("accepted");
     expect(runtime?.agents).toHaveLength(1);
-    expect(state.latestTodosByThreadId[threadId]).toEqual([{ content: "Ship the fix", status: "pending", activeForm: "" }]);
-    expect(runtime?.feed.some((item) => item.kind === "log" && item.line === "live log line")).toBe(true);
-    expect(runtime?.feed.some((item) => item.kind === "error" && item.message === "boom")).toBe(true);
-    expect(state.notifications.some((entry) => entry.detail === "session/internal_error: boom")).toBe(true);
+    expect(state.latestTodosByThreadId[threadId]).toEqual([
+      { content: "Ship the fix", status: "pending", activeForm: "" },
+    ]);
+    expect(runtime?.feed.some((item) => item.kind === "log" && item.line === "live log line")).toBe(
+      true,
+    );
+    expect(runtime?.feed.some((item) => item.kind === "error" && item.message === "boom")).toBe(
+      true,
+    );
+    expect(
+      state.notifications.some((entry) => entry.detail === "session/internal_error: boom"),
+    ).toBe(true);
   });
 
   test("server ask requests stay on the request path and answerAsk responds on the shared socket", async () => {
@@ -1155,9 +1240,13 @@ describe("desktop JSON-RPC event mapping", () => {
     expect(useAppStore.getState().promptModal).toBeNull();
     expect(firstSocket.responses).toEqual([]);
     expect(secondSocket.responses).toEqual([]);
-    expect(useAppStore.getState().threadRuntimeById[threadId]?.feed.some((item) =>
-      item.kind === "log" && item.line === "stale retired log line"
-    )).toBe(false);
+    expect(
+      useAppStore
+        .getState()
+        .threadRuntimeById[threadId]?.feed.some(
+          (item) => item.kind === "log" && item.line === "stale retired log line",
+        ),
+    ).toBe(false);
 
     secondSocket.notify("item/completed", {
       threadId: sessionId,
@@ -1171,9 +1260,13 @@ describe("desktop JSON-RPC event mapping", () => {
     await flushAsyncWork();
     await flushAsyncWork();
 
-    expect(useAppStore.getState().threadRuntimeById[threadId]?.feed.some((item) =>
-      item.kind === "log" && item.line === "fresh replacement log line"
-    )).toBe(true);
+    expect(
+      useAppStore
+        .getState()
+        .threadRuntimeById[threadId]?.feed.some(
+          (item) => item.kind === "log" && item.line === "fresh replacement log line",
+        ),
+    ).toBe(true);
 
     await expectPromptRequestToStayOnRequestPath({
       socket: secondSocket,
@@ -1208,9 +1301,8 @@ describe("desktop JSON-RPC event mapping", () => {
     });
     await flushAsyncWork();
 
-    const turnStartParams = jsonRpcRequests.find((entry) => entry.method === "turn/start")?.params as
-      | { clientMessageId?: string }
-      | undefined;
+    const turnStartParams = jsonRpcRequests.find((entry) => entry.method === "turn/start")
+      ?.params as { clientMessageId?: string } | undefined;
     expect(turnStartParams?.clientMessageId).toEqual(expect.any(String));
     expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingTurnStart).toMatchObject({
       clientMessageId: turnStartParams?.clientMessageId,
@@ -1236,7 +1328,8 @@ describe("desktop JSON-RPC event mapping", () => {
 
     const runtime = useAppStore.getState().threadRuntimeById[threadId];
     expect(runtime?.pendingTurnStart).toBeNull();
-    const userMessages = runtime?.feed.filter((item) => item.kind === "message" && item.role === "user") ?? [];
+    const userMessages =
+      runtime?.feed.filter((item) => item.kind === "message" && item.role === "user") ?? [];
     expect(userMessages).toHaveLength(1);
     expect(userMessages[0]).toMatchObject({
       id: turnStartParams?.clientMessageId,

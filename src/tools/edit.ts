@@ -1,11 +1,10 @@
 import fs from "node:fs/promises";
 
 import { z } from "zod";
-
-import type { ToolContext } from "./context";
-import { defineTool } from "./defineTool";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
+import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 
 export function createEditTool(ctx: ToolContext) {
   return defineTool({
@@ -34,7 +33,7 @@ export function createEditTool(ctx: ToolContext) {
       const abs = await assertWritePathAllowed(
         resolveMaybeRelative(filePath, ctx.config.workingDirectory),
         ctx.config,
-        "edit"
+        "edit",
       );
       let content = await fs.readFile(abs, "utf-8");
       if (!content.includes(oldString)) throw new Error(`oldString not found in ${abs}`);
@@ -43,12 +42,14 @@ export function createEditTool(ctx: ToolContext) {
         const count = content.split(oldString).length - 1;
         if (count > 1) {
           throw new Error(
-            `oldString found ${count} times in ${abs}. Provide more context or set replaceAll=true.`
+            `oldString found ${count} times in ${abs}. Provide more context or set replaceAll=true.`,
           );
         }
       }
 
-      content = replaceAll ? content.replaceAll(oldString, newString) : content.replace(oldString, newString);
+      content = replaceAll
+        ? content.replaceAll(oldString, newString)
+        : content.replace(oldString, newString);
       await fs.writeFile(abs, content, "utf-8");
 
       ctx.log(`tool< edit ${JSON.stringify({ ok: true })}`);

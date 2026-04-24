@@ -2,16 +2,25 @@ import { createRequire } from "node:module";
 
 import type { ProgressInfo, UpdateDownloadedEvent, UpdateInfo } from "electron-updater";
 
-import { createDefaultUpdaterState, type UpdaterReleaseInfo, type UpdaterState } from "../../src/lib/desktopApi";
+import {
+  createDefaultUpdaterState,
+  type UpdaterReleaseInfo,
+  type UpdaterState,
+} from "../../src/lib/desktopApi";
 import { applyUpdaterPlatformDefaults } from "./updaterPlatform";
 
 const AUTOMATIC_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const STARTUP_CHECK_DELAY_MS = 10 * 1000;
 const RELEASE_NOTES_URL = "https://github.com/mweinbach/agent-coworker/releases/latest";
-const UNAVAILABLE_RELEASE_FEED_MESSAGE = "Updates are unavailable for this platform because no update feed is published.";
+const UNAVAILABLE_RELEASE_FEED_MESSAGE =
+  "Updates are unavailable for this platform because no update feed is published.";
 const require = createRequire(import.meta.url);
 
-type UpdaterEventHandler = (...args: any[]) => void;
+type UpdaterEventHandler =
+  | ((info: UpdateInfo) => void)
+  | ((progress: ProgressInfo) => void)
+  | ((info: UpdateDownloadedEvent) => void)
+  | ((...args: unknown[]) => void);
 
 export interface UpdaterClient {
   autoDownload: boolean;
@@ -92,7 +101,10 @@ function toMessage(error: unknown): string {
 
 function isMissingReleaseFeedMessage(message: string): boolean {
   const normalized = message.toLowerCase();
-  return /latest(?:-[a-z0-9-]+)?\.yml/.test(normalized) && (normalized.includes("404") || normalized.includes("cannot find"));
+  return (
+    /latest(?:-[a-z0-9-]+)?\.yml/.test(normalized) &&
+    (normalized.includes("404") || normalized.includes("cannot find"))
+  );
 }
 
 function normalizeReleaseNotes(value: unknown): string | undefined {
@@ -112,12 +124,8 @@ function normalizeReleaseNotes(value: unknown): string | undefined {
       const record = entry as Record<string, unknown>;
       const versionValue = record.version;
       const noteValue = record.note;
-      const version = typeof versionValue === "string"
-        ? versionValue.trim()
-        : "";
-      const note = typeof noteValue === "string"
-        ? noteValue.trim()
-        : "";
+      const version = typeof versionValue === "string" ? versionValue.trim() : "";
+      const note = typeof noteValue === "string" ? noteValue.trim() : "";
       const merged = [version ? `${version}:` : "", note].filter(Boolean).join(" ");
       return merged || null;
     })
@@ -126,7 +134,9 @@ function normalizeReleaseNotes(value: unknown): string | undefined {
   return parts.length > 0 ? parts.join("\n\n") : undefined;
 }
 
-function normalizeReleaseInfo(info: Partial<UpdateInfo> | UpdateDownloadedEvent | null | undefined): UpdaterReleaseInfo | null {
+function normalizeReleaseInfo(
+  info: Partial<UpdateInfo> | UpdateDownloadedEvent | null | undefined,
+): UpdaterReleaseInfo | null {
   const version = typeof info?.version === "string" ? info.version.trim() : "";
   if (!version) {
     return null;
@@ -134,8 +144,14 @@ function normalizeReleaseInfo(info: Partial<UpdateInfo> | UpdateDownloadedEvent 
 
   return {
     version,
-    releaseName: typeof info?.releaseName === "string" && info.releaseName.trim() ? info.releaseName.trim() : undefined,
-    releaseDate: typeof info?.releaseDate === "string" && info.releaseDate.trim() ? info.releaseDate.trim() : undefined,
+    releaseName:
+      typeof info?.releaseName === "string" && info.releaseName.trim()
+        ? info.releaseName.trim()
+        : undefined,
+    releaseDate:
+      typeof info?.releaseDate === "string" && info.releaseDate.trim()
+        ? info.releaseDate.trim()
+        : undefined,
     releaseNotes: normalizeReleaseNotes(info?.releaseNotes),
     releasePageUrl: RELEASE_NOTES_URL,
   };
@@ -219,7 +235,11 @@ export class DesktopUpdaterService {
   }
 
   getState(): UpdaterState {
-    return { ...this.state, progress: this.state.progress ? { ...this.state.progress } : null, release: this.state.release ? { ...this.state.release } : null };
+    return {
+      ...this.state,
+      progress: this.state.progress ? { ...this.state.progress } : null,
+      release: this.state.release ? { ...this.state.release } : null,
+    };
   }
 
   async checkForUpdates(): Promise<void> {
@@ -294,7 +314,9 @@ export class DesktopUpdaterService {
       this.setState({
         phase: "available",
         lastCheckedAt: this.now(),
-        message: release ? `Update ${release.version} is available. Downloading now…` : "Update available. Downloading now…",
+        message: release
+          ? `Update ${release.version} is available. Downloading now…`
+          : "Update available. Downloading now…",
         error: null,
         release,
         progress: null,
@@ -332,7 +354,9 @@ export class DesktopUpdaterService {
         phase: "downloaded" as const,
         lastCheckedAt: this.now(),
         downloadedAt: this.now(),
-        message: release ? `Restart Cowork to install ${release.version}.` : "Restart Cowork to install the update.",
+        message: release
+          ? `Restart Cowork to install ${release.version}.`
+          : "Restart Cowork to install the update.",
         error: null,
         progress: {
           percent: 100,

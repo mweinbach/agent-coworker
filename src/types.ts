@@ -18,10 +18,7 @@ export const PROVIDER_NAMES = [
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 const providerNameSchema = z.enum(PROVIDER_NAMES);
 
-export const CHILD_MODEL_ROUTING_MODES = [
-  "same-provider",
-  "cross-provider-allowlist",
-] as const;
+export const CHILD_MODEL_ROUTING_MODES = ["same-provider", "cross-provider-allowlist"] as const;
 
 export type ChildModelRoutingMode = (typeof CHILD_MODEL_ROUTING_MODES)[number];
 const childModelRoutingModeSchema = z.enum(CHILD_MODEL_ROUTING_MODES);
@@ -50,11 +47,7 @@ export function resolveChildModelRoutingMode(v: unknown): ChildModelRoutingMode 
   return parsed.success ? parsed.data : null;
 }
 
-export const RUNTIME_NAMES = [
-  "pi",
-  "openai-responses",
-  "google-interactions",
-] as const;
+export const RUNTIME_NAMES = ["pi", "openai-responses", "google-interactions"] as const;
 
 export type RuntimeName = (typeof RUNTIME_NAMES)[number];
 const runtimeNameSchema = z.enum(RUNTIME_NAMES);
@@ -395,7 +388,13 @@ export type SkillMutationTargetScope = "project" | "global";
 
 export type SkillInstallState = "effective" | "shadowed" | "disabled" | "invalid";
 
-export type SkillInstallOriginKind = "github" | "skills.sh" | "local" | "manual" | "bootstrap" | "unknown";
+export type SkillInstallOriginKind =
+  | "github"
+  | "skills.sh"
+  | "local"
+  | "manual"
+  | "bootstrap"
+  | "unknown";
 
 export interface SkillInstallOrigin {
   kind: SkillInstallOriginKind;

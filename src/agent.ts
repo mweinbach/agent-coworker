@@ -2,33 +2,41 @@ import { z } from "zod";
 
 import { getModel as realGetModel } from "./config";
 import { buildTurnSystemPrompt } from "./harness/buildTurnSystemPrompt";
+import { loadMCPServers, loadMCPTools } from "./mcp";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
-import type { RuntimeModelRawEvent, RuntimePrepareStep, RuntimeStepOverride } from "./runtime/types";
-import type { AgentRole } from "./shared/agents";
-import type { ProviderContinuationState } from "./shared/providerContinuation";
-import type { AgentControl } from "./tools";
-import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "./types";
-import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTracker";
-import { loadMCPServers, loadMCPTools } from "./mcp";
-import { createTools } from "./tools";
+import type {
+  RuntimeModelRawEvent,
+  RuntimePrepareStep,
+  RuntimeStepOverride,
+} from "./runtime/types";
 import type { AgentShellPolicy } from "./server/agents/commandPolicy";
 import { getAgentRoleDefinition, getAgentRoleShellPolicy } from "./server/agents/roles";
 import { filterToolsForRole } from "./server/agents/toolPolicy";
+import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTracker";
+import type { AgentRole } from "./shared/agents";
+import type { ProviderContinuationState } from "./shared/providerContinuation";
+import type { AgentControl } from "./tools";
+import { createTools } from "./tools";
+import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "./types";
 
 const MAX_STREAM_SETTLE_TICKS = 64;
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
-const messageRecordSchema = z.object({
-  role: z.string(),
-  content: z.unknown(),
-}).passthrough();
+const messageRecordSchema = z
+  .object({
+    role: z.string(),
+    content: z.unknown(),
+  })
+  .passthrough();
 const messageContentPartSchema = z.union([
   z.string(),
-  z.object({
-    text: z.string().optional(),
-    inputText: z.string().optional(),
-  }).passthrough(),
+  z
+    .object({
+      text: z.string().optional(),
+      inputText: z.string().optional(),
+    })
+    .passthrough(),
 ]);
 const messageContentSchema = z.array(messageContentPartSchema);
 const usageSchema = z.object({
@@ -45,9 +53,11 @@ const asyncIterableSchema = z.custom<AsyncIterable<unknown>>((value) => {
   const iterable = value as { [Symbol.asyncIterator]?: unknown };
   return typeof iterable[Symbol.asyncIterator] === "function";
 });
-const streamResultWithFullStreamSchema = z.object({
-  fullStream: asyncIterableSchema.optional(),
-}).passthrough();
+const streamResultWithFullStreamSchema = z
+  .object({
+    fullStream: asyncIterableSchema.optional(),
+  })
+  .passthrough();
 
 export interface RunTurnParams {
   config: AgentConfig;
@@ -111,7 +121,7 @@ export interface RunTurnParams {
 function mergeToolSets(
   builtInTools: Record<string, any>,
   mcpTools: Record<string, any>,
-  log: (line: string) => void
+  log: (line: string) => void,
 ): Record<string, any> {
   const merged: Record<string, any> = { ...builtInTools };
   for (const [name, toolDef] of Object.entries(mcpTools)) {
@@ -280,7 +290,17 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     };
     providerState?: ProviderContinuationState;
   }> {
-    const { config, system, messages, log, askUser, approveCommand, updateTodos, discoveredSkills, abortSignal } = params;
+    const {
+      config,
+      system,
+      messages,
+      log,
+      askUser,
+      approveCommand,
+      updateTodos,
+      discoveredSkills,
+      abortSignal,
+    } = params;
     let latestTurnMessages = messages;
 
     const toolCtx = {
@@ -320,7 +340,9 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     const tools = params.agentRole
       ? filterToolsForRole(mergedTools, getAgentRoleDefinition(params.agentRole))
       : mergedTools;
-    const mcpToolNames = Object.keys(tools).filter((name) => name.startsWith("mcp__")).sort();
+    const mcpToolNames = Object.keys(tools)
+      .filter((name) => name.startsWith("mcp__"))
+      .sort();
     const turnSystem = buildTurnSystemPrompt(system, config, mcpToolNames, params.harnessContext);
     const turnProviderOptions = config.providerOptions;
     const googlePrepareStep =
@@ -409,7 +431,11 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
             let previousCount = streamPartCount;
             let stableTicks = 0;
             let ticks = 0;
-            while (!streamConsumptionSettled && stableTicks < 2 && ticks < MAX_STREAM_SETTLE_TICKS) {
+            while (
+              !streamConsumptionSettled &&
+              stableTicks < 2 &&
+              ticks < MAX_STREAM_SETTLE_TICKS
+            ) {
               await Promise.resolve();
               ticks += 1;
               if (streamPartCount === previousCount) {
@@ -428,19 +454,25 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
             } else {
               log("[warn] Model stream did not drain after response completion; continuing turn.");
               void streamConsumption.catch((error) => {
-                log(`[warn] Model stream ended with error after response completion: ${String(error)}`);
+                log(
+                  `[warn] Model stream ended with error after response completion: ${String(error)}`,
+                );
               });
             }
           }
 
-          const parsedResponseMessages = responseMessagesSchema.safeParse((response as any)?.messages);
+          const parsedResponseMessages = responseMessagesSchema.safeParse(
+            (response as any)?.messages,
+          );
           const parsedReasoningText = stringSchema.safeParse(reasoningText);
           const parsedUsage = usageSchema.safeParse((response as any)?.usage);
 
           return {
             text: String(text ?? ""),
             reasoningText: parsedReasoningText.success ? parsedReasoningText.data : undefined,
-            responseMessages: (parsedResponseMessages.success ? parsedResponseMessages.data : []) as ModelMessage[],
+            responseMessages: (parsedResponseMessages.success
+              ? parsedResponseMessages.data
+              : []) as ModelMessage[],
             usage: parsedUsage.success
               ? {
                   promptTokens: parsedUsage.data.promptTokens,
@@ -493,7 +525,7 @@ export const runTurn = createRunTurn();
 
 export async function runTurnWithDeps(
   params: RunTurnParams,
-  overrides: RunTurnOverrides = {}
+  overrides: RunTurnOverrides = {},
 ): Promise<{
   text: string;
   reasoningText?: string;

@@ -1,23 +1,32 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
+import { buildPluginCatalogSnapshot, setPluginSkillEnabled } from "../plugins";
 import type {
   AgentConfig,
   SkillCatalogSnapshot,
+  SkillInstallationEntry,
   SkillInstallOrigin,
   SkillInstallPreview,
-  SkillInstallationEntry,
   SkillMutationTargetScope,
   SkillUpdateCheckResult,
 } from "../types";
-import { setPluginSkillEnabled } from "../plugins";
 import { workspacePathOverlaps } from "../utils/workspacePath";
-import { getInstallationById, getSkillScopeDescriptors, scanSkillCatalog } from "./catalog";
-import { buildPluginCatalogSnapshot } from "../plugins";
-import { scanSkillCatalogFromSources } from "./catalog";
-import { createManagedInstallationId, adoptSkillInstallManifest, writeSkillInstallManifest } from "./manifest";
-import { buildSkillInstallPreview, materializeSkillSource, resolveSkillSource } from "./sourceResolver";
+import {
+  getInstallationById,
+  getSkillScopeDescriptors,
+  scanSkillCatalogFromSources,
+} from "./catalog";
+import {
+  adoptSkillInstallManifest,
+  createManagedInstallationId,
+  writeSkillInstallManifest,
+} from "./manifest";
+import {
+  buildSkillInstallPreview,
+  materializeSkillSource,
+  resolveSkillSource,
+} from "./sourceResolver";
 
 type WritableScopePaths = {
   scope: SkillMutationTargetScope;
@@ -25,9 +34,14 @@ type WritableScopePaths = {
   disabledSkillsDir: string;
 };
 
-function requireWritableScope(config: AgentConfig, scope: SkillMutationTargetScope): WritableScopePaths {
-  const descriptor = getSkillScopeDescriptors(config.skillsDirs).find((entry) => entry.scope === scope);
-  if (!descriptor || !descriptor.disabledSkillsDir || !descriptor.writable) {
+function requireWritableScope(
+  config: AgentConfig,
+  scope: SkillMutationTargetScope,
+): WritableScopePaths {
+  const descriptor = getSkillScopeDescriptors(config.skillsDirs).find(
+    (entry) => entry.scope === scope,
+  );
+  if (!descriptor?.disabledSkillsDir || !descriptor.writable) {
     throw new Error(`Writable scope "${scope}" is not configured`);
   }
 
@@ -72,7 +86,10 @@ function originFromDescriptor(descriptor: SkillInstallPreview["source"]): SkillI
   }
 }
 
-async function removeConflictingTargets(paths: WritableScopePaths, skillName: string): Promise<void> {
+async function removeConflictingTargets(
+  paths: WritableScopePaths,
+  skillName: string,
+): Promise<void> {
   for (const targetRoot of conflictingTargetRoots(paths, skillName)) {
     await fs.rm(targetRoot, { recursive: true, force: true });
   }
@@ -87,11 +104,16 @@ async function copySkillRoot(sourceRoot: string, destinationRoot: string): Promi
   });
 }
 
-async function stageCopySourceIfNeeded(sourceRoot: string, conflictingTargets: string[]): Promise<{
+async function stageCopySourceIfNeeded(
+  sourceRoot: string,
+  conflictingTargets: string[],
+): Promise<{
   sourceRoot: string;
   cleanup: () => Promise<void>;
 }> {
-  const overlapsConflict = conflictingTargets.some((targetRoot) => workspacePathOverlaps(sourceRoot, targetRoot));
+  const overlapsConflict = conflictingTargets.some((targetRoot) =>
+    workspacePathOverlaps(sourceRoot, targetRoot),
+  );
   if (!overlapsConflict) {
     return {
       sourceRoot,
@@ -116,7 +138,10 @@ function installSourceFromOrigin(installation: SkillInstallationEntry): string |
     return null;
   }
 
-  if ((origin.kind === "skills.sh" || origin.kind === "github" || origin.kind === "bootstrap") && origin.url) {
+  if (
+    (origin.kind === "skills.sh" || origin.kind === "github" || origin.kind === "bootstrap") &&
+    origin.url
+  ) {
     return origin.url;
   }
 
@@ -141,14 +166,17 @@ async function refreshCatalog(config: AgentConfig): Promise<SkillCatalogSnapshot
   const pluginCatalog = await buildPluginCatalogSnapshot(config);
   return await scanSkillCatalogFromSources(
     [
-      ...getSkillScopeDescriptors(config.skillsDirs).map((descriptor) => ({ kind: "standalone" as const, descriptor })),
+      ...getSkillScopeDescriptors(config.skillsDirs).map((descriptor) => ({
+        kind: "standalone" as const,
+        descriptor,
+      })),
       ...pluginCatalog.plugins.flatMap((plugin) =>
         plugin.skills.map((skill) => ({
           kind: "plugin" as const,
           plugin,
           skill,
           enabled: skill.enabled,
-        }))
+        })),
       ),
     ],
     { includeDisabled: true },
@@ -165,7 +193,9 @@ function resolveRecordedUpdateCandidate<T extends NamedUpdateCandidate>(
   installationName: string,
 ): { candidate: T | null; reason: string | null } {
   const matchingCandidates = candidates.filter((candidate) => candidate.name === installationName);
-  const validCandidates = matchingCandidates.filter((candidate) => candidate.diagnostics.length === 0);
+  const validCandidates = matchingCandidates.filter(
+    (candidate) => candidate.diagnostics.length === 0,
+  );
   if (validCandidates.length === 1) {
     return { candidate: validCandidates[0] ?? null, reason: null };
   }
@@ -184,19 +214,22 @@ function resolveRecordedUpdateCandidate<T extends NamedUpdateCandidate>(
     };
   }
 
-  const diagnosticMessages = [...new Set(
-    matchingCandidates.flatMap((candidate) =>
-      candidate.diagnostics
-        .map((diagnostic) => diagnostic.message.trim())
-        .filter((message) => message.length > 0)
-    )
-  )];
+  const diagnosticMessages = [
+    ...new Set(
+      matchingCandidates.flatMap((candidate) =>
+        candidate.diagnostics
+          .map((diagnostic) => diagnostic.message.trim())
+          .filter((message) => message.length > 0),
+      ),
+    ),
+  ];
 
   return {
     candidate: null,
-    reason: diagnosticMessages.length > 0
-      ? `Recorded skill "${installationName}" exists in the update source but is not a valid skill installation. ${diagnosticMessages.join(" ")}`
-      : `Recorded skill "${installationName}" exists in the update source but is not a valid skill installation.`,
+    reason:
+      diagnosticMessages.length > 0
+        ? `Recorded skill "${installationName}" exists in the update source but is not a valid skill installation. ${diagnosticMessages.join(" ")}`
+        : `Recorded skill "${installationName}" exists in the update source but is not a valid skill installation.`,
   };
 }
 
@@ -204,7 +237,11 @@ export async function installSkillsFromSource(opts: {
   config: AgentConfig;
   input: string;
   targetScope: SkillMutationTargetScope;
-}): Promise<{ preview: SkillInstallPreview; installationIds: string[]; catalog: SkillCatalogSnapshot }> {
+}): Promise<{
+  preview: SkillInstallPreview;
+  installationIds: string[];
+  catalog: SkillCatalogSnapshot;
+}> {
   const currentCatalog = await refreshCatalog(opts.config);
   const preview = await buildSkillInstallPreview({
     input: opts.input,
@@ -220,7 +257,9 @@ export async function installSkillsFromSource(opts: {
   });
 
   try {
-    const validCandidates = materialized.candidates.filter((candidate) => candidate.diagnostics.length === 0);
+    const validCandidates = materialized.candidates.filter(
+      (candidate) => candidate.diagnostics.length === 0,
+    );
     if (validCandidates.length === 0) {
       throw new Error("No valid skill installations were found in the provided source");
     }
@@ -239,7 +278,10 @@ export async function installSkillsFromSource(opts: {
     const installedIds: string[] = [];
     for (const candidate of validCandidates) {
       const destinationRoot = path.join(writableScope.skillsDir, candidate.name);
-      const stagedSource = await stageCopySourceIfNeeded(candidate.rootDir, conflictingTargetRoots(writableScope, candidate.name));
+      const stagedSource = await stageCopySourceIfNeeded(
+        candidate.rootDir,
+        conflictingTargetRoots(writableScope, candidate.name),
+      );
       try {
         await removeConflictingTargets(writableScope, candidate.name);
         await copySkillRoot(stagedSource.sourceRoot, destinationRoot);
@@ -327,7 +369,10 @@ export async function disableSkillInstallation(opts: {
     return await refreshCatalog(opts.config);
   }
 
-  const writableScope = requireWritableScope(opts.config, opts.installation.scope as SkillMutationTargetScope);
+  const writableScope = requireWritableScope(
+    opts.config,
+    opts.installation.scope as SkillMutationTargetScope,
+  );
   const destinationRoot = path.join(writableScope.disabledSkillsDir, opts.installation.name);
   const manifest = await adoptSkillInstallManifest({
     skillRoot: opts.installation.rootDir,
@@ -369,7 +414,10 @@ export async function enableSkillInstallation(opts: {
     return await refreshCatalog(opts.config);
   }
 
-  const writableScope = requireWritableScope(opts.config, opts.installation.scope as SkillMutationTargetScope);
+  const writableScope = requireWritableScope(
+    opts.config,
+    opts.installation.scope as SkillMutationTargetScope,
+  );
   const destinationRoot = path.join(writableScope.skillsDir, opts.installation.name);
   const manifest = await adoptSkillInstallManifest({
     skillRoot: opts.installation.rootDir,
@@ -439,12 +487,17 @@ export async function checkSkillInstallationUpdate(opts: {
     catalog: await refreshCatalog(opts.config),
     cwd: opts.config.workingDirectory,
   });
-  const resolvedCandidate = resolveRecordedUpdateCandidate(preview.candidates, opts.installation.name);
+  const resolvedCandidate = resolveRecordedUpdateCandidate(
+    preview.candidates,
+    opts.installation.name,
+  );
   if (!resolvedCandidate.candidate) {
     return {
       installationId: opts.installation.installationId,
       canUpdate: false,
-      reason: resolvedCandidate.reason ?? `No valid update candidate was found for "${opts.installation.name}".`,
+      reason:
+        resolvedCandidate.reason ??
+        `No valid update candidate was found for "${opts.installation.name}".`,
       preview,
     };
   }
@@ -472,7 +525,10 @@ export async function updateSkillInstallation(opts: {
     throw new Error("No update source is recorded for this installation");
   }
 
-  const writableScope = requireWritableScope(opts.config, opts.installation.scope as SkillMutationTargetScope);
+  const writableScope = requireWritableScope(
+    opts.config,
+    opts.installation.scope as SkillMutationTargetScope,
+  );
   const materialized = await materializeSkillSource({
     input,
     cwd: opts.config.workingDirectory,
@@ -486,13 +542,21 @@ export async function updateSkillInstallation(opts: {
       cwd: opts.config.workingDirectory,
       materialized,
     });
-    const resolvedCandidate = resolveRecordedUpdateCandidate(materialized.candidates, opts.installation.name);
+    const resolvedCandidate = resolveRecordedUpdateCandidate(
+      materialized.candidates,
+      opts.installation.name,
+    );
     const selectedCandidate = resolvedCandidate.candidate;
     if (!selectedCandidate) {
-      throw new Error(resolvedCandidate.reason ?? `No valid update candidate was found for "${opts.installation.name}"`);
+      throw new Error(
+        resolvedCandidate.reason ??
+          `No valid update candidate was found for "${opts.installation.name}"`,
+      );
     }
 
-    const destinationBase = opts.installation.enabled ? writableScope.skillsDir : writableScope.disabledSkillsDir;
+    const destinationBase = opts.installation.enabled
+      ? writableScope.skillsDir
+      : writableScope.disabledSkillsDir;
     const destinationRoot = path.join(destinationBase, opts.installation.name);
     const stagedSource = await stageCopySourceIfNeeded(
       selectedCandidate.rootDir,

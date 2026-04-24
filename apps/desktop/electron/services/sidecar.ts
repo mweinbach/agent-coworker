@@ -46,7 +46,7 @@ export type SidecarLaunchCommand = {
 
 export function resolveDesktopTargetTriple(
   platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch
+  arch: string = process.arch,
 ): string {
   if (platform === "win32") {
     if (arch === "x64") return "x86_64-pc-windows-msvc";
@@ -68,14 +68,14 @@ export function resolveDesktopTargetTriple(
 
 export function shouldUseBundledBunRuntime(
   platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch
+  arch: string = process.arch,
 ): boolean {
   return platform === "win32" && arch === "arm64";
 }
 
 export function resolvePackagedSidecarFilename(
   platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch
+  arch: string = process.arch,
 ): string {
   const ext = platform === "win32" ? ".exe" : "";
   return `${SIDECAR_BASE_NAME}-${resolveDesktopTargetTriple(platform, arch)}${ext}`;
@@ -83,7 +83,7 @@ export function resolvePackagedSidecarFilename(
 
 export function buildSidecarManifest(
   platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch
+  arch: string = process.arch,
 ): SidecarManifest {
   const targetTriple = resolveDesktopTargetTriple(platform, arch);
   if (shouldUseBundledBunRuntime(platform, arch)) {
@@ -201,13 +201,13 @@ function buildSidecarLaunchCommand(
   dir: string,
   manifest: SidecarManifest | LegacySidecarManifest,
   existsSync: typeof fs.existsSync,
-  manifestPath?: string
+  manifestPath?: string,
 ): SidecarLaunchCommand {
   if (isLegacySidecarManifest(manifest)) {
     const command = resolveRelativeManifestPath(dir, manifest.filename);
     if (!existsSync(command)) {
       throw new Error(
-        `Bundled sidecar manifest points to a missing binary: ${manifestPath ?? dir} -> ${manifest.filename}`
+        `Bundled sidecar manifest points to a missing binary: ${manifestPath ?? dir} -> ${manifest.filename}`,
       );
     }
     return {
@@ -224,7 +224,7 @@ function buildSidecarLaunchCommand(
     const command = resolveRelativeManifestPath(dir, manifest.launch.path);
     if (!existsSync(command)) {
       throw new Error(
-        `Bundled sidecar manifest points to a missing executable: ${manifestPath ?? dir} -> ${manifest.launch.path}`
+        `Bundled sidecar manifest points to a missing executable: ${manifestPath ?? dir} -> ${manifest.launch.path}`,
       );
     }
     return {
@@ -240,14 +240,14 @@ function buildSidecarLaunchCommand(
   const runtime = resolveRelativeManifestPath(dir, manifest.launch.runtime);
   if (!existsSync(runtime)) {
     throw new Error(
-      `Bundled sidecar manifest points to a missing Bun runtime: ${manifestPath ?? dir} -> ${manifest.launch.runtime}`
+      `Bundled sidecar manifest points to a missing Bun runtime: ${manifestPath ?? dir} -> ${manifest.launch.runtime}`,
     );
   }
 
   const entrypoint = resolveRelativeManifestPath(dir, manifest.launch.entrypoint);
   if (!existsSync(entrypoint)) {
     throw new Error(
-      `Bundled sidecar manifest points to a missing Bun entrypoint: ${manifestPath ?? dir} -> ${manifest.launch.entrypoint}`
+      `Bundled sidecar manifest points to a missing Bun entrypoint: ${manifestPath ?? dir} -> ${manifest.launch.entrypoint}`,
     );
   }
 
@@ -271,7 +271,7 @@ function isDirectoryPath(target: string, lstatSync: typeof fs.lstatSync): boolea
 
 export function findPackagedSidecarLaunchCommand(
   searchDirs: string[],
-  options: FindPackagedSidecarLaunchOptions = {}
+  options: FindPackagedSidecarLaunchOptions = {},
 ): SidecarLaunchCommand {
   const explicitPath = options.explicitPath?.trim();
   const existsSync = options.existsSync ?? fs.existsSync;
@@ -311,7 +311,9 @@ export function findPackagedSidecarLaunchCommand(
       try {
         parsed = JSON.parse(readFileSync(manifestPath, "utf-8"));
       } catch (error) {
-        throw new Error(`Bundled sidecar manifest is unreadable: ${manifestPath} (${String(error)})`);
+        throw new Error(
+          `Bundled sidecar manifest is unreadable: ${manifestPath} (${String(error)})`,
+        );
       }
 
       if (!isSidecarManifest(parsed) && !isLegacySidecarManifest(parsed)) {
@@ -343,6 +345,6 @@ export function findPackagedSidecarLaunchCommand(
     foundCandidates.size > 0 ? ` Found candidates: ${[...foundCandidates].sort().join(", ")}` : "";
 
   throw new Error(
-    `Server sidecar launch target not found. Expected ${expectedFilename} in ${resolvedSearchDirs.join(", ")}.${foundSummary}`
+    `Server sidecar launch target not found. Expected ${expectedFilename} in ${resolvedSearchDirs.join(", ")}.${foundSummary}`,
   );
 }

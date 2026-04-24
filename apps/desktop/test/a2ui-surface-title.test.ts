@@ -16,7 +16,9 @@ describe("extractSurfaceTitle", () => {
           {
             id: "hero",
             type: "Card",
-            children: [{ id: "hero-title", type: "Heading", props: { text: "A2UI Demo Lab", level: 1 } }],
+            children: [
+              { id: "hero-title", type: "Heading", props: { text: "A2UI Demo Lab", level: 1 } },
+            ],
           },
           { id: "sub", type: "Heading", props: { text: "System Pulse", level: 2 } },
         ],
@@ -31,9 +33,7 @@ describe("extractSurfaceTitle", () => {
       {
         id: "root",
         type: "Column",
-        children: [
-          { id: "body", type: "Text", props: { text: "hello there" } },
-        ],
+        children: [{ id: "body", type: "Text", props: { text: "hello there" } }],
       },
       {},
     );

@@ -9,7 +9,10 @@ import { parseConnectionStoreJson } from "../src/store/connections";
 
 const mockedAuthorizeUrl = `https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=${encodeURIComponent(`http://${OAUTH_LOOPBACK_HOST}:1455/auth/callback`)}&scope=openid%20profile%20email%20offline_access&code_challenge=mock-challenge&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&state=mock-state&originator=codex_cli_rs`;
 
-function buildMockCodexMaterial(paths: { authDir: string }, overrides: Partial<Record<string, unknown>> = {}) {
+function buildMockCodexMaterial(
+  paths: { authDir: string },
+  overrides: Partial<Record<string, unknown>> = {},
+) {
   return {
     file: path.join(paths.authDir, "codex-cli", "auth.json"),
     issuer: "https://auth.openai.com",
@@ -27,20 +30,19 @@ const runCodexLoginMock = mock(async (opts: any) => {
   return buildMockCodexMaterial(opts.paths);
 });
 
-const {
-  connectProvider,
-  getAiCoworkerPaths,
-  isOauthCliProvider,
-  maskApiKey,
-  readConnectionStore,
-} = await import("../src/connect");
+const { connectProvider, getAiCoworkerPaths, isOauthCliProvider, maskApiKey, readConnectionStore } =
+  await import("../src/connect");
 
 async function makeTmpHome(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "cowork-connect-test-"));
 }
 
 function b64url(input: string): string {
-  return Buffer.from(input, "utf8").toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+  return Buffer.from(input, "utf8")
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
 }
 
 function makeJwt(payload: Record<string, unknown>): string {
@@ -242,7 +244,7 @@ describe("connectProvider", () => {
     expect(runCodexLoginMock).toHaveBeenCalledTimes(1);
 
     const persisted = JSON.parse(
-      await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")
+      await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
     ) as any;
     expect(persisted?.tokens?.access_token).toBe("mock-access-token");
     expect(persisted?.tokens?.refresh_token).toBe("mock-refresh-token");
@@ -278,9 +280,9 @@ describe("connectProvider", () => {
           },
         },
         null,
-        2
+        2,
       ),
-      "utf-8"
+      "utf-8",
     );
 
     const result = await connectProvider({
@@ -296,11 +298,13 @@ describe("connectProvider", () => {
     if (!result.ok) return;
     expect(result.mode).toBe("oauth");
     expect(result.message).toContain("Codex OAuth sign-in completed.");
-    expect(result.oauthCredentialsFile).toBe(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"));
+    expect(result.oauthCredentialsFile).toBe(
+      path.join(home, ".cowork", "auth", "codex-cli", "auth.json"),
+    );
     expect(runCodexLoginMock).toHaveBeenCalledTimes(1);
 
     const persisted = JSON.parse(
-      await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")
+      await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
     ) as any;
     expect(persisted?.tokens?.access_token).toBe("mock-access-token");
     expect(persisted?.tokens?.refresh_token).toBe("mock-refresh-token");
@@ -326,8 +330,8 @@ describe("connectProvider", () => {
           },
         },
         null,
-        2
-      )
+        2,
+      ),
     );
 
     const openedUrls: string[] = [];
@@ -382,7 +386,9 @@ describe("connectProvider", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.oauthCredentialsFile).toBe(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"));
+    expect(result.oauthCredentialsFile).toBe(
+      path.join(home, ".cowork", "auth", "codex-cli", "auth.json"),
+    );
 
     await expect(fs.readFile(nonCoworkFile, "utf-8")).rejects.toThrow();
 
@@ -407,9 +413,10 @@ describe("connectProvider", () => {
     expect(result.ok).toBe(false);
     expect(runCodexLoginMock).not.toHaveBeenCalled();
     expect(result.message).toContain("browser-managed by Cowork");
-    await expect(fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")).rejects.toThrow();
+    await expect(
+      fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
+    ).rejects.toThrow();
   });
-
 });
 
 describe("connection store parsing", () => {
@@ -449,7 +456,9 @@ describe("connection store parsing", () => {
       },
     });
 
-    expect(() => parseConnectionStoreJson(raw, "/tmp/connections.json")).toThrow("Invalid connection store schema");
+    expect(() => parseConnectionStoreJson(raw, "/tmp/connections.json")).toThrow(
+      "Invalid connection store schema",
+    );
   });
 
   test("enforces string tool API keys", () => {
@@ -460,6 +469,8 @@ describe("connection store parsing", () => {
       },
     });
 
-    expect(() => parseConnectionStoreJson(raw, "/tmp/connections.json")).toThrow("Invalid connection store schema");
+    expect(() => parseConnectionStoreJson(raw, "/tmp/connections.json")).toThrow(
+      "Invalid connection store schema",
+    );
   });
 });

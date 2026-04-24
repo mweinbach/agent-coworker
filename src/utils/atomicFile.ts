@@ -31,7 +31,7 @@ async function renameWithRetry(
     maxAttempts: number;
     initialDelayMs: number;
     maxDelayMs: number;
-  }
+  },
 ): Promise<void> {
   let delayMs = opts.initialDelayMs;
   for (let attempt = 1; attempt <= opts.maxAttempts; attempt++) {
@@ -61,7 +61,7 @@ export async function writeTextFileAtomic(
     fsImpl?: FsLike;
     platform?: NodeJS.Platform;
     sleepImpl?: (ms: number) => Promise<void>;
-  } = {}
+  } = {},
 ): Promise<void> {
   const fsImpl = deps.fsImpl ?? fs;
   const platform = deps.platform ?? process.platform;
@@ -73,7 +73,7 @@ export async function writeTextFileAtomic(
   await fsImpl.mkdir(path.dirname(filePath), { recursive: true });
   const tempPath = path.join(
     path.dirname(filePath),
-    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
   );
   if (opts.mode === undefined) {
     await fsImpl.writeFile(tempPath, payload, "utf-8");

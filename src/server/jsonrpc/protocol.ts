@@ -65,42 +65,58 @@ export type JsonRpcInitializeParams = {
 
 export type JsonRpcInitializedParams = Record<string, never>;
 
-const initializeParamsSchema = z.object({
-  clientInfo: z.object({
-    name: nonEmptyTrimmedStringSchema,
-    title: z.string().optional(),
-    version: z.string().optional(),
-  }).strict(),
-  capabilities: z.object({
-    experimentalApi: z.boolean().optional(),
-    optOutNotificationMethods: z.array(nonEmptyTrimmedStringSchema).optional(),
-  }).strict().optional(),
-}).strict();
+const initializeParamsSchema = z
+  .object({
+    clientInfo: z
+      .object({
+        name: nonEmptyTrimmedStringSchema,
+        title: z.string().optional(),
+        version: z.string().optional(),
+      })
+      .strict(),
+    capabilities: z
+      .object({
+        experimentalApi: z.boolean().optional(),
+        optOutNotificationMethods: z.array(nonEmptyTrimmedStringSchema).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
 
 const initializedParamsSchema = z.object({}).strict();
 
-const requestEnvelopeSchema = z.object({
-  id: jsonRpcIdSchema,
-  method: nonEmptyTrimmedStringSchema,
-  params: z.unknown().optional(),
-}).strict();
+const requestEnvelopeSchema = z
+  .object({
+    id: jsonRpcIdSchema,
+    method: nonEmptyTrimmedStringSchema,
+    params: z.unknown().optional(),
+  })
+  .strict();
 
-const notificationEnvelopeSchema = z.object({
-  method: nonEmptyTrimmedStringSchema,
-  params: z.unknown().optional(),
-}).strict();
+const notificationEnvelopeSchema = z
+  .object({
+    method: nonEmptyTrimmedStringSchema,
+    params: z.unknown().optional(),
+  })
+  .strict();
 
-const responseEnvelopeSchema = z.object({
-  id: jsonRpcIdSchema,
-  result: z.unknown().optional(),
-  error: z.object({
-    code: z.number().finite(),
-    message: z.string(),
-    data: z.unknown().optional(),
-  }).optional(),
-}).strict().refine((value) => value.result !== undefined || value.error !== undefined, {
-  message: "Response must include result or error",
-});
+const responseEnvelopeSchema = z
+  .object({
+    id: jsonRpcIdSchema,
+    result: z.unknown().optional(),
+    error: z
+      .object({
+        code: z.number().finite(),
+        message: z.string(),
+        data: z.unknown().optional(),
+      })
+      .optional(),
+  })
+  .strict()
+  .refine((value) => value.result !== undefined || value.error !== undefined, {
+    message: "Response must include result or error",
+  });
 
 export type ParseJsonRpcClientMessageResult =
   | { ok: true; message: JsonRpcLiteClientMessage }

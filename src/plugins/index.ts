@@ -7,18 +7,18 @@ export { discoverPlugins } from "./discovery";
 export {
   buildPluginCatalogEntry,
   manifestPathForPluginRoot,
+  type ParsedPluginApp,
+  type ParsedPluginSkill,
+  type PluginManifest,
   readPluginAppSummaries,
   readPluginManifest,
   readPluginSkillSummaries,
   validatePluginBundledSkills,
-  type ParsedPluginApp,
-  type ParsedPluginSkill,
-  type PluginManifest,
 } from "./manifest";
 export {
-  parsePluginMarketplace,
   type ParsedMarketplaceDocument,
   type ParsedMarketplacePluginEntry,
+  parsePluginMarketplace,
 } from "./marketplace";
 export {
   parsePluginMcpDocument,
@@ -28,24 +28,24 @@ export {
   validatePluginMcpPath,
 } from "./mcp";
 export {
-  buildPluginSkillSources,
-  type PluginSkillCatalogSource,
-} from "./skillBridge";
-export {
-  isPluginEnabled,
-  isPluginSkillEnabled,
-  readPluginOverrides,
-  setPluginEnabled,
-  setPluginSkillEnabled,
-  type PluginOverrideSnapshot,
-} from "./overrides";
-export {
   installPluginsFromSource,
   resolvePluginSourceDescriptorForInstallInput,
 } from "./operations";
 export {
+  isPluginEnabled,
+  isPluginSkillEnabled,
+  type PluginOverrideSnapshot,
+  readPluginOverrides,
+  setPluginEnabled,
+  setPluginSkillEnabled,
+} from "./overrides";
+export {
+  buildPluginSkillSources,
+  type PluginSkillCatalogSource,
+} from "./skillBridge";
+export {
   buildPluginInstallPreview,
+  type MaterializedPluginSource,
   materializePluginSource,
   resolvePluginSource,
-  type MaterializedPluginSource,
 } from "./sourceResolver";

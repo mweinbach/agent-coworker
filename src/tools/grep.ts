@@ -1,18 +1,17 @@
-import { z } from "zod";
 import { execFile } from "node:child_process";
-
-import type { ToolContext } from "./context";
-import { defineTool } from "./defineTool";
+import { z } from "zod";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
 import { resolveMaybeRelative } from "../utils/paths";
-import { ensureRipgrep } from "../utils/ripgrep";
 import { assertReadPathAllowed } from "../utils/permissions";
+import { ensureRipgrep } from "../utils/ripgrep";
+import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 
 const errorCodeSchema = z.object({ code: z.union([z.string(), z.number()]) }).passthrough();
 
 export function createGrepTool(
   ctx: ToolContext,
-  opts: { execFileImpl?: typeof execFile; ensureRipgrepImpl?: typeof ensureRipgrep } = {}
+  opts: { execFileImpl?: typeof execFile; ensureRipgrepImpl?: typeof ensureRipgrep } = {},
 ) {
   const execFileImpl = opts.execFileImpl ?? execFile;
   const ensureRipgrepImpl = opts.ensureRipgrepImpl ?? ensureRipgrep;
@@ -24,7 +23,13 @@ export function createGrepTool(
       pattern: z.string().describe("Regex pattern"),
       path: z.string().optional().describe("File or directory to search"),
       fileGlob: z.string().optional().describe("Glob to filter files (e.g. *.ts)"),
-      contextLines: z.number().int().min(0).max(50).optional().describe("Context lines around matches"),
+      contextLines: z
+        .number()
+        .int()
+        .min(0)
+        .max(50)
+        .optional()
+        .describe("Context lines around matches"),
       caseSensitive: z.boolean().optional().default(true),
     }),
     execute: async ({
@@ -41,7 +46,7 @@ export function createGrepTool(
       caseSensitive: boolean;
     }) => {
       ctx.log(
-        `tool> grep ${JSON.stringify({ pattern, path: searchPath, fileGlob, contextLines, caseSensitive })}`
+        `tool> grep ${JSON.stringify({ pattern, path: searchPath, fileGlob, contextLines, caseSensitive })}`,
       );
 
       const args: string[] = ["--line-number"]; // include file:line
@@ -50,9 +55,12 @@ export function createGrepTool(
       if (fileGlob) args.push("--glob", fileGlob);
 
       const validatedSearchPath = await assertReadPathAllowed(
-        resolveMaybeRelative(searchPath || ctx.config.workingDirectory, ctx.config.workingDirectory),
+        resolveMaybeRelative(
+          searchPath || ctx.config.workingDirectory,
+          ctx.config.workingDirectory,
+        ),
         ctx.config,
-        "grep"
+        "grep",
       );
 
       args.push("--", pattern);

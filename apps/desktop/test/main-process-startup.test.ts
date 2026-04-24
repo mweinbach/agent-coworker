@@ -5,7 +5,9 @@ test("desktop app names itself before userData-backed services initialize", asyn
   const source = await fs.readFile(new URL("../electron/main.ts", import.meta.url), "utf8");
 
   const setNameIndex = source.indexOf("app.setName(DESKTOP_APP_NAME);");
-  const mobileRelayBridgeIndex = source.indexOf("const mobileRelayBridge = new MobileRelayBridge({ serverManager });");
+  const mobileRelayBridgeIndex = source.indexOf(
+    "const mobileRelayBridge = new MobileRelayBridge({ serverManager });",
+  );
   const persistenceIndex = source.indexOf("const persistence = new PersistenceService();");
 
   expect(setNameIndex).toBeGreaterThanOrEqual(0);

@@ -69,24 +69,29 @@ type ThreadStoreState = {
   clearAll(): void;
 };
 
-function ensureThreadSnapshot(threadId: string, existing?: SessionSnapshotLike): SessionSnapshotLike {
-  return existing ?? {
-    sessionId: threadId,
-    title: "Thread",
-    titleSource: "manual",
-    provider: "opencode",
-    model: "mobile-scaffold",
-    sessionKind: "primary",
-    createdAt: new Date(0).toISOString(),
-    updatedAt: new Date(0).toISOString(),
-    messageCount: 0,
-    lastEventSeq: 0,
-    feed: [],
-    agents: [],
-    todos: [],
-    hasPendingAsk: false,
-    hasPendingApproval: false,
-  };
+function ensureThreadSnapshot(
+  threadId: string,
+  existing?: SessionSnapshotLike,
+): SessionSnapshotLike {
+  return (
+    existing ?? {
+      sessionId: threadId,
+      title: "Thread",
+      titleSource: "manual",
+      provider: "opencode",
+      model: "mobile-scaffold",
+      sessionKind: "primary",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      messageCount: 0,
+      lastEventSeq: 0,
+      feed: [],
+      agents: [],
+      todos: [],
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    }
+  );
 }
 
 function buildThreadSummary(
@@ -99,15 +104,17 @@ function buildThreadSummary(
   return {
     id: threadId,
     title: snapshot.title,
-    preview: previewSource && "text" in previewSource
-      ? previewSource.text
-      : previewSource && "line" in previewSource
-        ? previewSource.line
-        : "No activity yet.",
+    preview:
+      previewSource && "text" in previewSource
+        ? previewSource.text
+        : previewSource && "line" in previewSource
+          ? previewSource.line
+          : "No activity yet.",
     updatedAtLabel: `${snapshot.feed.length} updates`,
     feed: snapshot.feed,
     composerDraft,
-    pendingPrompt: snapshot.hasPendingAsk || snapshot.hasPendingApproval || pendingServerRequest !== null,
+    pendingPrompt:
+      snapshot.hasPendingAsk || snapshot.hasPendingApproval || pendingServerRequest !== null,
     pendingServerRequest,
   };
 }
@@ -280,11 +287,11 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         ...state.pendingRequests,
         [request.threadId]: request,
       },
-      threads: state.threads.map((thread) => (
+      threads: state.threads.map((thread) =>
         thread.id === request.threadId
           ? { ...thread, pendingPrompt: true, pendingServerRequest: request }
-          : thread
-      )),
+          : thread,
+      ),
     }));
   },
   clearPendingRequest(threadId) {
@@ -293,15 +300,18 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
         ...state.pendingRequests,
         [threadId]: null,
       },
-      threads: state.threads.map((thread) => (
+      threads: state.threads.map((thread) =>
         thread.id === threadId
           ? {
               ...thread,
-              pendingPrompt: state.snapshots[threadId]?.hasPendingAsk || state.snapshots[threadId]?.hasPendingApproval || false,
+              pendingPrompt:
+                state.snapshots[threadId]?.hasPendingAsk ||
+                state.snapshots[threadId]?.hasPendingApproval ||
+                false,
               pendingServerRequest: null,
             }
-          : thread
-      )),
+          : thread,
+      ),
     }));
   },
   selectThread(threadId) {
@@ -309,11 +319,9 @@ export const useThreadStore = create<ThreadStoreState>((set, get) => ({
   },
   setComposerDraft(threadId, text) {
     set((state) => ({
-      threads: state.threads.map((thread) => (
-        thread.id === threadId
-          ? { ...thread, composerDraft: text }
-          : thread
-      )),
+      threads: state.threads.map((thread) =>
+        thread.id === threadId ? { ...thread, composerDraft: text } : thread,
+      ),
       selectedThreadId: threadId,
     }));
   },

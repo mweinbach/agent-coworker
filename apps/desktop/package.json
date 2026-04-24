@@ -11,7 +11,7 @@
   "type": "module",
   "main": "out/main/main.js",
   "scripts": {
-    "electron-vite": "bun --bun ./node_modules/electron-vite/bin/electron-vite.js",
+    "electron-vite": "bun --bun ../../node_modules/electron-vite/bin/electron-vite.js",
     "dev": "bun run --cwd ../.. build:desktop-resources && bun run electron-vite -- dev",
     "build": "bun run --cwd ../.. build:desktop-resources && bun run electron-vite -- build && electron-builder --config electron-builder.yml",
     "build:dir": "bun run --cwd ../.. build:desktop-resources && bun run electron-vite -- build && electron-builder --dir --config electron-builder.yml",

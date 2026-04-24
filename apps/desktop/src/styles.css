@@ -23,7 +23,6 @@ body {
   color: var(--text-primary);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
-  -electron-corner-smoothing: system-ui;
 }
 
 code,
@@ -66,7 +65,16 @@ samp {
   color: inherit;
 }
 
-:where(button, [role="button"], [role="treeitem"], a, input, textarea, select, [role="separator"]):focus-visible {
+:where(
+    button,
+    [role="button"],
+    [role="treeitem"],
+    a,
+    input,
+    textarea,
+    select,
+    [role="separator"]
+  ):focus-visible {
   outline: none;
   box-shadow: var(--focus-ring-shadow);
 }
@@ -291,7 +299,7 @@ samp {
 /* Inline gridTemplateColumns on desktop; collapse to one column at small widths */
 @media (max-width: 860px) {
   .settings-shell {
-    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -509,7 +517,7 @@ body.app-animating-sidebars .app-topbar__content-fill {
 
 @media (prefers-reduced-motion: reduce) {
   .sidebar-rail-enter {
-    animation: none !important;
+    animation: none;
   }
 
   .sidebar-lift,
@@ -519,6 +527,6 @@ body.app-animating-sidebars .app-topbar__content-fill {
   .sidebar-workspace-card,
   .sidebar-thread-item,
   .sidebar-thread-region {
-    transition: none !important;
+    transition: none;
   }
 }

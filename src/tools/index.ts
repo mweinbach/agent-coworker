@@ -1,8 +1,14 @@
-import type { ToolContext } from "./context";
+import { getAgentRoleDefinition } from "../server/agents/roles";
+import { filterToolsForRole } from "../server/agents/toolPolicy";
+import {
+  getCodexWebSearchBackendFromProviderOptions,
+  getGoogleNativeWebSearchFromProviderOptions,
+} from "../shared/openaiCompatibleOptions";
 import type { AgentConfig } from "../types";
-
+import { createA2uiTool } from "./a2ui";
 import { createAskTool } from "./ask";
 import { createBashTool } from "./bash";
+import type { ToolContext } from "./context";
 import { createEditTool } from "./edit";
 import { createGlobTool } from "./glob";
 import { createGrepTool } from "./grep";
@@ -24,13 +30,6 @@ import { createUsageTool } from "./usage";
 import { createWebFetchTool } from "./webFetch";
 import { createWebSearchTool } from "./webSearch";
 import { createWriteTool } from "./write";
-import { createA2uiTool } from "./a2ui";
-import { filterToolsForRole } from "../server/agents/toolPolicy";
-import { getAgentRoleDefinition } from "../server/agents/roles";
-import {
-  getCodexWebSearchBackendFromProviderOptions,
-  getGoogleNativeWebSearchFromProviderOptions,
-} from "../shared/openaiCompatibleOptions";
 
 function usesLegacyCodexWebSearch(ctx: ToolContext): boolean {
   if (ctx.config.provider !== "codex-cli") return false;
@@ -42,12 +41,16 @@ function usesGoogleNativeWebTools(ctx: ToolContext): boolean {
   return getGoogleNativeWebSearchFromProviderOptions(ctx.config.providerOptions) === true;
 }
 
-function usesLegacyCodexWebSearchConfig(config: Pick<AgentConfig, "provider" | "providerOptions">): boolean {
+function usesLegacyCodexWebSearchConfig(
+  config: Pick<AgentConfig, "provider" | "providerOptions">,
+): boolean {
   if (config.provider !== "codex-cli") return false;
   return getCodexWebSearchBackendFromProviderOptions(config.providerOptions) !== "native";
 }
 
-function usesGoogleNativeWebToolsConfig(config: Pick<AgentConfig, "provider" | "providerOptions">): boolean {
+function usesGoogleNativeWebToolsConfig(
+  config: Pick<AgentConfig, "provider" | "providerOptions">,
+): boolean {
   if (config.provider !== "google") return false;
   return getGoogleNativeWebSearchFromProviderOptions(config.providerOptions) === true;
 }
@@ -61,8 +64,8 @@ export function listSessionToolNames(
   opts: ListSessionToolNameOptions = {},
 ): string[] {
   const includeLegacyWebSearch =
-    !usesGoogleNativeWebToolsConfig(config)
-    && (config.provider !== "codex-cli" || usesLegacyCodexWebSearchConfig(config));
+    !usesGoogleNativeWebToolsConfig(config) &&
+    (config.provider !== "codex-cli" || usesLegacyCodexWebSearchConfig(config));
 
   const names = [
     "bash",
@@ -78,10 +81,18 @@ export function listSessionToolNames(
     "todoWrite",
     "notebookEdit",
     "skill",
-    ...(config.enableMemory ?? true ? ["memory"] : []),
+    ...((config.enableMemory ?? true) ? ["memory"] : []),
     "usage",
     ...(opts.includeAgentControl
-      ? ["spawnAgent", "listAgents", "sendAgentInput", "waitForAgent", "inspectAgent", "resumeAgent", "closeAgent"]
+      ? [
+          "spawnAgent",
+          "listAgents",
+          "sendAgentInput",
+          "waitForAgent",
+          "inspectAgent",
+          "resumeAgent",
+          "closeAgent",
+        ]
       : []),
   ];
 
@@ -91,8 +102,8 @@ export function listSessionToolNames(
 export function createTools(ctx: ToolContext): Record<string, any> {
   const askTool = createAskTool(ctx);
   const includeLegacyWebSearch =
-    !usesGoogleNativeWebTools(ctx)
-    && (ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx));
+    !usesGoogleNativeWebTools(ctx) &&
+    (ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx));
   const baseTools = {
     bash: createBashTool(ctx),
     read: createReadTool(ctx),
@@ -108,7 +119,7 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     ...(ctx.agentControl ? { spawnAgent: createSpawnAgentTool(ctx) } : {}),
     notebookEdit: createNotebookEditTool(ctx),
     skill: createSkillTool(ctx),
-    ...(ctx.config.enableMemory ?? true ? { memory: createMemoryTool(ctx) } : {}),
+    ...((ctx.config.enableMemory ?? true) ? { memory: createMemoryTool(ctx) } : {}),
     ...(ctx.config.enableA2ui === true && ctx.applyA2uiEnvelope
       ? { a2ui: createA2uiTool(ctx) }
       : {}),

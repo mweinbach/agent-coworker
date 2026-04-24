@@ -1,5 +1,5 @@
-import type { ComponentProps } from "react";
 import { Link } from "expo-router";
+import type { ComponentProps } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { useAppTheme } from "@/theme/use-app-theme";

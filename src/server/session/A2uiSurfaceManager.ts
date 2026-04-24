@@ -1,17 +1,17 @@
-import type { ServerEvent } from "../protocol";
 import {
   A2UI_PROTOCOL_VERSION,
-  applyEnvelope,
-  createEmptySurfaces,
-  envelopeKind,
-  envelopeSurfaceId,
-  parseA2uiEnvelope,
   type A2uiEnvelope,
   type A2uiEnvelopeKind,
   type A2uiSurfaceState,
   type A2uiSurfacesById,
   type ApplyEnvelopeResult,
+  applyEnvelope,
+  createEmptySurfaces,
+  envelopeKind,
+  envelopeSurfaceId,
+  parseA2uiEnvelope,
 } from "../../shared/a2ui";
+import type { ServerEvent } from "../protocol";
 
 /**
  * Upper bound on distinct surfaces held per session. When exceeded, the
@@ -101,10 +101,13 @@ export class A2uiSurfaceManager {
     // Emit deletion events for any still-active surfaces so clients can
     // flush their local renderers.
     const now = new Date().toISOString();
-    for (const [surfaceId, state] of Object.entries(this.surfaces)) {
+    for (const [_surfaceId, state] of Object.entries(this.surfaces)) {
       if (state.deleted) continue;
       this.deps.emit(
-        this.resolvedEvent({ ...state, deleted: true, updatedAt: now }, { changeKind: "deleteSurface" }),
+        this.resolvedEvent(
+          { ...state, deleted: true, updatedAt: now },
+          { changeKind: "deleteSurface" },
+        ),
       );
     }
     this.surfaces = createEmptySurfaces();
@@ -123,9 +126,10 @@ export class A2uiSurfaceManager {
   ): A2uiApplyResult {
     const kind = envelopeKind(envelope);
     const incomingSurfaceId = envelopeSurfaceId(envelope);
-    const overflowPlan = kind === "createSurface" && !this.surfaces[incomingSurfaceId]
-      ? this.planOverflowEviction(this.surfaces, now)
-      : { surfaces: this.surfaces };
+    const overflowPlan =
+      kind === "createSurface" && !this.surfaces[incomingSurfaceId]
+        ? this.planOverflowEviction(this.surfaces, now)
+        : { surfaces: this.surfaces };
     const result = applyEnvelope(overflowPlan.surfaces, envelope, now);
 
     const surfaceId = result.surfaceId;
@@ -250,15 +254,20 @@ export class A2uiSurfaceManager {
     }
 
     const deletedIds = ids
-      .map((id) => surfaces[id]!)
+      .map((id) => surfaces[id])
+      .filter((state): state is A2uiSurfaceState => Boolean(state))
       .filter((state) => state.deleted)
       .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
       .map((state) => state.surfaceId);
     let nextSurfaces = surfaces;
     if (deletedIds.length > 0) {
       nextSurfaces = { ...surfaces };
-      while (Object.keys(nextSurfaces).length >= MAX_SURFACES_PER_SESSION && deletedIds.length > 0) {
-        const deletedSurfaceId = deletedIds.shift()!;
+      while (
+        Object.keys(nextSurfaces).length >= MAX_SURFACES_PER_SESSION &&
+        deletedIds.length > 0
+      ) {
+        const deletedSurfaceId = deletedIds.shift();
+        if (!deletedSurfaceId) break;
         const { [deletedSurfaceId]: _pruned, ...rest } = nextSurfaces;
         nextSurfaces = rest;
       }
@@ -269,7 +278,8 @@ export class A2uiSurfaceManager {
 
     // Evict oldest non-deleted surface.
     const sorted = Object.keys(nextSurfaces)
-      .map((id) => nextSurfaces[id]!)
+      .map((id) => nextSurfaces[id])
+      .filter((state): state is A2uiSurfaceState => Boolean(state))
       .filter((state) => !state.deleted)
       .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
     const victim = sorted[0];

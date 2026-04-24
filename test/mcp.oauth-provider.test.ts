@@ -32,59 +32,71 @@ describe("mcp oauth provider", () => {
       // Serve RFC 9728 protected resource metadata.
       if (req.url?.startsWith("/.well-known/oauth-protected-resource")) {
         res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({
-          resource: tokenServerUrl,
-          authorization_servers: [tokenServerUrl],
-        }));
+        res.end(
+          JSON.stringify({
+            resource: tokenServerUrl,
+            authorization_servers: [tokenServerUrl],
+          }),
+        );
         return;
       }
       // Serve RFC 8414 authorization server metadata.
       if (req.url?.startsWith("/.well-known/oauth-authorization-server")) {
         res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({
-          issuer: tokenServerUrl,
-          authorization_endpoint: `${tokenServerUrl}/authorize`,
-          token_endpoint: `${tokenServerUrl}/token`,
-          registration_endpoint: `${tokenServerUrl}/register`,
-          response_types_supported: ["code"],
-          code_challenge_methods_supported: ["S256"],
-        }));
+        res.end(
+          JSON.stringify({
+            issuer: tokenServerUrl,
+            authorization_endpoint: `${tokenServerUrl}/authorize`,
+            token_endpoint: `${tokenServerUrl}/token`,
+            registration_endpoint: `${tokenServerUrl}/register`,
+            response_types_supported: ["code"],
+            code_challenge_methods_supported: ["S256"],
+          }),
+        );
         return;
       }
       if (req.url === "/register" && req.method === "POST") {
         let rawBody = "";
-        req.on("data", (chunk: Buffer) => { rawBody += chunk.toString(); });
+        req.on("data", (chunk: Buffer) => {
+          rawBody += chunk.toString();
+        });
         req.on("end", () => {
           registrationCount += 1;
           lastRegistrationRequest = JSON.parse(rawBody) as Record<string, unknown>;
           res.setHeader("content-type", "application/json");
-          res.end(JSON.stringify({
-            client_id: `registered-client-${registrationCount}`,
-            client_secret: `registered-secret-${registrationCount}`,
-            redirect_uris: (lastRegistrationRequest?.redirect_uris as string[] | undefined) ?? [],
-            grant_types: ["authorization_code", "refresh_token"],
-            response_types: ["code"],
-            token_endpoint_auth_method: "none",
-          }));
+          res.end(
+            JSON.stringify({
+              client_id: `registered-client-${registrationCount}`,
+              client_secret: `registered-secret-${registrationCount}`,
+              redirect_uris: (lastRegistrationRequest?.redirect_uris as string[] | undefined) ?? [],
+              grant_types: ["authorization_code", "refresh_token"],
+              response_types: ["code"],
+              token_endpoint_auth_method: "none",
+            }),
+          );
         });
         return;
       }
       if (req.url === "/token" && req.method === "POST") {
         let rawBody = "";
-        req.on("data", (chunk: Buffer) => { rawBody += chunk.toString(); });
+        req.on("data", (chunk: Buffer) => {
+          rawBody += chunk.toString();
+        });
         req.on("end", () => {
           lastTokenRequest = {
             authorization: req.headers.authorization ?? null,
             body: new URLSearchParams(rawBody),
           };
           res.setHeader("content-type", "application/json");
-          res.end(JSON.stringify({
-            access_token: "real-access-token",
-            token_type: "Bearer",
-            refresh_token: "real-refresh-token",
-            expires_in: 3600,
-            scope: "tools.read",
-          }));
+          res.end(
+            JSON.stringify({
+              access_token: "real-access-token",
+              token_type: "Bearer",
+              refresh_token: "real-refresh-token",
+              expires_in: 3600,
+              scope: "tools.read",
+            }),
+          );
         });
         return;
       }
@@ -167,14 +179,18 @@ describe("mcp oauth provider", () => {
       auth: { type: "oauth", oauthMode: "auto", scope: "tools.read" },
     });
 
-    const result = await authorizeMCPServerOAuth(server, {
-      clientId: "stale-client",
-      clientSecret: "stale-secret",
-      redirectUris: ["http://127.0.0.1:1455/oauth/callback"],
-      updatedAt: new Date().toISOString(),
-    }, {
-      openUrl: async () => true,
-    });
+    const result = await authorizeMCPServerOAuth(
+      server,
+      {
+        clientId: "stale-client",
+        clientSecret: "stale-secret",
+        redirectUris: ["http://127.0.0.1:1455/oauth/callback"],
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        openUrl: async () => true,
+      },
+    );
 
     const authUrl = new URL(result.challenge.url!);
     expect(authUrl.searchParams.get("client_id")).toBe("registered-client-1");
@@ -205,11 +221,15 @@ describe("mcp oauth provider", () => {
   });
 
   describe("exchangeMCPServerOAuthCode", () => {
-
     test("exchanges authorization code at token endpoint", async () => {
       const server = makeOAuthServer({
         transport: { type: "http", url: `${tokenServerUrl}/mcp` },
-        auth: { type: "oauth", oauthMode: "code", scope: "tools.read", resource: "urn:example:resource" } as any,
+        auth: {
+          type: "oauth",
+          oauthMode: "code",
+          scope: "tools.read",
+          resource: "urn:example:resource",
+        } as any,
       });
       const pending = {
         challengeId: "challenge",
@@ -234,7 +254,9 @@ describe("mcp oauth provider", () => {
       expect(lastTokenRequest!.body.get("code")).toBe("auth-code-123");
       // The SDK sends the client_id (fallback or registered).
       expect(lastTokenRequest!.body.get("client_id")).toBe("agent-coworker-desktop");
-      expect(lastTokenRequest!.body.get("redirect_uri")).toBe("http://127.0.0.1:9999/oauth/callback");
+      expect(lastTokenRequest!.body.get("redirect_uri")).toBe(
+        "http://127.0.0.1:9999/oauth/callback",
+      );
       expect(lastTokenRequest!.body.get("code_verifier")).toBe("test-verifier");
       expect(lastTokenRequest!.body.get("resource")).toBe("urn:example:resource");
 

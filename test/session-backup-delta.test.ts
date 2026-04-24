@@ -15,7 +15,9 @@ async function makeTmpSessionDir() {
 }
 
 afterAll(async () => {
-  await Promise.all(tmpRoots.map((root) => fs.rm(root, { recursive: true, force: true }).catch(() => {})));
+  await Promise.all(
+    tmpRoots.map((root) => fs.rm(root, { recursive: true, force: true }).catch(() => {})),
+  );
 });
 
 async function writeDirectorySnapshot(

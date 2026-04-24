@@ -4,16 +4,15 @@ import os from "node:os";
 import path from "node:path";
 
 import { z } from "zod";
-
-import { createOpenAiResponsesRuntime } from "../src/runtime/openaiResponsesRuntime";
 import { defaultSupportedModel } from "../src/models/registry";
 import { writeCodexAuthMaterial } from "../src/providers/codex-auth";
 import { __internal as openAiNativeInternal } from "../src/runtime/openaiNativeResponses";
+import { createOpenAiResponsesRuntime } from "../src/runtime/openaiResponsesRuntime";
+import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import {
   MODEL_SCRATCHPAD_DIRNAME,
   TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS,
 } from "../src/shared/toolOutputOverflow";
-import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import type { AgentConfig, ModelMessage } from "../src/types";
 
 function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -37,7 +36,10 @@ function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): Agen
   };
 }
 
-function makeParams(config: AgentConfig, overrides: Partial<RuntimeRunTurnParams> = {}): RuntimeRunTurnParams {
+function makeParams(
+  config: AgentConfig,
+  overrides: Partial<RuntimeRunTurnParams> = {},
+): RuntimeRunTurnParams {
   return {
     config,
     system: "You are helpful.",
@@ -168,7 +170,9 @@ describe("openai responses runtime", () => {
           return {
             assistant: {
               role: "assistant",
-              content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "needle" } }],
+              content: [
+                { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "needle" } },
+              ],
               usage: { input: 1, output: 1, totalTokens: 2 },
               stopReason: "toolUse",
             },
@@ -230,7 +234,9 @@ describe("openai responses runtime", () => {
           return {
             assistant: {
               role: "assistant",
-              content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "needle" } }],
+              content: [
+                { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "needle" } },
+              ],
               usage: { input: 1, output: 1, totalTokens: 2 },
               stopReason: "toolUse",
             },
@@ -275,7 +281,10 @@ describe("openai responses runtime", () => {
 
     const scratchFiles = await fs.readdir(path.join(homeDir, MODEL_SCRATCHPAD_DIRNAME));
     expect(scratchFiles).toHaveLength(1);
-    const saved = await fs.readFile(path.join(homeDir, MODEL_SCRATCHPAD_DIRNAME, scratchFiles[0]!), "utf-8");
+    const saved = await fs.readFile(
+      path.join(homeDir, MODEL_SCRATCHPAD_DIRNAME, scratchFiles[0]!),
+      "utf-8",
+    );
     expect(saved).toContain(hugeTailMarker);
     expect(result.providerState?.responseId).toBe("resp_2");
   });
@@ -300,7 +309,14 @@ describe("openai responses runtime", () => {
           return {
             assistant: {
               role: "assistant",
-              content: [{ type: "toolCall", id: "call_1", name: "read", arguments: { filePath: "/tmp/big.txt" } }],
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_1",
+                  name: "read",
+                  arguments: { filePath: "/tmp/big.txt" },
+                },
+              ],
               usage: { input: 1, output: 1, totalTokens: 2 },
               stopReason: "toolUse",
             },
@@ -339,7 +355,8 @@ describe("openai responses runtime", () => {
     expect(secondPiMessages).toHaveLength(1);
     expect(secondPiMessages[0]?.role).toBe("toolResult");
 
-    const toolContent = (secondPiMessages[0]?.content as Array<Record<string, unknown>> | undefined) ?? [];
+    const toolContent =
+      (secondPiMessages[0]?.content as Array<Record<string, unknown>> | undefined) ?? [];
     expect(toolContent).toEqual([{ type: "text", text: hugeReadOutput }]);
     expect(JSON.stringify(secondPiMessages[0])).toContain(hugeTailMarker);
     expect(JSON.stringify(secondPiMessages[0])).not.toContain("Tool output overflowed");
@@ -364,7 +381,9 @@ describe("openai responses runtime", () => {
           return {
             assistant: {
               role: "assistant",
-              content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "needle" } }],
+              content: [
+                { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "needle" } },
+              ],
               usage: { input: 1, output: 1, totalTokens: 2 },
               stopReason: "toolUse",
             },
@@ -404,7 +423,8 @@ describe("openai responses runtime", () => {
     expect(secondPiMessages).toHaveLength(1);
     expect(secondPiMessages[0]?.role).toBe("toolResult");
 
-    const toolContent = (secondPiMessages[0]?.content as Array<Record<string, unknown>> | undefined) ?? [];
+    const toolContent =
+      (secondPiMessages[0]?.content as Array<Record<string, unknown>> | undefined) ?? [];
     expect(toolContent).toHaveLength(1);
     expect(toolContent[0]?.type).toBe("text");
     const pointerText = String(toolContent[0]?.text ?? "");
@@ -452,25 +472,28 @@ describe("openai responses runtime", () => {
     });
 
     const result = await runtime.runTurn(
-      makeParams(makeConfig(homeDir, {
-        provider: "codex-cli",
-        model: pickCodexModelId(),
-        preferredChildModel: pickCodexModelId(),
-      }), {
-        messages: [{ role: "user", content: "latest" }],
-        allMessages: [
-          { role: "user", content: "older user" },
-          { role: "assistant", content: "older assistant" },
-          { role: "user", content: "latest" },
-        ] as ModelMessage[],
-        providerState: {
+      makeParams(
+        makeConfig(homeDir, {
           provider: "codex-cli",
           model: pickCodexModelId(),
-          responseId: "resp_previous",
-          updatedAt: new Date().toISOString(),
-          accountId: "acct_123",
+          preferredChildModel: pickCodexModelId(),
+        }),
+        {
+          messages: [{ role: "user", content: "latest" }],
+          allMessages: [
+            { role: "user", content: "older user" },
+            { role: "assistant", content: "older assistant" },
+            { role: "user", content: "latest" },
+          ] as ModelMessage[],
+          providerState: {
+            provider: "codex-cli",
+            model: pickCodexModelId(),
+            responseId: "resp_previous",
+            updatedAt: new Date().toISOString(),
+            accountId: "acct_123",
+          },
         },
-      }),
+      ),
     );
 
     expect(nativeCalls).toHaveLength(1);
@@ -511,7 +534,9 @@ describe("openai responses runtime", () => {
           return {
             assistant: {
               role: "assistant",
-              content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "needle" } }],
+              content: [
+                { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "needle" } },
+              ],
               usage: { input: 1, output: 1, totalTokens: 2 },
               stopReason: "toolUse",
             },
@@ -532,20 +557,23 @@ describe("openai responses runtime", () => {
     });
 
     const result = await runtime.runTurn(
-      makeParams(makeConfig(homeDir, {
-        provider: "codex-cli",
-        model: modelId,
-        preferredChildModel: modelId,
-      }), {
-        messages: [{ role: "user", content: "find it" }],
-        allMessages: [{ role: "user", content: "find it" }] as ModelMessage[],
-        maxSteps: 2,
-        tools: {
-          lookup: {
-            execute: async () => "found it",
+      makeParams(
+        makeConfig(homeDir, {
+          provider: "codex-cli",
+          model: modelId,
+          preferredChildModel: modelId,
+        }),
+        {
+          messages: [{ role: "user", content: "find it" }],
+          allMessages: [{ role: "user", content: "find it" }] as ModelMessage[],
+          maxSteps: 2,
+          tools: {
+            lookup: {
+              execute: async () => "found it",
+            },
           },
         },
-      }),
+      ),
     );
 
     expect(nativeCalls).toHaveLength(2);
@@ -553,8 +581,14 @@ describe("openai responses runtime", () => {
     expect(nativeCalls[1]?.previousResponseId).toBeUndefined();
 
     const secondPiMessages = (nativeCalls[1]?.piMessages as Array<Record<string, unknown>>) ?? [];
-    expect(secondPiMessages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult"]);
-    expect((secondPiMessages[1]?.content as Array<Record<string, unknown>> | undefined)?.[0]).toEqual({
+    expect(secondPiMessages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
+    expect(
+      (secondPiMessages[1]?.content as Array<Record<string, unknown>> | undefined)?.[0],
+    ).toEqual({
       type: "toolCall",
       id: "call_1",
       name: "lookup",
@@ -565,7 +599,9 @@ describe("openai responses runtime", () => {
   });
 
   test("injects a reminder message into the next responses step after malformed tool-call format errors", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-tool-format-reminder-"));
+    const homeDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openai-runtime-tool-format-reminder-"),
+    );
     const nativeCalls: Array<Record<string, unknown>> = [];
     let step = 0;
     const runtime = createOpenAiResponsesRuntime({
@@ -601,28 +637,39 @@ describe("openai responses runtime", () => {
     });
 
     await runtime.runTurn(
-      makeParams(makeConfig(homeDir, {
-        provider: "openai",
-        model: "gpt-5.4",
-        preferredChildModel: "gpt-5.4",
-      }), {
-        maxSteps: 2,
-        tools: {
-          read: {
-            inputSchema: z.object({ filePath: z.string() }),
-            execute: async () => "unused",
+      makeParams(
+        makeConfig(homeDir, {
+          provider: "openai",
+          model: "gpt-5.4",
+          preferredChildModel: "gpt-5.4",
+        }),
+        {
+          maxSteps: 2,
+          tools: {
+            read: {
+              inputSchema: z.object({ filePath: z.string() }),
+              execute: async () => "unused",
+            },
           },
         },
-      }),
+      ),
     );
 
     expect(nativeCalls).toHaveLength(2);
     const secondPiMessages = (nativeCalls[1]?.piMessages as Array<Record<string, unknown>>) ?? [];
-    expect(secondPiMessages.some((message) => message.role === "toolResult" && message.toolName === "tool")).toBe(true);
-    expect(secondPiMessages.some((message) => {
-      if (message.role !== "assistant") return false;
-      return JSON.stringify(message.content).includes("Possible invalid tool call format detected");
-    })).toBe(true);
+    expect(
+      secondPiMessages.some(
+        (message) => message.role === "toolResult" && message.toolName === "tool",
+      ),
+    ).toBe(true);
+    expect(
+      secondPiMessages.some((message) => {
+        if (message.role !== "assistant") return false;
+        return JSON.stringify(message.content).includes(
+          "Possible invalid tool call format detected",
+        );
+      }),
+    ).toBe(true);
   });
 
   test("request builder disables strict tools and unsupported continuation fields for codex chatgpt backend", () => {
@@ -642,18 +689,20 @@ describe("openai responses runtime", () => {
       },
       systemPrompt: "You are helpful.",
       piMessages: [{ role: "user", content: "hello" }],
-      tools: [{
-        name: "read",
-        description: "Read a file",
-        parameters: {
-          type: "object",
-          properties: {
-            filePath: { type: "string" },
-            offset: { type: "integer" },
+      tools: [
+        {
+          name: "read",
+          description: "Read a file",
+          parameters: {
+            type: "object",
+            properties: {
+              filePath: { type: "string" },
+              offset: { type: "integer" },
+            },
+            required: ["filePath"],
           },
-          required: ["filePath"],
         },
-      }],
+      ],
       streamOptions: {
         maxTokens: 128,
         textVerbosity: "low",
@@ -708,11 +757,13 @@ describe("openai responses runtime", () => {
       },
       systemPrompt: "You are helpful.",
       piMessages: [{ role: "user", content: "hello" }],
-      tools: [{
-        name: "webSearch",
-        description: "Search the web",
-        parameters: { type: "object", properties: {}, required: [] },
-      }],
+      tools: [
+        {
+          name: "webSearch",
+          description: "Search the web",
+          parameters: { type: "object", properties: {}, required: [] },
+        },
+      ],
       streamOptions: {
         webSearchMode: "disabled",
       },
@@ -739,24 +790,28 @@ describe("openai responses runtime", () => {
       },
       systemPrompt: "You are helpful.",
       piMessages: [{ role: "user", content: "hello" }],
-      tools: [{
-        name: "webSearch",
-        description: "Search the web",
-        parameters: { type: "object", properties: {}, required: [] },
-      }],
+      tools: [
+        {
+          name: "webSearch",
+          description: "Search the web",
+          parameters: { type: "object", properties: {}, required: [] },
+        },
+      ],
       streamOptions: {
         webSearchBackend: "exa",
         webSearchMode: "live",
       },
     });
 
-    expect(request.tools).toEqual([{
-      type: "function",
-      name: "webSearch",
-      description: "Search the web",
-      parameters: { type: "object", properties: {}, required: [] },
-      strict: false,
-    }]);
+    expect(request.tools).toEqual([
+      {
+        type: "function",
+        name: "webSearch",
+        description: "Search the web",
+        parameters: { type: "object", properties: {}, required: [] },
+        strict: false,
+      },
+    ]);
     expect(request.include).toBeUndefined();
   });
 
@@ -777,24 +832,28 @@ describe("openai responses runtime", () => {
       },
       systemPrompt: "You are helpful.",
       piMessages: [{ role: "user", content: "hello" }],
-      tools: [{
-        name: "webSearch",
-        description: "Search the web",
-        parameters: { type: "object", properties: {}, required: [] },
-      }],
+      tools: [
+        {
+          name: "webSearch",
+          description: "Search the web",
+          parameters: { type: "object", properties: {}, required: [] },
+        },
+      ],
       streamOptions: {
         webSearchBackend: "parallel",
         webSearchMode: "live",
       },
     });
 
-    expect(request.tools).toEqual([{
-      type: "function",
-      name: "webSearch",
-      description: "Search the web",
-      parameters: { type: "object", properties: {}, required: [] },
-      strict: false,
-    }]);
+    expect(request.tools).toEqual([
+      {
+        type: "function",
+        name: "webSearch",
+        description: "Search the web",
+        parameters: { type: "object", properties: {}, required: [] },
+        strict: false,
+      },
+    ]);
     expect(request.include).toBeUndefined();
   });
 
@@ -815,11 +874,13 @@ describe("openai responses runtime", () => {
       },
       systemPrompt: "You are helpful.",
       piMessages: [{ role: "user", content: "hello" }],
-      tools: [{
-        name: "webSearch",
-        description: "Search the web",
-        parameters: { type: "object", properties: {}, required: [] },
-      }],
+      tools: [
+        {
+          name: "webSearch",
+          description: "Search the web",
+          parameters: { type: "object", properties: {}, required: [] },
+        },
+      ],
       streamOptions: {
         reasoningEffort: "high",
         webSearchMode: "cached",
@@ -842,20 +903,22 @@ describe("openai responses runtime", () => {
       "reasoning.encrypted_content",
       "web_search_call.action.sources",
     ]);
-    expect(request.tools).toEqual([{
-      type: "web_search",
-      external_web_access: false,
-      search_context_size: "high",
-      filters: {
-        allowed_domains: ["openai.com", "example.com"],
+    expect(request.tools).toEqual([
+      {
+        type: "web_search",
+        external_web_access: false,
+        search_context_size: "high",
+        filters: {
+          allowed_domains: ["openai.com", "example.com"],
+        },
+        user_location: {
+          type: "approximate",
+          country: "US",
+          city: "New York",
+          timezone: "America/New_York",
+        },
       },
-      user_location: {
-        type: "approximate",
-        country: "US",
-        city: "New York",
-        timezone: "America/New_York",
-      },
-    }]);
+    ]);
   });
 
   test("request builder strips legacy local webSearch when native web search is enabled", () => {
@@ -926,7 +989,26 @@ describe("openai responses runtime", () => {
       },
       systemPrompt: "You are helpful.",
       piMessages: [{ role: "user", content: "hello" }],
-      tools: [{
+      tools: [
+        {
+          name: "read",
+          description: "Read a file",
+          parameters: {
+            type: "object",
+            properties: {
+              filePath: { type: "string" },
+              offset: { type: "integer" },
+            },
+            required: ["filePath"],
+          },
+        },
+      ],
+      streamOptions: {},
+    });
+
+    expect(request.tools).toEqual([
+      {
+        type: "function",
         name: "read",
         description: "Read a file",
         parameters: {
@@ -937,24 +1019,9 @@ describe("openai responses runtime", () => {
           },
           required: ["filePath"],
         },
-      }],
-      streamOptions: {},
-    });
-
-    expect(request.tools).toEqual([{
-      type: "function",
-      name: "read",
-      description: "Read a file",
-      parameters: {
-        type: "object",
-        properties: {
-          filePath: { type: "string" },
-          offset: { type: "integer" },
-        },
-        required: ["filePath"],
+        strict: false,
       },
-      strict: false,
-    }]);
+    ]);
   });
 
   test("codex api-key path keeps the normal OpenAI base URL", () => {

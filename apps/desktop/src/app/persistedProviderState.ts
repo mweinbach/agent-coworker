@@ -1,7 +1,15 @@
 import { PROVIDER_NAMES, type ProviderName } from "../lib/wsProtocol";
 import type { PersistedProviderState, PersistedProviderStatus } from "./types";
 
-const PROVIDER_STATUS_MODES = new Set(["missing", "error", "api_key", "oauth", "oauth_pending", "local", "credentials"]);
+const PROVIDER_STATUS_MODES = new Set([
+  "missing",
+  "error",
+  "api_key",
+  "oauth",
+  "oauth_pending",
+  "local",
+  "credentials",
+]);
 const DEFAULT_CHECKED_AT = new Date(0).toISOString();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -14,7 +22,7 @@ function asNonEmptyString(value: unknown): string | undefined {
 
 function normalizeProviderStatusMode(value: unknown): PersistedProviderStatus["mode"] {
   return typeof value === "string" && PROVIDER_STATUS_MODES.has(value)
-    ? value as PersistedProviderStatus["mode"]
+    ? (value as PersistedProviderStatus["mode"])
     : "missing";
 }
 
@@ -55,13 +63,13 @@ export function normalizePersistedProviderStatus(
   // refresh token (i.e. recovery is still possible). Persisting this stale
   // status causes the desktop to show "not connected" on every restart even
   // when a fresh refresh could succeed.
-  const tokenRecoverable = typeof value.tokenRecoverable === "boolean" ? value.tokenRecoverable : false;
+  const tokenRecoverable =
+    typeof value.tokenRecoverable === "boolean" ? value.tokenRecoverable : false;
   if (!authorized && tokenRecoverable) return null;
 
   const account = normalizeAccount(value.account);
   const message =
-    asNonEmptyString(value.message) ??
-    (authorized || verified ? "Connected." : "Not connected.");
+    asNonEmptyString(value.message) ?? (authorized || verified ? "Connected." : "Not connected.");
   const checkedAt = asNonEmptyString(value.checkedAt) ?? DEFAULT_CHECKED_AT;
   const methodId = asNonEmptyString(value.methodId);
   const savedApiKeyMasks = normalizeSavedMaskMap(value.savedApiKeyMasks);
@@ -82,7 +90,9 @@ export function normalizePersistedProviderStatus(
   };
 }
 
-export function normalizePersistedProviderState(value: unknown): PersistedProviderState | undefined {
+export function normalizePersistedProviderState(
+  value: unknown,
+): PersistedProviderState | undefined {
   if (!isRecord(value)) return undefined;
 
   const rawStatusByName = isRecord(value.statusByName) ? value.statusByName : {};

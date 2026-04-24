@@ -1,29 +1,42 @@
 import { Reorder, useDragControls } from "framer-motion";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from "react";
-
-import { usePrefersReducedMotion } from "../lib/usePrefersReducedMotion";
-
 import {
+  BookOpenIcon,
   ChevronRightIcon,
   FolderIcon,
   FolderOpenIcon,
   FolderPlusIcon,
   PanelLeftIcon,
   Settings2Icon,
-  SquarePenIcon,
   SparklesIcon,
+  SquarePenIcon,
 } from "lucide-react";
-
+import {
+  type MouseEvent,
+  memo,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { resolvePluginCatalogWorkspaceSelection } from "../app/pluginManagement";
 import { useAppStore } from "../app/store";
 import type { ThreadRecord, ThreadRuntime, WorkspaceRecord } from "../app/types";
-import { Collapsible, CollapsibleTrigger } from "../components/ui/collapsible";
-import { confirmAction, showContextMenu } from "../lib/desktopCommands";
 import { Button } from "../components/ui/button";
+import { Collapsible, CollapsibleTrigger } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
+import { confirmAction, showContextMenu } from "../lib/desktopCommands";
+import { usePrefersReducedMotion } from "../lib/usePrefersReducedMotion";
 import { cn } from "../lib/utils";
-import { formatSidebarRelativeAge, getVisibleSidebarThreads, shouldEmphasizeWorkspaceRow, swapSidebarItemsById } from "./sidebarHelpers";
 import { useWindowDragHandle } from "./layout/useWindowDragHandle";
+import {
+  formatSidebarRelativeAge,
+  getVisibleSidebarThreads,
+  shouldEmphasizeWorkspaceRow,
+  swapSidebarItemsById,
+} from "./sidebarHelpers";
 
 const MAX_VISIBLE_THREADS = 10;
 const WORKSPACE_ITEM_CLASSNAME = "sidebar-workspace-item [&:not(:last-child)]:mb-3";
@@ -58,7 +71,11 @@ type SidebarWorkspaceItemProps = {
   onStartEditing: (threadId: string, currentTitle: string) => void;
   onThreadContextMenu: (event: MouseEvent<HTMLElement>, threadId: string, title: string) => void;
   onToggleThreadList: (workspaceId: string) => void;
-  onWorkspaceContextMenu: (event: MouseEvent<HTMLElement>, workspaceId: string, workspaceName: string) => void;
+  onWorkspaceContextMenu: (
+    event: MouseEvent<HTMLElement>,
+    workspaceId: string,
+    workspaceName: string,
+  ) => void;
   onWorkspaceOpenChange: (workspaceId: string, nextOpen: boolean) => void;
   reorderEnabled: boolean;
   selectedThreadId: string | null;
@@ -191,18 +208,20 @@ const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
               ? "text-foreground hover:bg-foreground/[0.03]"
               : "text-foreground/78 hover:bg-foreground/[0.03] hover:text-foreground",
         )}
-        onPointerDownCapture={reorderEnabled
-          ? (event) => {
-              if (event.button !== 0) {
-                return;
+        onPointerDownCapture={
+          reorderEnabled
+            ? (event) => {
+                if (event.button !== 0) {
+                  return;
+                }
+                const target = event.target as HTMLElement;
+                if (target.closest("button, input, a, textarea")) {
+                  return;
+                }
+                controls.start(event);
               }
-              const target = event.target as HTMLElement;
-              if (target.closest("button, input, a, textarea")) {
-                return;
-              }
-              controls.start(event);
-            }
-          : undefined}
+            : undefined
+        }
       >
         <CollapsibleTrigger asChild>
           <Button
@@ -226,20 +245,24 @@ const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
           </Button>
         </CollapsibleTrigger>
         <Button
-          aria-keyshortcuts={reorderEnabled ? "Alt+ArrowUp Alt+ArrowDown Meta+ArrowUp Meta+ArrowDown" : undefined}
+          aria-keyshortcuts={
+            reorderEnabled ? "Alt+ArrowUp Alt+ArrowDown Meta+ArrowUp Meta+ArrowDown" : undefined
+          }
           className="sidebar-lift flex h-auto min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-left"
-          onKeyDown={reorderEnabled
-            ? (event) => {
-                if (!(event.altKey || event.metaKey)) {
-                  return;
+          onKeyDown={
+            reorderEnabled
+              ? (event) => {
+                  if (!(event.altKey || event.metaKey)) {
+                    return;
+                  }
+                  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+                    return;
+                  }
+                  event.preventDefault();
+                  moveWorkspace(workspace.id, event.key === "ArrowUp" ? "up" : "down");
                 }
-                if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
-                  return;
-                }
-                event.preventDefault();
-                moveWorkspace(workspace.id, event.key === "ArrowUp" ? "up" : "down");
-              }
-            : undefined}
+              : undefined
+          }
           onClick={() => onSelectWorkspace(workspace.id)}
           title={workspace.path}
           type="button"
@@ -305,7 +328,9 @@ const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
                             : "text-foreground/82 hover:border-border/35 hover:bg-foreground/[0.035] hover:text-foreground",
                         )}
                         onClick={() => selectThread(thread.id)}
-                        onContextMenu={(event) => onThreadContextMenu(event, thread.id, displayTitle)}
+                        onContextMenu={(event) =>
+                          onThreadContextMenu(event, thread.id, displayTitle)
+                        }
                         onDoubleClick={() => onStartEditing(thread.id, displayTitle)}
                         type="button"
                         variant="ghost"
@@ -318,10 +343,15 @@ const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
 
                         <span className="flex shrink-0 items-center gap-2 pl-2">
                           {busy ? (
-                            <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" aria-hidden="true" />
+                            <span
+                              className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
+                              aria-hidden="true"
+                            />
                           ) : null}
                           {ageLabel ? (
-                            <span className="text-[11px] font-medium text-muted-foreground">{ageLabel}</span>
+                            <span className="text-[11px] font-medium text-muted-foreground">
+                              {ageLabel}
+                            </span>
                           ) : null}
                         </span>
                       </Button>
@@ -367,7 +397,8 @@ const SidebarWorkspaceItem = memo(function SidebarWorkspaceItem({
 });
 
 export const Sidebar = memo(function Sidebar() {
-  const platform = typeof document !== "undefined" ? document.documentElement.dataset.platform : undefined;
+  const platform =
+    typeof document !== "undefined" ? document.documentElement.dataset.platform : undefined;
   const isWin32 = platform === "win32";
   const view = useAppStore((s) => s.view);
   const workspaces = useAppStore((s) => s.workspaces);
@@ -390,25 +421,36 @@ export const Sidebar = memo(function Sidebar() {
   const selectThread = useAppStore((s) => s.selectThread);
   const renameThread = useAppStore((s) => s.renameThread);
   const openSkills = useAppStore((s) => s.openSkills);
+  const openResearch = useAppStore((s) => s.openResearch);
   const openSettings = useAppStore((s) => s.openSettings);
 
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
-  const [expandedWorkspaceSections, setExpandedWorkspaceSections] = useState<Record<string, boolean>>({});
+  const [expandedWorkspaceSections, setExpandedWorkspaceSections] = useState<
+    Record<string, boolean>
+  >({});
   const [expandedThreadLists, setExpandedThreadLists] = useState<Record<string, boolean>>({});
   const editInputRef = useRef<HTMLInputElement>(null);
 
-  const pluginSelection = useMemo(() => resolvePluginCatalogWorkspaceSelection({
-    workspaces,
-    selectedWorkspaceId,
-    pluginManagementWorkspaceId,
-    pluginManagementMode,
-  }), [pluginManagementMode, pluginManagementWorkspaceId, selectedWorkspaceId, workspaces]);
+  const pluginSelection = useMemo(
+    () =>
+      resolvePluginCatalogWorkspaceSelection({
+        workspaces,
+        selectedWorkspaceId,
+        pluginManagementWorkspaceId,
+        pluginManagementMode,
+      }),
+    [pluginManagementMode, pluginManagementWorkspaceId, selectedWorkspaceId, workspaces],
+  );
   const workspacePickerEnabled = desktopFeatures.workspacePicker !== false;
   const workspaceLifecycleEnabled = desktopFeatures.workspaceLifecycle !== false;
-  const activeWorkspaceId = view === "skills"
-    ? pluginSelection.displayWorkspaceId
-    : selectedWorkspaceId;
+  const activeWorkspaceId =
+    view === "skills"
+      ? pluginSelection.displayWorkspaceId
+      : view === "research"
+        ? null
+        : selectedWorkspaceId;
+  const sidebarSelectedThreadId = view === "research" ? null : selectedThreadId;
   const visibleWorkspaces = useMemo(() => {
     if (workspacePickerEnabled || workspaces.length <= 1) {
       return workspaces;
@@ -502,27 +544,45 @@ export const Sidebar = memo(function Sidebar() {
     }));
   }, []);
 
-  const handleSelectThread = useCallback((threadId: string) => {
-    void selectThread(threadId);
-  }, [selectThread]);
+  const handleSelectThread = useCallback(
+    (threadId: string) => {
+      void selectThread(threadId);
+    },
+    [selectThread],
+  );
 
-  const handleReorder = useCallback((nextWorkspaces: WorkspaceRecord[]) => {
-    void setWorkspacesOrder(nextWorkspaces.map((workspace) => workspace.id));
-  }, [setWorkspacesOrder]);
+  const handleReorder = useCallback(
+    (nextWorkspaces: WorkspaceRecord[]) => {
+      void setWorkspacesOrder(nextWorkspaces.map((workspace) => workspace.id));
+    },
+    [setWorkspacesOrder],
+  );
 
-  const moveWorkspace = useCallback((workspaceId: string, direction: WorkspaceMoveDirection) => {
-    const nextWorkspaces = swapSidebarItemsById(workspaces, workspaceId, direction);
-    if (nextWorkspaces === workspaces) {
-      return;
-    }
-    void setWorkspacesOrder(nextWorkspaces.map((workspace) => workspace.id));
-  }, [setWorkspacesOrder, workspaces]);
+  const moveWorkspace = useCallback(
+    (workspaceId: string, direction: WorkspaceMoveDirection) => {
+      const nextWorkspaces = swapSidebarItemsById(workspaces, workspaceId, direction);
+      if (nextWorkspaces === workspaces) {
+        return;
+      }
+      void setWorkspacesOrder(nextWorkspaces.map((workspace) => workspace.id));
+    },
+    [setWorkspacesOrder, workspaces],
+  );
 
-  const handleSelectWorkspace = useCallback((workspaceId: string) => {
-    void (view === "skills" ? setPluginManagementWorkspace(workspaceId) : selectWorkspace(workspaceId));
-  }, [selectWorkspace, setPluginManagementWorkspace, view]);
+  const handleSelectWorkspace = useCallback(
+    (workspaceId: string) => {
+      void (view === "skills"
+        ? setPluginManagementWorkspace(workspaceId)
+        : selectWorkspace(workspaceId));
+    },
+    [selectWorkspace, setPluginManagementWorkspace, view],
+  );
 
-  const handleWorkspaceContextMenu = async (e: MouseEvent<HTMLElement>, wsId: string, wsName: string) => {
+  const handleWorkspaceContextMenu = async (
+    e: MouseEvent<HTMLElement>,
+    wsId: string,
+    wsName: string,
+  ) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -549,7 +609,11 @@ export const Sidebar = memo(function Sidebar() {
     }
   };
 
-  const handleThreadContextMenu = async (e: MouseEvent<HTMLElement>, tId: string, tTitle: string) => {
+  const handleThreadContextMenu = async (
+    e: MouseEvent<HTMLElement>,
+    tId: string,
+    tTitle: string,
+  ) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -601,7 +665,7 @@ export const Sidebar = memo(function Sidebar() {
     const workspaceThreads = threadsByWorkspaceId.get(workspace.id) ?? [];
     const emphasizeWorkspace = shouldEmphasizeWorkspaceRow(
       active,
-      selectedThreadId,
+      sidebarSelectedThreadId,
       workspaceThreads.map((thread) => thread.id),
     );
     const showAllThreads = expandedThreadLists[workspace.id] === true;
@@ -632,7 +696,7 @@ export const Sidebar = memo(function Sidebar() {
         onWorkspaceContextMenu={handleWorkspaceContextMenu}
         onWorkspaceOpenChange={handleWorkspaceOpenChange}
         reorderEnabled={reorderEnabled}
-        selectedThreadId={selectedThreadId}
+        selectedThreadId={sidebarSelectedThreadId}
         selectThread={handleSelectThread}
         showAllThreads={showAllThreads}
         threadRuntimeById={threadRuntimeById}
@@ -681,6 +745,19 @@ export const Sidebar = memo(function Sidebar() {
           className={cn(
             "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
             "hover:bg-foreground/[0.045] hover:text-foreground",
+            view === "research" && "bg-foreground/[0.055] text-foreground",
+          )}
+          onClick={() => void openResearch()}
+        >
+          <BookOpenIcon className="h-4 w-4 text-muted-foreground" />
+          Research
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn(
+            "sidebar-lift h-8 w-full min-w-0 justify-start rounded-lg px-2.5 text-[13px] font-medium tracking-[-0.015em] text-foreground/80",
+            "hover:bg-foreground/[0.045] hover:text-foreground",
             view === "skills" && "bg-foreground/[0.055] text-foreground",
           )}
           onClick={() => void openSkills()}
@@ -692,7 +769,9 @@ export const Sidebar = memo(function Sidebar() {
 
       <section className="flex min-h-0 flex-1 flex-col gap-2">
         <div className="flex items-center justify-between px-1">
-          <div className="text-[11px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">Workspaces</div>
+          <div className="text-[11px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">
+            Workspaces
+          </div>
           {workspaceLifecycleEnabled ? (
             <Button
               size="icon-sm"
@@ -709,10 +788,19 @@ export const Sidebar = memo(function Sidebar() {
         {workspaces.length === 0 ? (
           <div className="min-h-0 flex-1 overflow-auto pr-1">
             <div className="rounded-xl border border-border/55 bg-foreground/[0.03] px-4 py-4 text-center text-xs text-muted-foreground">
-              <FolderPlusIcon strokeWidth={1.5} className="mx-auto mb-2 h-6 w-6 text-muted-foreground/70" />
+              <FolderPlusIcon
+                strokeWidth={1.5}
+                className="mx-auto mb-2 h-6 w-6 text-muted-foreground/70"
+              />
               <div>No workspaces yet</div>
               {workspaceLifecycleEnabled ? (
-                <Button className="mt-3 h-7 rounded-lg px-3" size="sm" variant="outline" type="button" onClick={() => void addWorkspace()}>
+                <Button
+                  className="mt-3 h-7 rounded-lg px-3"
+                  size="sm"
+                  variant="outline"
+                  type="button"
+                  onClick={() => void addWorkspace()}
+                >
                   Add workspace
                 </Button>
               ) : null}
@@ -730,9 +818,7 @@ export const Sidebar = memo(function Sidebar() {
             {workspaceItems}
           </Reorder.Group>
         ) : (
-          <div className="min-h-0 flex-1 overflow-auto pr-1">
-            {workspaceItems}
-          </div>
+          <div className="min-h-0 flex-1 overflow-auto pr-1">{workspaceItems}</div>
         )}
       </section>
 
